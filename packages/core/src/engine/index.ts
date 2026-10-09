@@ -3,3 +3,4 @@ export { applyRun } from "./apply.js";
 export { destroyRun } from "./destroy.js";
 export { Ledger, identity } from "./ledger.js";
 export type { RunOptions, PlanLine, PlanLineStatus, PlanResult, ApplyResultSummary } from "./types.js";
+export { staleness, type AncestryCheck, type Staleness } from "./history.js";

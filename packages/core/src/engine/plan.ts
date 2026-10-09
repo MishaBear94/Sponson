@@ -1,6 +1,7 @@
 import { dependenciesOf } from "../plan.js";
 import type { LineOutputs } from "../resolve.js";
 import { scopeDrift } from "./drift.js";
+import { staleness } from "./history.js";
 import { inspectLine, waitingOn, type Inspection } from "./inspect.js";
 import { hasExternalOutputs, planOutputs } from "./outputs.js";
 import { prepare } from "./prepare.js";
@@ -15,9 +16,8 @@ export async function planRun(opts: RunOptions): Promise<PlanResult> {
   await rc.resolveSecrets(prepared);
   const lock = await opts.store.readLock(opts.ctx.env, opts.ctx.scope).catch(() => null);
   if (lock && Date.parse(lock.expiresAt) > Date.now()) rc.warnings.push(`An apply (${lock.holder}) is running on this scope; this plan describes a moving target.`);
-  const history = rc.previous?.history ?? [];
-  const at = history.findIndex((h) => h.sha === opts.ctx.git.sha);
-  if (at >= 0 && at < history.length - 1) rc.warnings.push(`Commit ${opts.ctx.git.short_sha} is older than the last applied commit ${history[history.length - 1]!.sha.slice(0, 7)}; apply would skip this run as stale.`);
+  const st = await staleness(rc.previous?.history ?? [], opts.ctx.git.sha, opts.isAncestor);
+  if (st.stale) rc.warnings.push(`Commit ${opts.ctx.git.short_sha} is older than the last applied commit ${st.last!.slice(0, 7)}; apply would skip this run as stale.`);
 
   const outputs = new Map<string, LineOutputs>();
   const lines: PlanLine[] = [];

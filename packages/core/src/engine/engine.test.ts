@@ -545,6 +545,21 @@ describe("v2: scope and environment boundaries", () => {
     expect((await planRun(opts())).warnings.join("\n")).toMatch(/stale/);
   });
 
+  it("a never-applied commit older than the last applied one is stale when ancestry can tell, and not otherwise", async () => {
+    const newer = { ...ctx, git: { ...ctx.git, sha: "newer", short_sha: "newer" } };
+    await applyRun(opts(PLAN.replace("value: one", "value: two"), { ctx: newer }));
+    const writes = cloud.writes.length;
+    const isAncestor = async (older: string, n: string) => (older === "older" && n === "newer" ? true : null);
+    const older = { ...ctx, git: { ...ctx.git, sha: "older", short_sha: "older" } };
+    const late = await applyRun(opts(PLAN, { ctx: older, isAncestor }));
+    expect(late.receipt.stale).toBe(true);
+    expect(late.receipt.lines["a"]).toMatchObject({ status: "skipped", errorCode: "STALE" });
+    expect(cloud.writes.length).toBe(writes);
+    // Unknown ancestry (shallow clone): not provably older, so the run proceeds.
+    const unknown = await applyRun(opts(PLAN, { ctx: { ...ctx, git: { ...ctx.git, sha: "other", short_sha: "other" } }, isAncestor: async () => null }));
+    expect(unknown.receipt.stale).toBeUndefined();
+  });
+
   it("a misspelt output name fails before anything is written", async () => {
     await expect(planRun(opts(PLAN.replace("a.id", "a.idd")))).rejects.toMatchObject({ code: "REF_OUTPUT_UNKNOWN" });
   });

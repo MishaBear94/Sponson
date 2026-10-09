@@ -77,6 +77,8 @@ jobs:
         with:
           # for deployment_status, check out the commit that was deployed
           ref: ${{ github.event.deployment.sha || github.sha }}
+          # full history lets Sponson recognise a late build of an older commit
+          fetch-depth: 0
 
       - name: Destroy preview resources
         if: github.event_name == 'pull_request' && github.event.action == 'closed'
@@ -105,6 +107,7 @@ jobs:
       PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
     steps:
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }   # full history: lets Sponson recognise a late build of an older commit
 
       - name: Who approved this deployment
         id: approval

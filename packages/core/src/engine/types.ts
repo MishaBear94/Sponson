@@ -1,4 +1,5 @@
 import type { Redactor } from "../redact.js";
+import type { AncestryCheck } from "./history.js";
 import type { Registry } from "../registry.js";
 import type { Ctx, Drift, LockInfo, Plan, Receipt, ReceiptStore, ResolvedValue, ResourceDiff } from "../types.js";
 
@@ -19,6 +20,8 @@ export interface RunOptions {
   waitTimeoutMs?: number;
   pollIntervalMs?: number;
   lockTtlMs?: number;
+  /** Lets a run recognise a never-applied commit that is older than the last applied one. */
+  isAncestor?: AncestryCheck;
   /** Test hook: called after each line so a scenario can crash the process mid-run. */
   onLineDone?: (id: string, receipt: Receipt) => Promise<void> | void;
   now?: () => Date;

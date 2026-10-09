@@ -44,7 +44,8 @@ export type ErrorCode =
   | "INTERRUPTED"
   | "INTENT_UNRESOLVED"
   | "ROLLBACK_FAILED"
-  | "DESTROY_FAILED";
+  | "DESTROY_FAILED"
+  | "STALE";
 
 export class SponsonError extends Error {
   constructor(

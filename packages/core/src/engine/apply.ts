@@ -4,6 +4,7 @@ import { dependenciesOf } from "../plan.js";
 import { resolveParams, type LineOutputs } from "../resolve.js";
 import type { ApplyResult, Change, LedgerEntry, LiveState, Literal, Receipt, ReceiptLine, ResourceRecord, RunStatus } from "../types.js";
 import { scopeDrift } from "./drift.js";
+import { staleness } from "./history.js";
 import { identity } from "./ledger.js";
 import { inspectLine, waitingOn, type Inspection } from "./inspect.js";
 import { Lease } from "./lease.js";
@@ -21,7 +22,8 @@ export async function applyRun(opts: RunOptions): Promise<ApplyResultSummary> {
     if (lease.preempted) rc.warnings.push(`Took over an expired lock held by ${lease.preempted.holder} since ${lease.preempted.acquiredAt}.`);
     await rc.load();
     const run = new ApplyRun(rc, prepared, lease, approvedBy);
-    if (run.isStale()) return run.stale();
+    const st = await staleness(rc.previous?.history ?? [], opts.ctx.git.sha, opts.isAncestor);
+    if (st.stale) return run.stale(st.last!, st.reason!);
     await rc.resolveSecrets(prepared);
     return await run.execute();
   } finally {
@@ -76,20 +78,14 @@ class ApplyRun {
     };
   }
 
-  /** A commit older than the last applied one must not roll the scope back (late deployment events). */
-  isStale(): boolean {
-    const h = this.receipt.history;
-    const i = h.findIndex((x) => x.sha === this.rc.opts.ctx.git.sha);
-    return i >= 0 && i < h.length - 1;
-  }
-
-  stale(): ApplyResultSummary {
-    const last = this.receipt.history[this.receipt.history.length - 1]!;
+  /** A commit older than the last applied one changes nothing (late deployment events, re-run jobs). */
+  stale(last: string, reason: "superseded" | "ancestor"): ApplyResultSummary {
+    const why = reason === "ancestor" ? "is an ancestor of" : "was superseded by";
     this.receipt.stale = true;
     this.receipt.ledger = this.rc.ledger.toJSON();
     this.receipt.finishedAt = this.now().toISOString();
-    for (const c of this.prepared.ordered) this.receipt.lines[c.id] = this.line(c, { status: "skipped", error: `stale: commit ${last.sha.slice(0, 7)} was already applied after this one` });
-    this.rc.warnings.push(`Skipped: commit ${this.rc.opts.ctx.git.short_sha} is older than the last applied commit ${last.sha.slice(0, 7)}. Nothing was changed.`);
+    for (const c of this.prepared.ordered) this.receipt.lines[c.id] = this.line(c, { status: "skipped", error: `stale: this commit ${why} ${last.slice(0, 7)}, already applied`, errorCode: "STALE" });
+    this.rc.warnings.push(`Skipped: commit ${this.rc.opts.ctx.git.short_sha} ${why} the last applied commit ${last.slice(0, 7)}. Nothing was changed.`);
     return { receipt: this.receipt, drift: [], warnings: this.rc.warnings };
   }
 

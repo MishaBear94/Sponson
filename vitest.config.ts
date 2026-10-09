@@ -14,6 +14,12 @@ const alias = {
 export default defineConfig({
   resolve: { alias },
   test: {
+    coverage: {
+      provider: "v8",
+      include: ["packages/*/src/**/*.ts"],
+      exclude: ["**/*.test.ts", "packages/adapters/src/testing.ts", "packages/*/src/bin.ts"],
+      reporter: ["text-summary", "text"],
+    },
     projects: [
       { resolve: { alias }, test: { name: "unit", include: ["packages/*/src/**/*.test.ts"], testTimeout: 20000 } },
       { resolve: { alias }, test: { name: "scenarios", include: ["scenarios/**/*.test.ts"], testTimeout: 60000 } },

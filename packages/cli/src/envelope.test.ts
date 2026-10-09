@@ -55,7 +55,7 @@ function fakeRegistry(store = new Map<string, string>(), opts: { throwOnCreate?:
   r.addAdapter(adapter);
   r.addSecretSource({
     scheme: "env",
-    async resolve(ref, env) {
+    async resolve(ref: string, env: NodeJS.ProcessEnv) {
       const v = env[ref.slice("env://".length)];
       if (v === undefined) throw new Error(`missing ${ref}`);
       return v;

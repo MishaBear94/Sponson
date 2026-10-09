@@ -81,9 +81,10 @@ export class Team {
   }
 
   /** Vercel finished building `sha`: a READY deployment now exists. */
-  deploy(s: string, opts: { at?: number; suffix?: string } = {}) {
+  /** A finished build of `s`. The sim numbers repeat builds of one sha itself (`…-2`, `…-3`). */
+  deploy(s: string, opts: { at?: number } = {}) {
     const p = this.sim.state.vercel.projects.prj_demo!;
-    return this.sim.state.createDeployment("prj_demo", p, s, "READY", opts.at ?? Date.now(), opts.suffix ?? "");
+    return this.sim.state.createDeployment("prj_demo", p, s, "READY", opts.at ?? Date.now());
   }
 
   static previewUrl(s: string, suffix = ""): string {

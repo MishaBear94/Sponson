@@ -119,7 +119,7 @@ async function cli(args: string[]): Promise<{ code: number; out: string; err: st
 
 function actx(adapter: "vercel" | "neon" | "clerk"): AdapterContext {
   const ctx: Ctx = { env: "preview", git: { branch, sha, short_sha: sha.slice(0, 7) }, pr: { number: pr }, scope: `pr-${pr}` };
-  return { ctx, provider: adapter === "clerk" ? {} : providers[adapter], env, log: () => {} };
+  return { ctx, provider: adapter === "clerk" ? {} : providers[adapter], env, log: () => {}, intend: async () => {}, redact: (t) => t };
 }
 
 describe(`contract (${LIVE ? "@live" : "sim"})`, () => {

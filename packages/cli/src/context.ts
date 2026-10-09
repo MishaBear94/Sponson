@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { join, resolve } from "node:path";
 import {
   GitBranchReceiptStore,
@@ -9,6 +10,7 @@ import {
   loadPlan,
   type Ctx,
   type Plan,
+  type AncestryCheck,
   type ReceiptStore,
   type Registry,
   type RunOptions,
@@ -90,8 +92,20 @@ export function toRunOptions(rc: RunContext, io: IO, extra: Partial<RunOptions> 
     redactor: rc.redactor,
     // Adapter logs go to stderr so `--json` stdout stays parseable.
     log: (m) => io.stderr.write(`${m}\n`),
+    isAncestor: gitAncestry(io.cwd),
     ...extra,
   };
+}
+
+/** `git merge-base --is-ancestor`: exit 0 yes, 1 no, anything else (shallow clone, unknown sha) unknown. */
+export function gitAncestry(cwd: string): AncestryCheck {
+  return (older, newer) =>
+    new Promise((resolve) => {
+      execFile("git", ["merge-base", "--is-ancestor", older, newer], { cwd, timeout: 5000 }, (err) => {
+        if (!err) return resolve(true);
+        resolve((err as { code?: unknown }).code === 1 ? false : null);
+      });
+    });
 }
 
 /** An approver name, trimmed; empty or whitespace-only is "not provided". */

@@ -75,9 +75,6 @@ function registryWith(...adapters: ResourceAdapter[]): Registry {
       if (v === undefined) throw new Error(`missing ${ref}`);
       return v;
     },
-    async fingerprint(ref, env) {
-      return sha256(env[ref.slice("env://".length)] ?? "");
-    },
   });
   return r;
 }
@@ -317,5 +314,29 @@ changes:
     expect(r.code).toBe(2);
     const j = JSON.parse(r.out);
     expect(j).toMatchObject({ ok: false, command: "init", error: { code: "USAGE", adopt: "nope", adoptable: ["thing:legacy"] } });
+  });
+});
+
+describe("stale commits through git ancestry", () => {
+  it("a late run for a never-applied older commit changes nothing", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const h = await harness();
+    const git = (...a: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...a], { cwd: h.cwd }).toString().trim();
+    git("init", "-q");
+    git("commit", "-q", "--allow-empty", "-m", "a");
+    const a = git("rev-parse", "HEAD");
+    git("commit", "-q", "--allow-empty", "-m", "b");
+    const b = git("rev-parse", "HEAD");
+    const apply = async (sha: string) => {
+      let out = "";
+      const code = await run(["apply", "--json", "--receipts", "local", "--receipts-dir", h.receipts, "--branch", "feat", "--sha", sha, "--pr", "42"], {
+        stdout: { write: (x: string) => (out += x) }, stderr: { write: () => true }, env: h.env, cwd: h.cwd, createRegistry: () => registryWith(memAdapter("mem", "thing", h.state)), color: false,
+      });
+      return { code, json: JSON.parse(out) };
+    };
+    expect((await apply(b)).json.receipt.status).toBe("complete");
+    const late = await apply(a); // a was never applied, but it is an ancestor of b
+    expect(late.code).toBe(0);
+    expect(late.json.receipt).toMatchObject({ stale: true });
   });
 });

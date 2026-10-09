@@ -105,7 +105,8 @@ jobs:
       CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
     steps:
       - uses: actions/checkout@v4
-        with: { ref: "${{ github.event.deployment.sha || github.sha }}" }
+        # full history lets Sponson recognise a late build of an older commit
+        with: { ref: "${{ github.event.deployment.sha || github.sha }}", fetch-depth: 0 }
       - uses: sponson/sponson/action@v1
         with:
           command: ${{ github.event.action == 'closed' && 'destroy' || 'apply' }}
