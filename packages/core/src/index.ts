@@ -7,7 +7,7 @@ export * from "./graph.js";
 export * from "./redact.js";
 export * from "./registry.js";
 export * from "./resolve.js";
-export * from "./engine.js";
+export * from "./engine/index.js";
 export * from "./receipts/layout.js";
 export * from "./receipts/local.js";
 export * from "./receipts/git.js";

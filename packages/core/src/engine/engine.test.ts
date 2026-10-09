@@ -2,14 +2,14 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import { applyRun, destroyRun, planRun, type RunOptions } from "./engine.js";
-import { SponsonError } from "./errors.js";
-import { parsePlan } from "./plan.js";
-import { Redactor } from "./redact.js";
-import { LocalReceiptStore } from "./receipts/local.js";
-import { Registry } from "./registry.js";
-import { FakeCloud, fakeSecretSource } from "./testing/fake.js";
-import type { Ctx } from "./types.js";
+import { applyRun, destroyRun, planRun, type RunOptions } from "./index.js";
+import { SponsonError } from "../errors.js";
+import { parsePlan } from "../plan.js";
+import { Redactor } from "../redact.js";
+import { LocalReceiptStore } from "../receipts/local.js";
+import { Registry } from "../registry.js";
+import { FakeCloud, fakeSecretSource } from "../testing/fake.js";
+import type { Ctx } from "../types.js";
 
 const ctx: Ctx = { env: "preview", git: { branch: "feat/x", sha: "abc1234def", short_sha: "abc1234" }, pr: { number: 42 }, scope: "pr-42" };
 
@@ -68,7 +68,7 @@ describe("plan", () => {
     const r = await planRun(opts(PLAN.replace("{ from: a.id }", "{ from: a.secret }")));
     expect(r.lines[1]!.inputs["value"]).toMatchObject({ state: "resolved", value: null, sensitive: true });
     expect(JSON.stringify(r)).not.toContain("s-alpha-one");
-    expect(r.lines[0]!.outputs["secret"]).toBe("(secret)");
+    expect(r.lines[0]!.outputs["secret"]).toBeNull(); // present, so agents know it exists; never text
   });
 
   it("blocks dependents of a line that cannot be read", async () => {
@@ -85,7 +85,12 @@ describe("apply", () => {
     expect(Object.values(receipt.lines).map((l) => l.status)).toEqual(["applied", "applied", "applied"]);
     expect(cloud.items.get("beta")!.value).toBe(cloud.items.get("alpha")!.id);
     expect(receipt.lines["a"]!.createdBy).toBe("sponson");
-    expect(receipt.lines["a"]!.outputs).toEqual({ id: "it_1" });
+    expect(receipt.lines["a"]!.outputs).toEqual({ id: "it_1", url: "https://alpha.example.test" }); // external outputs are recorded as soon as they exist
+    expect(receipt.ledger.map((e) => [e.key, e.createdBy, e.line])).toEqual([
+      ["item:alpha", "sponson", "a"],
+      ["item:beta", "sponson", "b"],
+      ["item:gamma", "sponson", "c"],
+    ]);
     expect(await store.read("preview", "pr-42")).toMatchObject({ runId: receipt.runId });
   });
 
@@ -144,13 +149,18 @@ describe("apply", () => {
         }),
       ),
     ).rejects.toThrow("SIGKILL");
-    expect(await store.read("preview", "pr-42")).toBeNull(); // no half-written receipt
+    // The checkpoint written before each create survives the crash.
+    const checkpoint = await store.read("preview", "pr-42");
+    expect(checkpoint).toMatchObject({ status: "failed" });
+    expect(checkpoint!.ledger.map((e) => e.key)).toEqual(["item:alpha", "item:beta"]);
     const { receipt } = await applyRun(opts());
     expect(receipt.lines["a"]!.status).toBe("unchanged");
     expect(receipt.lines["b"]!.status).toBe("unchanged");
     expect(receipt.lines["c"]!.status).toBe("applied");
-    // adopted vs ours: the crash lost the receipt, so pre-crash items are adopted and will not be destroyed
-    expect(receipt.lines["a"]!.createdBy).toBe("adopted");
+    // Ownership survived the crash: everything is Sponson's and destroy removes all of it.
+    expect(receipt.ledger.every((e) => e.createdBy === "sponson")).toBe(true);
+    await destroyRun(opts());
+    expect(cloud.items.size).toBe(0);
   });
 });
 
@@ -195,7 +205,11 @@ changes:
 
   it("with --wait, times out instead of hanging", async () => {
     cloud.external = "never";
-    await expect(applyRun(opts(EXT, { wait: true, waitTimeoutMs: 50, pollIntervalMs: 10 }))).rejects.toMatchObject({ code: "WAIT_TIMEOUT" });
+    const { receipt } = await applyRun(opts(EXT, { wait: true, waitTimeoutMs: 50, pollIntervalMs: 10 }));
+    expect(receipt.status).toBe("failed");
+    expect(receipt.lines["cb"]).toMatchObject({ status: "waiting", errorCode: "WAIT_TIMEOUT" });
+    expect(receipt.lines["site"]!.status).toBe("applied"); // a slow deploy is not a reason to tear down the preview
+    expect(receipt.ledger.map((e) => e.key)).toEqual(["item:site"]);
   });
 
   it("plan shows the url once the deploy exists", async () => {
@@ -248,7 +262,7 @@ describe("drift", () => {
     expect(plan.drift).toContainEqual(expect.objectContaining({ kind: "orphan", line: "c" }));
     const { receipt } = await applyRun(opts(shorter));
     expect(cloud.items.has("gamma")).toBe(true);
-    expect(receipt.lines["c"]).toMatchObject({ orphan: true });
+    expect(receipt.ledger.find((e) => e.key === "item:gamma")).toMatchObject({ orphan: true, line: "c", createdBy: "sponson" });
     // destroy still knows about it
     await destroyRun(opts(shorter));
     expect(cloud.items.has("gamma")).toBe(false);
@@ -278,7 +292,9 @@ changes:
     const redactor = new Redactor();
     const plan = await planRun(opts(SECRET, { redactor }));
     expect(plan.lines[0]!.inputs["value"]).toMatchObject({ state: "secret", value: null, ref: "fake://TOKEN" });
-    expect(redactor.size()).toBe(0);
+    // plan resolves secrets only to mask them; the diff never carries the value.
+    expect(redactor.size()).toBeGreaterThan(0);
+    expect(JSON.stringify(plan)).not.toContain("hunter2");
 
     cloud.failNext("apply", "withsecret"); // the fake error message embeds the value
     const failed = await applyRun(opts(SECRET, { redactor }));
@@ -298,8 +314,10 @@ changes:
   });
 
   it("fails the line when the secret source cannot resolve", async () => {
+    const plan = await planRun(opts(SECRET.replace("TOKEN", "NOPE")));
+    expect(plan.lines[0]).toMatchObject({ status: "blocked", errorCode: "SECRET_UNRESOLVED" });
     const { receipt } = await applyRun(opts(SECRET.replace("TOKEN", "NOPE")));
-    expect(receipt.lines["s"]!.status).toBe("failed");
+    expect(receipt.lines["s"]).toMatchObject({ status: "blocked", errorCode: "SECRET_UNRESOLVED" });
     expect(receipt.lines["s"]!.error).toContain("NOPE");
   });
 });
@@ -392,7 +410,7 @@ describe("error codes", () => {
     await applyRun(opts());
     cloud.drift("alpha", "edited");
     const { receipt } = await applyRun(opts());
-    expect(receipt.lines["a"]).toMatchObject({ status: "failed", errorCode: "DRIFT_CHANGED" });
+    expect(receipt.lines["a"]).toMatchObject({ status: "blocked", errorCode: "DRIFT_CHANGED" });
   });
 });
 
@@ -409,7 +427,125 @@ describe("receipt robustness", () => {
   it("refuses receipts from a newer version", async () => {
     await applyRun(opts());
     const { writeFile } = await import("node:fs/promises");
-    await writeFile(join((store as unknown as { root: string }).root, "preview/pr-42/latest.json"), JSON.stringify({ version: 2, lines: {}, scope: "pr-42", environment: "preview" }));
+    await writeFile(join((store as unknown as { root: string }).root, "preview/pr-42/latest.json"), JSON.stringify({ version: 3, lines: {}, scope: "pr-42", environment: "preview" }));
     await expect(planRun(opts())).rejects.toBeInstanceOf(SponsonError);
+  });
+});
+
+describe("v2: the ledger never forgets", () => {
+  it("a refused line stays refused on retry, and keeps its ownership", async () => {
+    await applyRun(opts());
+    cloud.drift("alpha", "hotfix");
+    const first = await applyRun(opts());
+    expect(first.receipt.lines["a"]).toMatchObject({ status: "blocked", errorCode: "DRIFT_CHANGED" });
+    const plan = await planRun(opts());
+    expect(plan.drift).toContainEqual(expect.objectContaining({ kind: "changed", line: "a" }));
+    expect(plan.lines[0]).toMatchObject({ status: "blocked", errorCode: "DRIFT_CHANGED" });
+    const second = await applyRun(opts());
+    expect(second.receipt.lines["a"]).toMatchObject({ status: "blocked", errorCode: "DRIFT_CHANGED" });
+    expect(cloud.items.get("alpha")!.value).toBe("hotfix");
+    expect(second.receipt.ledger.filter((e) => e.createdBy === "sponson").map((e) => e.key)).toEqual(["item:alpha", "item:beta", "item:gamma"]);
+    await destroyRun(opts());
+    expect(cloud.items.size).toBe(0);
+  });
+
+  it("a create whose response was lost is still Sponson's: rolled back on failure, or claimed on the next run", async () => {
+    cloud.failNext("lost", "beta");
+    const failed = await applyRun(opts());
+    expect(failed.receipt.status).toBe("failed");
+    expect(cloud.items.size).toBe(0); // alpha rolled back, and beta found by re-read and rolled back too
+
+    cloud.failNext("lost", "gamma");
+    cloud.failNext("destroy", "gamma"); // rollback cannot remove it either
+    const second = await applyRun(opts());
+    expect(second.receipt.ledger.find((e) => e.key === "item:gamma")).toMatchObject({ createdBy: "sponson" });
+    const third = await applyRun(opts());
+    expect(third.receipt.ledger.find((e) => e.key === "item:gamma")?.createdBy).toBe("sponson");
+    await destroyRun(opts());
+    expect(cloud.items.size).toBe(0);
+  });
+
+  it("renaming a line id moves ownership instead of orphaning", async () => {
+    await applyRun(opts());
+    const renamed = PLAN.replace("id: c", "id: renamed");
+    const plan = await planRun(opts(renamed));
+    expect(plan.drift.filter((d) => d.kind === "orphan")).toEqual([]);
+    const { receipt } = await applyRun(opts(renamed));
+    expect(receipt.ledger.find((e) => e.key === "item:gamma")).toMatchObject({ line: "renamed", createdBy: "sponson", orphan: false });
+  });
+
+  it("changing a resource's name leaves the old one as an orphan that destroy still removes", async () => {
+    await applyRun(opts());
+    const changed = PLAN.replace("name: gamma", "name: gamma2");
+    const plan = await planRun(opts(changed));
+    expect(plan.drift).toContainEqual(expect.objectContaining({ kind: "orphan", resource: expect.objectContaining({ key: "item:gamma" }) }));
+    expect(plan.drift.some((d) => d.kind === "missing")).toBe(false);
+    await applyRun(opts(changed));
+    await destroyRun(opts(changed));
+    expect([...cloud.items.keys()]).toEqual([]);
+  });
+
+  it("a resource deleted and re-created by hand is not taken over silently", async () => {
+    await applyRun(opts());
+    const value = cloud.items.get("alpha")!.value;
+    cloud.delete("alpha");
+    cloud.items.set("alpha", { id: "human_1", name: "alpha", value, createdBy: "seed" });
+    const plan = await planRun(opts());
+    expect(plan.drift).toContainEqual(expect.objectContaining({ kind: "changed", replaced: true, line: "a" }));
+    const refused = await applyRun(opts());
+    expect(refused.receipt.lines["a"]).toMatchObject({ status: "blocked", errorCode: "DRIFT_CHANGED" });
+    const taken = await applyRun(opts(PLAN, { reconcile: true }));
+    expect(taken.receipt.ledger.find((e) => e.key === "item:alpha")).toMatchObject({ id: "human_1", createdBy: "adopted" });
+    await destroyRun(opts());
+    expect(cloud.items.has("alpha")).toBe(true); // the human's object survives
+  });
+
+  it("external outputs land in the receipt and ledger even when no line reads them", async () => {
+    const { receipt } = await applyRun(opts(`version: 1\nchanges:\n  - { id: site, adapter: fake, op: item, name: site, value: v1 }\n`));
+    expect(receipt.lines["site"]!.outputs).toMatchObject({ url: "https://site.example.test" });
+    expect(receipt.ledger[0]!.outputs).toMatchObject({ url: "https://site.example.test" });
+  });
+});
+
+describe("v2: scope and environment boundaries", () => {
+  it("a line that writes to production needs approval even under --env preview", async () => {
+    const src = PLAN.replace("value: one\n", "value: one\n    target: production\n");
+    await expect(applyRun(opts(src))).rejects.toMatchObject({ code: "ENV_NOT_APPROVED", details: { productionLines: ["a"] } });
+    expect(cloud.writes).toHaveLength(0);
+    expect((await planRun(opts(src))).requiresApproval).toBe(true);
+    const ok = await applyRun(opts(src, { approvedBy: "  alice  " }));
+    expect(ok.receipt.approvedBy).toBe("alice");
+    await expect(applyRun(opts(src, { approvedBy: "   " }))).rejects.toMatchObject({ code: "ENV_NOT_APPROVED" });
+  });
+
+  it("another scope's resources are neither unmanaged nor changeable, but may be relied on", async () => {
+    const shared = `version: 1\nchanges:\n  - { id: s, adapter: fake, op: item, name: shared, value: v1 }\n`;
+    await applyRun(opts(shared));
+    const other = { ...ctx, pr: { number: 43 }, scope: "pr-43" };
+    const plan = await planRun(opts(shared, { ctx: other }));
+    expect(plan.drift.filter((d) => d.kind === "unmanaged")).toEqual([]);
+    const relied = await applyRun(opts(shared, { ctx: other }));
+    expect(relied.receipt.lines["s"]!.status).toBe("unchanged");
+    expect(relied.receipt.ledger[0]!.createdBy).toBe("adopted");
+    const conflicting = await applyRun(opts(shared.replace("v1", "v2"), { ctx: other }));
+    expect(conflicting.receipt.lines["s"]).toMatchObject({ status: "blocked", errorCode: "OWNED_BY_OTHER_SCOPE" });
+    expect(cloud.items.get("shared")!.value).toBe("v1");
+    await destroyRun(opts(shared, { ctx: other }));
+    expect(cloud.items.has("shared")).toBe(true); // pr-43 never owned it
+  });
+
+  it("a late run for an older commit changes nothing", async () => {
+    await applyRun(opts());
+    await applyRun(opts(PLAN.replace("value: one", "value: two"), { ctx: { ...ctx, git: { ...ctx.git, sha: "newer", short_sha: "newer" } } }));
+    const writes = cloud.writes.length;
+    const late = await applyRun(opts());
+    expect(late.receipt.stale).toBe(true);
+    expect(cloud.writes.length).toBe(writes);
+    expect(cloud.items.get("alpha")!.value).toBe("two");
+    expect((await planRun(opts())).warnings.join("\n")).toMatch(/stale/);
+  });
+
+  it("a misspelt output name fails before anything is written", async () => {
+    await expect(planRun(opts(PLAN.replace("a.id", "a.idd")))).rejects.toMatchObject({ code: "REF_OUTPUT_UNKNOWN" });
   });
 });

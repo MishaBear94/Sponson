@@ -8,7 +8,8 @@
 #   pull-requests: write   plan/apply comment on the PR
 #
 # The same action serves all three triggers: pull_request (opened, synchronize) -> apply,
-# deployment_status -> apply (finishes lines that waited on the deploy), pull_request (closed) -> destroy.
+# deployment_status of a preview deployment with an open PR -> apply (finishes lines that waited on the deploy),
+# pull_request (closed) -> destroy. A push to main with env: production applies production (with approved-by).
 # See README.md next to this file for the full workflow.
 
 name: Sponson
@@ -43,11 +44,14 @@ outputs:
     description: The CLI's JSON output (plan or receipt), verbatim.
     value: ${{ steps.run.outputs.result }}
   status:
-    description: For apply/destroy, the receipt status (complete | partial | failed). For plan, "ok" or "error".
+    description: For apply/destroy, the receipt status (complete | partial | failed, or stale when a newer commit was already applied). For plan, "ok" or "error".
     value: ${{ steps.run.outputs.status }}
   exit-code:
-    description: The CLI's exit code (0 ok, 1 failed, 2 usage/plan/approval, 3 lock held).
+    description: The CLI's exit code (0 ok, 1 failed, 2 usage/plan/approval, 3 lock held or lost). Empty when skipped.
     value: ${{ steps.run.outputs.exit }}
+  skipped:
+    description: "\"true\" when the run was skipped: a deployment_status with no open pull request, or a production deployment for a preview run."
+    value: ${{ steps.scope.outputs.skip }}
 
 runs:
   using: composite
@@ -56,29 +60,58 @@ runs:
       with:
         node-version: ${{ inputs.node-version }}
 
-    # Resolve the PR/branch/sha for the scope. deployment_status events run on the default branch,
-    # so the PR has to be looked up from the deployment's ref.
+    # Resolve the PR/branch/sha for the scope.
+    # pull_request: the PR itself. deployment_status: only an OPEN pull request associated with the deployed
+    # commit; with none (the PR was merged or closed, or the branch never had one) the run is skipped, because
+    # applying would re-create a preview that `destroy` already removed or that nothing will ever destroy.
+    # A production deployment never drives a preview apply. push: no flags; the CLI reads the GitHub context.
     - id: scope
       uses: actions/github-script@v7
+      env:
+        SPONSON_ENV: ${{ inputs.env }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
           const ev = context.payload;
-          let pr = null, branch = null, sha = null;
+          let pr = null, branch = null, sha = null, skip = null;
           if (ev.pull_request) {
             pr = ev.pull_request.number; branch = ev.pull_request.head.ref; sha = ev.pull_request.head.sha;
           } else if (ev.deployment) {
-            sha = ev.deployment.sha; branch = ev.deployment.ref;
-            if (/^[0-9a-f]{40}$/.test(branch)) branch = null;
-            const { data } = await github.rest.repos.listPullRequestsAssociatedWithCommit({ ...context.repo, commit_sha: sha });
-            const open = data.find((p) => p.state === "open") ?? data[0];
-            if (open) { pr = open.number; branch ??= open.head.ref; }
+            const target = String((typeof process !== "undefined" && process.env.SPONSON_ENV) || "preview").toLowerCase();
+            const deployedTo = String(ev.deployment.environment ?? "").toLowerCase();
+            if (deployedTo === "production" && target !== "production") {
+              skip = `deployment to ${ev.deployment.environment} does not drive the ${target} environment`;
+            } else {
+              const { data } = await github.rest.repos.listPullRequestsAssociatedWithCommit({ ...context.repo, commit_sha: ev.deployment.sha });
+              const open = data.find((p) => p.state === "open");
+              if (open) {
+                pr = open.number; sha = ev.deployment.sha;
+                branch = /^[0-9a-f]{40}$/.test(ev.deployment.ref) ? open.head.ref : ev.deployment.ref;
+              } else {
+                skip = `no open pull request is associated with ${String(ev.deployment.sha).slice(0, 7)}; nothing to finish`;
+              }
+            }
+          }
+          if (skip) {
+            // Empty scope outputs: a caller that ignores `skip` still passes no PR/branch/sha.
+            core.setOutput("skip", "true");
+            core.setOutput("reason", skip);
+            const say = core.notice ?? core.info;
+            if (say) say(`sponson: skipped (${skip})`);
+            pr = null; branch = null; sha = null;
           }
           core.setOutput("pr", pr ?? "");
           core.setOutput("branch", branch ?? "");
           core.setOutput("sha", sha ?? "");
 
+    - if: steps.scope.outputs.skip == 'true'
+      shell: bash
+      env:
+        REASON: ${{ steps.scope.outputs.reason }}
+      run: echo "::notice title=sponson skipped::$REASON"
+
     - id: run
+      if: steps.scope.outputs.skip != 'true'
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
@@ -109,12 +142,12 @@ runs:
           cat "$RUNNER_TEMP/sponson-result.json"
           echo "SPONSON_EOF"
           echo "exit=$code"
-          echo "status=$(node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(r.receipt?r.receipt.status:(r.ok?"ok":"error"))' "$RUNNER_TEMP/sponson-result.json" 2>/dev/null || echo error)"
+          echo "status=$(node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(r.receipt?(r.receipt.stale?"stale":r.receipt.status):(r.ok?"ok":"error"))' "$RUNNER_TEMP/sponson-result.json" 2>/dev/null || echo error)"
         } >> "$GITHUB_OUTPUT"
         exit 0
 
     - id: comment
-      if: github.event_name == 'pull_request' || steps.scope.outputs.pr != ''
+      if: steps.scope.outputs.skip != 'true' && (github.event_name == 'pull_request' || steps.scope.outputs.pr != '')
       uses: actions/github-script@v7
       env:
         RESULT_PATH: ${{ runner.temp }}/sponson-result.json
@@ -131,34 +164,61 @@ runs:
           let r; try { r = JSON.parse(fs.readFileSync(process.env.RESULT_PATH, "utf8")); } catch { r = null; }
 
           const PLAN = { create: "+", update: "~", unchanged: "=", pending: "?", blocked: "-", error: "!" };
-          const LINE = { applied: "+", unchanged: "=", waiting: "?", failed: "!", rolled_back: "-", rollback_failed: "!", skipped: "-", destroyed: "-", destroy_failed: "!" };
-          const esc = (s) => String(s ?? "").replace(/\|/g, "\\|").replace(/\n/g, " ");
+          const LINE = { applied: "+", unchanged: "=", waiting: "?", failed: "!", rolled_back: "-", rollback_failed: "!", skipped: "-", blocked: "-", destroyed: "-", destroy_failed: "!" };
+          // Provider text can carry anything (HTML error pages, CRLF, pipes, backticks): neutralise every
+          // character that could end a table row, open a code span, a tag or an HTML comment.
+          const esc = (s) => String(s ?? "")
+            .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+            .replace(/\|/g, "&#124;").replace(/`/g, "&#96;")
+            .replace(/\r\n|\r|\n/g, " ");
+          // An identifier shown inside a code span: no backticks or line breaks, never HTML-interpreted there.
+          const code = (s) => "`" + String(s ?? "").replace(/[`\r\n|]/g, "") + "`";
+          const side = (s) => {
+            if (s === undefined || s === null) return null;
+            if (typeof s !== "object") return esc(s);
+            if (s.state === "absent") return null;
+            if (s.state === "literal") return esc(s.value);
+            if (s.state === "sensitive") return "(secret)";
+            return `(${esc(s.state)}${s.ref ? " ← " + esc(s.ref) : ""})`;
+          };
+          const failure = (l) => [l.errorCode ? code(l.errorCode) : "", esc(l.error)].filter(Boolean).join(" ");
           const rows = [];
           let title, tail = "";
           if (!r) {
-            title = `${command} crashed (exit ${exit})`;
+            title = `${esc(command)} crashed (exit ${exit})`;
           } else if (r.ok === false && r.error) {
-            title = `${command} failed: \`${r.error.code}\``;
+            title = `${esc(command)} failed: ${code(r.error.code)}`;
             tail = `\n\n${esc(r.error.message)}`;
           } else if (r.command === "plan") {
-            title = `plan · ${r.environment} · ${r.scope} · plan ${r.planHash.slice(0, 8)}`;
+            title = `plan · ${esc(r.environment)} · ${esc(r.scope)} · plan ${esc(String(r.planHash).slice(0, 8))}`;
+            if (r.lock) tail += `\n\nAn apply is running on this scope (${esc(r.lock.holder)}); this plan may change.`;
+            if (r.requiresApproval) tail += "\n\nApplying this plan needs approval: it writes to production.";
             for (const l of r.lines) {
-              const detail = l.status === "pending" ? `waiting on \`${l.waitingOn}\`` : l.error ?? l.diffs.map((d) => `${d.label}${d.after !== undefined ? ` ${d.before !== undefined ? d.before + " → " : ""}${d.after}` : ""}`).join("<br>");
-              rows.push(`| \`${PLAN[l.status] ?? " "}\` | \`${l.id}\` | ${l.adapter}.${l.op} | ${l.status} | ${esc(detail)} |`);
+              let detail;
+              if (l.status === "pending") detail = l.waitingOn ? `waiting on ${code(l.waitingOn)}${l.waitingFor ? ` (${esc(l.waitingFor)})` : ""}` : `waiting${l.waitingFor ? ` on ${esc(l.waitingFor)}` : ""}`;
+              else if (l.status === "error" || l.status === "blocked") detail = failure(l);
+              else detail = (l.diffs ?? []).map((d) => {
+                const after = side(d.after), before = side(d.before);
+                return `${esc(d.label)}${after !== null ? ` ${before !== null ? before + " → " : ""}${after}` : ""}`;
+              }).join("<br>");
+              rows.push(`| ${code(PLAN[l.status] ?? " ")} | ${code(l.id)} | ${esc(l.adapter)}.${esc(l.op)} | ${esc(l.status)} | ${detail} |`);
             }
           } else {
             const rc = r.receipt;
-            title = `${rc.destroy ? "destroy" : "apply"} · ${rc.environment} · ${rc.scope} · **${rc.status}** (run ${rc.runId})`;
+            const status = rc.stale ? "stale (a newer commit was already applied)" : rc.status;
+            title = `${rc.destroy ? "destroy" : "apply"} · ${esc(rc.environment)} · ${esc(rc.scope)} · **${esc(status)}** (run ${esc(rc.runId)})${rc.approvedBy ? ` · approved by ${esc(rc.approvedBy)}` : ""}`;
             for (const l of Object.values(rc.lines)) {
-              const detail = l.status === "waiting" ? `waiting on ${l.waitingFor}` : l.error ?? [...l.resources.map((x) => x.label ?? x.key), ...Object.entries(l.outputs).map(([k, v]) => `${k} = ${v}`)].join("<br>");
-              rows.push(`| \`${LINE[l.status] ?? " "}\` | \`${l.id}\` | ${l.adapter}.${l.op} | ${l.status} | ${esc(detail)} |`);
+              const detail = l.status === "waiting" ? `waiting on ${esc(l.waitingFor)}`
+                : (l.error || l.errorCode) ? failure(l)
+                : [...l.resources.map((x) => esc(x.label ?? x.key)), ...Object.entries(l.outputs ?? {}).map(([k, v]) => `${esc(k)} = ${esc(v)}`)].join("<br>");
+              rows.push(`| ${code(LINE[l.status] ?? " ")} | ${code(l.id)} | ${esc(l.adapter)}.${esc(l.op)} | ${esc(l.status)} | ${detail} |`);
             }
             if (rc.status === "partial") tail += "\n\nSome lines are waiting on a deploy. The `deployment_status` run will finish them; nothing to retry.";
           }
-          if (r?.drift?.length) tail += "\n\n**Drift**\n" + r.drift.map((d) => `- \`${d.kind}\` ${d.adapter}: ${esc(d.message)}`).join("\n");
+          if (r?.drift?.length) tail += "\n\n**Drift**\n" + r.drift.map((d) => `- ${code(d.kind)} ${esc(d.adapter)}: ${esc(d.message)}`).join("\n");
           if (r?.warnings?.length) tail += "\n\n**Warnings**\n" + r.warnings.map((w) => `- ${esc(w)}`).join("\n");
           const table = rows.length ? `\n\n| | line | adapter | status | detail |\n|---|---|---|---|---|\n${rows.join("\n")}` : "";
-          const body = `${marker}\n### Sponson ${title}${table}${tail}\n\n<sub>${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}</sub>`;
+          const body = `${marker}\n### Sponson ${title}${table}${tail}\n\n<sub>${esc(`${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`)}</sub>`;
 
           const issue_number = context.payload.pull_request?.number ?? Number(process.env.SPONSON_PR);
           const comments = await github.paginate(github.rest.issues.listComments, { ...context.repo, issue_number, per_page: 100 });
@@ -166,7 +226,8 @@ runs:
           if (mine) await github.rest.issues.updateComment({ ...context.repo, comment_id: mine.id, body });
           else await github.rest.issues.createComment({ ...context.repo, issue_number, body });
 
-    - shell: bash
+    - if: steps.scope.outputs.skip != 'true'
+      shell: bash
       env:
         SPONSON_EXIT: ${{ steps.run.outputs.exit }}
       run: |

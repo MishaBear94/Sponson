@@ -1,10 +1,10 @@
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import {
   GitBranchReceiptStore,
   LocalReceiptStore,
   PLAN_FILENAME,
   type Redactor,
-  type SponsonError,
+  SponsonError,
   detectCtx,
   loadPlan,
   type Ctx,
@@ -16,8 +16,11 @@ import {
 
 /** Streams and environment for one in-process invocation. Tests and the MCP server supply their own. */
 export interface IO {
+  /** Text for humans. Every chunk is redacted. */
   stdout: { write(chunk: string): unknown };
   stderr: { write(chunk: string): unknown };
+  /** Write one JSON envelope to stdout: redacted field by field, then serialized (see output.ts). */
+  json(payload: unknown): void;
   env: NodeJS.ProcessEnv;
   cwd: string;
   createRegistry: () => Registry | Promise<Registry>;
@@ -46,9 +49,12 @@ export interface RunContext {
   warnings: string[];
 }
 
-/** Wrong invocation (not a plan or provider problem). Exit code 2. */
-export class UsageError extends Error {
-  override name = "UsageError";
+/** Wrong invocation (not a plan or provider problem). Code USAGE, exit code 2. */
+export class UsageError extends SponsonError {
+  constructor(message: string, details: Record<string, unknown> = {}) {
+    super("USAGE", message, details);
+    this.name = "UsageError";
+  }
 }
 
 export function planPathFor(opts: GlobalOpts, io: IO): string {
@@ -65,23 +71,34 @@ export async function buildRunContext(opts: GlobalOpts, io: IO, redactor: Redact
     io.env,
     io.cwd,
   );
-  const store = await selectStore(opts, plan, io, (m) => warnings.push(m));
+  const store = await selectStore(opts, plan.receipts, io, (m) => warnings.push(m));
   const registry = await io.createRegistry();
   return { plan, planPath, ctx, store, registry, redactor, warnings };
 }
 
 export function toRunOptions(rc: RunContext, io: IO, extra: Partial<RunOptions> = {}): RunOptions {
+  // Approval is resolved (and trimmed) by the CLI from --approved-by / SPONSON_APPROVED_BY; the engine
+  // must not find an untrimmed copy in the environment.
+  const env = { ...io.env };
+  delete env.SPONSON_APPROVED_BY;
   return {
     plan: rc.plan,
     ctx: rc.ctx,
     registry: rc.registry,
     store: rc.store,
-    env: io.env,
+    env,
     redactor: rc.redactor,
     // Adapter logs go to stderr so `--json` stdout stays parseable.
     log: (m) => io.stderr.write(`${m}\n`),
     ...extra,
   };
+}
+
+/** An approver name, trimmed; empty or whitespace-only is "not provided". */
+export function cleanApprover(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const t = raw.trim();
+  return t === "" ? undefined : t;
 }
 
 export function parsePr(raw: string | number | null | undefined): number | null | undefined {
@@ -96,20 +113,16 @@ export function localReceiptsRoot(opts: GlobalOpts, io: IO): string {
   return resolve(io.cwd, opts.receiptsDir ?? io.env.SPONSON_RECEIPTS_DIR ?? ".sponson/receipts");
 }
 
-async function selectStore(opts: GlobalOpts, plan: Plan, io: IO, warn: (m: string) => void): Promise<ReceiptStore> {
-  const kind = opts.receipts ?? plan.receipts;
+/** `--receipts` wins over the plan's `receipts:` (`planKind`), which defaults to git-branch. */
+export async function selectStore(opts: GlobalOpts, planKind: Plan["receipts"] | undefined, io: IO, warn: (m: string) => void): Promise<ReceiptStore> {
+  const kind = opts.receipts ?? planKind ?? "git-branch";
   const localRoot = localReceiptsRoot(opts, io);
   if (kind === "git-branch") {
     const remote = opts.receiptsRemote ?? io.env.SPONSON_RECEIPTS_REMOTE ?? (await GitBranchReceiptStore.originOf(io.cwd));
-    if (remote) return new GitBranchReceiptStore({ remote });
+    if (remote) return new GitBranchReceiptStore({ remote, fallbackDir: join(io.cwd, ".sponson/unpushed") });
     warn(`No git remote found for receipts; using the local store at ${localRoot}. Pass --receipts-remote <url>, or set \`receipts: local\` in the plan to silence this.`);
   }
   return new LocalReceiptStore(localRoot);
 }
 
-/** Exit codes: 2 = the invocation or the plan is wrong, 3 = another apply holds the lock, 1 = anything else. */
-export function exitCodeFor(e: SponsonError): number {
-  if (e.code === "LOCK_HELD") return 3;
-  if (/^(PLAN_|REF_|ENV_)/.test(e.code) || ["CTX_NULL", "SECRET_LITERAL", "ADAPTER_UNKNOWN", "OP_UNKNOWN"].includes(e.code)) return 2;
-  return 1;
-}
+export { exitCodeFor } from "./output.js";

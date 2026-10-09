@@ -1,12 +1,12 @@
 import { Command, CommanderError, Option } from "commander";
-import { Redactor, isSponsonError, type Registry } from "@sponson/core";
+import { Redactor, type Registry } from "@sponson/core";
 import { applyCommand } from "./commands/apply.js";
 import { initCommand } from "./commands/init.js";
 import { mcpCommand } from "./commands/mcp.js";
 import { planCommand } from "./commands/plan.js";
-import { UsageError, exitCodeFor, type GlobalOpts, type IO } from "./context.js";
+import type { GlobalOpts, IO } from "./context.js";
+import { errorEnvelope, exitCodeFor, serialize, toSponsonError } from "./output.js";
 import { defaultRegistry } from "./registry.js";
-import { errorJson } from "./render.js";
 
 export interface RunIO {
   stdout?: { write(chunk: string): unknown };
@@ -19,72 +19,83 @@ export interface RunIO {
   color?: boolean;
 }
 
+const COMMANDS = ["plan", "status", "apply", "init", "mcp"] as const;
+
 /**
  * Run the CLI in-process. `argv` excludes node and the script name.
- * Resolves to the exit code; never throws for user-facing errors.
+ * Resolves to the exit code; never throws.
  */
 export async function run(argv: string[], init: RunIO = {}): Promise<number> {
+  // One redactor for the whole command: the engine registers into it, every byte of output passes through it.
   const redactor = new Redactor();
   const env = init.env ?? process.env;
   const rawOut = init.stdout ?? process.stdout;
   const rawErr = init.stderr ?? process.stderr;
-  // Every byte of output passes through the redactor.
   const io: IO = {
     stdout: { write: (s) => rawOut.write(redactor.redact(s)) },
     stderr: { write: (s) => rawErr.write(redactor.redact(s)) },
+    json: (payload) => rawOut.write(serialize(payload, redactor) + "\n"),
     env,
     cwd: init.cwd ?? process.cwd(),
     createRegistry: init.createRegistry ?? defaultRegistry,
     color: init.color ?? (Boolean(process.stdout.isTTY) && env.NO_COLOR === undefined && init.stdout === undefined),
   };
 
+  const json = argv.includes("--json");
+  const command = commandOf(argv);
   let code = 0;
   const program = buildProgram(io, redactor, (c) => (code = c));
-  const json = argv.includes("--json");
   try {
     await program.parseAsync(argv, { from: "user" });
     return code;
   } catch (e) {
-    if (e instanceof CommanderError) return e.exitCode === 0 ? 0 : 2; // help/version vs usage
-    return reportError(e, io, json, env);
+    // --help / --version: commander already printed them.
+    if (e instanceof CommanderError && e.exitCode === 0) return 0;
+    return reportError(e, io, json, command, env);
   }
 }
 
-function reportError(e: unknown, io: IO, json: boolean, env: NodeJS.ProcessEnv): number {
-  const debug = env.SPONSON_DEBUG === "1";
-  let code: number;
-  let payload: { code: string; message: string; details?: Record<string, unknown> };
-  if (isSponsonError(e)) {
-    code = exitCodeFor(e);
-    payload = { code: e.code, message: e.message, details: e.details };
-  } else if (e instanceof UsageError) {
-    code = 2;
-    payload = { code: "USAGE", message: e.message };
-  } else {
-    code = 1;
-    payload = { code: "INTERNAL", message: (e as Error)?.message ?? String(e) };
+/** The subcommand named on the command line, or the unknown word in its place; null when there is none. */
+function commandOf(argv: string[]): string | null {
+  const valued = new Set(["--plan", "--env", "--pr", "--branch", "--sha", "--receipts", "--receipts-dir", "--receipts-remote"]);
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (valued.has(a)) {
+      i++;
+      continue;
+    }
+    if (a.startsWith("-")) continue;
+    if (a === "status") return "plan";
+    return a;
   }
-  if (json) io.stdout.write(JSON.stringify(errorJson(payload)) + "\n");
-  else io.stderr.write(`error ${payload.code}: ${payload.message}\n`);
-  if (debug && e instanceof Error && e.stack) io.stderr.write(e.stack + "\n");
-  return code;
+  return null;
+}
+
+function reportError(e: unknown, io: IO, json: boolean, command: string | null, env: NodeJS.ProcessEnv): number {
+  const err = toSponsonError(e);
+  const known = command !== null && (COMMANDS as readonly string[]).includes(command) ? command : null;
+  if (json) io.json(errorEnvelope(known, err));
+  else io.stderr.write(`error ${err.code}: ${err.message}\n`);
+  if (env.SPONSON_DEBUG === "1" && e instanceof Error && e.stack) io.stderr.write(e.stack + "\n");
+  return exitCodeFor(err);
 }
 
 function buildProgram(io: IO, redactor: Redactor, setCode: (c: number) => void): Command {
   const program = new Command("sponson")
     .description("One release, one plan. Declares and applies everything that ships beside the code.")
-    .version("0.1.0")
+    .version("0.2.0")
     .option("--plan <path>", "plan file (default: release.plan.yaml in the working directory)")
     .option("--env <name>", "environment; production is never inferred from the branch", "preview")
     .option("--pr <n>", "pull request number (default: detected from CI or `gh`)")
     .option("--branch <name>", "git branch (default: checked-out branch)")
     .option("--sha <sha>", "git commit (default: HEAD)")
-    .option("--json", "machine-readable output on stdout")
+    .option("--json", "machine-readable output on stdout: one JSON document, also for errors")
     .addOption(new Option("--receipts <store>", "receipt store; overrides the plan's `receipts:`").choices(["git-branch", "local"]))
     .option("--receipts-dir <dir>", "local receipt store root (default: .sponson/receipts, or $SPONSON_RECEIPTS_DIR)")
     .option("--receipts-remote <url>", "git remote for the receipts branch (default: origin, or $SPONSON_RECEIPTS_REMOTE)")
     .exitOverride()
-    .configureOutput({ writeOut: (s) => io.stdout.write(s), writeErr: (s) => io.stderr.write(s) })
+    // Usage errors are reported once, by reportError, in the same envelope as every other failure.
+    .configureOutput({ writeOut: (s) => io.stdout.write(s), writeErr: (s) => io.stderr.write(s), outputError: () => {} })
     .showHelpAfterError(false);
 
   const globals = (cmd: Command): GlobalOpts => cmd.optsWithGlobals() as GlobalOpts;
@@ -101,7 +112,7 @@ function buildProgram(io: IO, redactor: Redactor, setCode: (c: number) => void):
     .command("apply")
     .description("apply the plan for this environment and scope, roll back on failure, write a receipt")
     .option("--destroy", "destroy everything this scope created, in reverse order")
-    .option("--approved-by <who>", "who approved this run; required for --env production")
+    .option("--approved-by <who>", "who approved this run; required when a line writes to production (or $SPONSON_APPROVED_BY)")
     .option("--reconcile", "overwrite values changed outside Sponson since the last apply")
     .option("--wait", "poll for deploys and locks instead of stopping with status partial")
     .option("--wait-timeout <seconds>", "give up waiting after this long (default: 600)")
@@ -110,7 +121,7 @@ function buildProgram(io: IO, redactor: Redactor, setCode: (c: number) => void):
   program
     .command("init")
     .description("write a starter plan, or adopt unmanaged resources into the existing one")
-    .option("--adopt <id>", "adopt only the unmanaged resource with this key, id or label")
+    .option("--adopt <key>", "adopt only the unmanaged resource with this key, id or label")
     .action(async (_opts, cmd: Command) => setCode(await initCommand(cmd.optsWithGlobals(), io, redactor)));
 
   program

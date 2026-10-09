@@ -25,6 +25,6 @@ plan: |
 steps:
   - run: apply --json
     expect: { exit: 0 }
-  - receipt: version2
+  - receipt: newer
   - run: plan
     expect: { exit: 1, stderr: ["RECEIPT_VERSION", "Upgrade Sponson"] }

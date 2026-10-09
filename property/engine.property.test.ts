@@ -24,6 +24,7 @@ interface Case {
   lines: Line[];
   seeded: Array<{ name: string; value: string; planned: boolean }>;
   failApplyAt: number | null;
+  failKind: "apply" | "create" | "lost";
   failDestroyAt: number | null;
   external: "ok" | "never" | "fail";
   driftAt: number | null;
@@ -45,6 +46,7 @@ const caseArb: fc.Arbitrary<Case> = fc.integer({ min: 2, max: 7 }).chain((n) =>
     lines: fc.tuple(...Array.from({ length: n }, (_, i) => lineArb(i))).map((t) => [...t]),
     seeded: fc.array(fc.record({ name: fc.constantFrom("legacy", "n0", "n1", "other"), value: fc.constantFrom("seed", "x"), planned: fc.boolean() }), { maxLength: 2 }),
     failApplyAt: fc.option(fc.integer({ min: 0, max: n - 1 }), { nil: null }),
+    failKind: fc.constantFrom("apply" as const, "create" as const, "lost" as const),
     failDestroyAt: fc.option(fc.integer({ min: 0, max: n - 1 }), { nil: null }),
     external: fc.constantFrom("ok" as const, "never" as const, "fail" as const),
     driftAt: fc.option(fc.integer({ min: 0, max: n - 1 }), { nil: null }),
@@ -104,7 +106,7 @@ describe("engine invariants", () => {
 
         // first apply with an optional injected failure
         const namesBefore = new Set(cloud.items.keys());
-        if (c.failApplyAt !== null) cloud.failNext("apply", `n${c.failApplyAt}`);
+        if (c.failApplyAt !== null) cloud.failNext(c.failKind, `n${c.failApplyAt}`);
         const a1 = await applyRun(opts());
         record(a1);
         // I6: receipt parseable
@@ -150,6 +152,13 @@ describe("engine invariants", () => {
           const ours = Object.values(a3.receipt.lines).some((l) => l.resources.some((r) => r.key === `item:${name}` && r.createdBy === "sponson"));
           if (!ours) expect(cloud.items.has(name)).toBe(true);
         }
+
+        // I8: once destroy succeeds, nothing Sponson created survives — whatever failed, crashed or was lost before.
+        const final = d.receipt.status === "complete" ? d : await destroyRun(opts());
+        record(final);
+        expect(final.receipt.status).toBe("complete");
+        const leaked = [...cloud.items.values()].filter((i) => i.createdBy === "api").map((i) => i.name);
+        expect(leaked).toEqual([]);
 
         // I5: unmanaged resources untouched throughout
         for (const [name, value] of unmanagedBefore) {

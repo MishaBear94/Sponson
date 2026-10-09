@@ -23,12 +23,24 @@ export interface SecretRef {
   secret: string;
 }
 
+/**
+ * `{ keep: true }` — whatever value the resource has live. Sponson manages that it exists and
+ * who owns it, not its value. This is how adopted values enter a plan without being copied anywhere.
+ */
+export interface KeepRef {
+  keep: true;
+}
+
 export type Literal = string | number | boolean;
 
-export type ValueSpec = Literal | FromRef | SecretRef;
+export type ValueSpec = Literal | FromRef | SecretRef | KeepRef;
 
 export function isFromRef(v: unknown): v is FromRef {
   return typeof v === "object" && v !== null && "from" in v && typeof (v as FromRef).from === "string";
+}
+
+export function isKeepRef(v: unknown): v is KeepRef {
+  return typeof v === "object" && v !== null && "keep" in v && (v as KeepRef).keep === true;
 }
 
 export function isSecretRef(v: unknown): v is SecretRef {
@@ -78,7 +90,7 @@ export interface Ctx {
 // Resolved values
 // ---------------------------------------------------------------------------
 
-export type ValueState = "literal" | "resolved" | "pending" | "secret";
+export type ValueState = "literal" | "resolved" | "pending" | "secret" | "kept";
 
 export interface ResolvedValue {
   state: ValueState;
@@ -107,7 +119,11 @@ export interface OutputSpec {
 
 /** One concrete thing in the provider. */
 export interface ResourceRecord {
-  /** Stable key within the adapter+target scope, e.g. `env:preview:DATABASE_URL`. */
+  /**
+   * Stable key within the adapter and provider block, e.g. `env:preview:feat/x:DATABASE_URL`.
+   * Must include every dimension that makes two resources distinct in the provider
+   * (target, git branch, …): the ledger treats equal keys as the same resource.
+   */
   key: string;
   /** Provider-side identifier used to update or delete it. */
   id: string;
@@ -127,19 +143,31 @@ export interface LiveState {
 
 export type DiffKind = "create" | "update" | "unchanged";
 
+/**
+ * One side of a diff, as data. Renderers turn it into text; JSON carries it as-is.
+ * `value` is present only for non-sensitive literal values; everything else is described by state.
+ */
+export interface DiffSide {
+  state: "literal" | "sensitive" | "pending" | "secret" | "absent";
+  /** Non-sensitive value only. */
+  value?: string;
+  /** For pending/secret: the reference (`db.connection_string`, `env://KEY`). */
+  ref?: string;
+}
+
 export interface ResourceDiff {
   key: string;
   kind: DiffKind;
   label: string;
-  /** Display-safe before/after. Sensitive values are already masked. */
-  before?: string;
-  after?: string;
+  before?: DiffSide;
+  after?: DiffSide;
 }
 
 export interface ApplyResult {
+  /** Every resource this change now manages (not only the ones written in this call). */
   resources: ResourceRecord[];
   outputs: Record<string, Literal>;
-  /** Keys of resources that did not exist before this apply (rollback deletes only these). */
+  /** Keys of resources that did not exist before this apply. Must be a subset of what was passed to `intend`. */
   created: string[];
   /** Adapter-specific notes written into the receipt (e.g. `redeployed: true`). */
   notes?: Record<string, unknown>;
@@ -155,12 +183,27 @@ export interface AdapterContext {
   /** Process environment, for tokens and base URLs. */
   env: NodeJS.ProcessEnv;
   log: (message: string) => void;
+  /**
+   * Declare the keys about to be CREATED, before the write request is sent.
+   * The engine persists the intent so a crash, a lost response or a failed call that
+   * actually succeeded server-side is still recognised as Sponson's on the next run.
+   * Updates of existing resources need no intent.
+   */
+  intend(keys: string[]): Promise<void>;
+  /** Mask every known secret (in all its encodings). Call it on provider text BEFORE truncating it. */
+  redact(text: string): string;
 }
 
 export interface OpSpec {
   outputs: Record<string, OutputSpec>;
   /** Fill in defaults (e.g. a branch name) given the context. Returns a new params object. */
   defaults?(params: ResolvedParams, ctx: Ctx): ResolvedParams;
+  /**
+   * The deployment environment this change writes to, when the op targets one explicitly
+   * (Vercel env `target`). The engine requires approval when any line writes to `production`,
+   * whatever `--env` says. Return null when the op is not environment-specific.
+   */
+  writesEnvironment?(params: ResolvedParams, ctx: Ctx): string | null;
   /** Find what currently exists for this change. Null when nothing exists. Must not write. */
   read(actx: AdapterContext, params: ResolvedParams): Promise<LiveState | null>;
   /** Compare live state against desired params. Must not write. */
@@ -176,8 +219,9 @@ export interface OpSpec {
    */
   awaitExternal?(actx: AdapterContext, params: ResolvedParams, live: LiveState): Promise<Record<string, Literal> | null>;
   /**
-   * List every resource in the same target scope as this change, for drift detection.
-   * E.g. all env vars in the Vercel project's preview target.
+   * List every resource this change could plausibly own, for drift and adoption.
+   * E.g. all env vars in the project's preview target, branch-scoped and project-wide.
+   * The engine removes everything any scope's ledger already manages.
    */
   listScope?(actx: AdapterContext, params: ResolvedParams): Promise<ResourceRecord[]>;
 }
@@ -190,10 +234,8 @@ export interface ResourceAdapter {
 export interface SecretSource {
   /** URL scheme, e.g. `env`, `doppler`, `op`. */
   scheme: string;
-  /** Resolve the value. Called only inside apply. */
+  /** Resolve the value. Called by every command so the value can be registered for redaction; only apply sends it anywhere. */
   resolve(ref: string, env: NodeJS.ProcessEnv): Promise<string>;
-  /** A version or hash that changes when the value changes, without exposing it. */
-  fingerprint(ref: string, env: NodeJS.ProcessEnv): Promise<string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -209,7 +251,8 @@ export type LineStatus =
   | "rollback_failed"
   | "skipped"
   | "destroyed"
-  | "destroy_failed";
+  | "destroy_failed"
+  | "blocked";
 
 export type RunStatus = "complete" | "partial" | "failed";
 
@@ -234,8 +277,36 @@ export interface ReceiptLine {
   orphan?: boolean;
 }
 
+/**
+ * The ledger: every resource Sponson knows about in this environment+scope, keyed by identity,
+ * independent of plan lines and carried forward across runs whatever a run's outcome.
+ */
+export interface LedgerEntry {
+  adapter: string;
+  op: string;
+  /** The provider block (project, team) the resource lives in; destroy uses this, not the current plan. */
+  provider: Record<string, unknown>;
+  key: string;
+  id: string;
+  /** Keyed hash of the value we last wrote or accepted; see Receipt.hashKey. */
+  hash: string;
+  label?: string;
+  /**
+   * sponson: created by Sponson, destroyed with the scope.
+   * adopted: existed before, never destroyed.
+   * intent: Sponson was about to create it; claimed as sponson if found live, dropped if not.
+   */
+  createdBy: "sponson" | "adopted" | "intent";
+  /** Line that declares (or last declared) this resource. */
+  line: string;
+  /** True when no line of the current plan declares it any more; kept until destroy. */
+  orphan?: boolean;
+  /** Non-sensitive outputs last seen for the owning line (including external ones like preview_url). */
+  outputs?: Record<string, Literal>;
+}
+
 export interface Receipt {
-  version: 1;
+  version: 2;
   runId: string;
   environment: string;
   scope: string;
@@ -244,11 +315,24 @@ export interface Receipt {
   finishedAt: string;
   plan: { hash: string; path?: string };
   ctx: Ctx;
+  /** What this run did, per plan line. */
   lines: Record<string, ReceiptLine>;
+  /** What Sponson manages after this run. */
+  ledger: LedgerEntry[];
+  /** Commits applied to this scope, oldest first; a run for an older one is stale. */
+  history: Array<{ sha: string; at: string }>;
+  /** Random per-scope key for value hashes, so low-entropy secrets cannot be looked up from a receipt. */
+  hashKey: string;
+  /** Who approved this run, when approval was required. */
+  approvedBy?: string;
   /** Set when this run was a destroy. */
   destroy?: boolean;
+  /** Set when this run was skipped because a newer commit was already applied. */
+  stale?: boolean;
   /** Set when a lock was preempted from a crashed run. */
   lockPreempted?: string;
+  /** Set on a branch scope whose resources a pull request scope took over. */
+  supersededBy?: string;
 }
 
 export interface LockInfo {
@@ -261,11 +345,26 @@ export interface ReceiptStore {
   readonly kind: string;
   /** Latest receipt for this environment+scope, or null. */
   read(environment: string, scope: string): Promise<Receipt | null>;
-  write(receipt: Receipt): Promise<void>;
+  /**
+   * Write the receipt. When `holder` is given the write is fenced: it fails with LockLostError
+   * unless `holder` still holds the scope's lock at the moment of writing.
+   */
+  write(receipt: Receipt, opts?: { holder?: string }): Promise<void>;
   list(environment: string): Promise<Array<{ scope: string; receipt: Receipt }>>;
   /** Returns the preempted lock when an expired lock was taken over. Throws LockHeldError when held and not expired. */
   acquireLock(environment: string, scope: string, holder: string, ttlMs: number): Promise<LockInfo | null>;
+  /** Extend a lock we hold. Throws LockLostError when someone else holds it now. */
+  renewLock(environment: string, scope: string, holder: string, ttlMs: number): Promise<void>;
+  /** Current lock, or null. Never throws for a missing/unreadable lock. */
+  readLock(environment: string, scope: string): Promise<LockInfo | null>;
   releaseLock(environment: string, scope: string, holder: string): Promise<void>;
+}
+
+export class LockLostError extends Error {
+  constructor(public readonly holder: string, public readonly current: LockInfo | null) {
+    super(`Lock for this scope is no longer held by ${holder}${current ? ` (now ${current.holder})` : ""}`);
+    this.name = "LockLostError";
+  }
 }
 
 export class LockHeldError extends Error {
@@ -288,4 +387,6 @@ export interface Drift {
   line?: string;
   resource: { key: string; id?: string; label?: string };
   message: string;
+  /** For `changed`: the live resource was replaced (different provider id), not just edited. */
+  replaced?: boolean;
 }

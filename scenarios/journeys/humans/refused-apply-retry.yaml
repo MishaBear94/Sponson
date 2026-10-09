@@ -1,0 +1,34 @@
+name: 控制台紧急改动后 apply 被拒；CI 重试同一个 apply 不能把改动覆盖掉
+# 决策-引用与漂移.md: 被改动 → 该行拒绝执行，除非带 --reconcile。默认不覆盖人在控制台改的东西。
+# A refused run writes a receipt whose line is `blocked` (v0.2: DRIFT_CHANGED); the ledger keeps the resource, so the next run must still see the drift.
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      parent: main
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        DATABASE_URL: { from: db.connection_string }
+        MAINTENANCE: "off"
+      environments: [preview]
+steps:
+  - run: apply --json
+    expect: { exit: 0, status: complete }
+  - chaos: { drift: { "vercel.env.preview.MAINTENANCE": "on" } }
+  - run: apply --json
+    expect: { exit: 1, lines: { env: blocked }, errors: { env: "--reconcile" } }
+  - run: plan --json
+    expect: { exit: 1, drift: [{ kind: changed, line: env }], plan_lines: { env: blocked } }
+  - run: apply --json
+    expect: { exit: 1, lines: { env: blocked } }
+  - sim:
+      vercel_env: { preview: { MAINTENANCE: "on" } }

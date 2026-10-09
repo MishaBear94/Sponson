@@ -22,7 +22,29 @@ export type ErrorCode =
   | "RECEIPT_VERSION"
   | "STORE_PERMISSION"
   | "APPLY_FAILED"
-  | "WAIT_TIMEOUT";
+  | "WAIT_TIMEOUT"
+  | "LOCK_LOST"
+  | "STORE_CONTENDED"
+  | "STORE_REJECTED"
+  | "OWNED_BY_OTHER_SCOPE"
+  | "REF_OUTPUT_UNKNOWN"
+  | "USAGE"
+  | "INTERNAL"
+  // Provider errors, classified by the HTTP layer so agents can branch on them.
+  | "PROVIDER_TRANSIENT"
+  | "PROVIDER_CONFLICT"
+  | "PROVIDER_NOT_FOUND"
+  | "PROVIDER_AUTH"
+  | "PROVIDER_INVALID"
+  | "PROVIDER_TIMEOUT"
+  | "PROVIDER_RESPONSE"
+  | "PARAM_INVALID"
+  | "DEPENDENCY_BLOCKED"
+  | "EXTERNAL_FAILED"
+  | "INTERRUPTED"
+  | "INTENT_UNRESOLVED"
+  | "ROLLBACK_FAILED"
+  | "DESTROY_FAILED";
 
 export class SponsonError extends Error {
   constructor(

@@ -31,7 +31,7 @@ steps:
   - run: apply --json
     expect:
       exit: 1
-      lines: { env: failed }
+      lines: { env: blocked }
       errors: { env: "changed outside Sponson" }
   - sim:
       vercel_env: { preview: { DATABASE_URL: edited-after-plan } }

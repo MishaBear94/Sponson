@@ -1,13 +1,15 @@
-import type { ApplyResultSummary, Drift, LineStatus, PlanLine, PlanLineStatus, PlanResult, ReceiptLine, ResourceDiff } from "@sponson/core";
+/**
+ * Text rendering (for humans) and the JSON envelopes (for agents).
+ * Display strings such as `(secret)` or `(pending ← db.x)` exist only here, in text; JSON carries engine data as-is.
+ */
+import type { ApplyResultSummary, DiffSide, Drift, LineStatus, PlanLine, PlanLineStatus, PlanResult, ReceiptLine, ResourceDiff } from "@sponson/core";
 
 export interface RenderOptions {
   color: boolean;
-  /** Line id → name of the external event its outputs wait on (e.g. "deploy"), for pending lines. */
-  events?: Record<string, string>;
 }
 
-const PLAN_SYMBOL: Record<PlanLineStatus, string> = { create: "+", update: "~", unchanged: "=", pending: "?", blocked: "-", error: "!" };
-const LINE_SYMBOL: Record<LineStatus, string> = {
+export const PLAN_SYMBOL: Record<PlanLineStatus, string> = { create: "+", update: "~", unchanged: "=", pending: "?", blocked: "-", error: "!" };
+export const LINE_SYMBOL: Record<LineStatus, string> = {
   applied: "+",
   unchanged: "=",
   waiting: "?",
@@ -17,6 +19,7 @@ const LINE_SYMBOL: Record<LineStatus, string> = {
   skipped: "-",
   destroyed: "-",
   destroy_failed: "!",
+  blocked: "-",
 };
 const ANSI: Record<string, string> = { "+": "32", "~": "33", "=": "2", "!": "31" };
 
@@ -25,9 +28,33 @@ function paint(symbol: string, text: string, color: boolean): string {
   return color && code ? `\u001b[${code}m${text}\u001b[0m` : text;
 }
 
-function diffText(d: ResourceDiff): string {
-  if (d.after === undefined) return d.label;
-  return `${d.label}  ${d.before !== undefined ? `${d.before} → ` : ""}${d.after}`;
+/** One side of a diff as text; undefined when there is nothing to show (absent). */
+export function sideText(s: DiffSide | undefined): string | undefined {
+  if (!s) return undefined;
+  switch (s.state) {
+    case "literal":
+      return s.value ?? "";
+    case "sensitive":
+      return "(secret)";
+    case "pending":
+      return s.ref ? `(pending ← ${s.ref})` : "(pending)";
+    case "secret":
+      return s.ref ? `(secret ← ${s.ref})` : "(secret)";
+    case "absent":
+      return undefined;
+  }
+}
+
+export function diffText(d: ResourceDiff): string {
+  const after = sideText(d.after);
+  if (after === undefined) return d.label;
+  const before = sideText(d.before);
+  return `${d.label}  ${before !== undefined ? `${before} → ` : ""}${after}`;
+}
+
+function errorText(error: string | undefined, code: string | undefined): string {
+  if (!error) return code ?? "";
+  return code ? `${code}: ${error}` : error;
 }
 
 interface Row {
@@ -69,18 +96,19 @@ function warningsSection(warnings: string[]): string {
 // plan
 // ---------------------------------------------------------------------------
 
-function planRow(l: PlanLine, events: Record<string, string>): Row {
+function planRow(l: PlanLine): Row {
   const row: Row = { symbol: PLAN_SYMBOL[l.status], id: l.id, op: `${l.adapter}.${l.op}`, status: l.status, detail: "", sub: [] };
+  const diffRows = () => l.diffs.map((d) => `${PLAN_SYMBOL[d.kind]} ${diffText(d)}`);
   if (l.status === "pending") {
-    const ev = l.waitingOn ? events[l.waitingOn] : undefined;
-    row.detail = `waiting on \`${l.waitingOn}\`${ev ? ` (${ev})` : ""}`;
-    row.sub = l.diffs.map((d) => `${PLAN_SYMBOL[d.kind]} ${diffText(d)}`);
+    row.detail = l.waitingOn ? `waiting on \`${l.waitingOn}\`${l.waitingFor ? ` (${l.waitingFor})` : ""}` : `waiting${l.waitingFor ? ` on ${l.waitingFor}` : ""}`;
+    row.sub = diffRows();
   } else if (l.status === "error" || l.status === "blocked") {
-    row.detail = l.error ?? "";
+    row.detail = errorText(l.error, l.errorCode);
+    if (l.status === "blocked") row.sub = diffRows();
   } else if (l.diffs.length === 1) {
     row.detail = diffText(l.diffs[0]!);
   } else if (l.diffs.length > 1) {
-    row.sub = l.diffs.map((d) => `${PLAN_SYMBOL[d.kind]} ${diffText(d)}`);
+    row.sub = diffRows();
   }
   return row;
 }
@@ -95,8 +123,12 @@ export function planSummary(lines: PlanLine[]): string {
 
 export function renderPlan(result: PlanResult, opts: RenderOptions): string {
   const header = `sponson plan · ${result.environment} · ${result.scope} · plan ${result.planHash.slice(0, 8)}`;
-  const body = result.lines.length ? table(result.lines.map((l) => planRow(l, opts.events ?? {})), opts.color) : "(no lines for this environment)";
-  return `${header}\n\n${body}\n${driftSection(result.drift)}${warningsSection(result.warnings)}\n${planSummary(result.lines)}\n`;
+  const notes: string[] = [];
+  if (result.lock) notes.push(`! an apply is running on this scope; this plan may change (lock held by ${result.lock.holder} until ${result.lock.expiresAt})`);
+  if (result.requiresApproval) notes.push("! apply needs approval: it writes to production (--approved-by <who>, from a human)");
+  const noteText = notes.length ? `\n${notes.join("\n")}\n` : "";
+  const body = result.lines.length ? table(result.lines.map(planRow), opts.color) : "(no lines for this environment)";
+  return `${header}\n${noteText}\n${body}\n${driftSection(result.drift)}${warningsSection(result.warnings)}\n${planSummary(result.lines)}\n`;
 }
 
 // ---------------------------------------------------------------------------
@@ -104,10 +136,10 @@ export function renderPlan(result: PlanResult, opts: RenderOptions): string {
 // ---------------------------------------------------------------------------
 
 function receiptRow(l: ReceiptLine): Row {
-  const row: Row = { symbol: LINE_SYMBOL[l.status], id: l.id, op: `${l.adapter}.${l.op}`, status: l.status, detail: "", sub: [] };
+  const row: Row = { symbol: LINE_SYMBOL[l.status] ?? " ", id: l.id, op: `${l.adapter}.${l.op}`, status: l.status, detail: "", sub: [] };
   if (l.orphan) row.detail = "(removed from the plan; left alone)";
   else if (l.status === "waiting") row.detail = `waiting on ${l.waitingFor ?? "external event"}`;
-  else if (l.error) row.detail = l.error;
+  else if (l.error || l.errorCode) row.detail = errorText(l.error, l.errorCode);
   else row.detail = l.resources.map((r) => r.label ?? r.key).join(", ");
   return row;
 }
@@ -115,20 +147,28 @@ function receiptRow(l: ReceiptLine): Row {
 export function finalLine(summary: ApplyResultSummary): string {
   const { receipt } = summary;
   const verb = receipt.destroy ? "destroy" : "apply";
+  if (receipt.stale) {
+    const newest = receipt.history.at(-1)?.sha;
+    return `${verb} skipped (stale): a newer commit${newest ? ` (${newest.slice(0, 7)})` : ""} was already applied to this scope`;
+  }
   const lines = Object.values(receipt.lines).filter((l) => !l.orphan);
   if (receipt.status === "complete") return `${verb} complete`;
   if (receipt.status === "partial") {
     const byEvent = new Map<string, string[]>();
     for (const l of lines) if (l.status === "waiting") byEvent.set(l.waitingFor ?? "external event", [...(byEvent.get(l.waitingFor ?? "external event") ?? []), l.id]);
-    return `${verb} partial: ` + [...byEvent].map(([ev, ids]) => `waiting on ${ev} for lines ${ids.join(", ")}`).join("; ");
+    const blocked = lines.filter((l) => l.status === "blocked").map((l) => l.id);
+    const parts = [...byEvent].map(([ev, ids]) => `waiting on ${ev} for lines ${ids.join(", ")}`);
+    if (blocked.length) parts.push(`blocked: ${blocked.join(", ")}`);
+    return `${verb} partial: ${parts.join("; ")}`;
   }
-  const first = lines.find((l) => ["failed", "rollback_failed", "destroy_failed"].includes(l.status));
-  return `${verb} failed: ${first ? `${first.id}: ${first.error ?? first.status}` : "unknown error"}`;
+  const first = lines.find((l) => ["failed", "rollback_failed", "destroy_failed", "blocked"].includes(l.status));
+  return `${verb} failed: ${first ? `${first.id}: ${errorText(first.error, first.errorCode) || first.status}` : "unknown error"}`;
 }
 
 export function renderApply(summary: ApplyResultSummary, opts: RenderOptions): string {
   const { receipt } = summary;
-  const header = `sponson ${receipt.destroy ? "apply --destroy" : "apply"} · ${receipt.environment} · ${receipt.scope} · run ${receipt.runId}`;
+  const approval = receipt.approvedBy ? ` · approved by ${receipt.approvedBy}` : "";
+  const header = `sponson ${receipt.destroy ? "apply --destroy" : "apply"} · ${receipt.environment} · ${receipt.scope} · run ${receipt.runId}${approval}`;
   const lines = Object.values(receipt.lines);
   const body = lines.length ? table(lines.map(receiptRow), opts.color) : "(nothing to do)";
   const outputs = lines.flatMap((l) => Object.entries(l.outputs).map(([k, v]) => `  ${l.id}.${k} = ${String(v)}`));
@@ -137,7 +177,7 @@ export function renderApply(summary: ApplyResultSummary, opts: RenderOptions): s
 }
 
 // ---------------------------------------------------------------------------
-// JSON
+// JSON envelopes: engine data passed through, nothing added for display.
 // ---------------------------------------------------------------------------
 
 export function planJson(result: PlanResult, ok: boolean) {
@@ -147,6 +187,8 @@ export function planJson(result: PlanResult, ok: boolean) {
     environment: result.environment,
     scope: result.scope,
     planHash: result.planHash,
+    requiresApproval: result.requiresApproval,
+    lock: result.lock,
     lines: result.lines,
     drift: result.drift,
     warnings: result.warnings,
@@ -155,8 +197,4 @@ export function planJson(result: PlanResult, ok: boolean) {
 
 export function applyJson(summary: ApplyResultSummary, ok: boolean) {
   return { ok, command: "apply" as const, receipt: summary.receipt, drift: summary.drift, warnings: summary.warnings };
-}
-
-export function errorJson(error: { code: string; message: string; details?: Record<string, unknown> }) {
-  return { ok: false, error: { code: error.code, message: error.message, ...(error.details ?? {}) } };
 }

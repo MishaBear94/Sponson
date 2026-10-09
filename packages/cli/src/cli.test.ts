@@ -37,11 +37,11 @@ function memAdapter(name: string, op: string, state: MemState): ResourceAdapter 
         read,
         diff(live, p) {
           const key = String(p.name);
-          const after = String(p.value ?? "");
+          const after = { state: "literal" as const, value: String(p.value ?? "") };
           if (!live) return [{ key: `thing:${key}`, kind: "create", label: `thing ${key}`, after }];
           const r = live.resources[0]!;
           const kind = r.hash === sha256(JSON.stringify(p.value ?? null)) ? "unchanged" : "update";
-          return [{ key: r.key, kind, label: r.label!, before: r.hash.slice(0, 8), after }];
+          return [{ key: r.key, kind, label: r.label!, before: { state: "literal" as const, value: r.hash.slice(0, 8) }, after }];
         },
         async apply(_a, p, live) {
           if (p.fail) throw new Error(`boom: ${String(p.token ?? "")}`);
@@ -292,20 +292,30 @@ changes:
 `;
     const h = await harness(plan, state, memAdapter("vercel", "env", state));
     const r = await h.exec("init");
-    expect(r.code).toBe(0);
+    expect(r.code, r.out + r.err).toBe(0);
     expect(r.out).toContain("Added 1 line");
     const text = await readFile(join(h.cwd, "release.plan.yaml"), "utf8");
     expect(text).toContain("# keep me");
     expect(text).toContain("# the main one");
     expect(text).toContain("id: env-preview");
-    expect(text).toContain("LEGACY_KEY:\n        secret: env://LEGACY_KEY");
+    expect(text).toMatch(/LEGACY_KEY:\s*\{\s*keep: true\s*\}/);
     expect(text).not.toContain("env_1");
-    // the adopted line parses and plans
-    expect((await h.exec("plan", "--json")).code).toBe(0);
+    // the adopted line parses and plans (once the referenced variable is set)
+    h.env.LEGACY_KEY = "legacy-value";
+    const after = await h.exec("plan", "--json");
+    expect(after.code, after.out).toBe(0);
   });
 
-  it("--adopt with no match exits 1", async () => {
-    const h = await harness();
-    expect((await h.exec("init", "--adopt", "nope")).code).toBe(1);
+  it("--adopt with no match is a USAGE error (exit 2) listing what can be adopted", async () => {
+    const state = memState();
+    state.scopeExtra.push({ key: "thing:legacy", id: "id-legacy", hash: "h" });
+    const h = await harness(BASE_PLAN, state);
+    const text = await h.exec("init", "--adopt", "nope");
+    expect(text.code).toBe(2);
+    expect(text.err).toContain("error USAGE: Nothing to adopt");
+    const r = await h.exec("init", "--adopt", "nope", "--json");
+    expect(r.code).toBe(2);
+    const j = JSON.parse(r.out);
+    expect(j).toMatchObject({ ok: false, command: "init", error: { code: "USAGE", adopt: "nope", adoptable: ["thing:legacy"] } });
   });
 });

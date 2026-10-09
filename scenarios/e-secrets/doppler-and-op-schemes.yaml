@@ -14,5 +14,5 @@ steps:
   - run: apply --json
     expect:
       exit: 1
-      lines: { env: failed }
+      lines: { env: blocked }
       errors: { env: "No secret source for `vault://`.*env://" }

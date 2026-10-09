@@ -25,4 +25,8 @@ plan: |
 chaos: { deploy: never }
 steps:
   - run: apply --wait --wait-timeout 1 --json
-    expect: { exit: 1, error: WAIT_TIMEOUT }
+    expect:
+      exit: 1
+      status: failed
+      lines: { db: applied, env: applied, callback: waiting }
+      errors: { callback: "timed out waiting for deploy" }

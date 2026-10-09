@@ -1,5 +1,5 @@
 import { walkParams } from "./plan.js";
-import { isFromRef, isSecretRef, type Literal, type OutputSpec, type ResolvedParams, type ResolvedValue } from "./types.js";
+import { isFromRef, isKeepRef, isSecretRef, type Literal, type OutputSpec, type ResolvedParams, type ResolvedValue } from "./types.js";
 
 /** Outputs a line has produced so far, with the spec that says which are sensitive. */
 export interface LineOutputs {
@@ -22,6 +22,13 @@ export function pendingRef(marker: string): string {
   return marker.slice(PENDING_PREFIX.length);
 }
 
+const KEEP_MARKER = "\u0000keep";
+
+/** Placed into params for `{ keep: true }`. Adapters treat it as "equal to whatever is live". */
+export function isKeepMarker(v: unknown): v is string {
+  return v === KEEP_MARKER;
+}
+
 /** How a pending marker is shown: secret references are URLs, output references are `line.output`. */
 export function pendingDisplay(marker: string): string {
   const ref = pendingRef(marker);
@@ -39,6 +46,8 @@ export function displayValue(v: ResolvedValue): string {
       return `(pending ← ${v.ref})`;
     case "secret":
       return `(secret ← ${v.ref})`;
+    case "kept":
+      return "(kept as is)";
   }
 }
 
@@ -79,6 +88,10 @@ export function resolveParams(
       inputs[key] = { state: "pending", value: null, ref: value.from, dependsOn: line!, sensitive: spec?.sensitive === true };
       pending.push({ path: key, ref: value.from, line: line! });
       return pendingMarker(value.from);
+    }
+    if (isKeepRef(value)) {
+      inputs[path.join(".")] = { state: "kept", value: null };
+      return KEEP_MARKER;
     }
     if (isSecretRef(value)) {
       const key = path.join(".");

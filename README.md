@@ -70,7 +70,8 @@ One release, one plan. Three commands.
 - **Secrets are references.** `{ secret: "env://NAME" }`, `doppler://`, `op://`. Values are resolved inside `apply`, handed to the adapter, and redacted from every byte of output. A literal that looks like a secret is rejected at parse time.
 - **References cross lines.** `{ from: db.connection_string }` reads another line's output. Outputs that only exist after an external event (a deploy) stop the run with status `partial`; the next `apply` continues from there. Same command, no flags.
 - **Drift is reported, never silently overwritten.** Something changed in a console since the last apply? `plan` says so; `apply` refuses that line until you pass `--reconcile`. Something exists that the plan does not mention? It is listed and left alone.
-- **Receipts are the agent's memory.** Each run writes what actually happened — which resources, their value hashes, which lines waited or failed — to an orphan branch `sponson/receipts` in your repo. The agent reads the receipt, not its own last tool call.
+- **Receipts are the agent's memory.** Each run writes what actually happened to an orphan branch `sponson/receipts` in your repo: a ledger of every resource the scope owns (kept across failed, refused and crashed runs), what each line did, and which commits were applied. Creates are recorded before they are sent, so even a write whose response was lost is never forgotten. The agent reads the receipt, not its own last tool call.
+- **Adopting is not copying.** `sponson init` adopts existing resources as `{ keep: true }`: Sponson takes over that they exist, keeps their live values, and never destroys them.
 - **Production needs a human.** `--env production` without `--approved-by` is refused before any adapter is touched. The default environment is always `preview`; nothing is inferred from a branch name.
 - **Destroy is symmetric.** `sponson apply --destroy` removes what Sponson created, in reverse order, and never touches resources it merely adopted.
 
@@ -90,25 +91,33 @@ In GitHub Actions, one workflow with three triggers calls the same action:
 on:
   pull_request: { types: [opened, synchronize, closed] }
   deployment_status:
-permissions: { contents: write, pull-requests: write }
+permissions: { contents: write, pull-requests: write, deployments: read }
 jobs:
   sponson:
     runs-on: ubuntu-latest
+    # only finished preview deployments; production has its own approved job (see action/README.md)
+    if: >-
+      github.event_name == 'pull_request' || (github.event.deployment_status.state == 'success' &&
+      github.event.deployment.environment != 'Production' && github.event.deployment.environment != 'production')
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
     steps:
       - uses: actions/checkout@v4
+        with: { ref: "${{ github.event.deployment.sha || github.sha }}" }
       - uses: sponson/sponson/action@v1
         with:
           command: ${{ github.event.action == 'closed' && 'destroy' || 'apply' }}
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
 ```
 
 The action comments the plan and the receipt on the pull request. See [action/README.md](action/README.md).
 
 ### For agents
 
-`sponson mcp` exposes `sponson_plan`, `sponson_apply` and `sponson_receipt` over stdio. [SKILL.md](SKILL.md) tells an agent when to write a plan line, when to stop and show a human the diff, what `partial` means, and why it must never write a secret value or approve production itself. Every command takes `--json`; pending and secret values are `null` there, never placeholder text.
+`sponson mcp` exposes `sponson_plan`, `sponson_apply` and `sponson_receipt` over stdio. [SKILL.md](SKILL.md) tells an agent when to write a plan line, when to stop and show a human the diff, what `partial` and `blocked` mean, and why it must never write a secret value or approve production itself.
+
+Every command (`init` included) takes `--json`, and every outcome, failures included, is one JSON document: `{ ok, command, ... }` or `{ ok: false, command, error: { code, message } }`. That holds for a mistyped flag (`USAGE`), a plan error, a provider failure (`PROVIDER_*`) and an unexpected crash (`INTERNAL`) alike, and the MCP tools return the same envelope as the first line of every result. `ok` is true exactly when the exit code is 0. Pending, secret and sensitive values are `null` next to an explicit `state`, never placeholder text; display strings exist only in the human-readable output. Secrets are masked in every form a provider may echo them (raw, JSON-escaped, URL-encoded, base64, the password inside a connection string) before anything is printed, logged or written to a receipt, and JSON is masked field by field so redaction can never change its structure.
 
 ## How it works
 
@@ -134,9 +143,10 @@ Receipts live on an orphan git branch so CI runs, which start from nothing, can 
 
 This repository was built and accepted entirely against a local fake cloud, because no real Vercel, Neon or Clerk account was available during development.
 
-- `packages/sim` serves the API subsets the adapters use, with a chaos endpoint: latency, failing the next N writes matching a rule, console-style drift, and five deploy behaviours (`ok`, `never`, `fail`, `stale`, `delay`, `double`).
-- `scenarios/` holds 53 YAML scenarios across nine categories — mid-run failure, concurrency, drift, references, secrets, the deploy barrier, destroy, mistakes agents make, mistakes humans make. After every step the runner checks that no secret appears anywhere, that `plan` wrote nothing, and that every receipt parses.
-- `property/` generates random plans, failures and drift and checks only the invariants, 1000 cases per run.
+- `packages/sim` serves the API subsets the adapters use, with a chaos endpoint: latency, failing or hanging the next N requests matching a rule, `429` with `Retry-After`, lost responses after a successful write, pagination, Neon's asynchronous operations, deployment lifecycles, and console-style drift (edit, delete, delete-and-recreate).
+- `scenarios/*/` holds 53 YAML scenarios across nine categories — mid-run failure, concurrency, drift, references, secrets, the deploy barrier, destroy, mistakes agents make, mistakes humans make.
+- `scenarios/journeys/` holds long system tests along six independent dimensions: a week of a team's CI lifecycle, many actors at once on real git receipts (including SIGKILL mid-apply), providers misbehaving like real clouds, an agent driving Sponson only through MCP and JSON, humans editing consoles and refactoring plans, and every channel a secret could leak through (including the receipts branch history and PR comments).
+- `property/` generates random plans, failures (including lost responses) and drift, and checks eight invariants — among them that `plan` writes nothing and that nothing Sponson created survives a successful destroy — 1000 cases per run.
 
 What the fake cannot prove is that the real APIs behave as assumed. The assumptions are listed at the top of `packages/sim/src/server.ts`, and `scenarios/contract.test.ts` pins the critical ones: it runs against the sim by default and against the real APIs with `pnpm test:live` (see the file header for the required variables). It has not yet been run against real accounts.
 

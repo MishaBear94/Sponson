@@ -28,14 +28,14 @@ steps:
   - chaos: { drift: { "vercel.env.preview.DATABASE_URL": "edited-in-console" } }
   - run: plan --json
     expect:
-      exit: 0
+      exit: 1
       drift: [{ kind: changed, line: env }]
-      plan_lines: { env: update }
+      plan_lines: { env: blocked }
   - run: apply --json
     expect:
       exit: 1
       status: failed
-      lines: { db: unchanged, env: failed, callback: skipped }
+      lines: { db: unchanged, env: blocked, callback: skipped }
       errors: { env: "--reconcile" }
   - sim:
       vercel_env: { preview: { DATABASE_URL: edited-in-console } }

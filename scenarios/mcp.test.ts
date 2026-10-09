@@ -34,7 +34,7 @@ changes:
     op: redirect_allow
     url: { from: env.preview_url }
 `;
-const SECRET = "sk_test_mcp_secret_value";
+const SECRET = "fake_ts_mcp_secret_value";
 
 let sim: SimHandle;
 let client: Client;

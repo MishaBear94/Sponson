@@ -35,7 +35,7 @@
  *     - crash_after: <line id>   run apply through the engine and kill it after that line
  *     - lock: held | expired     plant a lock for the scope, as another run (or a crashed one) would
  *     - ctx: { sha, branch, pr } change the context for later steps (force-push, rename)
- *     - receipt: corrupt | delete | version2
+ *     - receipt: corrupt | delete | newer   (newer: bump latest.json one version past what was written)
  *     - wait: <ms>
  *
  * After every `run` step the runner checks: no secret in stdout/stderr/receipts (I1),
@@ -84,7 +84,7 @@ type Step =
   | { crash_after: string }
   | { lock: "held" | "expired" }
   | { ctx: Partial<typeof DEFAULT_CTX> }
-  | { receipt: "corrupt" | "delete" | "version2" }
+  | { receipt: "corrupt" | "delete" | "newer" }
   | { wait: number };
 
 interface Scenario {
@@ -334,7 +334,7 @@ class Harness {
     await writeFile(join(dir, "lock.json"), JSON.stringify({ holder: `other-${kind}`, acquiredAt: new Date(0).toISOString(), expiresAt: expiresAt.toISOString() }));
   }
 
-  private async tamperReceipt(kind: "corrupt" | "delete" | "version2") {
+  private async tamperReceipt(kind: "corrupt" | "delete" | "newer") {
     const latest = join(this.cwd, ".sponson/receipts", this.ctx.env, scopeOf(this.ctx), "latest.json");
     if (kind === "delete") return rm(latest, { force: true });
     if (kind === "corrupt") {
@@ -342,7 +342,7 @@ class Harness {
       return writeFile(latest, "{ not json");
     }
     const r = JSON.parse(await readFile(latest, "utf8"));
-    r.version = 2;
+    r.version = r.version + 1;
     this.tampered.add(JSON.stringify(r));
     await writeFile(latest, JSON.stringify(r));
   }

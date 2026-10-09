@@ -1,6 +1,6 @@
 import { sha256 } from "../hash.js";
-import { isPendingMarker, pendingDisplay } from "../resolve.js";
-import type { ApplyResult, LiveState, ResourceAdapter, ResourceDiff, ResourceRecord, SecretSource } from "../types.js";
+import { isPendingMarker, pendingRef } from "../resolve.js";
+import type { ApplyResult, DiffSide, LiveState, ResourceAdapter, ResourceRecord, SecretSource } from "../types.js";
 
 /**
  * An in-memory provider for engine tests and property tests.
@@ -16,12 +16,14 @@ export interface FakeItem {
   createdBy: "seed" | "api";
 }
 
+type FailKind = "apply" | "create" | "lost" | "destroy" | "read";
+
 export class FakeCloud {
   items = new Map<string, FakeItem>();
   writes: Array<{ op: "create" | "update" | "delete"; name: string }> = [];
   reads = 0;
   external: "ok" | "never" | "fail" = "ok";
-  private failQueue: Array<{ kind: "apply" | "destroy" | "read"; match?: string }> = [];
+  private failQueue: Array<{ kind: FailKind; match?: string }> = [];
   private seq = 0;
 
   seed(name: string, value: string): FakeItem {
@@ -30,8 +32,11 @@ export class FakeCloud {
     return item;
   }
 
-  /** Fail the next write of this kind (optionally only for a given item name). */
-  failNext(kind: "apply" | "destroy" | "read", match?: string): void {
+  /**
+   * Fail the next operation of this kind (optionally only for one item name).
+   * apply: before any write. create: before a create, after the intent. lost: after the create succeeded.
+   */
+  failNext(kind: FailKind, match?: string): void {
     this.failQueue.push({ kind, match });
   }
 
@@ -53,7 +58,7 @@ export class FakeCloud {
     this.failQueue = [];
   }
 
-  private maybeFail(kind: "apply" | "destroy" | "read", name: string): void {
+  private maybeFail(kind: FailKind, name: string): void {
     const i = this.failQueue.findIndex((f) => f.kind === kind && (!f.match || f.match === name));
     if (i >= 0) {
       this.failQueue.splice(i, 1);
@@ -77,6 +82,7 @@ export class FakeCloud {
             url: { available: "external", event: "deploy" },
           },
           defaults: (p, ctx) => ({ ...p, name: p.name ?? `item-${ctx.scope}` }),
+          writesEnvironment: (p) => (typeof p.target === "string" ? p.target : null),
           async read(_actx, p) {
             cloud.reads++;
             cloud.maybeFail("read", String(p.name));
@@ -88,11 +94,12 @@ export class FakeCloud {
             const n = String(p.name);
             const want = p.value;
             const current = live?.resources.find((r) => r.key === key(n));
-            const after = isPendingMarker(want) ? pendingDisplay(want) : String(want);
-            const d: ResourceDiff = { key: key(n), label: n, kind: "create", after };
-            if (!current) return [d];
-            if (isPendingMarker(want)) return [{ ...d, kind: "update", before: "sha:" + current.hash.slice(0, 8) }];
-            return [{ ...d, kind: current.hash === sha256(String(want)) ? "unchanged" : "update", before: "sha:" + current.hash.slice(0, 8) }];
+            const after: DiffSide = isPendingMarker(want)
+              ? { state: pendingRef(want).includes("://") ? "secret" : "pending", ref: pendingRef(want) }
+              : { state: "literal", value: String(want) };
+            if (!current) return [{ key: key(n), label: n, kind: "create", after }];
+            if (!isPendingMarker(want) && current.hash === sha256(String(want))) return [{ key: key(n), label: n, kind: "unchanged" }];
+            return [{ key: key(n), label: n, kind: "update", before: { state: "sensitive" }, after }];
           },
           async apply(_actx, p, live): Promise<ApplyResult> {
             const n = String(p.name);
@@ -106,9 +113,12 @@ export class FakeCloud {
               }
               return { resources: [record(existing)], outputs: outputsOf(existing), created: [] };
             }
+            await _actx.intend([key(n)]);
+            cloud.maybeFail("create", n);
             const it: FakeItem = { id: `it_${++cloud.seq}`, name: n, value: String(p.value), createdBy: "api" };
             cloud.items.set(n, it);
             cloud.writes.push({ op: "create", name: n });
+            cloud.maybeFail("lost", n); // the write happened; the response did not arrive
             void live;
             return { resources: [record(it)], outputs: outputsOf(it), created: [key(n)] };
           },
@@ -142,10 +152,6 @@ export function fakeSecretSource(values: Record<string, string>, scheme = "fake"
       const v = values[name];
       if (v === undefined) throw new Error(`secret ${ref} not found`);
       return v;
-    },
-    async fingerprint(ref) {
-      const name = ref.slice(`${scheme}://`.length);
-      return sha256(values[name] ?? "").slice(0, 16);
     },
   };
 }

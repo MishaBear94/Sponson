@@ -22,16 +22,27 @@ export async function detectCtx(
   processEnv: NodeJS.ProcessEnv = process.env,
   cwd: string = process.cwd(),
 ): Promise<Ctx> {
-  const env = overrides.env ?? processEnv.SPONSON_CTX_ENV ?? "preview";
+  // CI systems export variables that do not apply to this event as empty strings (GitHub sets
+  // GITHUB_HEAD_REF="" on a push). An empty value is "not set", never a value.
+  const v = (name: string): string | undefined => nonEmpty(processEnv[name]);
+  const env = nonEmpty(overrides.env) ?? v("SPONSON_CTX_ENV") ?? "preview";
 
-  let branch = overrides.branch ?? processEnv.SPONSON_CTX_BRANCH ?? processEnv.GITHUB_HEAD_REF ?? processEnv.GITHUB_REF_NAME;
-  let sha = overrides.sha ?? processEnv.SPONSON_CTX_SHA ?? processEnv.GITHUB_SHA;
+  let branch = nonEmpty(overrides.branch) ?? v("SPONSON_CTX_BRANCH") ?? v("GITHUB_HEAD_REF") ?? v("GITHUB_REF_NAME");
+  let sha = nonEmpty(overrides.sha) ?? v("SPONSON_CTX_SHA") ?? v("GITHUB_SHA");
   let pr: number | null | undefined = overrides.pr;
 
+  // SPONSON_CTX_PR="" is the one deliberate empty value: "there is no pull request" (skips `gh` lookups).
   if (pr === undefined && processEnv.SPONSON_CTX_PR !== undefined) {
-    pr = processEnv.SPONSON_CTX_PR === "" ? null : Number(processEnv.SPONSON_CTX_PR);
+    const raw = processEnv.SPONSON_CTX_PR.trim();
+    if (raw === "") pr = null;
+    else {
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n <= 0) throw new SponsonError("CTX_NULL", `SPONSON_CTX_PR must be a positive integer or empty (got ${JSON.stringify(raw)})`, { variable: "SPONSON_CTX_PR" });
+      pr = n;
+    }
   }
-  if (pr === undefined) pr = await prFromGithub(processEnv);
+  const payload = await eventPayload(processEnv);
+  if (pr === undefined) pr = prFromGithub(processEnv, payload);
 
   if (!branch || !sha) {
     const git = await gitInfo(cwd);
@@ -45,32 +56,54 @@ export async function detectCtx(
     env,
     git: { branch, sha, short_sha },
     pr: { number: pr ?? null },
-    scope: scopeFor(branch, pr ?? null),
+    scope: scopeFor(branch, pr ?? null, defaultBranchOf(payload)),
   };
 }
 
-export function scopeFor(branch: string, pr: number | null): string {
+function nonEmpty(s: string | undefined): string | undefined {
+  if (s === undefined) return undefined;
+  const t = s.trim();
+  return t === "" ? undefined : t;
+}
+
+/** `defaultBranch`: the repository's default branch when known (GitHub event payloads carry it); it maps to `main` too. */
+export function scopeFor(branch: string, pr: number | null, defaultBranch?: string): string {
   if (pr !== null) return `pr-${pr}`;
-  if (branch === "main" || branch === "master") return "main";
+  if (branch === "main" || branch === "master" || (defaultBranch !== undefined && branch === defaultBranch)) return "main";
   return `branch-${branch.replace(/[^a-zA-Z0-9._-]+/g, "-")}`;
 }
 
-async function prFromGithub(env: NodeJS.ProcessEnv): Promise<number | null | undefined> {
-  const ref = env.GITHUB_REF ?? "";
+/** The fields of a GitHub event payload context detection reads. */
+interface EventPayload {
+  number?: unknown;
+  pull_request?: { number?: unknown } | null;
+  repository?: { default_branch?: unknown } | null;
+}
+
+async function eventPayload(env: NodeJS.ProcessEnv): Promise<EventPayload | null> {
+  const path = nonEmpty(env.GITHUB_EVENT_PATH);
+  if (!path) return null;
+  try {
+    const payload = JSON.parse(await readFile(path, "utf8"));
+    return payload && typeof payload === "object" ? (payload as EventPayload) : null;
+  } catch {
+    return null; // not every event has a payload we understand
+  }
+}
+
+function defaultBranchOf(payload: EventPayload | null): string | undefined {
+  const b = payload?.repository?.default_branch;
+  return typeof b === "string" && b !== "" ? b : undefined;
+}
+
+function prFromGithub(env: NodeJS.ProcessEnv, payload: EventPayload | null): number | null | undefined {
+  const ref = nonEmpty(env.GITHUB_REF) ?? "";
   const m = /^refs\/pull\/(\d+)\//.exec(ref);
   if (m) return Number(m[1]);
-  if (env.GITHUB_EVENT_PATH) {
-    try {
-      const payload = JSON.parse(await readFile(env.GITHUB_EVENT_PATH, "utf8"));
-      const n = payload?.pull_request?.number ?? payload?.number;
-      if (typeof n === "number") return n;
-      // deployment_status events carry no PR; fall back to branch-based scope lookup later.
-      if (env.GITHUB_ACTIONS) return null;
-    } catch {
-      /* ignore: not every event has a payload we understand */
-    }
-  }
-  if (env.GITHUB_ACTIONS) return null;
+  const n = payload?.pull_request?.number ?? payload?.number;
+  if (typeof n === "number") return n;
+  // push and deployment_status events carry no PR: inside Actions that means "no PR", not "ask gh".
+  if (nonEmpty(env.GITHUB_ACTIONS)) return null;
   return undefined;
 }
 

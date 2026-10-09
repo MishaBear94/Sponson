@@ -3,7 +3,7 @@ import { parseDocument, visit, isAlias } from "yaml";
 import { z } from "zod";
 import { SponsonError } from "./errors.js";
 import { sha256 } from "./hash.js";
-import { isFromRef, isSecretRef, type Change, type Plan } from "./types.js";
+import { isFromRef, isKeepRef, isSecretRef, type Change, type Plan } from "./types.js";
 
 export const PLAN_FILENAME = "release.plan.yaml";
 
@@ -150,7 +150,8 @@ function validateSemantics(plan: Plan): void {
     }
     walkParams(c.params, [], (path, value) => {
       const last = path[path.length - 1] ?? "";
-      if (typeof value === "string" && SECRET_KEY_PATTERN.test(last) && !isPendingPlaceholder(value)) {
+      // Numbers count too: `ADMIN_PASSWORD: 84736291` is a secret written in YAML's other scalar type.
+      if ((typeof value === "string" || typeof value === "number") && SECRET_KEY_PATTERN.test(last) && !isPendingPlaceholder(String(value))) {
         throw new SponsonError(
           "SECRET_LITERAL",
           `Line \`${c.id}\`: \`${path.join(".")}\` looks like a secret but is a literal. Use \`{ secret: "env://${last}" }\` instead.`,
@@ -195,14 +196,14 @@ function isPendingPlaceholder(s: string): boolean {
 }
 
 /**
- * Visit every leaf of a params object. ValueSpec objects (`{from}`, `{secret}`) are leaves.
+ * Visit every leaf of a params object. ValueSpec objects (`{from}`, `{secret}`, `{keep}`) are leaves.
  */
 export function walkParams(
   value: unknown,
   path: string[],
   fn: (path: string[], value: unknown) => void,
 ): void {
-  if (isFromRef(value) || isSecretRef(value)) {
+  if (isFromRef(value) || isSecretRef(value) || isKeepRef(value)) {
     fn(path, value);
     return;
   }

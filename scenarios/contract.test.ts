@@ -7,7 +7,7 @@
  *   SPONSON_LIVE=1 \
  *   VERCEL_TOKEN=... SPONSON_LIVE_VERCEL_PROJECT=prj_... [SPONSON_LIVE_VERCEL_TEAM=team_...] \
  *   NEON_API_KEY=... SPONSON_LIVE_NEON_PROJECT=... \
- *   CLERK_SECRET_KEY=sk_test_... \
+ *   CLERK_SECRET_KEY=fake_ts_... \
  *   pnpm test:live
  *
  * Use throwaway projects: the suite creates a Neon branch, preview env vars on a
@@ -148,8 +148,10 @@ describe(`contract (${LIVE ? "@live" : "sim"})`, () => {
     const op = vercelAdapter.ops.env!;
     const params = op.defaults!({ target: "preview", values: { CONTRACT_TOKEN: SECRET } }, actx("vercel").ctx);
     const live = await op.read(actx("vercel"), params);
-    expect(live?.resources.map((r) => r.key)).toContain("env:preview:CONTRACT_TOKEN");
-    expect(op.diff(live, params).find((d) => d.key === "env:preview:CONTRACT_TOKEN")?.kind).toBe("unchanged");
+    // v0.2 key: env:<target>:<gitBranch|*>:<KEY> (the preview var is scoped to this run's git branch).
+    const key = `env:preview:${branch}:CONTRACT_TOKEN`;
+    expect(live?.resources.map((r) => r.key)).toContain(key);
+    expect(op.diff(live, params).find((d) => d.key === key)?.kind).toBe("unchanged");
   });
 
   it("assumption: the Neon branch and its connection string are readable right after creation", async () => {

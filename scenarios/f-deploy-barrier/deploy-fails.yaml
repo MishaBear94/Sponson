@@ -29,7 +29,7 @@ steps:
       exit: 1
       status: failed
       lines: { db: applied, env: applied, callback: skipped }
-      errors: { callback: "failed" }
+      errors: { callback: "deployment \\S+ ended ERROR" }
   - sim:
       neon_branches: { "sponson/preview/pr-42": exists }
       vercel_env: { preview: { DATABASE_URL: exists } }

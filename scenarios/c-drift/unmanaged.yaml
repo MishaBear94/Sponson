@@ -30,7 +30,7 @@ steps:
     expect:
       exit: 0
       drift:
-        - { kind: unmanaged, key: "env:preview:LEGACY_KEY" }
+        - { kind: unmanaged, key: "env:preview:feat/x:LEGACY_KEY" }
         - { kind: unmanaged, key: "branch:sponson/preview/old-one" }
   - run: apply --json
     expect: { exit: 0, status: complete }
