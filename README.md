@@ -138,7 +138,7 @@ This repository was built and accepted entirely against a local fake cloud, beca
 - `scenarios/` holds 53 YAML scenarios across nine categories — mid-run failure, concurrency, drift, references, secrets, the deploy barrier, destroy, mistakes agents make, mistakes humans make. After every step the runner checks that no secret appears anywhere, that `plan` wrote nothing, and that every receipt parses.
 - `property/` generates random plans, failures and drift and checks only the invariants, 1000 cases per run.
 
-What the fake cannot prove is that the real APIs behave as assumed. The three assumptions most likely to be wrong are written at the top of `packages/sim/src/server.ts`; the first thing to do with a real account is check them.
+What the fake cannot prove is that the real APIs behave as assumed. The assumptions are listed at the top of `packages/sim/src/server.ts`, and `scenarios/contract.test.ts` pins the critical ones: it runs against the sim by default and against the real APIs with `pnpm test:live` (see the file header for the required variables). It has not yet been run against real accounts.
 
 ## Status
 

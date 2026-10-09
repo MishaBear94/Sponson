@@ -17,7 +17,8 @@
     "test:property": "vitest run --project property",
     "lint": "eslint .",
     "sim": "tsx packages/sim/src/bin.ts",
-    "sponson": "tsx packages/cli/src/bin.ts"
+    "sponson": "tsx packages/cli/src/bin.ts",
+    "test:live": "SPONSON_LIVE=1 vitest run --project scenarios scenarios/contract.test.ts"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
