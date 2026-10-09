@@ -147,6 +147,6 @@ describe("lifecycle: late and out-of-order events", () => {
       GITHUB_HEAD_REF: "",
       GITHUB_SHA: m,
     });
-    expect({ exit: r.exit, scope: r.json?.receipt?.scope ?? r.json?.error?.code, branch: r.json?.receipt?.ctx.git.branch }).toEqual({ exit: 0, scope: "main", branch: "main" });
+    expect({ exit: r.code, scope: r.json?.receipt?.scope ?? r.json?.error?.code, branch: r.json?.receipt?.ctx.git.branch }).toEqual({ exit: 0, scope: "main", branch: "main" });
   });
 });

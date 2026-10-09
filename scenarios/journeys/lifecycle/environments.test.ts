@@ -1,6 +1,7 @@
 /**
  * Two environments in one plan. Production needs a human (README: "`--env production` without `--approved-by` is
- * refused before any adapter is touched"; 验收策略 invariant 7: "无 --env production + 审批标记时，production 目标零写入").
+ * refused before any adapter is touched"; invariant I7: without `--env production` and the approval flag, zero
+ * writes reach a production target).
  * A PR's preview run and a PR's destroy must never write to the production target, whatever a line says.
  */
 import { afterEach, describe, expect, it } from "vitest";
@@ -42,7 +43,7 @@ describe("lifecycle: preview runs never touch production", () => {
 
     // pull_request: opened — preview, no approval anywhere
     const r = await team.cli(["apply"], { pr: 42, branch: "feat/search", sha: a });
-    expect(productionEnvs(team), `preview run (exit ${r.exit}) wrote to production`).toEqual(before);
+    expect(productionEnvs(team), `preview run (exit ${r.code}) wrote to production`).toEqual(before);
 
     // pull_request: closed
     await team.cli(["apply", "--destroy"], { pr: 42, branch: "feat/search", sha: a });
@@ -59,7 +60,7 @@ describe("lifecycle: preview runs never touch production", () => {
 
     // production without approval: refused, zero writes
     const refused = await team.cli(["apply"], { env: "production", pr: null, branch: "main", sha: m });
-    expect(refused.exit).toBe(2);
+    expect(refused.code).toBe(2);
     expect(refused.writes).toEqual([]);
 
     const prod = await team.cli(["apply", "--approved-by", "alice"], { env: "production", pr: null, branch: "main", sha: m });

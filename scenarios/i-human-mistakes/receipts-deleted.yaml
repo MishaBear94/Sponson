@@ -1,4 +1,4 @@
-name: 回执被删：一切当作未管理/收编，不崩
+name: "receipts deleted: everything is treated as unmanaged/adopted, no crash"
 plan: |
   version: 1
   providers:

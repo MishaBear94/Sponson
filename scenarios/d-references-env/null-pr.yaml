@@ -1,4 +1,4 @@
-name: 本地没有 PR 但分支名用了 ctx.pr.number：说清楚哪行、为什么、怎么补
+name: "no PR locally but the branch name uses ctx.pr.number: says which line, why, and how to fix it"
 plan: |
   version: 1
   providers:

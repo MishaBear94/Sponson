@@ -41,7 +41,8 @@ export interface GlobalOpts {
   receiptsRemote?: string;
 }
 
-export interface RunContext {
+/** Everything one CLI or MCP invocation resolved before calling the engine (not core's engine `RunContext`). */
+export interface Invocation {
   plan: Plan;
   planPath: string;
   ctx: Ctx;
@@ -64,7 +65,7 @@ export function planPathFor(opts: GlobalOpts, io: IO): string {
 }
 
 /** Load the plan, detect the context, pick a receipt store and build the registry. */
-export async function buildRunContext(opts: GlobalOpts, io: IO, redactor: Redactor): Promise<RunContext> {
+export async function buildInvocation(opts: GlobalOpts, io: IO, redactor: Redactor): Promise<Invocation> {
   const planPath = planPathFor(opts, io);
   const { plan, warnings: parseWarnings } = await loadPlan(planPath);
   const warnings = parseWarnings.map((w) => w.message);
@@ -78,18 +79,14 @@ export async function buildRunContext(opts: GlobalOpts, io: IO, redactor: Redact
   return { plan, planPath, ctx, store, registry, redactor, warnings };
 }
 
-export function toRunOptions(rc: RunContext, io: IO, extra: Partial<RunOptions> = {}): RunOptions {
-  // Approval is resolved (and trimmed) by the CLI from --approved-by / SPONSON_APPROVED_BY; the engine
-  // must not find an untrimmed copy in the environment.
-  const env = { ...io.env };
-  delete env.SPONSON_APPROVED_BY;
+export function toRunOptions(inv: Invocation, io: IO, extra: Partial<RunOptions> = {}): RunOptions {
   return {
-    plan: rc.plan,
-    ctx: rc.ctx,
-    registry: rc.registry,
-    store: rc.store,
-    env,
-    redactor: rc.redactor,
+    plan: inv.plan,
+    ctx: inv.ctx,
+    registry: inv.registry,
+    store: inv.store,
+    env: io.env,
+    redactor: inv.redactor,
     // Adapter logs go to stderr so `--json` stdout stays parseable.
     log: (m) => io.stderr.write(`${m}\n`),
     isAncestor: gitAncestry(io.cwd),
@@ -108,8 +105,15 @@ export function gitAncestry(cwd: string): AncestryCheck {
     });
 }
 
-/** An approver name, trimmed; empty or whitespace-only is "not provided". */
-export function cleanApprover(raw: unknown): string | undefined {
+/**
+ * Who approved this run: `--approved-by` (or the MCP `approvedBy` argument), else `$SPONSON_APPROVED_BY`.
+ * The CLI owns this fallback; the engine only sees the resolved name. Trimmed; blank counts as absent.
+ */
+export function resolveApprover(flag: unknown, env: NodeJS.ProcessEnv): string | undefined {
+  return cleanApprover(flag) ?? cleanApprover(env.SPONSON_APPROVED_BY);
+}
+
+function cleanApprover(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
   const t = raw.trim();
   return t === "" ? undefined : t;

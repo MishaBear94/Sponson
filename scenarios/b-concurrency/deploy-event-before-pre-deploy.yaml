@@ -1,4 +1,4 @@
-name: deployment_status 先于前半段到达：后半段等待而不是跳过
+name: "deployment_status arrives before the pre-deploy half: the post-deploy half waits instead of skipping"
 plan: |
   version: 1
   providers:

@@ -1,4 +1,4 @@
-name: 失败后修复原因重跑：从零完整跑完
+name: "fix the cause after a failure and re-run: runs to completion from scratch"
 plan: |
   version: 1
   providers:

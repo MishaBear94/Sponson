@@ -1,4 +1,4 @@
-name: --env prod 拼错：列出合法环境名
+name: "--env prod typo: lists the valid environment names"
 plan: |
   version: 1
   providers:

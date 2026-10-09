@@ -23,7 +23,7 @@ class Notebook {
 }
 
 function status(r: CliResult | null): string {
-  return r?.json?.receipt?.status ?? r?.json?.error?.code ?? `exit ${r?.exit}`;
+  return r?.json?.receipt?.status ?? r?.json?.error?.code ?? `exit ${r?.code}`;
 }
 
 describe("lifecycle journeys", () => {

@@ -1,4 +1,4 @@
-name: partial 状态下改 plan 再 apply：续跑 + 按新 plan diff
+name: "plan edited while partial, then apply: resumes and diffs against the new plan"
 plan: |
   version: 1
   providers:

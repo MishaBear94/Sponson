@@ -1,4 +1,4 @@
-name: 未管理资源：列出来，永远不碰
+name: "unmanaged resources: listed, never touched"
 plan: |
   version: 1
   providers:

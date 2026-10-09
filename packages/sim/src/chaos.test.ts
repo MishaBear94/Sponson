@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startSim, type SimHandle } from "./index.js";
-import { matchesRule } from "./state.js";
+import { matchesRule } from "./chaos.js";
 
 const auth = { authorization: "Bearer t", "content-type": "application/json" };
 
@@ -128,6 +128,18 @@ describe("sim chaos: transport", () => {
     await expect(fetch(`${sim.url}/neon/projects/proj_demo/branches`, { headers: auth, signal: ctl.signal })).rejects.toThrow();
     clearTimeout(t);
     expect((await fetch(`${sim.url}/neon/projects/proj_demo/branches`, { headers: auth })).status).toBe(200);
+  });
+
+  it("hold_next parks a matching request until released, then performs and answers it", async () => {
+    await chaos({ hold_next: 1, fail_on: "POST /clerk/*" });
+    const held = post("/clerk/redirect_urls", { url: "https://held" });
+    await expect.poll(() => sim.state.heldCount).toBe(1);
+    expect((await post("/clerk/redirect_urls", { url: "https://after" })).status).toBe(200);
+    expect(sim.state.clerk.redirect_urls.map((r) => r.url)).toEqual(["https://after"]);
+    expect(await (await fetch(`${sim.url}/_release`, { method: "POST" })).json()).toEqual({ released: 1 });
+    expect((await held).status).toBe(200);
+    expect(sim.state.clerk.redirect_urls.map((r) => r.url)).toEqual(["https://after", "https://held"]);
+    expect(sim.state.heldCount).toBe(0);
   });
 
   it("refused writes are logged as failed", async () => {

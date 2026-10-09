@@ -1,4 +1,4 @@
-name: providers 里写错 project id：plan 报 404，不是堆栈
+name: "wrong project id in providers: plan reports a 404, not a stack trace"
 plan: |
   version: 1
   providers:

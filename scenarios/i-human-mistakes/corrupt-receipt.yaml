@@ -1,4 +1,4 @@
-name: 回执被手改坏：报位置，降级为无回执继续
+name: "receipt hand-edited into garbage: reports where, continues as if there were no receipt"
 plan: |
   version: 1
   providers:

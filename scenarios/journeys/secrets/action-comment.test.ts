@@ -11,7 +11,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { afterEach, describe, expect, it } from "vitest";
-import { World } from "./helpers.js";
+import { SHA, World } from "./helpers.js";
 
 const root = new URL("../../../", import.meta.url).pathname;
 const requireFn = createRequire(import.meta.url);
@@ -242,7 +242,7 @@ changes:
 });
 
 describe("scope derivation (action.yml step `scope`)", () => {
-  const sha = "0123456789abcdef0123456789abcdef01234567";
+  const sha = SHA;
 
   it("control: pull_request uses the PR; deployment_status with a sha ref finds the open PR and its branch; without an open PR it skips", async () => {
     const code = await script("scope");

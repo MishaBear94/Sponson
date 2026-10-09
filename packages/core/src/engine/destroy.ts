@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { resolveParams } from "../resolve.js";
-import type { LedgerEntry, Receipt, ReceiptLine, ResourceRecord } from "../types.js";
+import type { LedgerEntry, Receipt, ReceiptLine } from "../types.js";
 import { Lease } from "./lease.js";
 import type { Ledger } from "./ledger.js";
 import { prepare, requireApproval, type Prepared } from "./prepare.js";
+import { receiptSkeleton, rereadLine, toRecord } from "./receipt.js";
 import { RunContext } from "./run-context.js";
 import type { ApplyResultSummary, RunOptions } from "./types.js";
 
@@ -19,27 +19,11 @@ export async function destroyRun(opts: RunOptions): Promise<ApplyResultSummary> 
   const rc = new RunContext(opts);
   const lease = await Lease.acquire(opts, `destroy-${randomUUID().slice(0, 8)}`);
   try {
-    if (lease.preempted) rc.warnings.push(`Took over an expired lock held by ${lease.preempted.holder}.`);
+    if (lease.preempted) rc.warnings.push(`Took over an expired lock held by ${lease.preempted.holder} since ${lease.preempted.acquiredAt}.`);
     await rc.load();
     // Secrets are resolved only so that provider errors echoing them are masked.
     await rc.resolveSecrets(prepared);
-    const receipt: Receipt = {
-      version: 2,
-      runId: lease.holder,
-      environment: opts.ctx.env,
-      scope: opts.ctx.scope,
-      status: "complete",
-      startedAt: now().toISOString(),
-      finishedAt: "",
-      plan: { hash: opts.plan.hash, ...(opts.plan.path ? { path: opts.plan.path } : {}) },
-      ctx: opts.ctx,
-      lines: {},
-      ledger: [],
-      history: rc.previous?.history ?? [],
-      hashKey: rc.ledger.hashKey,
-      destroy: true,
-      ...(approvedBy ? { approvedBy } : {}),
-    };
+    const receipt: Receipt = { ...receiptSkeleton(rc, lease, now(), approvedBy), destroy: true };
 
     if (rc.ledger.all().length === 0) {
       rc.warnings.push("Nothing to destroy: no receipt for this scope.");
@@ -118,8 +102,7 @@ async function locateIntents(rc: RunContext, prepared: Prepared): Promise<void> 
     const change = prepared.ordered.find((c) => c.id === e.line && c.adapter === e.adapter);
     if (!change) continue;
     try {
-      const params = resolveParams(prepared.params.get(change.id)!, new Map(), rc.secrets.values).params;
-      const live = await prepared.ops.get(change.id)!.read(rc.adapterContext(e.adapter, e.provider), params);
+      const live = await rereadLine(rc, prepared, change, e.provider);
       const r = live?.resources.find((x) => x.key === e.key);
       if (r) rc.ledger.put({ ...e, id: r.id, hash: rc.ledger.keyed(r.hash), createdBy: "sponson" });
       else rc.ledger.delete(e);
@@ -137,15 +120,10 @@ async function stillPresent(rc: RunContext, prepared: Prepared, head: LedgerEntr
   const change = prepared.ordered.find((c) => c.id === head.line && c.adapter === head.adapter);
   if (!change) return [];
   try {
-    const params = resolveParams(prepared.params.get(change.id)!, new Map(), rc.secrets.values).params;
-    const live = await prepared.ops.get(change.id)!.read(rc.adapterContext(head.adapter, head.provider), params);
+    const live = await rereadLine(rc, prepared, change, head.provider);
     const keys = new Set(destroyed.map((e) => e.key));
     return (live?.resources ?? []).filter((r) => keys.has(r.key)).map((r) => r.label ?? r.key);
   } catch {
     return [];
   }
-}
-
-function toRecord(e: LedgerEntry): ResourceRecord {
-  return { key: e.key, id: e.id, hash: e.hash, ...(e.label ? { label: e.label } : {}), createdBy: e.createdBy === "adopted" ? "adopted" : "sponson" };
 }

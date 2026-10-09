@@ -44,6 +44,7 @@ export async function scopeDrift(rc: RunContext, inspected: Inspection[], uninsp
       drift.push({
         kind: "unmanaged",
         adapter: i.change.adapter,
+        op: i.change.op,
         resource: { key: r.key, id: r.id, label: r.label },
         message: `${r.label ?? r.key} exists but no scope manages it. Sponson will not touch it. Run \`sponson init\` to adopt it.`,
       });

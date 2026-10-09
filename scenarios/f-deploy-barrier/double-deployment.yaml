@@ -1,4 +1,4 @@
-name: 同一 sha 两个部署：取最新的
+name: "two deployments of one sha: the newest wins"
 plan: |
   version: 1
   providers:

@@ -1,4 +1,4 @@
-name: 重命名 PR 分支：scope 是 pr-N，不受影响
+name: "PR branch renamed: the scope is pr-N, unaffected"
 plan: |
   version: 1
   providers:

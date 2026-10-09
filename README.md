@@ -83,6 +83,8 @@ npx sponson plan          # read-only diff
 npx sponson apply         # creates the branch, injects the variable, waits for the deploy
 ```
 
+Third-party adapters and secret sources load as plugins: `SPONSON_PLUGINS=sponson-adapter-x,./local-adapter.mjs`, each module exporting `register(registry)`.
+
 Credentials come from the providers' own conventions — `VERCEL_TOKEN`, `NEON_API_KEY`, `CLERK_SECRET_KEY` — Sponson has no credential store of its own.
 
 In GitHub Actions, one workflow with three triggers calls the same action:
@@ -136,7 +138,7 @@ release.plan.yaml ──▶ sponson plan ──▶ diff + drift        (reads ad
                                    preview_url ──▶ callback
 ```
 
-A plan is a flat list. Each line is one adapter op, filtered by `environments:`. Order is derived from references. Values have four states — `literal`, `resolved`, `pending`, `secret` — and the JSON output carries the state explicitly so an agent never has to parse prose.
+A plan is a flat list. Each line is one adapter op, filtered by `environments:`. Order is derived from references. Values have five states — `literal`, `resolved`, `pending`, `secret`, `kept` — and the JSON output carries the state explicitly so an agent never has to parse prose.
 
 Receipts live on an orphan git branch so CI runs, which start from nothing, can still see what the last run did. The store is an interface; `local` is the alternative, and a hosted one is where a control plane would plug in.
 
@@ -149,7 +151,7 @@ This repository was built and accepted entirely against a local fake cloud, beca
 - `scenarios/journeys/` holds long system tests along six independent dimensions: a week of a team's CI lifecycle, many actors at once on real git receipts (including SIGKILL mid-apply), providers misbehaving like real clouds, an agent driving Sponson only through MCP and JSON, humans editing consoles and refactoring plans, and every channel a secret could leak through (including the receipts branch history and PR comments).
 - `property/` generates random plans, failures (including lost responses) and drift, and checks eight invariants — among them that `plan` writes nothing and that nothing Sponson created survives a successful destroy — 1000 cases per run.
 
-What the fake cannot prove is that the real APIs behave as assumed. The assumptions are listed at the top of `packages/sim/src/server.ts`, and `scenarios/contract.test.ts` pins the critical ones: it runs against the sim by default and against the real APIs with `pnpm test:live` (see the file header for the required variables). It has not yet been run against real accounts.
+What the fake cannot prove is that the real APIs behave as assumed. The assumptions are numbered at the top of each provider's routes file in `packages/sim/src/routes/`, and `scenarios/contract.test.ts` pins the critical ones: it runs against the sim by default and against the real APIs with `pnpm test:live` (see the file header for the required variables). It has not yet been run against real accounts.
 
 ## Status
 
@@ -157,7 +159,7 @@ Format, engine, three adapters (Neon branches, Vercel env + deploy, Clerk redire
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Adding an adapter is one file plus its sim routes plus one scenario.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full adapter checklist: the adapter file, its registration (or a plugin loaded with `SPONSON_PLUGINS`), one sim routes file, and one scenario.
 
 ## License
 

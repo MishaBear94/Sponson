@@ -1,4 +1,4 @@
-name: environments 写成字符串：拒绝并给出正确写法
+name: "environments written as a string: rejected, with the correct form"
 plan: |
   version: 1
   providers:

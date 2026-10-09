@@ -16,8 +16,10 @@ function client(actx: AdapterContext): ApiClient {
   return clientFor(actx, "clerk", { baseUrl: actx.env.CLERK_API_URL || CLERK_DEFAULT_API_URL, token });
 }
 
+const REDIRECT_PREFIX = "redirect:";
+
 function redirectKey(url: string): string {
-  return `redirect:${url}`;
+  return `${REDIRECT_PREFIX}${url}`;
 }
 
 function record(r: RedirectUrl): ResourceRecord {
@@ -92,6 +94,11 @@ const redirect_allow: OpSpec = {
 
   async listScope(actx) {
     return (await list(client(actx))).map(record);
+  },
+
+  /** One line per allowed URL. */
+  adopt(resources) {
+    return resources.map((r) => ({ id: "callback", params: { url: r.key.slice(REDIRECT_PREFIX.length) }, keys: [r.key] }));
   },
 };
 

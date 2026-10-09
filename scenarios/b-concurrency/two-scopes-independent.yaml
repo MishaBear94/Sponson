@@ -1,4 +1,4 @@
-name: 两个 PR 各自 apply：互不影响
+name: "two PRs apply independently: neither affects the other"
 plan: |
   version: 1
   providers:

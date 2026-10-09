@@ -5,16 +5,14 @@
  * to `sponson mcp` over stdio with the MCP SDK client, like Claude Code would.
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { stringify } from "yaml";
 import { startSim, type SimHandle, type SimSeed } from "@sponson/sim";
-import { run } from "sponson";
+import { cliEnv, mcpTransport, runCli, SHA, workspace, type CliRun, type Workspace } from "../../support.js";
 
+export { SHA };
 export const repo = new URL("../../..", import.meta.url).pathname;
-export const SHA = "0123456789abcdef0123456789abcdef01234567";
 
 /** Vocabulary SKILL.md documents. Anything else in the JSON is undocumented. */
 export const SKILL = {
@@ -30,37 +28,22 @@ export const SKILL = {
 /** Text Sponson prints for values it will not show. An agent must never find this where a value belongs. */
 export const PLACEHOLDER = /^\((pending|secret)\b|^\(secret\)$|^<(pending|secret)/;
 
-export interface CliResult {
-  code: number;
-  out: string;
-  err: string;
-  json: any;
-}
-
 export class AgentWorld {
   env: NodeJS.ProcessEnv;
   ctx = { pr: 42 as number | null, branch: "feat/preview-db", sha: SHA };
   private constructor(
     readonly sim: SimHandle,
-    readonly cwd: string,
+    private readonly ws: Workspace,
   ) {
-    this.env = {
-      PATH: process.env.PATH,
-      HOME: process.env.HOME,
-      NO_COLOR: "1",
-      VERCEL_TOKEN: "tok_vercel",
-      NEON_API_KEY: "tok_neon",
-      CLERK_SECRET_KEY: "tok_clerk",
-      VERCEL_API_URL: `${sim.url}/vercel`,
-      NEON_API_URL: `${sim.url}/neon`,
-      CLERK_API_URL: `${sim.url}/clerk`,
-    };
+    this.env = cliEnv(sim);
   }
 
   static async create(seed?: Partial<SimSeed>): Promise<AgentWorld> {
-    const sim = await startSim({ seed });
-    const cwd = await mkdtemp(join(tmpdir(), "sponson-agent-"));
-    return new AgentWorld(sim, cwd);
+    return new AgentWorld(await startSim({ seed }), await workspace("agent"));
+  }
+
+  get cwd(): string {
+    return this.ws.dir;
   }
 
   get receiptsDir() {
@@ -78,29 +61,13 @@ export class AgentWorld {
     await writeFile(join(this.cwd, "release.plan.yaml"), typeof plan === "string" ? plan : stringify(plan));
   }
 
-  async cli(args: string[], opts: { ctx?: boolean } = {}): Promise<CliResult> {
-    let out = "";
-    let err = "";
-    const argv = [...args, ...(opts.ctx === false ? [] : this.ctxArgs())];
-    const code = await run(argv, { stdout: { write: (s) => (out += s) }, stderr: { write: (s) => (err += s) }, env: this.env, cwd: this.cwd, color: false });
-    let json: any = null;
-    try {
-      json = JSON.parse(out);
-    } catch {
-      /* not JSON */
-    }
-    return { code, out, err, json };
+  cli(args: string[], opts: { ctx?: boolean } = {}): Promise<CliRun> {
+    return runCli([...args, ...(opts.ctx === false ? [] : this.ctxArgs())], { env: this.env, cwd: this.cwd });
   }
 
   /** Start `sponson mcp` as its own process, as an agent host would. Each call is a fresh session with no memory. */
   async mcp(extraEnv: Record<string, string> = {}): Promise<McpAgent> {
-    const transport = new StdioClientTransport({
-      command: "npx",
-      args: ["tsx", join(repo, "packages/cli/src/bin.ts"), "mcp", ...this.ctxArgs()],
-      cwd: this.cwd,
-      env: { ...(this.env as Record<string, string>), ...extraEnv },
-      stderr: "pipe",
-    });
+    const { transport } = mcpTransport(this.ctxArgs(), { cwd: this.cwd, env: { ...this.env, ...extraEnv } });
     const client = new Client({ name: "scripted-agent", version: "0.0.0" });
     await client.connect(transport);
     return new McpAgent(client);
@@ -108,7 +75,7 @@ export class AgentWorld {
 
   async close() {
     await this.sim.close();
-    await rm(this.cwd, { recursive: true, force: true });
+    await this.ws.cleanup();
   }
 }
 

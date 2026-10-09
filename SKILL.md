@@ -37,7 +37,7 @@ changes:
     environments: [preview]
 ```
 
-Every value is in one of four states, and `--json` tells you which: `literal` (written in the file), `resolved` (the referenced output exists now; `value` is filled unless sensitive), `pending` (the referenced line has not been applied; `value` is `null`), `secret` (`value` is always `null`). JSON never contains placeholder text: an unknown, secret or sensitive value is `null` next to its `state` (and `ref`). Display text like `(pending ← db.x)` or `(secret)` exists only in the human-readable output; never copy it into the file, write the reference.
+Every value is in one of five states, and `--json` tells you which: `literal` (written in the file), `resolved` (the referenced output exists now; `value` is filled unless sensitive), `pending` (the referenced line has not been applied; `value` is `null`), `secret` (`value` is always `null`), `kept` (`{ keep: true }`: whatever is live stays; written by `init` when adopting). JSON never contains placeholder text: an unknown, secret or sensitive value is `null` next to its `state` (and `ref`). Display text like `(pending ← db.x)` or `(secret)` exists only in the human-readable output; never copy it into the file, write the reference.
 
 Dependencies come from `from:` references. Use `depends_on: [id]` only for ordering without data. `${ctx.env}`, `${ctx.scope}`, `${ctx.pr.number}` (null outside a PR: use `${ctx.scope}`), `${ctx.git.branch}`, `${ctx.git.sha}`, `${ctx.git.short_sha}` are the only variables.
 
@@ -81,7 +81,7 @@ Common `errorCode`s:
 5. **Drift is reported, not overwritten.** `changed` drift makes that line `blocked` (`DRIFT_CHANGED`) until a human passes `--reconcile`. `unmanaged` resources are never touched; adopt them with `init --adopt <drift resource.key>`. Deleting a line does not destroy its resource.
 6. **Read the receipt, not your memory.** `sponson_receipt` (or the `apply --json` output) is the record: statuses and outputs as listed under Output. Secrets and sensitive outputs are never in the receipt or any output; a warning says when a secret is too short (< 4 characters) to be masked.
 
-Exit codes: `0` ok (including partial and stale), `1` failed, `2` usage / plan invalid / bad reference / env unknown / not approved, `3` the scope's lock is held or was lost (wait, do not force).
+Exit codes: `0` ok (including partial and stale), `1` failed, `2` usage / plan invalid / bad reference / bad parameter / secret literal / unknown adapter or op / env unknown / not approved, `3` the scope's lock is held or was lost (wait, do not force). Error envelopes may carry `error.hint`: the CLI remedy for that code (for a human; never act on it yourself when it means approving production).
 
 ## Example 1: open a preview environment for a feature
 

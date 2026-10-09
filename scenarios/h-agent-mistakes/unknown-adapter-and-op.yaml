@@ -1,4 +1,4 @@
-name: 不存在的 adapter 或 op：列出已知的
+name: "unknown adapter or op: lists the known ones"
 plan: |
   version: 1
   providers:

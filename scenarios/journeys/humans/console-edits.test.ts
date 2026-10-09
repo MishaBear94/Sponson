@@ -2,7 +2,7 @@
  * Console edits interleaved with applies. The human is fast and sloppy: change, delete, re-create by hand with
  * the same name, change and change back, edit an adopted vs a Sponson-created thing, move a var between targets.
  *
- * Expectations: 决策-引用与漂移.md drift table (changed → warn + refuse without --reconcile; missing → recreate;
+ * Expectations: the drift rules (changed → warn + refuse without --reconcile; missing → recreate;
  * unmanaged → never touch) and README "destroy … never touches resources it merely adopted".
  */
 import { afterEach, describe, expect, it } from "vitest";
@@ -89,7 +89,8 @@ describe("console edits beside applies", () => {
   });
 
   it("a refused apply stays refused: retrying plain apply must not overwrite the console edit", async () => {
-    // 决策: 被改动 → "该行拒绝执行，整个 apply 失败，除非带 --reconcile。默认不覆盖人在控制台改的东西".
+    // Changed drift: the line is refused and the whole apply fails unless --reconcile is passed; by default Sponson
+    // never overwrites what a human changed in a console.
     // CI retries; a human re-runs the job. The second plain apply must refuse exactly like the first.
     j = await Journey.start(undefined, PLAN);
     expect((await j.apply()).code).toBe(0);
@@ -113,7 +114,7 @@ describe("console edits beside applies", () => {
     const mine = j.consoleCreateBranch("sponson/preview/pr-42", "main");
     expect(mine.id).not.toBe(original);
     const p = await j.plan();
-    // v0.2 (决策-v0.2 G1.4 "同 key 不同 provider id = 被替换（changed），不认领"; G6.3 blocked): the replaced branch is
+    // v0.2 (same key, different provider id = replaced, i.e. `changed`, never claimed; the line is blocked): the replaced branch is
     // `changed` drift with `replaced: true`, the db line is blocked DRIFT_CHANGED and env (which reads db) is blocked too.
     expect(driftKinds(p)).toContain("changed:db:branch:sponson/preview/pr-42");
     expect((p.json.drift as Array<{ kind: string; replaced?: boolean }>).find((d) => d.kind === "changed")?.replaced).toBe(true);
@@ -138,7 +139,7 @@ describe("console edits beside applies", () => {
     j.consoleDeleteEnv("FEATURE_X");
     j.consoleSetEnv("FEATURE_X", "on"); // same key, same value, new id
     const p = await j.plan();
-    // v0.2 (决策-v0.2 G1.4): same key, new provider id = replaced → `changed` drift (replaced: true), line blocked.
+    // v0.2: same key, new provider id = replaced → `changed` drift (replaced: true), line blocked.
     expect(driftKinds(p)).toContain("changed:env:env:preview:feat/x:FEATURE_X");
     expect(lineStatus(p, "env")).toBe("blocked");
     const d = await j.destroy();

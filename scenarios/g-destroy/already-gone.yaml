@@ -1,4 +1,4 @@
-name: 资源已被手动删：销毁跳过，不报错
+name: "resource already deleted by hand: destroy skips it without error"
 plan: |
   version: 1
   providers:

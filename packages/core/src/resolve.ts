@@ -29,26 +29,16 @@ export function isKeepMarker(v: unknown): v is string {
   return v === KEEP_MARKER;
 }
 
-/** How a pending marker is shown: secret references are URLs, output references are `line.output`. */
-export function pendingDisplay(marker: string): string {
-  const ref = pendingRef(marker);
-  return ref.includes("://") ? `(secret ← ${ref})` : `(pending ← ${ref})`;
-}
+export type MarkerKind = "pending" | "secret" | "keep";
 
-/** Display form of a value, never exposing secrets. */
-export function displayValue(v: ResolvedValue): string {
-  switch (v.state) {
-    case "literal":
-      return JSON.stringify(v.value);
-    case "resolved":
-      return v.sensitive ? `(secret ← ${v.ref})` : `${JSON.stringify(v.value)} ← ${v.ref}`;
-    case "pending":
-      return `(pending ← ${v.ref})`;
-    case "secret":
-      return `(secret ← ${v.ref})`;
-    case "kept":
-      return "(kept as is)";
-  }
+/**
+ * What a resolved param leaf stands for when it is not a concrete value (see the marker contract on `OpSpec`).
+ * The one place that tells an unresolved secret reference (a URL, `env://X`) from an output reference (`line.output`).
+ */
+export function markerKind(v: unknown): MarkerKind | null {
+  if (isKeepMarker(v)) return "keep";
+  if (!isPendingMarker(v)) return null;
+  return pendingRef(v).includes("://") ? "secret" : "pending";
 }
 
 export interface ResolveResult {

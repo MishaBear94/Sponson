@@ -40,7 +40,7 @@ changes:
     // changing it would also change preview/development, and splitting it silently leaves two effective values. The run
     // fails with a coded error that tells the human what to do, and nothing is written.
     const r1 = await w.cli("apply --json", prod);
-    expect(r1.exit, r1.stdout).toBe(1);
+    expect(r1.code, r1.stdout).toBe(1);
     expect(r1.json.receipt.status).toBe("failed");
     expect(r1.json.receipt.lines.env).toMatchObject({ errorCode: "PROVIDER_CONFLICT" });
     expect(r1.json.receipt.lines.env.error).toMatch(/API_BASE.*production.*preview.*development|shared by targets/);
@@ -115,7 +115,7 @@ changes:
     w.proxy.on(isPath("POST", /^\/vercel\/v10\/projects\/[^/]+\/env$/), (r) => ({ status: 400, body: { error: { code: "bad_request", message: "Invalid request: value contains invalid characters", input: JSON.parse(r.body) } } }), 1);
 
     const r = await w.cli("apply --json");
-    expect(r.exit).toBe(1);
+    expect(r.code).toBe(1);
     const everything = [r.stdout, r.stderr, ...(await w.receiptTexts())].join("\n");
     for (const line of PEM_LINES) expect(everything, "PEM body leaked through an echoed, JSON-escaped error body").not.toContain(line);
   });
@@ -137,14 +137,14 @@ changes:
       },
     }));
 
-    // v2 (G3 response-shape handling): the `{ data, total_count }` envelope is supported, so plan simply works, and an
+    // v2 (response-shape handling): the `{ data, total_count }` envelope is supported, so plan simply works, and an
     // existing URL listed inside the envelope is recognised (no duplicate on the next apply).
     const r = await w.cli("plan --json");
     const line = r.json.lines[0];
     expect(line.error, "error is a raw JS TypeError").toBeUndefined();
     expect(line.status).toBe("create");
     const a = await w.cli("apply --json");
-    expect(a.exit, a.stdout).toBe(0);
+    expect(a.code, a.stdout).toBe(0);
     const again = await w.cli("plan --json");
     expect(again.json.lines[0].status).toBe("unchanged");
     expect(w.redirects()).toHaveLength(1);

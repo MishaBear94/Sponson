@@ -2,7 +2,7 @@
  * Brownfield adoption: a project that already has preview/production vars, Neon branches and Clerk URLs,
  * then `sponson init` (no plan → plan → --adopt) and plan/apply/destroy on top.
  *
- * Expectations come from 决策-引用与漂移.md ("init 就是 import": init makes the plan catch up with reality;
+ * Expectations: init is import (it makes the plan catch up with reality;
  * unmanaged things are never touched; adopted things are never destroyed) and README ("Run again to adopt
  * resources the plan does not know about").
  */
@@ -116,7 +116,7 @@ describe("brownfield init", () => {
     for (const c of ["# Release plan for the checkout service.", "# Owner: payments team.", "# linked via .vercel/project.json", "# The per-PR database.", "# Vars the app needs per preview.", "# never a literal", "# shared by every preview", "# trailing note"]) {
       expect(after, `comment lost: ${c}`).toContain(c);
     }
-    // 决策: "再次运行：有 plan，把未管理的资源作为新行追加进去，已有行不动。"
+    // Running init again with a plan appends unmanaged resources as new lines and leaves existing lines alone.
     const humanPart = PLAN_WITH_COMMENTS.split("# trailing note")[0]!;
     expect(after.startsWith(humanPart), `existing lines were rewritten:\n${after}`).toBe(true);
     // and the Clerk URL a human added in the console was adopted, as a reference to itself

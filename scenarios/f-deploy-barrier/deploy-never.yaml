@@ -1,4 +1,4 @@
-name: 部署永远不来：默认模式停下记录 partial，退出码 0；部署来了之后续上
+name: "deployment never comes: default mode stops and records partial with exit code 0; resumes once it arrives"
 plan: |
   version: 1
   providers:

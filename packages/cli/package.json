@@ -1,8 +1,16 @@
 {
   "name": "sponson",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "One release, one plan. CLI and MCP server for Sponson.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sponson/sponson.git",
+    "directory": "packages/cli"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -10,7 +18,8 @@
     "sponson": "./src/bin.ts"
   },
   "scripts": {
-    "build": "tsc -b"
+    "build": "tsc -b",
+    "prepack": "tsc -b && node -e \"require('node:fs').copyFileSync('../../LICENSE', 'LICENSE')\""
   },
   "dependencies": {
     "@sponson/core": "workspace:*",
@@ -22,7 +31,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "publishConfig": {
     "main": "./dist/index.js",
@@ -36,10 +46,5 @@
     "bin": {
       "sponson": "./dist/bin.js"
     }
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/sponson/sponson",
-    "directory": "packages/cli"
   }
 }

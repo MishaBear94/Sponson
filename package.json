@@ -1,7 +1,7 @@
 {
   "name": "sponson-monorepo",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Sponson: one release, one plan. Declares and applies everything that ships beside the code.",
   "license": "Apache-2.0",
   "packageManager": "pnpm@11.5.1",

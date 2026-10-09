@@ -1,4 +1,4 @@
-name: 孤儿行：plan 删了一行，资源留着，只有 --destroy 才删
+name: "orphan line: removed from the plan, the resource stays; only --destroy deletes it"
 plan: |
   version: 1
   providers:

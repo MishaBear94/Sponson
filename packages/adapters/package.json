@@ -1,8 +1,16 @@
 {
   "name": "@sponson/adapters",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Resource adapters (Neon, Vercel, Clerk) and secret sources (env, doppler, op) for Sponson.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sponson/sponson.git",
+    "directory": "packages/adapters"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -10,7 +18,8 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "build": "tsc -b"
+    "build": "tsc -b",
+    "prepack": "tsc -b && node -e \"require('node:fs').copyFileSync('../../LICENSE', 'LICENSE')\""
   },
   "dependencies": {
     "@sponson/core": "workspace:*"
@@ -20,7 +29,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "publishConfig": {
     "main": "./dist/index.js",
@@ -31,10 +41,5 @@
         "default": "./dist/index.js"
       }
     }
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/sponson/sponson",
-    "directory": "packages/adapters"
   }
 }

@@ -1,4 +1,4 @@
-name: agent 把显示文本当值写回
+name: agent writes displayed placeholder text back as a value
 plan: |
   version: 1
   providers:

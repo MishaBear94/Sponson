@@ -1,4 +1,4 @@
-name: 回滚本身失败：记录遗留资源，不静默
+name: "rollback itself fails: leftover resources are recorded, never silently"
 plan: |
   version: 1
   providers:

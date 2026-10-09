@@ -1,4 +1,4 @@
-name: 销毁失败：记录 destroy_failed，资源留在回执里，可重试
+name: "destroy fails: destroy_failed is recorded, the resource stays in the receipt, retry is possible"
 plan: |
   version: 1
   providers:

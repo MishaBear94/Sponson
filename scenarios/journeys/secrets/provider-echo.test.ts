@@ -1,9 +1,9 @@
 /**
  * Providers that echo request data in error bodies.
  *
- * Promise under test (README "What it does"; SKILL.md rule 3; 决策-执行模型.md "日志脱敏"):
- * secret values and sensitive outputs are "redacted from every byte of output" — stdout, stderr, --json,
- * receipts. 验收策略.md E: "adapter 抛异常，消息含连接串 → stderr 脱敏".
+ * Promise under test (README "What it does"; SKILL.md rule 3): secret values and sensitive outputs are
+ * "redacted from every byte of output" — stdout, stderr, --json, receipts — including when an adapter throws
+ * an error whose message contains a connection string.
  *
  * A proxy sits in front of the sim and overrides a single route to answer with an error that echoes data.
  */

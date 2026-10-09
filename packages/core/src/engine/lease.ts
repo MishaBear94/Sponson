@@ -9,6 +9,7 @@ import type { RunOptions } from "./types.js";
 export class Lease {
   private timer: NodeJS.Timeout | null = null;
   private lost: LockLostError | null = null;
+  private released = false;
 
   private constructor(
     private readonly opts: RunOptions,
@@ -29,21 +30,34 @@ export class Lease {
       } catch (e) {
         if (!(e instanceof LockHeldError)) throw e;
         if (!opts.wait || Date.now() > deadline) {
-          throw new SponsonError("LOCK_HELD", `Another run (${e.lock.holder}) holds the lock for ${opts.ctx.env}/${opts.ctx.scope} until ${e.lock.expiresAt}. Wait for it, or pass --wait.`, { lock: e.lock });
+          throw new SponsonError("LOCK_HELD", `Another run (${e.lock.holder}) holds the lock for ${opts.ctx.env}/${opts.ctx.scope} until ${e.lock.expiresAt}. Wait for it, or run again with waiting enabled (wait).`, { lock: e.lock });
         }
         await new Promise((r) => setTimeout(r, opts.pollIntervalMs ?? 2000));
       }
     }
   }
 
+  /**
+   * Renewal paces itself: the next renewal is scheduled only after the previous one finished.
+   * A fixed interval would queue renewals faster than a slow store (a git push under load) can
+   * complete them, and the run's own receipt writes would wait behind that queue.
+   */
   private startRenewing(): void {
     const every = Math.max(50, Math.floor(this.ttl / 3));
-    this.timer = setInterval(() => {
-      this.opts.store.renewLock(this.opts.ctx.env, this.opts.ctx.scope, this.holder, this.ttl).catch((e) => {
-        if (e instanceof LockLostError) this.lost = e;
-      });
-    }, every);
-    this.timer.unref();
+    const tick = () => {
+      this.timer = setTimeout(() => {
+        this.opts.store
+          .renewLock(this.opts.ctx.env, this.opts.ctx.scope, this.holder, this.ttl)
+          .catch((e) => {
+            if (e instanceof LockLostError) this.lost = e;
+          })
+          .finally(() => {
+            if (!this.released && !this.lost) tick();
+          });
+      }, every);
+      this.timer.unref();
+    };
+    tick();
   }
 
   /** Throw LOCK_LOST when another run took the scope; called before every write to a provider. */
@@ -63,7 +77,8 @@ export class Lease {
   }
 
   async release(): Promise<void> {
-    if (this.timer) clearInterval(this.timer);
+    this.released = true;
+    if (this.timer) clearTimeout(this.timer);
     await this.opts.store.releaseLock(this.opts.ctx.env, this.opts.ctx.scope, this.holder).catch(() => {});
   }
 }

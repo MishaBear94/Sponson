@@ -1,4 +1,4 @@
-name: 第 3 行失败时回滚前 2 行
+name: "line 3 fails: lines 1 and 2 are rolled back"
 plan: |
   version: 1
   providers:

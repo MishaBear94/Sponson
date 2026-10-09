@@ -79,3 +79,10 @@ describe("clerk redirect_allow", () => {
     await expect(op.read(h.actx("clerk"), {})).rejects.toMatchObject({ code: "PARAM_INVALID" });
   });
 });
+
+describe("clerk redirect_allow adopt", () => {
+  it("one line per url", () => {
+    const ctx = { env: "preview", git: { branch: "feat/x", sha: "abc", short_sha: "abc" }, pr: { number: null }, scope: "branch-feat-x" };
+    expect(op.adopt!([{ key: KEY }], ctx)).toEqual([{ id: "callback", params: { url: params.url }, keys: [KEY] }]);
+  });
+});

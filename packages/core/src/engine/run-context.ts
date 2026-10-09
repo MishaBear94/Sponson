@@ -1,5 +1,5 @@
 import { scopeFor } from "../ctx.js";
-import { isSponsonError } from "../errors.js";
+import { isSponsonError, type ErrorCode } from "../errors.js";
 import { sha256 } from "../hash.js";
 import { Redactor } from "../redact.js";
 import type { AdapterContext, LedgerEntry, Receipt } from "../types.js";
@@ -125,7 +125,7 @@ export class RunContext {
     };
   }
 
-  errorText(e: unknown): { message: string; code?: string } {
+  errorText(e: unknown): { message: string; code?: ErrorCode } {
     const message = this.redactor.redact(String((e as Error)?.message ?? e));
     return isSponsonError(e) ? { message, code: e.code } : { message };
   }

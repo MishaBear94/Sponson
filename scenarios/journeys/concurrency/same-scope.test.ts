@@ -1,12 +1,14 @@
 /**
- * Several actors apply the SAME scope at once. 验收策略 B: "第二次获取 scope 锁失败，等待或退出，不并行写".
+ * Several actors apply the SAME scope at once. The second to take the scope lock fails to get it and waits or
+ * exits; nobody writes in parallel.
  */
 import { join } from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { startSim, type SimHandle } from "@sponson/sim";
 import { applyRun, LocalReceiptStore } from "@sponson/core";
-import { bareRemote, cli, ctxArgs, engineOpts, neonBranches, remoteFile, simEnv, spawnCli, tmp, workspace } from "./helpers.js";
+import { bareRemote, checkout, ctxArgs, engineOpts, neonBranches, remoteFile, spawnCli, tmp } from "./helpers.js";
+import { cliEnv, runCli } from "../../support.js";
 
 let sim: SimHandle;
 afterEach(async () => sim?.close());
@@ -16,9 +18,9 @@ describe("same scope, many actors", () => {
     sim = await startSim();
     sim.state.applyChaos({ latency_ms: 40 });
     const remote = await bareRemote();
-    const runners = await Promise.all([0, 1, 2].map(async () => ({ cwd: await workspace(), tmp: await tmp("runner") })));
+    const runners = await Promise.all([0, 1, 2].map(async () => ({ cwd: await checkout(), tmp: await tmp("runner") })));
     const results = await Promise.all(
-      runners.map((r) => spawnCli(["apply", "--json", "--receipts", "git-branch", "--receipts-remote", remote, ...ctxArgs(7)], r.cwd, simEnv(sim, { TMPDIR: r.tmp })).done),
+      runners.map((r) => spawnCli(["apply", "--json", "--receipts", "git-branch", "--receipts-remote", remote, ...ctxArgs(7)], r.cwd, cliEnv(sim, { TMPDIR: r.tmp })).done),
     );
     const codes = results.map((r) => r.code).sort();
     expect(codes, results.map((r) => r.stdout + r.stderr).join("\n----\n")).toEqual([0, 3, 3]);
@@ -34,20 +36,20 @@ describe("same scope, many actors", () => {
   it("a developer and two CI jobs call run() in-process on one local store: exactly one wins", async () => {
     sim = await startSim();
     sim.state.applyChaos({ latency_ms: 20 });
-    const cwd = await workspace();
+    const cwd = await checkout();
     const dir = join(cwd, ".sponson/receipts");
     const argv = ["apply", "--json", "--receipts", "local", "--receipts-dir", dir, ...ctxArgs(8)];
-    const results = await Promise.all([0, 1, 2].map(() => cli(argv, cwd, simEnv(sim))));
+    const results = await Promise.all([0, 1, 2].map(() => runCli(argv, { cwd, env: cliEnv(sim) })));
     expect(results.map((r) => r.code).sort()).toEqual([0, 3, 3]);
     expect(neonBranches(sim).filter((n) => n === "sponson/preview/pr-8")).toHaveLength(1);
   });
 
   it("several runners find the same expired lock (crashed holder) at once: only one may take it over (local store)", async () => {
-    // Expected (验收策略 B, 锁持有者崩溃): an expired lock "可被抢占" — by ONE successor, with the others refused.
+    // Expected (lock holder crashed): an expired lock can be taken over — by ONE successor, with the others refused.
     // Runners arrive a few event-loop turns apart, as separate jobs do; the expired lock is what a crashed run leaves.
     sim = await startSim();
     sim.state.applyChaos({ latency_ms: 30 });
-    const cwd = await workspace();
+    const cwd = await checkout();
     const root = await tmp("local-store");
     const plant = async (pr: number) => {
       await mkdir(join(root, "preview", `pr-${pr}`), { recursive: true });
@@ -61,7 +63,7 @@ describe("same scope, many actors", () => {
     for (let round = 0; round < 3; round++) {
       const pr = 20 + round;
       await plant(pr);
-      const runs = await Promise.allSettled([0, 1, 2, 3, 4].map(async (i) => { const o = await engineOpts(cwd, simEnv(sim), pr, new LocalReceiptStore(root)); await stagger(i); return applyRun(o); }));
+      const runs = await Promise.allSettled([0, 1, 2, 3, 4].map(async (i) => { const o = await engineOpts(cwd, cliEnv(sim), pr, new LocalReceiptStore(root)); await stagger(i); return applyRun(o); }));
       holders.push(runs.filter((r) => r.status === "fulfilled").length);
     }
     // The store alone, hammered: eight contenders per round.

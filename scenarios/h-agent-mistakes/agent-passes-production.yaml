@@ -1,4 +1,4 @@
-name: agent 自己给生产加审批：机制上允许，但 SKILL 禁止；没有标记则零写入
+name: "agent adds the production approval itself: the mechanism allows it but SKILL forbids it; without the flag, zero writes"
 plan: |
   version: 1
   providers:

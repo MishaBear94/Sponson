@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { startSim } from "./index.js";
+import { simEnv, startSim } from "./index.js";
 
 const args = process.argv.slice(2);
 const flag = args.indexOf("--port");
@@ -11,7 +11,7 @@ if (!Number.isInteger(port) || port < 0) {
 
 const sim = await startSim({ port });
 console.log(`sponson-sim listening on ${sim.url}`);
-console.log(`  VERCEL_API_URL=${sim.url}/vercel  NEON_API_URL=${sim.url}/neon  CLERK_API_URL=${sim.url}/clerk`);
+console.log(`  ${Object.entries(simEnv(sim, { tokens: false })).map(([k, v]) => `${k}=${v}`).join("  ")}`);
 
 const stop = () => {
   sim.close().finally(() => process.exit(0));

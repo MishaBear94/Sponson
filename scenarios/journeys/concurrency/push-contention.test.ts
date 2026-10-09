@@ -1,7 +1,8 @@
 /**
  * Many PRs apply at the same moment (a dependabot batch, a rebase of a stack), each on its own CI runner with its
  * own clone, all pushing to the one `sponson/receipts` branch.
- * Design (决策-执行模型 §1): "并发 PR 之间没有内容冲突，只有 ref 竞争。推送失败就 fetch → rebase → 重推" — distinct
+ * Design: concurrent PRs have no content conflicts, only a race for the ref; a rejected push fetches, rebases and
+ * pushes again — distinct
  * scopes are independent; a ref race must never fail a run or lose a receipt.
  */
 import { chmod, readFile, writeFile } from "node:fs/promises";
@@ -9,7 +10,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { startSim, type SimHandle } from "@sponson/sim";
 import { applyRun, GitBranchReceiptStore } from "@sponson/core";
-import { bareRemote, ctxArgs, engineOpts, neonBranches, remoteFile, simEnv, spawnCli, tmp, workspace } from "./helpers.js";
+import { bareRemote, checkout, ctxArgs, engineOpts, neonBranches, remoteFile, spawnCli, tmp } from "./helpers.js";
+import { cliEnv } from "../../support.js";
 
 let sim: SimHandle;
 afterEach(async () => sim?.close());
@@ -21,8 +23,8 @@ describe("push contention across scopes", () => {
     const prs = [101, 102, 103, 104, 105, 106, 107, 108];
     const runs = await Promise.all(
       prs.map(async (pr) => {
-        const cwd = await workspace();
-        return spawnCli(["apply", "--json", "--receipts", "git-branch", "--receipts-remote", remote, ...ctxArgs(pr)], cwd, simEnv(sim, { TMPDIR: await tmp(`ci-${pr}`) })).done;
+        const cwd = await checkout();
+        return spawnCli(["apply", "--json", "--receipts", "git-branch", "--receipts-remote", remote, ...ctxArgs(pr)], cwd, cliEnv(sim, { TMPDIR: await tmp(`ci-${pr}`) })).done;
       }),
     );
     const summary: Record<number, string> = {};
@@ -47,14 +49,14 @@ describe("push contention across scopes", () => {
     await chmod(hook, 0o755);
     const workdir = await tmp("kept-wd");
     const fallbackDir = await tmp("kept-fallback");
-    const cwd = await workspace();
-    const err = await applyRun(await engineOpts(cwd, simEnv(sim), 120, new GitBranchReceiptStore({ remote, workdir, fallbackDir }))).then(
+    const cwd = await checkout();
+    const err = await applyRun(await engineOpts(cwd, cliEnv(sim), 120, new GitBranchReceiptStore({ remote, workdir, fallbackDir }))).then(
       () => null,
       (e: Error & { code?: string; details?: Record<string, unknown> }) => e,
     );
     expect(err, "apply should fail to write its receipt").not.toBeNull();
     expect(err!.message).toMatch(/kept locally/);
-    // v2 (design G4.3 + G1.3): the unpushed receipt is kept at `<fallbackDir>/<env>/<scope>/<runId>.json`, named in
+    // v2: the unpushed receipt is kept at `<fallbackDir>/<env>/<scope>/<runId>.json`, named in
     // `details.keptAt` and the message. The checkpoint receipt is written *before* every create, so a receipt push that
     // can never land stops the run before the cloud is touched: nothing exists without a record.
     const keptAt = (err as { details?: { keptAt?: string } }).details?.keptAt;

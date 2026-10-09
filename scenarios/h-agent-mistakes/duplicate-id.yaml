@@ -1,4 +1,4 @@
-name: 重复 id
+name: duplicate id
 plan: |
   version: 1
   providers:

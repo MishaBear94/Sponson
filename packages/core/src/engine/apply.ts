@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { dependentsOf } from "../graph.js";
 import { dependenciesOf } from "../plan.js";
-import { resolveParams, type LineOutputs } from "../resolve.js";
+import type { LineOutputs } from "../resolve.js";
 import type { ApplyResult, Change, LedgerEntry, LiveState, Literal, Receipt, ReceiptLine, ResourceRecord, RunStatus } from "../types.js";
 import { scopeDrift } from "./drift.js";
 import { staleness } from "./history.js";
@@ -10,6 +10,7 @@ import { inspectLine, waitingOn, type Inspection } from "./inspect.js";
 import { Lease } from "./lease.js";
 import { hasExternalOutputs, publicOutputs } from "./outputs.js";
 import { prepare, requireApproval, type Prepared } from "./prepare.js";
+import { receiptSkeleton, rereadLine, toRecord } from "./receipt.js";
 import { RunContext } from "./run-context.js";
 import type { ApplyResultSummary, RunOptions } from "./types.js";
 
@@ -37,8 +38,6 @@ class ApplyRun {
   private readonly receipt: Receipt;
   private readonly outputs = new Map<string, LineOutputs>();
   private readonly inspections = new Map<string, Inspection>();
-  /** Resolved params (secrets included) of every line inspected, for rollback re-reads. */
-  private readonly lineParams = new Map<string, Record<string, unknown>>();
   /** Keys created by this run, per line, in creation order: the rollback set. */
   private readonly created: Array<{ line: Change; keys: Set<string> }> = [];
   /** Keys this run announced it would create, per line. */
@@ -57,25 +56,8 @@ class ApplyRun {
     private readonly lease: Lease,
     approvedBy: string | undefined,
   ) {
-    const opts = rc.opts;
-    this.now = opts.now ?? (() => new Date());
-    this.receipt = {
-      version: 2,
-      runId: lease.holder,
-      environment: opts.ctx.env,
-      scope: opts.ctx.scope,
-      status: "complete",
-      startedAt: this.now().toISOString(),
-      finishedAt: "",
-      plan: { hash: opts.plan.hash, ...(opts.plan.path ? { path: opts.plan.path } : {}) },
-      ctx: opts.ctx,
-      lines: {},
-      ledger: [],
-      history: rc.previous?.history ?? [],
-      hashKey: rc.ledger.hashKey,
-      ...(approvedBy ? { approvedBy } : {}),
-      ...(lease.preempted ? { lockPreempted: lease.preempted.holder } : {}),
-    };
+    this.now = rc.opts.now ?? (() => new Date());
+    this.receipt = receiptSkeleton(rc, lease, this.now(), approvedBy);
   }
 
   /** A commit older than the last applied one changes nothing (late deployment events, re-run jobs). */
@@ -184,7 +166,6 @@ class ApplyRun {
         insp = await inspectLine(this.rc, c, op, params, this.outputs);
       }
       this.inspections.set(c.id, insp);
-      this.lineParams.set(c.id, insp.resolved.params);
 
       if (insp.refusal) {
         this.receipt.lines[c.id] = this.line(c, { status: "blocked", error: insp.refusal.message, errorCode: insp.refusal.code });
@@ -355,10 +336,9 @@ class ApplyRun {
       const unresolved = [...keys].filter((k) => this.rc.ledger.get(this.lineAdapter(lineId), this.rc.provider(this.lineAdapter(lineId)), k)?.createdBy === "intent");
       if (unresolved.length === 0) continue;
       const c = this.prepared.ordered.find((x) => x.id === lineId)!;
-      const op = this.prepared.ops.get(lineId)!;
       const provider = this.rc.provider(c.adapter);
       try {
-        const live = await op.read(this.rc.adapterContext(c.adapter, provider), this.lineParams.get(lineId) ?? resolveParams(this.prepared.params.get(lineId)!, this.outputs, this.rc.secrets.values).params);
+        const live = await rereadLine(this.rc, this.prepared, c, provider, this.outputs);
         const found = new Map((live?.resources ?? []).map((r) => [r.key, r]));
         for (const k of unresolved) {
           const r = found.get(k);
@@ -398,10 +378,13 @@ class ApplyRun {
   private settleOrphans(): void {
     const active = new Set(this.prepared.ordered.map((c) => c.id));
     const claimedBy = new Map<string, string>();
-    for (const [lineId, keys] of this.claimed) for (const k of keys) claimedBy.set(`${this.lineAdapter(lineId)}|${k}`, lineId);
+    for (const [lineId, keys] of this.claimed) {
+      const insp = this.inspections.get(lineId)!;
+      for (const k of keys) claimedBy.set(identity(insp.change.adapter, insp.provider, k), lineId);
+    }
     for (const e of this.rc.ledger.all()) {
       if (e.createdBy === "intent") continue;
-      const owner = claimedBy.get(`${e.adapter}|${e.key}`);
+      const owner = claimedBy.get(identity(e.adapter, e.provider, e.key));
       // Lines that did not run this time (skipped/waiting/failed) keep their claims untouched.
       const judged = !active.has(e.line) || this.claimed.has(e.line) || owner !== undefined;
       if (!judged) continue;
@@ -428,7 +411,7 @@ class ApplyRun {
     return this.rc.ledger
       .all()
       .filter((e) => e.line === lineId && e.createdBy !== "intent")
-      .map((e) => ({ ...toRecord(e), createdBy: e.createdBy as "sponson" | "adopted" }));
+      .map(toRecord);
   }
 
   private line(c: Change, fields: Partial<ReceiptLine> & Pick<ReceiptLine, "status">): ReceiptLine {
@@ -443,8 +426,4 @@ class ApplyRun {
       ...fields,
     };
   }
-}
-
-function toRecord(e: LedgerEntry): ResourceRecord {
-  return { key: e.key, id: e.id, hash: e.hash, ...(e.label ? { label: e.label } : {}) };
 }

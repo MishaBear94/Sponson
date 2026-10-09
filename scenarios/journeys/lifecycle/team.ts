@@ -7,13 +7,12 @@
  * looked up, so a deployment exists only after `team.deploy(sha)` — i.e. when "Vercel" has finished building it.
  */
 import { createHash, createHmac } from "node:crypto";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { startSim, type SimHandle, type SimSeed } from "@sponson/sim";
-import { run } from "sponson";
+import { createDeployment, SIM_TOKENS, startSim, type SimHandle, type SimSeed } from "@sponson/sim";
 import { sha256, type Receipt } from "@sponson/core";
+import { cliEnv, runCli, workspace, type CliRun, type Workspace } from "../../support.js";
 
 export const repoRoot = new URL("../../../", import.meta.url).pathname;
 
@@ -29,47 +28,40 @@ export interface Ctx {
   sha: string;
 }
 
-export interface CliResult {
-  exit: number;
-  json: any;
-  stdout: string;
-  stderr: string;
+export interface CliResult extends CliRun {
+  /** Sim writes this invocation performed (refused and chaos-failed ones excluded). */
   writes: Array<{ method: string; path: string }>;
 }
 
-export const TOKENS = { VERCEL_TOKEN: "tok_vercel", NEON_API_KEY: "tok_neon", CLERK_SECRET_KEY: "tok_clerk" };
+/** Provider credentials, added per invocation so a step can run without them (the base env has none). */
+export const TOKENS = SIM_TOKENS;
 
 export class Team {
   private constructor(
     readonly sim: SimHandle,
-    readonly cwd: string,
+    private readonly ws: Workspace,
     readonly receiptsDir: string,
     readonly baseEnv: NodeJS.ProcessEnv,
   ) {}
 
+  get cwd(): string {
+    return this.ws.dir;
+  }
+
   static async create(opts: { seed?: Partial<SimSeed>; plan?: string; env?: Record<string, string> } = {}): Promise<Team> {
     const sim = await startSim({ seed: opts.seed });
     sim.state.applyChaos({ deploy: "never" });
-    const cwd = await mkdtemp(join(tmpdir(), "sponson-life-"));
-    const receiptsDir = join(cwd, ".sponson/receipts");
-    const baseEnv: NodeJS.ProcessEnv = {
-      PATH: process.env.PATH,
-      HOME: process.env.HOME,
-      NO_COLOR: "1",
-      VERCEL_API_URL: `${sim.url}/vercel`,
-      NEON_API_URL: `${sim.url}/neon`,
-      CLERK_API_URL: `${sim.url}/clerk`,
-      SPONSON_RECEIPTS_DIR: receiptsDir,
-      ...(opts.env ?? {}),
-    };
-    const t = new Team(sim, cwd, receiptsDir, baseEnv);
+    const ws = await workspace("life");
+    const receiptsDir = join(ws.dir, ".sponson/receipts");
+    const baseEnv = cliEnv(sim, { SPONSON_RECEIPTS_DIR: receiptsDir, ...(opts.env ?? {}) }, { tokens: false });
+    const t = new Team(sim, ws, receiptsDir, baseEnv);
     if (opts.plan) await t.writePlan(opts.plan);
     return t;
   }
 
   async close() {
     await this.sim.close();
-    await rm(this.cwd, { recursive: true, force: true });
+    await this.ws.cleanup();
   }
 
   async writePlan(text: string) {
@@ -80,11 +72,10 @@ export class Team {
     return readFile(join(this.cwd, "release.plan.yaml"), "utf8");
   }
 
-  /** Vercel finished building `sha`: a READY deployment now exists. */
   /** A finished build of `s`. The sim numbers repeat builds of one sha itself (`…-2`, `…-3`). */
   deploy(s: string, opts: { at?: number } = {}) {
     const p = this.sim.state.vercel.projects.prj_demo!;
-    return this.sim.state.createDeployment("prj_demo", p, s, "READY", opts.at ?? Date.now());
+    return createDeployment(this.sim.state, "prj_demo", p, s, "READY", opts.at ?? Date.now());
   }
 
   static previewUrl(s: string, suffix = ""): string {
@@ -107,24 +98,10 @@ export class Team {
       if (v === undefined) delete env[k];
       else env[k] = v;
     }
-    let stdout = "";
-    let stderr = "";
     const before = this.sim.state.writes.length;
-    const exit = await run([...argv, "--receipts", "local", "--receipts-dir", this.receiptsDir], {
-      stdout: { write: (s) => (stdout += s) },
-      stderr: { write: (s) => (stderr += s) },
-      env,
-      cwd,
-      color: false,
-    });
-    let json: any = null;
-    try {
-      json = JSON.parse(stdout);
-    } catch {
-      /* not json */
-    }
+    const r = await runCli([...argv, "--receipts", "local", "--receipts-dir", this.receiptsDir], { env, cwd });
     const writes = this.sim.state.writes.slice(before).filter((w) => !w.failed).map((w) => ({ method: w.method, path: w.path }));
-    return { exit, json, stdout, stderr, writes };
+    return { ...r, writes };
   }
 
   /** Latest receipt for env/scope, or null. */
@@ -181,7 +158,7 @@ export class Team {
     for (const p of Object.values(st.neon.projects)) for (const b of p.branches) live.set(b.id, "");
     for (const r of st.clerk.redirect_urls) live.set(r.id, sha256(r.url));
     const claimed = new Set<string>();
-    // v0.2 (决策-v0.2 G1, types.ts Receipt.ledger): what Sponson manages lives in `receipt.ledger`, keyed by
+    // v0.2 (types.ts Receipt.ledger): what Sponson manages lives in `receipt.ledger`, keyed by
     // identity and carried across runs; `lines` only describe what one run did. Ledger hashes are keyed (HMAC
     // with `receipt.hashKey`) over the adapter's raw sha256.
     const keyed = (rc: Receipt, raw: string) => (rc.hashKey ? createHmac("sha256", rc.hashKey).update(raw).digest("hex") : raw);

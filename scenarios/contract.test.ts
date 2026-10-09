@@ -14,18 +14,16 @@
  * unique git branch name, and a Clerk redirect URL, and destroys them in `afterAll`
  * even when an assertion fails. It never touches the production target.
  *
- * Each `assumption:` test pins one of the API assumptions listed at the top of
- * packages/sim/src/server.ts. If one fails live, fix the sim first, then the adapter.
+ * Each `assumption <id>:` test pins the API assumption with that id, listed at the top of the sim's provider
+ * file (packages/sim/src/routes/{vercel,neon,clerk}.ts). If one fails live, fix the sim first, then the adapter.
  */
 import { randomBytes } from "node:crypto";
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { clerkAdapter, neonAdapter, vercelAdapter } from "@sponson/adapters";
 import type { AdapterContext, Ctx } from "@sponson/core";
 import { startSim, type SimHandle } from "@sponson/sim";
-import { run } from "sponson";
+import { cliEnv, runCli, workspace, type CliRun, type Workspace } from "./support.js";
 
 const LIVE = process.env.SPONSON_LIVE === "1";
 const MISSING = ["VERCEL_TOKEN", "SPONSON_LIVE_VERCEL_PROJECT", "NEON_API_KEY", "SPONSON_LIVE_NEON_PROJECT", "CLERK_SECRET_KEY"].filter((k) => !process.env[k]);
@@ -40,7 +38,7 @@ const SECRET = `contract-secret-${tag}`;
 
 let sim: SimHandle | null = null;
 let env: NodeJS.ProcessEnv;
-let cwd: string;
+let ws: Workspace;
 let providers: { vercel: Record<string, unknown>; neon: Record<string, unknown> };
 
 beforeAll(async () => {
@@ -52,24 +50,13 @@ beforeAll(async () => {
     };
   } else {
     sim = await startSim();
-    env = {
-      PATH: process.env.PATH,
-      HOME: process.env.HOME,
-      VERCEL_TOKEN: "t",
-      NEON_API_KEY: "t",
-      CLERK_SECRET_KEY: "t",
-      VERCEL_API_URL: `${sim.url}/vercel`,
-      NEON_API_URL: `${sim.url}/neon`,
-      CLERK_API_URL: `${sim.url}/clerk`,
-    };
+    env = cliEnv(sim);
     providers = { vercel: { project: "prj_demo" }, neon: { project: "proj_demo" } };
   }
   env.SPONSON_CONTRACT_SECRET = SECRET;
-  cwd = await mkdtemp(join(tmpdir(), "sponson-contract-"));
   // No deploy-dependent line: a live run must not depend on a git push reaching Vercel.
-  await writeFile(
-    join(cwd, "release.plan.yaml"),
-    `version: 1
+  ws = await workspace("contract", {
+    plan: `version: 1
 providers:
   vercel: ${JSON.stringify(providers.vercel)}
   neon: ${JSON.stringify(providers.neon)}
@@ -89,32 +76,18 @@ changes:
     op: redirect_allow
     url: ${callbackUrl}
 `,
-  );
+  });
 }, 60_000);
 
 afterAll(async () => {
   // Always clean up, even when assertions failed half-way.
-  if (cwd) await cli(["apply", "--destroy"]).catch(() => {});
+  if (ws) await cli(["apply", "--destroy"]).catch(() => {});
   await sim?.close();
+  await ws?.cleanup();
 }, 120_000);
 
-async function cli(args: string[]): Promise<{ code: number; out: string; err: string; json: Record<string, unknown> | null }> {
-  let out = "";
-  let err = "";
-  const code = await run([...args, "--json", "--receipts", "local", "--receipts-dir", join(cwd, "r"), "--pr", String(pr), "--branch", branch, "--sha", sha], {
-    stdout: { write: (s) => (out += s) },
-    stderr: { write: (s) => (err += s) },
-    env,
-    cwd,
-    color: false,
-  });
-  let json: Record<string, unknown> | null = null;
-  try {
-    json = JSON.parse(out);
-  } catch {
-    /* error output */
-  }
-  return { code, out, err, json };
+function cli(args: string[]): Promise<CliRun> {
+  return runCli([...args, "--json", "--receipts", "local", "--receipts-dir", join(ws.dir, "r"), "--pr", String(pr), "--branch", branch, "--sha", sha], { env, cwd: ws.dir });
 }
 
 function actx(adapter: "vercel" | "neon" | "clerk"): AdapterContext {
@@ -125,7 +98,7 @@ function actx(adapter: "vercel" | "neon" | "clerk"): AdapterContext {
 describe(`contract (${LIVE ? "@live" : "sim"})`, () => {
   it("plan is read-only and sees every line", async () => {
     const r = await cli(["plan"]);
-    expect(r.code, r.out + r.err).toBe(0);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
     const lines = (r.json!.lines as Array<{ id: string; status: string }>).map((l) => [l.id, l.status]);
     expect(lines).toEqual([
       ["db", "create"],
@@ -137,14 +110,14 @@ describe(`contract (${LIVE ? "@live" : "sim"})`, () => {
 
   it("apply creates all three and never prints the secret", async () => {
     const r = await cli(["apply"]);
-    expect(r.code, r.out + r.err).toBe(0);
-    expect(r.out + r.err).not.toContain(SECRET);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout + r.stderr).not.toContain(SECRET);
     const receipt = r.json!.receipt as { status: string; lines: Record<string, { status: string }> };
     expect(receipt.status).toBe("complete");
     expect(Object.values(receipt.lines).map((l) => l.status)).toEqual(["applied", "applied", "applied"]);
   }, 120_000);
 
-  it("assumption: an env var written by apply is immediately readable with the same value hash", async () => {
+  it("assumption V1: an env var written by apply is immediately readable with the same value hash", async () => {
     const op = vercelAdapter.ops.env!;
     const params = op.defaults!({ target: "preview", values: { CONTRACT_TOKEN: SECRET } }, actx("vercel").ctx);
     const live = await op.read(actx("vercel"), params);
@@ -154,7 +127,7 @@ describe(`contract (${LIVE ? "@live" : "sim"})`, () => {
     expect(op.diff(live, params).find((d) => d.key === key)?.kind).toBe("unchanged");
   });
 
-  it("assumption: the Neon branch and its connection string are readable right after creation", async () => {
+  it("assumption N2: the Neon branch and its connection string are readable right after creation", async () => {
     const op = neonAdapter.ops.branch!;
     const params = op.defaults!({}, actx("neon").ctx);
     const live = await op.read(actx("neon"), params);
@@ -165,15 +138,15 @@ describe(`contract (${LIVE ? "@live" : "sim"})`, () => {
   it("second apply writes nothing", async () => {
     const before = sim?.state.writes.length ?? 0;
     const r = await cli(["apply"]);
-    expect(r.code, r.out + r.err).toBe(0);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
     const receipt = r.json!.receipt as { lines: Record<string, { status: string }> };
     expect(Object.values(receipt.lines).map((l) => l.status)).toEqual(["unchanged", "unchanged", "unchanged"]);
     if (sim) expect(sim.state.writes.length).toBe(before);
   }, 120_000);
 
-  it("assumption: destroy is visible immediately (Neon branch delete is synchronous enough to re-read)", async () => {
+  it("assumption N1: destroy is visible immediately (Neon branch delete is synchronous enough to re-read)", async () => {
     const r = await cli(["apply", "--destroy"]);
-    expect(r.code, r.out + r.err).toBe(0);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
     const neon = neonAdapter.ops.branch!;
     expect(await neon.read(actx("neon"), neon.defaults!({}, actx("neon").ctx))).toBeNull();
     const clerk = clerkAdapter.ops.redirect_allow!;

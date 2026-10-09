@@ -6,7 +6,7 @@
  *   Neon   GET /projects/:id/branches  → { branches, pagination: { next } }, next page via ?cursor=
  *   Vercel GET /v9/projects/:id/env    → { envs, pagination: { count, next, prev } }, next page via ?until=
  * Real page sizes are larger than the 2–3 used here; any project with enough preview branches/vars hits it.
- * Expected behaviour: the 验收策略 invariant 3 ("apply; apply → second run all unchanged, 0 writes") and plain
+ * Expected behaviour: invariant I3 (apply; apply → the second run is all unchanged, 0 writes) and plain
  * convergence hold whatever page a resource lands on.
  */
 import { afterEach, describe, expect, it } from "vitest";

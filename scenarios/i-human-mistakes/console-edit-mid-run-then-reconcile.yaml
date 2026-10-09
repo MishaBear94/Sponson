@@ -1,4 +1,4 @@
-name: 人在控制台改了又改回：不冲突
+name: "a human edits the console and changes it back: no conflict"
 plan: |
   version: 1
   providers:

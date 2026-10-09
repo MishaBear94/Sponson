@@ -169,6 +169,15 @@ function envKey(target: string, branch: string | undefined, name: string): strin
   return `env:${target}:${branch ?? ALL_BRANCHES}:${name}`;
 }
 
+/** Inverse of envKey. A variable name never contains `:`; a git branch may. */
+function parseEnvKey(key: string): { target: string; branch: string; name: string } {
+  const [kind, target] = key.split(":", 2);
+  const last = key.lastIndexOf(":");
+  const branchAt = (kind?.length ?? 0) + (target?.length ?? 0) + 2;
+  if (kind !== "env" || !target || last < branchAt) throw new SponsonError("INTERNAL", `vercel: \`${key}\` is not an env key`, { adapter: "vercel", key });
+  return { target, branch: key.slice(branchAt, last), name: key.slice(last + 1) };
+}
+
 function envLabel(scope: EnvScope, name: string): string {
   return `${name} (${scope.target}${scope.branch ? `, ${scope.branch}` : ""})`;
 }
@@ -300,6 +309,28 @@ const env: OpSpec = {
     return (await listEnvs(c))
       .filter((e) => e.target.includes(scope.target) && (e.gitBranch === undefined || e.gitBranch === scope.branch))
       .map((e) => envRecord(scope.target, e, sha256(e.value ?? "")));
+  },
+
+  /**
+   * One line per (target, git branch), every variable `{ keep: true }`: Sponson takes over that they exist, never
+   * their values. A project-wide variable is adopted as project-wide (`branch: "*"`), never re-created as a
+   * branch-scoped copy; `branch` is omitted when it is the current git branch (the op's default).
+   */
+  adopt(resources, ctx) {
+    const groups = new Map<string, { target: string; branch: string; values: Record<string, { keep: true }>; keys: string[] }>();
+    for (const r of resources) {
+      const { target, branch, name } = parseEnvKey(r.key);
+      const id = `${target}\u0000${branch}`;
+      const g = groups.get(id) ?? { target, branch, values: {}, keys: [] };
+      g.values[name] = { keep: true };
+      g.keys.push(r.key);
+      groups.set(id, g);
+    }
+    return [...groups.values()].map(({ target, branch, values, keys }) => {
+      const current = branch === ctx.git.branch;
+      const suffix = branch === ALL_BRANCHES ? "-shared" : current ? "" : `-${branch}`;
+      return { id: `env-${target}${suffix}`, params: { target, ...(current ? {} : { branch }), values }, keys };
+    });
   },
 
   async awaitExternal(actx) {

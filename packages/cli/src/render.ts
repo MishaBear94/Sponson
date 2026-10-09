@@ -2,7 +2,8 @@
  * Text rendering (for humans) and the JSON envelopes (for agents).
  * Display strings such as `(secret)` or `(pending ← db.x)` exist only here, in text; JSON carries engine data as-is.
  */
-import type { ApplyResultSummary, DiffSide, Drift, LineStatus, PlanLine, PlanLineStatus, PlanResult, ReceiptLine, ResourceDiff } from "@sponson/core";
+import type { ErrorCode, ApplyResultSummary, DiffSide, Drift, LineStatus, PlanLine, PlanLineStatus, PlanResult, ReceiptLine, ResourceDiff } from "@sponson/core";
+import { cliHint } from "./output.js";
 
 export interface RenderOptions {
   color: boolean;
@@ -52,9 +53,12 @@ export function diffText(d: ResourceDiff): string {
   return `${d.label}  ${before !== undefined ? `${before} → ` : ""}${after}`;
 }
 
+/** Line errors in text output carry the same CLI remedy the JSON envelope does (from core's ERROR_CODES). */
 function errorText(error: string | undefined, code: string | undefined): string {
   if (!error) return code ?? "";
-  return code ? `${code}: ${error}` : error;
+  const hint = cliHint(code as ErrorCode | undefined);
+  const text = hint ? `${error} ${hint}` : error;
+  return code ? `${code}: ${text}` : text;
 }
 
 interface Row {

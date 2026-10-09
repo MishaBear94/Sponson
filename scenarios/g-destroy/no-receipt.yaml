@@ -1,4 +1,4 @@
-name: 没有回执：报"无可销毁"，退出 0
+name: "no receipt: reports nothing to destroy, exit 0"
 plan: |
   version: 1
   providers:

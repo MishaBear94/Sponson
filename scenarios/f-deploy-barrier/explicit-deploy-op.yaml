@@ -1,4 +1,4 @@
-name: 显式 op deploy：没有屏障，一次跑完
+name: "explicit deploy op: no barrier, one run completes everything"
 plan: |
   version: 1
   providers:

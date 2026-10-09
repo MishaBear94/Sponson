@@ -228,7 +228,8 @@ describe("drift", () => {
 
     const { receipt } = await applyRun(opts());
     expect(receipt.status).toBe("failed");
-    expect(receipt.lines["a"]!.error).toContain("--reconcile");
+    expect(receipt.lines["a"]!.error).toContain("reconcile");
+    expect(receipt.lines["a"]!.error).not.toContain("--");
     expect(cloud.items.get("alpha")!.value).toBe("edited-in-console");
 
     const fixed = await applyRun(opts(PLAN, { reconcile: true }));
@@ -340,6 +341,25 @@ describe("environments and approval", () => {
 });
 
 describe("locks", () => {
+  it("never has two renewals in flight, however slow the store is", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let renewals = 0;
+    const slow = Object.create(store) as typeof store;
+    slow.renewLock = async (...args) => {
+      inFlight++;
+      renewals++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 60)); // slower than the 10ms renewal period below
+      inFlight--;
+      return store.renewLock(...args);
+    };
+    cloud.external = "never";
+    await applyRun(opts(PLAN, { store: slow, lockTtlMs: 30, onLineDone: () => new Promise((r) => setTimeout(r, 120)) }));
+    expect(renewals).toBeGreaterThan(1);
+    expect(maxInFlight).toBe(1);
+  });
+
   it("refuses to run while another apply holds the scope", async () => {
     await store.acquireLock("preview", "pr-42", "other", 60_000);
     await expect(applyRun(opts())).rejects.toMatchObject({ code: "LOCK_HELD" });
@@ -393,6 +413,49 @@ describe("destroy", () => {
     await destroyRun(opts());
     const { receipt } = await applyRun(opts());
     expect(Object.values(receipt.lines).every((l) => l.status === "applied")).toBe(true);
+  });
+
+  /** Crash right after `b` created its item: the last receipt on disk is the checkpoint that holds `item:beta` as an intent. */
+  async function crashAfterCreatingBeta(): Promise<void> {
+    const crash = opts(PLAN, {
+      onLineDone: (id) => {
+        if (id === "b") throw new Error("SIGKILL");
+      },
+    });
+    await expect(applyRun(crash)).rejects.toThrow("SIGKILL");
+    const checkpoint = await store.read("preview", "pr-42");
+    expect(checkpoint!.ledger.find((e) => e.key === "item:beta")).toMatchObject({ createdBy: "intent", line: "b" });
+    expect(cloud.items.has("beta")).toBe(true);
+  }
+
+  it("after a crash, locates an intent through its line and destroys it as Sponson's", async () => {
+    await crashAfterCreatingBeta();
+    const { receipt } = await destroyRun(opts());
+    expect(receipt.status).toBe("complete");
+    expect(receipt.lines["b"]!.status).toBe("destroyed");
+    expect(cloud.items.has("beta")).toBe(false);
+    expect(cloud.items.has("alpha")).toBe(false);
+    expect(receipt.ledger).toEqual([]);
+  });
+
+  it("after a crash, an intent whose line left the plan is INTENT_UNRESOLVED, never silently forgotten", async () => {
+    await crashAfterCreatingBeta();
+    const onlyA = PLAN.slice(0, PLAN.indexOf("  - id: b"));
+    const { receipt } = await destroyRun(opts(onlyA));
+    expect(receipt.status).toBe("failed");
+    expect(receipt.lines["b"]).toMatchObject({ status: "destroy_failed", errorCode: "INTENT_UNRESOLVED" });
+    expect(receipt.ledger.find((e) => e.key === "item:beta")).toMatchObject({ createdBy: "intent" });
+    // Unlocatable means untouched: the item may be Sponson's, but nothing is deleted on a guess.
+    expect(cloud.items.has("beta")).toBe(true);
+    expect(cloud.items.has("alpha")).toBe(false);
+  });
+
+  it("records a preempted lock on the destroy receipt too", async () => {
+    await applyRun(opts());
+    await store.acquireLock("preview", "pr-42", "crashed", -1);
+    const { receipt, warnings } = await destroyRun(opts());
+    expect(receipt.lockPreempted).toBe("crashed");
+    expect(warnings[0]).toMatch(/expired lock/);
   });
 
   it("records destroy_failed and keeps the resource in the receipt", async () => {

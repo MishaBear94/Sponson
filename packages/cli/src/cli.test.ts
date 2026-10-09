@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Registry, sha256, type LiveState, type ResourceAdapter, type ResourceRecord } from "@sponson/core";
+import { Registry, sha256, type LiveState, type OpSpec, type ResourceAdapter, type ResourceRecord } from "@sponson/core";
 import { describe, expect, it } from "vitest";
 import { run } from "./main.js";
 
@@ -20,7 +20,7 @@ function memState(): MemState {
   return { things: new Map(), deployed: new Set(), scopeExtra: [] };
 }
 
-function memAdapter(name: string, op: string, state: MemState): ResourceAdapter {
+function memAdapter(name: string, op: string, state: MemState, adopt?: OpSpec["adopt"]): ResourceAdapter {
   const read = async (_a: unknown, p: Record<string, unknown>): Promise<LiveState | null> => {
     const key = String(p.name);
     const t = state.things.get(key);
@@ -60,6 +60,7 @@ function memAdapter(name: string, op: string, state: MemState): ResourceAdapter 
           const own = [...state.things.keys()].map((k) => ({ key: `thing:${k}`, id: `id-${k}`, hash: "x" }));
           return [...own, ...state.scopeExtra];
         },
+        ...(adopt ? { adopt } : {}),
       },
     },
   };
@@ -142,9 +143,32 @@ describe("sponson plan", () => {
     expect(j.lines[1].inputs.value).toEqual({ state: "pending", value: null, ref: "a.id", dependsOn: "a", sensitive: false });
   });
 
-  it("status is an alias", async () => {
+  it("status is an alias, listed in --help, and reported as plan", async () => {
     const h = await harness();
-    expect((await h.exec("status", "--json")).code).toBe(0);
+    const ok = await h.exec("status", "--json");
+    expect(ok.code).toBe(0);
+    expect(JSON.parse(ok.out).command).toBe("plan");
+    const bad = await h.exec("status", "--json", "--env", "staging");
+    expect(JSON.parse(bad.out)).toMatchObject({ ok: false, command: "plan" });
+    const help = await h.exec("--help");
+    expect(help.code).toBe(0);
+    expect(help.out).toMatch(/^\s+plan\|status\b/m);
+  });
+
+  it("--version prints the package version", async () => {
+    const h = await harness();
+    const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
+    const r = await h.exec("--version");
+    expect(r.code).toBe(0);
+    expect(r.out.trim()).toBe(pkg.version);
+  });
+
+  it("a value-taking global option before the command is not mistaken for the command", async () => {
+    const h = await harness();
+    const r = await h.exec("--receipts-remote", "plan", "frobnicate", "--json");
+    expect(r.code).toBe(2);
+    // `frobnicate` is the command word (unknown), not `plan`, which was the option's value.
+    expect(JSON.parse(r.out)).toMatchObject({ ok: false, command: null, error: { code: "USAGE" } });
   });
 });
 
@@ -276,6 +300,10 @@ describe("sponson init", () => {
   it("adopts an unmanaged resource into the existing plan and keeps comments", async () => {
     const state = memState();
     state.scopeExtra.push({ key: "env:preview:LEGACY_KEY", id: "env_1", hash: "h", label: "LEGACY_KEY (preview)" });
+    // The op decides what an adopted line looks like; here, like vercel.env, values are kept, never copied.
+    const keepAll: OpSpec["adopt"] = (rs) => [
+      { id: "env-preview", params: { target: "preview", values: Object.fromEntries(rs.map((x) => [x.key.split(":").pop()!, { keep: true }])) }, keys: rs.map((x) => x.key) },
+    ];
     const plan = `# keep me
 version: 1
 environments: [preview, production]
@@ -287,7 +315,7 @@ changes:
     name: alpha
     value: one
 `;
-    const h = await harness(plan, state, memAdapter("vercel", "env", state));
+    const h = await harness(plan, state, memAdapter("vercel", "env", state, keepAll));
     const r = await h.exec("init");
     expect(r.code, r.out + r.err).toBe(0);
     expect(r.out).toContain("Added 1 line");
@@ -301,6 +329,19 @@ changes:
     h.env.LEGACY_KEY = "legacy-value";
     const after = await h.exec("plan", "--json");
     expect(after.code, after.out).toBe(0);
+  });
+
+  it("an op without adopt() adopts nothing and says so, instead of guessing a line", async () => {
+    const state = memState();
+    state.scopeExtra.push({ key: "thing:legacy", id: "id-legacy", hash: "h" });
+    const h = await harness(BASE_PLAN, state);
+    const before = await readFile(join(h.cwd, "release.plan.yaml"), "utf8");
+    const r = await h.exec("init", "--json");
+    expect(r.code, r.out + r.err).toBe(0);
+    const j = JSON.parse(r.out);
+    expect(j.added).toEqual([]);
+    expect(j.warnings).toContainEqual(expect.stringMatching(/cannot adopt thing:legacy: adapter mem \(op thing\) has no adopt\(\)/));
+    expect(await readFile(join(h.cwd, "release.plan.yaml"), "utf8")).toBe(before);
   });
 
   it("--adopt with no match is a USAGE error (exit 2) listing what can be adopted", async () => {

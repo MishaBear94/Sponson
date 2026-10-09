@@ -1,4 +1,4 @@
-name: 三行计划一次跑完：分支、变量、回调
+name: "three-line plan in one run: branch, env vars, callback"
 plan: |
   version: 1
   providers:

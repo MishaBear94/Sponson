@@ -1,4 +1,4 @@
-name: 变量注入晚于构建开始：触发 redeploy 并记录
+name: "env vars written after the build started: a redeploy is triggered and recorded"
 plan: |
   version: 1
   providers:

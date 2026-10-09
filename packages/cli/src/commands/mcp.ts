@@ -7,6 +7,7 @@ import { z } from "zod";
 import { UsageError, parsePr, planPathFor, selectStore, type GlobalOpts, type IO } from "../context.js";
 import { errorEnvelope, serialize, withRedactorWarnings } from "../output.js";
 import { applyJson, finalLine, planJson, planSummary } from "../render.js";
+import { VERSION } from "../version.js";
 import { executeApply } from "./apply.js";
 import { executePlan } from "./plan.js";
 
@@ -132,7 +133,7 @@ export async function mcpCommand(base: GlobalOpts, io: IO): Promise<number> {
 
 /** The server with its three tools, not yet connected (tests connect it to an in-memory transport). */
 export function buildMcpServer(base: GlobalOpts, io: IO): McpServer {
-  const server = new McpServer({ name: "sponson", version: "0.2.0" });
+  const server = new McpServer({ name: "sponson", version: VERSION });
   const tool = (
     name: string,
     command: string,

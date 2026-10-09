@@ -9,6 +9,8 @@
  *   Receipt   — what actually happened the last time this scope was applied
  */
 
+import type { ErrorCode } from "./errors.js";
+
 // ---------------------------------------------------------------------------
 // Plan file
 // ---------------------------------------------------------------------------
@@ -194,6 +196,32 @@ export interface AdapterContext {
   redact(text: string): string;
 }
 
+/**
+ * One plan line proposed by `OpSpec.adopt`. The CLI adds `adapter`, `op` and `environments`, and makes `id` unique.
+ */
+export interface AdoptedLine {
+  /** Suggested line id (made unique against the plan by the caller). */
+  id: string;
+  /** The line's params. Never a copied value: only references such as `{ keep: true }`, or identifying names. */
+  params: Record<string, unknown>;
+  /** Resource keys this line takes over. */
+  keys: string[];
+}
+
+/**
+ * The marker contract. After `resolveParams`, a param leaf that is not a concrete value is a marker string;
+ * classify it with `markerKind(v)` from `@sponson/core` (never by inspecting the string):
+ *
+ *   "pending" — a `{ from: line.output }` not known yet. `diff` shows it as pending with its reference
+ *               (`pendingRef(v)`); `apply` never receives one (the engine waits instead).
+ *   "secret"  — a `{ secret: "scheme://…" }` whose value is not resolved in this command (plan). `diff`
+ *               shows it as secret with its reference; `apply` never receives one (it gets the value).
+ *   "keep"    — `{ keep: true }`: equal to whatever is live. `diff` reports it unchanged when the resource
+ *               exists and PARAM_INVALID when it does not; `apply` leaves the live value alone.
+ *   null      — a concrete value.
+ *
+ * `desiredSide`, `diffValue` and `assertNoPending` in `@sponson/adapters` implement this contract.
+ */
 export interface OpSpec {
   outputs: Record<string, OutputSpec>;
   /** Fill in defaults (e.g. a branch name) given the context. Returns a new params object. */
@@ -201,14 +229,17 @@ export interface OpSpec {
   /**
    * The deployment environment this change writes to, when the op targets one explicitly
    * (Vercel env `target`). The engine requires approval when any line writes to `production`,
-   * whatever `--env` says. Return null when the op is not environment-specific.
+   * whatever the run's environment is. Return null when the op is not environment-specific.
    */
   writesEnvironment?(params: ResolvedParams, ctx: Ctx): string | null;
   /** Find what currently exists for this change. Null when nothing exists. Must not write. */
   read(actx: AdapterContext, params: ResolvedParams): Promise<LiveState | null>;
-  /** Compare live state against desired params. Must not write. */
+  /** Compare live state against desired params. Must not write. Params may carry markers (see the marker contract above). */
   diff(live: LiveState | null, params: ResolvedParams): ResourceDiff[];
-  /** Create or update. Must be idempotent: calling with the same params twice performs no writes the second time. */
+  /**
+   * Create or update. Must be idempotent: calling with the same params twice performs no writes the second time.
+   * Params never carry pending or secret markers here; `{ keep: true }` markers mean "leave the live value".
+   */
   apply(actx: AdapterContext, params: ResolvedParams, live: LiveState | null): Promise<ApplyResult>;
   /** Delete the given resources. A resource that is already gone is a success, not an error. */
   destroy(actx: AdapterContext, resources: ResourceRecord[]): Promise<void>;
@@ -224,6 +255,14 @@ export interface OpSpec {
    * The engine removes everything any scope's ledger already manages.
    */
   listScope?(actx: AdapterContext, params: ResolvedParams): Promise<ResourceRecord[]>;
+  /**
+   * Turn unmanaged resources that this op's `listScope` reported into plan lines (`sponson init`).
+   * Values are never copied into the plan: Vercel env vars become `{ keep: true }`, grouped into one
+   * line per (target, git branch), with `branch: "*"` for project-wide ones; a Neon branch becomes a
+   * line with its `name:`; a Clerk redirect a line with its `url:`. Every given key must be in exactly
+   * one returned line. Pure: no provider calls.
+   */
+  adopt?(resources: Array<Pick<ResourceRecord, "key" | "label"> & { id?: string }>, ctx: Ctx): AdoptedLine[];
 }
 
 export interface ResourceAdapter {
@@ -271,7 +310,7 @@ export interface ReceiptLine {
   waitingFor?: string;
   error?: string;
   /** Stable code when the error was a SponsonError (e.g. DRIFT_CHANGED), so agents can branch without parsing prose. */
-  errorCode?: string;
+  errorCode?: ErrorCode;
   notes?: Record<string, unknown>;
   /** Carried over from a previous receipt; the plan no longer has this line. */
   orphan?: boolean;
@@ -385,6 +424,8 @@ export interface Drift {
   adapter: string;
   /** Line id when known. */
   line?: string;
+  /** For `unmanaged`: the op whose `listScope` reported it (the op that can adopt it). */
+  op?: string;
   resource: { key: string; id?: string; label?: string };
   message: string;
   /** For `changed`: the live resource was replaced (different provider id), not just edited. */

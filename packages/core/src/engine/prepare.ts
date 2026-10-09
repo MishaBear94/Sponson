@@ -67,16 +67,20 @@ export function prepare(opts: RunOptions): Prepared {
   };
 }
 
-/** Approval is a non-empty name; whitespace is not a person. */
+/**
+ * Approval is a non-empty name; whitespace is not a person. Only `opts.approvedBy` counts: where it comes from
+ * (a flag, an environment variable, an approval workflow) is the caller's business.
+ */
 export function requireApproval(opts: RunOptions, prepared: Prepared): string | undefined {
   if (!prepared.requiresApproval) return undefined;
-  const approvedBy = (opts.approvedBy ?? (opts.env ?? process.env).SPONSON_APPROVED_BY ?? "").trim();
+  const approvedBy = (opts.approvedBy ?? "").trim();
   if (!approvedBy) {
+    const n = prepared.productionLines.length;
     const why =
       opts.ctx.env === "production"
-        ? "Applying to production requires approval."
-        : `Line${prepared.productionLines.length > 1 ? "s" : ""} ${prepared.productionLines.map((l) => `\`${l}\``).join(", ")} write${prepared.productionLines.length > 1 ? "" : "s"} to production, which requires approval even when --env is ${opts.ctx.env}.`;
-    throw new SponsonError("ENV_NOT_APPROVED", `${why} Pass --approved-by <who> or set SPONSON_APPROVED_BY from an approval workflow.`, {
+        ? "This run applies to production"
+        : `Line${n > 1 ? "s" : ""} ${prepared.productionLines.map((l) => `\`${l}\``).join(", ")} write${n > 1 ? "" : "s"} to production although the environment is ${opts.ctx.env}`;
+    throw new SponsonError("ENV_NOT_APPROVED", `${why}: approval is required (approvedBy).`, {
       environment: opts.ctx.env,
       productionLines: prepared.productionLines,
     });

@@ -24,7 +24,7 @@ class Log {
   }
 }
 
-const st = (r: CliResult) => r.json?.receipt?.status ?? r.json?.error?.code ?? `exit ${r.exit}`;
+const st = (r: CliResult) => r.json?.receipt?.status ?? r.json?.error?.code ?? `exit ${r.code}`;
 
 describe("lifecycle journeys: one PR, many pushes", () => {
   it("plan edited on every push (add, change, rename id, move a line to production, remove, secret rotation), deploy reported twice, then closed", async () => {

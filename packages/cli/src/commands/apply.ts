@@ -1,5 +1,5 @@
 import { applyRun, destroyRun, type ApplyResultSummary, type Redactor } from "@sponson/core";
-import { UsageError, buildRunContext, cleanApprover, toRunOptions, type GlobalOpts, type IO } from "../context.js";
+import { UsageError, buildInvocation, resolveApprover, toRunOptions, type GlobalOpts, type IO } from "../context.js";
 import { withRedactorWarnings } from "../output.js";
 import { applyJson, renderApply } from "../render.js";
 
@@ -21,16 +21,15 @@ export interface ApplyOutcome {
 /** Shared by the CLI and the MCP server. */
 export async function executeApply(opts: ApplyOpts, io: IO, redactor: Redactor): Promise<ApplyOutcome> {
   const waitTimeoutMs = parseTimeout(opts.waitTimeout);
-  const rc = await buildRunContext(opts, io, redactor);
-  const run = toRunOptions(rc, io, {
-    // Whitespace is not a name: an empty approver is no approver.
-    approvedBy: cleanApprover(opts.approvedBy) ?? cleanApprover(io.env.SPONSON_APPROVED_BY),
+  const inv = await buildInvocation(opts, io, redactor);
+  const run = toRunOptions(inv, io, {
+    approvedBy: resolveApprover(opts.approvedBy, io.env),
     reconcile: opts.reconcile,
     wait: opts.wait,
     waitTimeoutMs,
   });
   const summary = opts.destroy ? await destroyRun(run) : await applyRun(run);
-  summary.warnings = withRedactorWarnings([...rc.warnings, ...summary.warnings], redactor);
+  summary.warnings = withRedactorWarnings([...inv.warnings, ...summary.warnings], redactor);
   return { summary, code: summary.receipt.status === "failed" ? 1 : 0 };
 }
 

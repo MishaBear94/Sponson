@@ -1,4 +1,4 @@
-name: 部署慢：--wait 轮询直到 READY
+name: "slow deployment: --wait polls until READY"
 plan: |
   version: 1
   providers:

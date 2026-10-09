@@ -1,7 +1,7 @@
  
 /**
  * The CLI surface an agent uses when it has no MCP: `init`, typos in flags, and the production audit trail.
- * README: "Every command takes `--json`"; 产品定义.md: "人看彩色 diff，agent 看 `--json`。没有例外。"
+ * README: "Every command takes `--json`": humans read the coloured diff, agents read `--json`, no exceptions.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -21,7 +21,7 @@ describe("init for an agent", () => {
     expect(r.code).toBe(0);
     const plan = await readFile(join(w.cwd, "release.plan.yaml"), "utf8");
     expect(plan).toContain("from: db.connection_string");
-    expect(r.json, `stdout: ${JSON.stringify(r.out)}`).not.toBeNull();
+    expect(r.json, `stdout: ${JSON.stringify(r.stdout)}`).not.toBeNull();
     expect(r.json).toMatchObject({ ok: true, command: "init" });
   });
 
@@ -39,7 +39,7 @@ describe("init for an agent", () => {
     await w.writePlan(previewPlan());
     const r = await w.cli(["init", "--adopt", "NOPE", "--json"]);
     expect(r.code).not.toBe(0);
-    expect(r.json, `stdout: ${JSON.stringify(r.out)} stderr: ${JSON.stringify(r.err)}`).not.toBeNull();
+    expect(r.json, `stdout: ${JSON.stringify(r.stdout)} stderr: ${JSON.stringify(r.stderr)}`).not.toBeNull();
     expect(r.json.ok).toBe(false);
     expect(r.json.error.code).toMatch(/^[A-Z_]+$/);
   });
@@ -68,7 +68,7 @@ describe("flag typos with --json", () => {
     await w.writePlan(previewPlan());
     const r = await w.cli(args, { ctx: false });
     expect(r.code).toBe(2);
-    expect(r.json, `stdout: ${JSON.stringify(r.out)} stderr: ${JSON.stringify(r.err)}`).not.toBeNull();
+    expect(r.json, `stdout: ${JSON.stringify(r.stdout)} stderr: ${JSON.stringify(r.stderr)}`).not.toBeNull();
     expect(r.json.ok).toBe(false);
     expect(r.json.error.code).toMatch(/^[A-Z_]+$/);
   });

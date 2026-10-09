@@ -1,5 +1,5 @@
-name: 控制台紧急改动后 apply 被拒；CI 重试同一个 apply 不能把改动覆盖掉
-# 决策-引用与漂移.md: 被改动 → 该行拒绝执行，除非带 --reconcile。默认不覆盖人在控制台改的东西。
+name: apply refused after an emergency console edit; a CI retry of the same apply must not overwrite the edit
+# Changed drift: the line is refused unless --reconcile is passed. By default Sponson never overwrites what a human changed in a console.
 # A refused run writes a receipt whose line is `blocked` (v0.2: DRIFT_CHANGED); the ledger keeps the resource, so the next run must still see the drift.
 plan: |
   version: 1
@@ -25,7 +25,7 @@ steps:
     expect: { exit: 0, status: complete }
   - chaos: { drift: { "vercel.env.preview.MAINTENANCE": "on" } }
   - run: apply --json
-    expect: { exit: 1, lines: { env: blocked }, errors: { env: "--reconcile" } }
+    expect: { exit: 1, lines: { env: blocked }, errors: { env: "reconcile" } }
   - run: plan --json
     expect: { exit: 1, drift: [{ kind: changed, line: env }], plan_lines: { env: blocked } }
   - run: apply --json

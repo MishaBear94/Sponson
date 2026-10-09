@@ -14,7 +14,7 @@ const outputs: string[] = [];
 const live = () => w.sim.state.vercel.projects.prj_demo!.envs.find((e) => e.key === "STRIPE_KEY")?.value;
 async function cli(args: string[]) {
   const r = await w.cli(args);
-  outputs.push(r.out + r.err);
+  outputs.push(r.stdout + r.stderr);
   return r;
 }
 
@@ -68,7 +68,7 @@ describe("rotate the Stripe key", () => {
     const apply = await cli(["apply", "--json"]);
     const env = apply.json.receipt.lines.env;
     // v2: refusals are line status `blocked`, run `failed`, and plan predicts them (SKILL.md Output + rule 1;
-    // design G5.1: plan resolves secrets too).
+    // plan resolves secrets too).
     expect(apply.json.receipt.status).toBe("failed");
     expect(env.status).toBe("blocked");
     expect(env.error).toMatch(/STRIPE_KEY/);

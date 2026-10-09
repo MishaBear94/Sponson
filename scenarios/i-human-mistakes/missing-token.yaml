@@ -1,4 +1,4 @@
-name: 缺 token：报错点名环境变量
+name: "missing token: the error names the env var"
 plan: |
   version: 1
   providers:

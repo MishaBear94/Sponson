@@ -1,4 +1,4 @@
-name: preview 的行引用了 production-only 的行：说明是环境过滤导致
+name: "a preview line references a production-only line: the error says the environment filter is why"
 plan: |
   version: 1
   providers:

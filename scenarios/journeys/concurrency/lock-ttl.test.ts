@@ -2,15 +2,16 @@
  * The lock TTL is shorter than the run (slow provider, big plan, a 15-minute TTL vs a 20-minute deploy wait),
  * and the original holder is alive and still working when a second actor arrives.
  *
- * Expected (验收策略 B "不并行写"; 决策-执行模型 §3 scope 锁): a live holder must not be overlapped. Either the
- * holder keeps its lock alive while it works, or — once preempted — it must not go on writing as if it still
- * held it (a fenced write that fails / is reported). In every case the final receipt must account for every
+ * Expected (the scope lock exists so that two runs never write one scope in parallel): a live holder must not be
+ * overlapped. Either the holder keeps its lock alive while it works, or — once preempted — it must not go on
+ * writing as if it still held it (a fenced write that fails / is reported). In every case the final receipt must account for every
  * resource Sponson created, so that destroy leaves nothing behind.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { startSim, type SimHandle } from "@sponson/sim";
 import { applyRun, destroyRun, GitBranchReceiptStore, LocalReceiptStore, type ReceiptStore } from "@sponson/core";
-import { bareRemote, engineOpts, neonBranches, simEnv, sleep, tmp, waitFor, workspace } from "./helpers.js";
+import { bareRemote, checkout, engineOpts, neonBranches, sleep, tmp, waitFor } from "./helpers.js";
+import { cliEnv } from "../../support.js";
 
 let sim: SimHandle;
 afterEach(async () => sim?.close());
@@ -25,8 +26,8 @@ describe.each(stores)("lock expiry while the holder is alive (%s store)", (_name
     sim = await startSim();
     sim.state.applyChaos({ latency_ms: 120 });
     const store = await makeFactory();
-    const cwd = await workspace();
-    const env = simEnv(sim);
+    const cwd = await checkout();
+    const env = cliEnv(sim);
     const TTL = 500;
 
     const events: string[] = [];

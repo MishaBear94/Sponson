@@ -15,8 +15,11 @@ import { appendChanges } from "./commands/init.js";
 import { buildMcpServer, readReceipt, validateArgs } from "./commands/mcp.js";
 import { run } from "./main.js";
 import { errorEnvelope, exitCodeFor, serialize } from "./output.js";
-import { Redactor } from "@sponson/core";
+import { ERROR_CODES, Redactor } from "@sponson/core";
 import { finalLine, renderApply, renderPlan } from "./render.js";
+import { createRequire } from "node:module";
+
+const PKG_VERSION = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 
 // ---------------------------------------------------------------------------
 // A one-op fake registry: `fake.thing` stores `value`; `fail: true` echoes `token` in its error.
@@ -154,7 +157,20 @@ describe("error envelope on every failure path", () => {
     const code = (c: string) => exitCodeFor(new SponsonError(c as never, "x"));
     expect(["LOCK_HELD", "LOCK_LOST"].map(code)).toEqual([3, 3]);
     expect(["USAGE", "PLAN_INVALID", "REF_UNKNOWN", "REF_OUTPUT_UNKNOWN", "ENV_UNKNOWN", "ENV_NOT_APPROVED", "PARAM_INVALID", "SECRET_LITERAL"].map(code)).toEqual([2, 2, 2, 2, 2, 2, 2, 2]);
-    expect(["STORE_CONTENDED", "OWNED_BY_OTHER_SCOPE", "PROVIDER_TRANSIENT", "PROVIDER_AUTH", "INTERNAL", "APPLY_FAILED", "STORE_PERMISSION"].map(code)).toEqual([1, 1, 1, 1, 1, 1, 1]);
+    expect(["STORE_CONTENDED", "STORE_REJECTED", "OWNED_BY_OTHER_SCOPE", "PROVIDER_TRANSIENT", "PROVIDER_AUTH", "INTERNAL", "STORE_PERMISSION", "DRIFT_CHANGED"].map(code)).toEqual([1, 1, 1, 1, 1, 1, 1, 1]);
+  });
+
+  it("every error code has its exit code in core's ERROR_CODES, and the old hand list still holds", () => {
+    for (const [c, spec] of Object.entries(ERROR_CODES)) {
+      const expected = c === "LOCK_HELD" || c === "LOCK_LOST" ? 3 : /^(PLAN_|REF_|ENV_)/.test(c) || ["USAGE", "PARAM_INVALID", "CTX_NULL", "SECRET_LITERAL", "ADAPTER_UNKNOWN", "OP_UNKNOWN"].includes(c) ? 2 : 1;
+      expect([c, spec.exit]).toEqual([c, expected]);
+    }
+  });
+
+  it("the envelope carries the CLI remedy for codes whose fix is a flag", () => {
+    expect(errorEnvelope("apply", new SponsonError("ENV_NOT_APPROVED", "approval is required (approvedBy)")).error.hint).toMatch(/--approved-by/);
+    expect(errorEnvelope("apply", new SponsonError("DRIFT_CHANGED", "x")).error.hint).toMatch(/--reconcile/);
+    expect(errorEnvelope("plan", new SponsonError("PLAN_INVALID", "x")).error).not.toHaveProperty("hint");
   });
 
   it("errorEnvelope never lets details overwrite code or message", () => {
@@ -225,6 +241,13 @@ changes:
     const r = await w.exec(["apply", "--json", "--env", "production", "--approved-by", "  alice@example.com "]);
     expect(r.code, r.out).toBe(0);
     expect(r.json.receipt.approvedBy).toBe("alice@example.com");
+  });
+
+  it("without --approved-by, $SPONSON_APPROVED_BY (trimmed) is the approver", async () => {
+    const w = await world(prodPlan, { SPONSON_APPROVED_BY: "  bob " });
+    const r = await w.exec(["apply", "--json", "--env", "production"]);
+    expect(r.code, r.out).toBe(0);
+    expect(r.json.receipt.approvedBy).toBe("bob");
   });
 });
 
@@ -321,7 +344,7 @@ describe("text renderer", () => {
     expect(text).toContain("~ DATABASE_URL  (secret) → (pending ← db.connection_string)");
     expect(text).toContain("+ STRIPE_KEY  (secret ← env://STRIPE_KEY)");
     expect(text).toMatch(/^\? callback .*waiting on `env` \(deploy\)$/m);
-    expect(text).toMatch(/^- other .*blocked\s+DRIFT_CHANGED: changed outside Sponson$/m);
+    expect(text).toMatch(/^- other .*blocked\s+DRIFT_CHANGED: changed outside Sponson Re-run with --reconcile/m); // the CLI remedy follows the engine message
     expect(text).toContain("1 to update, 1 pending, 1 blocked");
   });
 
@@ -432,6 +455,19 @@ describe("MCP tools", () => {
     const { call } = await mcpClient(w.cwd);
     const r = await call("sponson_apply", { env: "production", approvedBy: "   " });
     expect(r.json.error.code).toBe("ENV_NOT_APPROVED");
+  });
+
+  it("without approvedBy, the server's $SPONSON_APPROVED_BY (trimmed) is the approver", async () => {
+    const w = await world(PLAN().replace("value: one", "value: one\n    environments: [production]"));
+    const { call } = await mcpClient(w.cwd, { SPONSON_APPROVED_BY: " carol " });
+    const r = await call("sponson_apply", { env: "production" });
+    expect(r.json.receipt?.approvedBy, JSON.stringify(r.json)).toBe("carol");
+  });
+
+  it("reports the package version", async () => {
+    const w = await world();
+    const { client } = await mcpClient(w.cwd);
+    expect(client.getServerVersion()?.version).toBe(PKG_VERSION);
   });
 
   it("descriptions list every plan status and every receipt line status; apply takes waitTimeout", async () => {

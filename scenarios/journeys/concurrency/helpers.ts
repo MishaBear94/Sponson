@@ -3,19 +3,17 @@
  * one receipts store. Not a test file.
  */
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
-import { run } from "sponson";
+import { onTestFinished } from "vitest";
 import { createRegistry } from "@sponson/adapters";
 import { detectCtx, loadPlan, Redactor, type ReceiptStore, type RunOptions } from "@sponson/core";
 import type { SimHandle } from "@sponson/sim";
+import { CLI_COMMAND, workspace } from "../../support.js";
 
 export const exec = promisify(execFile);
 export const REPO = new URL("../../../", import.meta.url).pathname;
-export const SHA = "0123456789abcdef0123456789abcdef01234567";
 const TSX = pathToFileURL(join(REPO, "node_modules/tsx/dist/loader.mjs")).href;
 const BIN = join(REPO, "packages/cli/src/bin.ts");
 
@@ -40,8 +38,11 @@ changes:
     url: { from: env.preview_url }
 `;
 
-export async function tmp(prefix: string): Promise<string> {
-  return mkdtemp(join(tmpdir(), `sponson-cc-${prefix}-`));
+/** A scratch directory (a TMPDIR, a store root, a workdir) removed when the current test finishes. */
+export async function tmp(prefix: string, opts: { plan?: string } = {}): Promise<string> {
+  const ws = await workspace(`cc-${prefix}`, opts);
+  onTestFinished(ws.cleanup);
+  return ws.dir;
 }
 
 export async function bareRemote(): Promise<string> {
@@ -51,25 +52,8 @@ export async function bareRemote(): Promise<string> {
 }
 
 /** A checkout of the user's repo as one actor sees it: just the plan file. */
-export async function workspace(plan = PLAN): Promise<string> {
-  const cwd = await tmp("ws");
-  await writeFile(join(cwd, "release.plan.yaml"), plan);
-  return cwd;
-}
-
-export function simEnv(sim: SimHandle, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return {
-    PATH: process.env.PATH,
-    HOME: process.env.HOME,
-    NO_COLOR: "1",
-    VERCEL_TOKEN: "tok_vercel",
-    NEON_API_KEY: "tok_neon",
-    CLERK_SECRET_KEY: "tok_clerk",
-    VERCEL_API_URL: `${sim.url}/vercel`,
-    NEON_API_URL: `${sim.url}/neon`,
-    CLERK_API_URL: `${sim.url}/clerk`,
-    ...extra,
-  };
+export function checkout(plan = PLAN): Promise<string> {
+  return tmp("ws", { plan });
 }
 
 /** Each PR has its own head commit (and so its own preview deployment URL). */
@@ -81,7 +65,8 @@ export function ctxArgs(pr: number, sha = shaFor(pr)): string[] {
   return ["--pr", String(pr), "--branch", `feat/pr-${pr}`, "--sha", sha];
 }
 
-export interface CliResult {
+/** A finished CLI process: like support's CliRun, but a killed process has no exit code. */
+export interface ProcessResult {
   code: number | null;
   signal?: NodeJS.Signals | null;
   stdout: string;
@@ -97,26 +82,18 @@ function parse(stdout: string): Record<string, any> | null {
   }
 }
 
-/** In-process CLI, the way the scenario runner calls it. */
-export async function cli(argv: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<CliResult> {
-  let stdout = "";
-  let stderr = "";
-  const code = await run(argv, { stdout: { write: (s) => (stdout += s) }, stderr: { write: (s) => (stderr += s) }, env, cwd, color: false });
-  return { code, stdout, stderr, json: parse(stdout) };
-}
-
 /** A separate OS process running the real CLI (one CI runner, or a developer's terminal). */
-export function spawnCli(argv: string[], cwd: string, env: NodeJS.ProcessEnv): { child: ChildProcess; done: Promise<CliResult> } {
+export function spawnCli(argv: string[], cwd: string, env: NodeJS.ProcessEnv): { child: ChildProcess; done: Promise<ProcessResult> } {
   const child = spawn(process.execPath, ["--import", TSX, BIN, ...argv], { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "";
   let stderr = "";
   child.stdout!.on("data", (d) => (stdout += d));
   child.stderr!.on("data", (d) => (stderr += d));
-  const done = new Promise<CliResult>((resolve) => child.on("close", (code, signal) => resolve({ code, signal, stdout, stderr, json: parse(stdout) })));
+  const done = new Promise<ProcessResult>((resolve) => child.on("close", (code, signal) => resolve({ code, signal, stdout, stderr, json: parse(stdout) })));
   return { child, done };
 }
 
-export const MCP_COMMAND = { command: process.execPath, args: ["--import", TSX, BIN, "mcp"] };
+export const MCP_COMMAND = { command: CLI_COMMAND.command, args: [...CLI_COMMAND.args, "mcp"] };
 
 /** RunOptions for driving the engine directly (needed for lockTtlMs, which the CLI does not expose). */
 export async function engineOpts(cwd: string, env: NodeJS.ProcessEnv, pr: number, store: ReceiptStore, extra: Partial<RunOptions> = {}): Promise<RunOptions> {

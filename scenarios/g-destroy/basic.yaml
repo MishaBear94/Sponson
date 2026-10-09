@@ -1,4 +1,4 @@
-name: 销毁：逆序删除，之后 reopen 从零开始
+name: "destroy: deletes in reverse order; a reopen afterwards starts from scratch"
 plan: |
   version: 1
   providers:

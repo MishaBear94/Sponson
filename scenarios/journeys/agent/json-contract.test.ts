@@ -3,22 +3,23 @@
  * The JSON an agent parses, checked across every command and outcome it can meet:
  * - every status that appears is one SKILL.md documents, and every documented status is reachable;
  * - `ok` agrees with the exit code (and the exit code with SKILL.md's table);
- * - pending/secret values are `null`, never placeholder text (design 决策-引用与漂移.md: "不是空串、不是占位符");
- * - every failed line carries a stable `errorCode` (实现记录.md: "agent 可直接分支");
+ * - pending/secret values are `null`, never placeholder text (not an empty string, not a placeholder);
+ * - every failed line carries a stable `errorCode`, so an agent can branch on it directly;
  * - shapes are stable across plan / apply / destroy / error.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { AgentWorld, callbackLine, leaves, PLACEHOLDER, previewPlan, SKILL, type CliResult } from "./harness.js";
+import { AgentWorld, callbackLine, leaves, PLACEHOLDER, previewPlan, SHA, SKILL } from "./harness.js";
+import type { CliRun } from "../../support.js";
 
 const SECRET = "fake_ts_contract_value_9f8e";
 let w: AgentWorld;
 const seen = { plan: new Set<string>(), line: new Set<string>(), run: new Set<string>(), value: new Set<string>() };
-const all: Array<{ what: string; r: CliResult }> = [];
+const all: Array<{ what: string; r: CliRun }> = [];
 
 async function cli(what: string, args: string[], pr: number) {
   w.ctx.pr = pr;
   // One PR = one git branch. v2 Vercel keys carry the gitBranch (env:<target>:<gitBranch|*>:<KEY>) and a scope may not
-  // touch a var another scope's ledger owns (design G2.2), so PRs sharing a branch would collide with OWNED_BY_OTHER_SCOPE.
+  // touch a var another scope's ledger owns, so PRs sharing a branch would collide with OWNED_BY_OTHER_SCOPE.
   w.ctx.branch = `feat/pr-${pr}`;
   const r = await w.cli(args);
   all.push({ what, r });
@@ -45,7 +46,7 @@ beforeAll(async () => {
   await cli("apply happy", ["apply", "--json"], 1);
   await cli("plan after apply", ["plan", "--json"], 1);
   await cli("apply again", ["apply", "--json"], 1);
-  // v2 (design G6.3): changed drift no longer plans as `update` (it is `blocked`), so reach `update` with a real edit.
+  // v2: changed drift no longer plans as `update` (it is `blocked`), so reach `update` with a real edit.
   await w.writePlan(previewPlan([{ id: "flag", adapter: "vercel", op: "env", target: "preview", values: { FEATURE_X: "off" }, environments: ["preview"] }]));
   await cli("plan update", ["plan", "--json"], 1);
   await cli("destroy", ["apply", "--destroy", "--json"], 1);
@@ -65,12 +66,12 @@ beforeAll(async () => {
   await st.applyChaos({ deploy: "never", fail_next: 0 });
   w.ctx.sha = "1111111111111111111111111111111111111111";
   await cli("apply partial", ["apply", "--json"], 4);
-  w.ctx.sha = "0123456789abcdef0123456789abcdef01234567";
+  w.ctx.sha = SHA;
   await st.applyChaos({ deploy: "ok" });
 
   // 5. destroy fails: destroy_failed
   await cli("apply for destroy-fail", ["apply", "--json"], 5);
-  // v2 (design G3): a single 5xx on DELETE is retried, so use a terminal 400 to make the destroy really fail.
+  // v2: a single 5xx on DELETE is retried, so use a terminal 400 to make the destroy really fail.
   await st.applyChaos({ fail_on: "DELETE /neon/*", fail_next: 1, status: 400 });
   await cli("destroy fails", ["apply", "--destroy", "--json"], 5);
   await st.applyChaos({ fail_next: 0 });
@@ -112,7 +113,7 @@ describe("JSON contract seen by an agent", () => {
 
   it("stdout is always one JSON document, and `ok` agrees with the exit code", () => {
     for (const { what, r } of all) {
-      expect(r.json, `${what}: stdout not JSON: ${r.out}${r.err}`).not.toBeNull();
+      expect(r.json, `${what}: stdout not JSON: ${r.stdout}${r.stderr}`).not.toBeNull();
       expect(SKILL.exitCodes, what).toContain(r.code);
       expect(r.json.ok, `${what}: ok=${r.json.ok} exit=${r.code}`).toBe(r.code === 0);
       if (r.json.receipt) expect(r.code === 1, `${what}: receipt ${r.json.receipt.status} exit ${r.code}`).toBe(r.json.receipt.status === "failed");
@@ -132,7 +133,7 @@ describe("JSON contract seen by an agent", () => {
   });
 
   it("the secret value never appears anywhere", () => {
-    for (const { what, r } of all) expect(r.out + r.err, what).not.toContain(SECRET);
+    for (const { what, r } of all) expect(r.stdout + r.stderr, what).not.toContain(SECRET);
   });
 
   it("inputs: pending and secret values are null; sensitive resolved values are null", () => {

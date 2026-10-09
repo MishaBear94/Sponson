@@ -1,4 +1,4 @@
-name: plan 和 apply 之间控制台被改：apply 重读实况，不信快照
+name: "console edited between plan and apply: apply re-reads live state instead of trusting the snapshot"
 plan: |
   version: 1
   providers:

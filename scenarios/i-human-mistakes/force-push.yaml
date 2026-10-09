@@ -1,4 +1,4 @@
-name: force-push 改了 sha：scope 不变，回执按 scope 找到
+name: "force-push changes the sha: the scope is unchanged and the receipt is found by scope"
 plan: |
   version: 1
   providers:

@@ -150,3 +150,13 @@ describe("neon branch", () => {
     await expect(op.read({ ...h.actx("neon"), env: { ...h.env, NEON_API_KEY: "" } }, params())).rejects.toThrow(/NEON_API_KEY/);
   });
 });
+
+describe("neon branch adopt", () => {
+  it("one line per branch, naming it", () => {
+    const ctx = { env: "preview", git: { branch: "feat/x", sha: "abc", short_sha: "abc" }, pr: { number: null }, scope: "branch-feat-x" };
+    expect(neonAdapter.ops.branch!.adopt!([{ key: "branch:preview/old" }, { key: "branch:x" }], ctx)).toEqual([
+      { id: "db-preview/old", params: { name: "preview/old" }, keys: ["branch:preview/old"] },
+      { id: "db-x", params: { name: "x" }, keys: ["branch:x"] },
+    ]);
+  });
+});

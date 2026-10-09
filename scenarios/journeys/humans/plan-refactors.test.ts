@@ -2,7 +2,7 @@
  * The plan file evolving across applies: renames, splits, merges, moved keys, renamed branches, retargeted lines,
  * environment filters, provider changes, reorders, deleting everything.
  *
- * The invariant every test checks in the end (README "Destroy is symmetric", 决策 orphan rule): whatever Sponson
+ * The invariant every test checks in the end (README "Destroy is symmetric", and the orphan rule): whatever Sponson
  * created is either still tracked by the receipt (and removed by `apply --destroy`) or was deliberately destroyed;
  * nothing Sponson created is silently forgotten, duplicated, or re-labelled as someone else's.
  */
@@ -75,7 +75,7 @@ describe("plan refactors across applies", () => {
   });
 
   it("rename a line id: plan does not claim the branch was 'removed from the plan' while another line still declares it", async () => {
-    // 决策 orphan = "回执说已 apply，plan 里这行被删了". The message says the resource is left alone and not in the
+    // An orphan is a line the receipt says was applied but the plan no longer has. The message says the resource is left alone and not in the
     // plan; for a pure rename that is false and tells the human to run destroy on something still in use.
     j = await Journey.start(undefined, HEAD + DB + envLine("env", { DATABASE_URL: "{ from: db.connection_string }" }));
     expect((await j.apply()).code).toBe(0);

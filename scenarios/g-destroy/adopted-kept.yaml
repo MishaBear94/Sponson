@@ -1,4 +1,4 @@
-name: 收编的资源永远不删
+name: adopted resources are never deleted
 plan: |
   version: 1
   providers:

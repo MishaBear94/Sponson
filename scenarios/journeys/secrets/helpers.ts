@@ -1,23 +1,19 @@
 /** Shared harness for the secrets / CI-surface journeys. Not a test file. */
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { chmod, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { startSim, type SimHandle } from "@sponson/sim";
-import { run } from "sponson";
+import { cliEnv, runCli, SHA, workspace, type CliRun } from "../../support.js";
 
+export { SHA };
 export const exec = promisify(execFile);
-export const SHA = "0123456789abcdef0123456789abcdef01234567";
+export type CliResult = CliRun;
 
-export interface CliResult {
-  code: number;
-  stdout: string;
-  stderr: string;
-  json: any;
-}
+/** Distinctive provider tokens, so a leak test can find any fragment of one in output or receipts. */
+const TOKENS = { VERCEL_TOKEN: "tok_vercel_9f8e7d6c5b4a", NEON_API_KEY: "tok_neon_1a2b3c4d5e6f", CLERK_SECRET_KEY: "tok_clerk_0f0e0d0c0b0a" };
 
 export interface Rule {
   method: string;
@@ -75,28 +71,15 @@ export class World {
 
   static async create(plan: string, opts: { env?: Record<string, string>; rules?: Rule[] } = {}): Promise<World> {
     const sim = await startSim();
-    const cwd = await mkdtemp(join(tmpdir(), "sponson-sec-"));
-    await writeFile(join(cwd, "release.plan.yaml"), plan);
-    const closers: Array<() => Promise<void>> = [() => sim.close(), () => rm(cwd, { recursive: true, force: true })];
+    const ws = await workspace("sec", { plan });
+    const closers: Array<() => Promise<void>> = [() => sim.close(), ws.cleanup];
     let base = sim.url;
     if (opts.rules?.length) {
       const proxy = await startEchoProxy(sim.url, opts.rules);
       closers.unshift(() => proxy.close());
       base = proxy.url;
     }
-    const env: NodeJS.ProcessEnv = {
-      PATH: process.env.PATH,
-      HOME: process.env.HOME,
-      NO_COLOR: "1",
-      VERCEL_TOKEN: "tok_vercel_9f8e7d6c5b4a",
-      NEON_API_KEY: "tok_neon_1a2b3c4d5e6f",
-      CLERK_SECRET_KEY: "tok_clerk_0f0e0d0c0b0a",
-      VERCEL_API_URL: `${base}/vercel`,
-      NEON_API_URL: `${base}/neon`,
-      CLERK_API_URL: `${base}/clerk`,
-      ...(opts.env ?? {}),
-    };
-    return new World(sim, cwd, env, closers);
+    return new World(sim, ws.dir, cliEnv(base, { ...TOKENS, ...(opts.env ?? {}) }), closers);
   }
 
   get receiptsDir(): string {
@@ -116,24 +99,8 @@ export class World {
 
   async cli(args: string, extra: Parameters<World["ctxArgs"]>[0] & { env?: Record<string, string> } = {}): Promise<CliResult> {
     const argv = [...args.split(/\s+/).filter(Boolean), ...this.ctxArgs(extra)];
-    let stdout = "";
-    let stderr = "";
-    const code = await run(argv, {
-      stdout: { write: (s) => (stdout += s) },
-      stderr: { write: (s) => (stderr += s) },
-      env: { ...this.env, ...(extra.env ?? {}) },
-      cwd: this.cwd,
-      color: false,
-    });
-    let json: any = null;
-    if (argv.includes("--json")) {
-      try {
-        json = JSON.parse(stdout);
-      } catch {
-        json = undefined;
-      }
-    }
-    return { code, stdout, stderr, json };
+    const r = await runCli(argv, { env: { ...this.env, ...(extra.env ?? {}) }, cwd: this.cwd });
+    return argv.includes("--json") ? r : { ...r, json: null };
   }
 
   /** Install fake executables on a private PATH dir that is prepended to PATH. */

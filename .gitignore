@@ -4,3 +4,4 @@ dist/
 *.tsbuildinfo
 .sponson/
 coverage/
+packages/*/LICENSE

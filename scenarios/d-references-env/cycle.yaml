@@ -1,4 +1,4 @@
-name: 环引用：plan 阶段报错并指出环路
+name: "reference cycle: plan fails and names the cycle"
 plan: |
   version: 1
   providers:

@@ -1,4 +1,4 @@
-import { SponsonError, pendingMarker, sha256 } from "@sponson/core";
+import { SponsonError, pendingMarker, resolveParams, sha256 } from "@sponson/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { harness, recordingProxy, SHA, writeIndex, type Harness } from "./testing.js";
 import { vercelAdapter } from "./vercel.js";
@@ -306,5 +306,35 @@ describe("vercel deploy", () => {
   it("fails with PROVIDER_INVALID when the deployment errors", async () => {
     await h.chaos({ deploy: "fail" });
     await expect(deploy.apply(h.actx("vercel"), {}, null)).rejects.toMatchObject({ code: "PROVIDER_INVALID", message: expect.stringMatching(/ended ERROR/) });
+  });
+});
+
+describe("vercel env adopt", () => {
+  const env = vercelAdapter.ops.env!;
+  const ctx = { env: "preview", git: { branch: "feat/x", sha: "abc", short_sha: "abc" }, pr: { number: 1 }, scope: "pr-1" };
+  const keys = ["env:preview:feat/x:A", "env:preview:*:B", "env:preview:*:C", "env:preview:fix/a:b:D", "env:production:*:E"];
+
+  it("groups by (target, branch), keeps values, and names the branch only when it is not the current one", () => {
+    const lines = env.adopt!(keys.map((key) => ({ key })), ctx);
+    expect(lines).toEqual([
+      { id: "env-preview", params: { target: "preview", values: { A: { keep: true } } }, keys: ["env:preview:feat/x:A"] },
+      { id: "env-preview-shared", params: { target: "preview", branch: "*", values: { B: { keep: true }, C: { keep: true } } }, keys: ["env:preview:*:B", "env:preview:*:C"] },
+      { id: "env-preview-fix/a:b", params: { target: "preview", branch: "fix/a:b", values: { D: { keep: true } } }, keys: ["env:preview:fix/a:b:D"] },
+      { id: "env-production-shared", params: { target: "production", branch: "*", values: { E: { keep: true } } }, keys: ["env:production:*:E"] },
+    ]);
+  });
+
+  it("each adopted line declares exactly the keys it adopted, all unchanged against live", () => {
+    for (const line of env.adopt!(keys.map((key) => ({ key })), ctx)) {
+      const params = resolveParams(env.defaults!(line.params, ctx), new Map()).params;
+      const live = { resources: line.keys.map((key) => ({ key, id: key, hash: "h" })), outputs: {} };
+      const diffs = env.diff(live, params);
+      expect(diffs.map((d) => d.key)).toEqual(line.keys);
+      expect(diffs.every((d) => d.kind === "unchanged")).toBe(true);
+    }
+  });
+
+  it("refuses a key that is not an env key", () => {
+    expect(() => env.adopt!([{ key: "deployment:abc" }], ctx)).toThrow(SponsonError);
   });
 });

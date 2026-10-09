@@ -1,4 +1,4 @@
-name: 同一文件两套环境：preview 只跑 preview 行，production 只跑 production 行
+name: "one file, two environments: preview runs only preview lines, production only production lines"
 plan: |
   version: 1
   providers:

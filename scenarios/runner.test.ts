@@ -1,5 +1,6 @@
 /**
- * Scenario runner: the acceptance suite from brainstorm/design/验收策略.md.
+ * Scenario runner: the acceptance suite, one YAML file per failure scenario, each run end to end through the
+ * in-process CLI against a fresh sim.
  *
  * Every `scenarios/<category>/<name>.yaml` is one scenario:
  *
@@ -9,7 +10,7 @@
  *   chaos: { ... }               initial POST /_chaos body
  *   ctx: { env, pr, branch, sha } defaults: preview / 42 / feat/x / <fixed sha>
  *   env: { NAME: value }         extra process env (secrets, tokens)
- *   secrets: [value, ...]        values that must never appear in any output (invariant 1)
+ *   secrets: [value, ...]        values that must never appear in any output (I1)
  *   steps:
  *     - run: "apply --json"      CLI args; ctx flags and a local receipts dir are appended
  *       expect:
@@ -38,18 +39,20 @@
  *     - receipt: corrupt | delete | newer   (newer: bump latest.json one version past what was written)
  *     - wait: <ms>
  *
- * After every `run` step the runner checks: no secret in stdout/stderr/receipts (I1),
- * `plan` performed zero writes (I4), every receipt file parses (I6).
+ * After every `run` step the runner checks exactly three invariants (numbered as in
+ * property/engine.property.test.ts), whatever the step expects:
+ *   I1  no `secrets` value in stdout, stderr or any receipt file;
+ *   I4  a `plan` or `status` step performed zero sim writes;
+ *   I6  every latest.json receipt parses (except content the scenario itself tampered with).
  */
-import { readdir, readFile, mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readdir, readFile, mkdir, writeFile, rm } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { describe, expect, it } from "vitest";
 import { startSim, type SimHandle, type SimSeed } from "@sponson/sim";
 import { createRegistry } from "@sponson/adapters";
-import { run } from "sponson";
 import { applyRun, detectCtx, loadPlan, LocalReceiptStore, parseReceipt, Redactor } from "@sponson/core";
+import { cliEnv, runCli, SHA, workspace, type Workspace } from "./support.js";
 
 interface Expect {
   exit?: number;
@@ -98,7 +101,7 @@ interface Scenario {
   steps: Step[];
 }
 
-const DEFAULT_CTX = { env: "preview", pr: 42 as number | null, branch: "feat/x", sha: "0123456789abcdef0123456789abcdef01234567" };
+const DEFAULT_CTX = { env: "preview", pr: 42 as number | null, branch: "feat/x", sha: SHA };
 
 async function listScenarios(dir: string): Promise<string[]> {
   const out: string[] = [];
@@ -131,7 +134,7 @@ class Harness {
   private constructor(
     private readonly scenario: Scenario,
     private readonly sim: SimHandle,
-    readonly cwd: string,
+    private readonly ws: Workspace,
     private env: NodeJS.ProcessEnv,
     private ctx: typeof DEFAULT_CTX,
   ) {}
@@ -141,29 +144,20 @@ class Harness {
 
   static async create(s: Scenario): Promise<Harness> {
     const sim = await startSim({ seed: s.seed });
-    const cwd = await mkdtemp(join(tmpdir(), "sponson-scn-"));
-    await writeFile(join(cwd, "release.plan.yaml"), s.plan);
-    const env: NodeJS.ProcessEnv = {
-      PATH: process.env.PATH,
-      HOME: process.env.HOME,
-      NO_COLOR: "1",
-      VERCEL_TOKEN: "tok_vercel",
-      NEON_API_KEY: "tok_neon",
-      CLERK_SECRET_KEY: "tok_clerk",
-      VERCEL_API_URL: `${sim.url}/vercel`,
-      NEON_API_URL: `${sim.url}/neon`,
-      CLERK_API_URL: `${sim.url}/clerk`,
-      SPONSON_RECEIPTS_DIR: join(cwd, ".sponson/receipts"),
-      ...(s.env ?? {}),
-    };
+    const ws = await workspace("scn", { plan: s.plan });
+    const env = cliEnv(sim, { SPONSON_RECEIPTS_DIR: join(ws.dir, ".sponson/receipts"), ...(s.env ?? {}) });
     const ctx = { ...DEFAULT_CTX, ...(s.ctx ?? {}) };
     if (s.chaos) await sim.state.applyChaos(s.chaos as never);
-    return new Harness(s, sim, cwd, env, ctx);
+    return new Harness(s, sim, ws, env, ctx);
+  }
+
+  get cwd(): string {
+    return this.ws.dir;
   }
 
   async close() {
     await this.sim.close();
-    await rm(this.cwd, { recursive: true, force: true });
+    await this.ws.cleanup();
   }
 
   private ctxArgs(): string[] {
@@ -197,26 +191,12 @@ class Harness {
     const argv = [...args.split(/\s+/).filter(Boolean), ...this.ctxArgs()];
     const isPlan = argv[0] === "plan" || argv[0] === "status";
     const writesBefore = this.sim.state.writes.length;
-    let stdout = "";
-    let stderr = "";
-    const exit = await run(argv, {
-      stdout: { write: (s) => (stdout += s) },
-      stderr: { write: (s) => (stderr += s) },
-      env: this.env,
-      cwd: this.cwd,
-      color: false,
-    });
+    const { code: exit, stdout, stderr, json: parsed } = await runCli(argv, { env: this.env, cwd: this.cwd });
     const writes = this.sim.state.writes.length - writesBefore;
     const ctx = `${where}\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`;
 
-    let json: Record<string, unknown> | null = null;
-    if (argv.includes("--json")) {
-      try {
-        json = JSON.parse(stdout);
-      } catch {
-        throw new Error(`${ctx}\nstdout is not JSON`);
-      }
-    }
+    const json = argv.includes("--json") ? (parsed as Record<string, unknown> | null) : null;
+    if (argv.includes("--json") && json === null) throw new Error(`${ctx}\nstdout is not JSON`);
 
     // invariants
     for (const s of this.scenario.secrets ?? []) {

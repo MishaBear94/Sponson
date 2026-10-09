@@ -1,4 +1,4 @@
-name: 同一 scope 已有 apply 在跑：拒绝并退出码 3；过期锁可接管
+name: "an apply is already running on the scope: refused with exit code 3; an expired lock can be taken over"
 plan: |
   version: 1
   providers:

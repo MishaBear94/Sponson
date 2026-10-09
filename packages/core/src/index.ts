@@ -11,4 +11,3 @@ export * from "./engine/index.js";
 export * from "./receipts/layout.js";
 export * from "./receipts/local.js";
 export * from "./receipts/git.js";
-export * from "./testing/fake.js";

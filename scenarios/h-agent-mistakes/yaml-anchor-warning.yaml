@@ -1,4 +1,4 @@
-name: 用了 YAML anchor：允许但警告
+name: "YAML anchor used: allowed, with a warning"
 plan: |
   version: 1
   providers:

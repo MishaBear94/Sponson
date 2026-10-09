@@ -2,7 +2,7 @@
  * "Did it happen?" — a write that succeeded server-side but whose response never reached Sponson.
  *
  * Correct behaviour (README: "Rolls back what this run created", "Destroy is symmetric: removes what Sponson
- * created"; 验收策略 invariant 2: after a failed run's rollback the set of Sponson-created resources equals the
+ * created"; invariant I2: after a failed run's rollback the set of Sponson-created resources equals the
  * set before the run): a resource Sponson wrote must be either rolled back or remembered as Sponson's, whether
  * or not the HTTP response arrived. Otherwise it is recorded as `adopted` on the next run and `--destroy`
  * leaves it behind forever.
@@ -32,9 +32,9 @@ changes:
     w.proxy.on(isPath("POST", /^\/neon\/projects\/[^/]+\/branches$/), () => "drop", 1);
 
     const r1 = await w.cli("apply --json");
-    expect(r1.exit).toBe(1);
+    expect(r1.code).toBe(1);
     expect(r1.json.receipt.lines.db.status).toBe("failed");
-    // The write did happen server-side. v2 (design G1.3 write-ahead intent) records the intent before the POST, so the
+    // The write did happen server-side. v2 (write-ahead intent) records the intent before the POST, so the
     // run can recover it at once: either it rolls the branch back as part of this failed run, or it keeps it in the
     // ledger as Sponson's. Leaving it in the cloud *and* out of the ledger is the leak this test guards against.
     const survived = w.branches(PR_BRANCH).length;
@@ -44,14 +44,14 @@ changes:
     );
 
     const r2 = await w.cli("apply --json");
-    expect(r2.exit).toBe(0);
+    expect(r2.code).toBe(0);
     expect(r2.json.receipt.status).toBe("complete");
     expect(w.branches(PR_BRANCH)).toHaveLength(1); // no duplicate
     // Sponson made this branch; it must not be laundered into "adopted".
     expect.soft(r2.json.receipt.lines.db.createdBy, "db created by Sponson in run 1 is recorded as adopted in run 2").toBe("sponson");
 
     const d = await w.cli("apply --destroy --json");
-    expect(d.exit).toBe(0);
+    expect(d.code).toBe(0);
     expect(w.branches(PR_BRANCH), "destroy left the Sponson-created branch behind").toHaveLength(0);
   });
 
@@ -63,7 +63,7 @@ changes:
     w.proxy.on(isPath("DELETE", /^\/neon\/projects\/[^/]+\/branches\/[^/]+$/), () => ({ status: 429, headers: { "retry-after": "1" }, body: { code: "", message: "rate limit exceeded" } }), 1);
 
     const r1 = await w.cli("apply --json");
-    expect(r1.exit).toBe(1);
+    expect(r1.code).toBe(1);
     expect(r1.json.receipt.lines.env.status).toBe("failed");
     // A 429 with a one-second Retry-After is not a reason to abandon a rollback.
     expect.soft(r1.json.receipt.lines.db.status, "rollback gave up on a 429 instead of honouring Retry-After").toBe("rolled_back");
@@ -72,7 +72,7 @@ changes:
     expect.soft(envRemembered || w.envs("DATABASE_URL").length === 0, "env vars written in run 1 are neither rolled back nor in the receipt").toBe(true);
 
     const r2 = await w.cli("apply --json");
-    expect(r2.exit, r2.stdout).toBe(0);
+    expect(r2.code, r2.stdout).toBe(0);
     // callback waits for the deploy in the default mode, or completes if the deploy was already seen
     expect(["complete", "partial"]).toContain(r2.json.receipt.status);
     expect(w.branches(PR_BRANCH)).toHaveLength(1);
@@ -86,7 +86,7 @@ changes:
     expect(w.redirects()).toHaveLength(1);
 
     const d = await w.cli("apply --destroy --json");
-    expect(d.exit).toBe(0);
+    expect(d.code).toBe(0);
     expect.soft(w.branches(PR_BRANCH), "branch left after destroy").toHaveLength(0);
     expect.soft(w.redirects(), "redirect left after destroy").toHaveLength(0);
     expect(w.envs().map((e) => e.key), "env vars Sponson wrote survive destroy").toEqual([]);
@@ -110,7 +110,7 @@ changes:
       FEATURE_FLAGS: "checkout-v2"
 `,
     });
-    // Vercel accepts DATABASE_URL and rejects FEATURE_FLAGS inside a 200 (assumption 5 in sim/server.ts).
+    // Vercel accepts DATABASE_URL and rejects FEATURE_FLAGS inside a 200 (assumption V4 in sim/src/routes/vercel.ts).
     w.proxy.on(isPath("POST", /^\/vercel\/v10\/projects\/[^/]+\/env$/), (r) => {
       const items = JSON.parse(r.body) as Array<{ key: string }>;
       return {
@@ -124,7 +124,7 @@ changes:
     }, 1);
 
     const r1 = await w.cli("apply --json");
-    expect(r1.exit).toBe(1);
+    expect(r1.code).toBe(1);
     expect(r1.json.receipt.lines.env.status).toBe("failed");
     expect(r1.json.receipt.lines.env.error).toMatch(/FEATURE_FLAGS/);
     expect(r1.json.receipt.lines.db.status).toBe("rolled_back");

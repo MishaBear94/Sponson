@@ -3,15 +3,14 @@
  * carried in the remote URL can reach any output.
  *
  * Promises: README "Receipts ... Secrets and sensitive outputs are never in the receipt" (SKILL.md rule 6);
- * 实现记录.md "确保远端 URL 中的 token 不进入任何错误信息"; action.yml passes
+ * a token in the remote URL must never reach any error message; action.yml passes
  * SPONSON_RECEIPTS_REMOTE=https://x-access-token:<token>@github.com/... and `cat`s the CLI JSON into the job log.
  */
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { connectionUri } from "@sponson/sim";
+import { workspace } from "../../support.js";
 import { PLAN_DB_ENV, World, exec } from "./helpers.js";
 
 const saved: Record<string, string | undefined> = {};
@@ -31,7 +30,8 @@ describe("git-branch receipts", () => {
   it("control: every commit of sponson/receipts is free of secrets, connection strings and their passwords across fail → rollback → apply → destroy", async () => {
     const stripe = "fake_lv_gitHistoryCheck_ZZ9";
     const w = await World.create(PLAN_DB_ENV(`      STRIPE_KEY: { secret: "env://STRIPE_KEY" }\n`), { env: { STRIPE_KEY: stripe } });
-    const bare = await mkdtemp(join(tmpdir(), "sponson-bare-"));
+    const remote = await workspace("bare");
+    const bare = remote.dir;
     try {
       await exec("git", ["init", "-q", "--bare", bare]);
       const opts = { receipts: "git-branch" as const, remote: bare };
@@ -39,7 +39,7 @@ describe("git-branch receipts", () => {
       const passwords = new Set<string>();
       const conns = new Set<string>();
       const capture = () => {
-        for (const p of Object.values(w.sim.state.neon.projects)) for (const b of p.branches) if (b.name !== "main") conns.add(w.sim.state.connectionUri(b));
+        for (const p of Object.values(w.sim.state.neon.projects)) for (const b of p.branches) if (b.name !== "main") conns.add(connectionUri(b));
       };
 
       await w.sim.state.applyChaos({ fail_on: "POST /vercel/*", fail_next: 1, status: 500 } as never);
@@ -66,7 +66,7 @@ describe("git-branch receipts", () => {
       expect(corpus).not.toMatch(/postgres(ql)?:\/\/[^\s"]*:[^\s"@]+@/);
       for (const pw of passwords) expect(history).not.toContain(`:${pw}@`);
     } finally {
-      await rm(bare, { recursive: true, force: true });
+      await remote.cleanup();
       await w.close();
     }
   });

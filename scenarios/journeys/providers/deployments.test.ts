@@ -1,7 +1,7 @@
 /**
  * Vercel deployments as the real API reports them: QUEUED → BUILDING → READY (or ERROR / CANCELED), builds that
  * outlast SPONSON_DEPLOY_TIMEOUT_MS, and a flaky status endpoint while Sponson watches for the deploy event.
- * The sim answers POST /v13/deployments with READY at once (assumption 6 in sim/server.ts); the proxy rewrites
+ * The sim answers POST /v13/deployments with READY at once (assumption V5 in sim/src/routes/vercel.ts); the proxy rewrites
  * states to give the deployment a lifecycle.
  */
 import { afterEach, describe, expect, it } from "vitest";
@@ -46,7 +46,7 @@ function lifecycle(world: World, stateFor: (ageMs: number, real: string) => stri
 describe("deployment lifecycle", () => {
   it("explicit deploy op follows QUEUED → BUILDING → READY and feeds preview_url to the callback (passes)", async () => {
     w = await World.create({ plan: DEPLOY_PLAN });
-    w.sim.state.applyChaos({ deploy: "never" }); // team turned off auto preview deploys (决策-执行模型 决定 D)
+    w.sim.state.applyChaos({ deploy: "never" }); // team turned off auto preview deploys
     lifecycle(w, (age, real) => (real !== "READY" ? real : age < 300 ? "QUEUED" : age < 700 ? "BUILDING" : "READY"));
 
     const r = await w.cli("apply --json");
@@ -63,12 +63,12 @@ describe("deployment lifecycle", () => {
     lifecycle(w, (_age, real) => (real === "READY" ? "BUILDING" : real)); // a 5-minute Next.js build, from our point of view
 
     const r1 = await w.cli("apply --json");
-    expect(r1.exit).toBe(1);
+    expect(r1.code).toBe(1);
     expect(r1.json.receipt.lines.deploy.error).toMatch(/not ready after 300ms/);
     expect(w.deployments()).toHaveLength(1);
 
     const r2 = await w.cli("apply --json");
-    expect(r2.exit).toBe(1);
+    expect(r2.code).toBe(1);
     expect(w.deployments(), "second apply triggered a duplicate build for the same sha").toHaveLength(1);
   });
 
@@ -82,6 +82,6 @@ describe("deployment lifecycle", () => {
     expect(r.json.receipt.lines.env.status).toBe("applied");
     expect(["waiting", "applied"], `callback: ${JSON.stringify(r.json.receipt.lines.callback)}`).toContain(r.json.receipt.lines.callback.status);
     expect(r.json.receipt.status).not.toBe("failed");
-    expect(r.exit).toBe(0);
+    expect(r.code).toBe(0);
   });
 });

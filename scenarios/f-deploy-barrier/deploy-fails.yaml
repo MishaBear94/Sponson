@@ -1,4 +1,4 @@
-name: 部署失败：后半段 skipped，整体 failed，前半段不回滚
+name: "deployment fails: post-deploy lines skipped, run failed, pre-deploy lines not rolled back"
 plan: |
   version: 1
   providers:

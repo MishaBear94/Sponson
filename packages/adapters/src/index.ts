@@ -5,6 +5,8 @@ import { dopplerSecretSource, envSecretSource, opSecretSource } from "./secrets.
 import { vercelAdapter } from "./vercel.js";
 
 export * from "./http.js";
+/** The stable adapter authoring API; see the comment at the top of common.ts. */
+export { clientFor, requireEnv, requireProvider, diffValue, desiredSide, assertNoPending, deleteIgnoringNotFound, paramError, stringParam } from "./common.js";
 export * from "./neon.js";
 export * from "./vercel.js";
 export * from "./clerk.js";

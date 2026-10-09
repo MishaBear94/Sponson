@@ -1,4 +1,4 @@
-name: --wait 超时：退出非 0，不挂死
+name: "--wait times out: non-zero exit, no hang"
 plan: |
   version: 1
   providers:

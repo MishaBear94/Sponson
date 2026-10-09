@@ -1,3 +1,4 @@
+import type { ErrorCode } from "../errors.js";
 import type { Redactor } from "../redact.js";
 import type { AncestryCheck } from "./history.js";
 import type { Registry } from "../registry.js";
@@ -46,7 +47,7 @@ export interface PlanLine {
   waitingOn?: string;
   waitingFor?: string;
   error?: string;
-  errorCode?: string;
+  errorCode?: ErrorCode;
 }
 
 export interface PlanResult {

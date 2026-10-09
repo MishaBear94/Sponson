@@ -25,8 +25,10 @@ function client(actx: AdapterContext): Client {
 }
 
 function branchKey(name: string): string {
-  return `branch:${name}`;
+  return `${BRANCH_PREFIX}${name}`;
 }
+
+const BRANCH_PREFIX = "branch:";
 
 /** Identity hash: name and parent, the two things that define a branch for us. A replacement shows as a new provider id. */
 function branchHash(b: { name: string; parent_id: string | null }): string {
@@ -155,6 +157,14 @@ const branch: OpSpec = {
   async listScope(actx) {
     const c = client(actx);
     return (await listBranches(c)).filter((b) => !b.default && !b.primary).map(record);
+  },
+
+  /** One line per branch, naming it: the line then manages exactly that branch. */
+  adopt(resources) {
+    return resources.map((r) => {
+      const name = r.key.slice(BRANCH_PREFIX.length);
+      return { id: `db-${name}`, params: { name }, keys: [r.key] };
+    });
   },
 };
 

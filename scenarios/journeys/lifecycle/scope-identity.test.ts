@@ -56,7 +56,7 @@ describe("lifecycle: scope and resource identity", () => {
     const ci1 = await team.cli(["apply"], { pr: 42, branch: "feat/search", sha: a });
     const ci2 = await team.cli(["apply"], { pr: 42, branch: "feat/search", sha: b });
 
-    // v0.2 scope succession (决策-v0.2-结构修复.md G2.4): a pull request supersedes the branch scope of its head
+    // v0.2 scope succession: a pull request supersedes the branch scope of its head
     // branch. pr-42 inherits branch-feat-search's resources (said loudly in a warning) and the branch scope's receipt
     // releases them, so exactly one scope owns each variable and destroying either scope cannot hit the other's.
     for (const r of [ci1, ci2]) expect(r.json.receipt.status).toBe("complete");

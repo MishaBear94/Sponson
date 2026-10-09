@@ -5,14 +5,12 @@
  * with the JSON shapes an agent reads (null for pending/secret values, never text).
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { type StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startSim, type SimHandle } from "@sponson/sim";
+import { cliEnv, mcpTransport, SHA, workspace, type Workspace } from "./support.js";
 
-const repo = new URL("..", import.meta.url).pathname;
 const PLAN = `
 version: 1
 providers:
@@ -37,30 +35,18 @@ changes:
 const SECRET = "fake_ts_mcp_secret_value";
 
 let sim: SimHandle;
+let ws: Workspace;
 let client: Client;
 let transport: StdioClientTransport;
 
 beforeAll(async () => {
   sim = await startSim();
-  const cwd = await mkdtemp(join(tmpdir(), "sponson-mcp-"));
-  await writeFile(join(cwd, "release.plan.yaml"), PLAN);
-  transport = new StdioClientTransport({
-    command: "npx",
-    args: ["tsx", join(repo, "packages/cli/src/bin.ts"), "mcp", "--receipts", "local", "--receipts-dir", join(cwd, "r"), "--pr", "42", "--branch", "feat/x", "--sha", "0123456789abcdef0123456789abcdef01234567"],
+  ws = await workspace("mcp", { plan: PLAN });
+  const cwd = ws.dir;
+  ({ transport } = mcpTransport(["--receipts", "local", "--receipts-dir", join(cwd, "r"), "--pr", "42", "--branch", "feat/x", "--sha", SHA], {
     cwd,
-    env: {
-      PATH: process.env.PATH!,
-      HOME: process.env.HOME!,
-      VERCEL_TOKEN: "t",
-      NEON_API_KEY: "t",
-      CLERK_SECRET_KEY: "t",
-      VERCEL_API_URL: `${sim.url}/vercel`,
-      NEON_API_URL: `${sim.url}/neon`,
-      CLERK_API_URL: `${sim.url}/clerk`,
-      STRIPE_KEY: SECRET,
-    },
-    stderr: "pipe",
-  });
+    env: cliEnv(sim, { STRIPE_KEY: SECRET }),
+  }));
   client = new Client({ name: "scenario-agent", version: "0.0.0" });
   await client.connect(transport);
 }, 60_000);
@@ -68,6 +54,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await client?.close();
   await sim?.close();
+  await ws?.cleanup();
 });
 
 function text(result: Awaited<ReturnType<Client["callTool"]>>): string {

@@ -38,7 +38,7 @@ describe("transient provider errors", () => {
     const r = await w.cli("apply --json");
     expect(r.json.receipt.lines.db.status, JSON.stringify(r.json.receipt.lines.env)).toBe("applied");
     expect(r.json.receipt.lines.env.status).toBe("applied");
-    expect(r.exit).toBe(0);
+    expect(r.code).toBe(0);
     expect(w.branches(PR_BRANCH)).toHaveLength(1);
   });
 
@@ -59,7 +59,7 @@ describe("transient provider errors", () => {
     const r = await w.cli("plan --json");
     const db = r.json.lines.find((l: { id: string }) => l.id === "db");
     expect(db.status, db.error).toBe("create");
-    expect(r.exit).toBe(0);
+    expect(r.code).toBe(0);
   });
 
   it("Neon answers 423 Locked while the previous branch's operations are still running: the second branch line retries instead of failing and rolling back the first", async () => {
@@ -97,7 +97,7 @@ changes:
   });
 
   it("a provider that accepts the connection and never answers does not hang apply (and the scope lock) indefinitely", async () => {
-    // The bound is SPONSON_HTTP_TIMEOUT_MS (design G3; default 30s, with retries). A 6s budget against the defaults would
+    // The bound is SPONSON_HTTP_TIMEOUT_MS (default 30s, with retries). A 6s budget against the defaults would
     // only test the defaults' size, so the test sets a short timeout and few retries, as a CI user in a hurry would.
     w = await World.create({ plan: DB_AND_CALLBACK, env: { SPONSON_HTTP_TIMEOUT_MS: "300", SPONSON_HTTP_RETRIES: "1", SPONSON_HTTP_RETRY_BASE_MS: "50" } });
     w.proxy.on(isPath("GET", /^\/clerk\/redirect_urls$/), () => "hang");
@@ -111,7 +111,7 @@ changes:
     expect(outcome.settled, `apply still running after ${BUDGET_MS}ms against a hung Clerk endpoint`).toBe(true);
     if (!outcome.settled) return;
     const rc = outcome.r.json.receipt;
-    expect(outcome.r.exit).toBe(1);
+    expect(outcome.r.code).toBe(1);
     expect(rc.lines.callback.errorCode).toMatch(/^PROVIDER_/);
     // The run failed, so the branch it created is rolled back, and the scope lock is free for the next run.
     expect(rc.lines.db.status).toBe("rolled_back");

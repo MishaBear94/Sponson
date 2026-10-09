@@ -29,7 +29,7 @@ describe("console drift → reconcile, driven by an agent", () => {
   it("happy path: plan reports the drift on `env`, apply refuses with DRIFT_CHANGED, human says reconcile, plan is clean", async () => {
     const plan = await w.cli(["plan", "--json"]);
     expect(plan.json.drift).toEqual([expect.objectContaining({ kind: "changed", line: "env", resource: expect.objectContaining({ key: "env:preview:feat/preview-db:DATABASE_URL" }) })]);
-    expect(plan.out).not.toContain("edited@console");
+    expect(plan.stdout).not.toContain("edited@console");
 
     const refused = await w.cli(["apply", "--json"]);
     expect(refused.code).toBe(1);

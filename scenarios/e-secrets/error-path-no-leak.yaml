@@ -1,4 +1,4 @@
-name: 错误路径不泄露：adapter 报错、回执、stdout/stderr 都不含密钥与连接串
+name: "error paths do not leak: adapter errors, receipts, stdout/stderr contain no secrets or connection strings"
 plan: |
   version: 1
   providers:

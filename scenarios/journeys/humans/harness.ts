@@ -2,54 +2,37 @@
  * Shared harness for the "humans beside the tool" journeys: a sim, a temp repo dir, the in-process CLI,
  * and "console" helpers that mutate the fake cloud the way a person clicking in a provider UI would.
  */
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { startSim, type SimHandle, type SimSeed } from "@sponson/sim";
-import { run } from "sponson";
+import { createBranch, startSim, type SimHandle, type SimSeed } from "@sponson/sim";
+import { cliEnv, runCli, SHA, workspace, type CliRun, type Workspace } from "../../support.js";
 
-export const SHA = "0123456789abcdef0123456789abcdef01234567";
+export { SHA };
 export const BRANCH = "feat/x";
-
-export interface Exec {
-  code: number;
-  stdout: string;
-  stderr: string;
-  json: any;
-}
+export type Exec = CliRun;
 
 export class Journey {
   private constructor(
     readonly sim: SimHandle,
-    readonly cwd: string,
+    private readonly ws: Workspace,
     readonly env: NodeJS.ProcessEnv,
   ) {}
   ctx = { env: "preview", pr: 42 as number | null, branch: BRANCH, sha: SHA };
 
   static async start(seed?: Partial<SimSeed>, plan?: string): Promise<Journey> {
     const sim = await startSim({ seed });
-    const cwd = await mkdtemp(join(tmpdir(), "sponson-human-"));
-    if (plan !== undefined) await writeFile(join(cwd, "release.plan.yaml"), plan);
-    const env: NodeJS.ProcessEnv = {
-      PATH: process.env.PATH,
-      HOME: process.env.HOME,
-      NO_COLOR: "1",
-      VERCEL_TOKEN: "tok_vercel",
-      NEON_API_KEY: "tok_neon",
-      CLERK_SECRET_KEY: "tok_clerk",
-      VERCEL_API_URL: `${sim.url}/vercel`,
-      NEON_API_URL: `${sim.url}/neon`,
-      CLERK_API_URL: `${sim.url}/clerk`,
-      VERCEL_PROJECT_ID: "prj_demo",
-      NEON_PROJECT_ID: "proj_demo",
-      SPONSON_RECEIPTS_DIR: join(cwd, ".sponson/receipts"),
-    };
-    return new Journey(sim, cwd, env);
+    const ws = await workspace("human", plan !== undefined ? { plan } : {});
+    const env = cliEnv(sim, { VERCEL_PROJECT_ID: "prj_demo", NEON_PROJECT_ID: "proj_demo", SPONSON_RECEIPTS_DIR: join(ws.dir, ".sponson/receipts") });
+    return new Journey(sim, ws, env);
+  }
+
+  get cwd(): string {
+    return this.ws.dir;
   }
 
   async close() {
     await this.sim.close();
-    await rm(this.cwd, { recursive: true, force: true });
+    await this.ws.cleanup();
   }
 
   get state() {
@@ -59,18 +42,8 @@ export class Journey {
   async exec(...args: string[]): Promise<Exec> {
     const a = [...args, "--env", this.ctx.env, "--branch", this.ctx.branch, "--sha", this.ctx.sha, "--receipts", "local", "--receipts-dir", join(this.cwd, ".sponson/receipts")];
     if (this.ctx.pr !== null) a.push("--pr", String(this.ctx.pr));
-    let stdout = "";
-    let stderr = "";
-    const code = await run(a, { stdout: { write: (s) => (stdout += s) }, stderr: { write: (s) => (stderr += s) }, env: this.env, cwd: this.cwd, color: false });
-    let json: any = null;
-    if (args.includes("--json")) {
-      try {
-        json = JSON.parse(stdout);
-      } catch {
-        json = null;
-      }
-    }
-    return { code, stdout, stderr, json };
+    const r = await runCli(a, { env: this.env, cwd: this.cwd });
+    return args.includes("--json") ? r : { ...r, json: null };
   }
 
   plan = () => this.exec("plan", "--json");
@@ -118,7 +91,7 @@ export class Journey {
   consoleCreateBranch(name: string, parent = "main", project = "proj_demo") {
     const p = this.state.neon.projects[project]!;
     const par = p.branches.find((b) => b.name === parent);
-    return this.state.createBranch(p, name, par?.id ?? null, "sim");
+    return createBranch(this.state, p, name, par?.id ?? null, "sim");
   }
   consoleDeleteBranch(name: string, project = "proj_demo") {
     const p = this.state.neon.projects[project]!;

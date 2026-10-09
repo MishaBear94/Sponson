@@ -1,4 +1,4 @@
-name: 丢失：回执有、实况没有，直接重建
+name: "missing: in the receipt but not live, so it is recreated"
 plan: |
   version: 1
   providers:

@@ -1,51 +1,90 @@
 /**
- * Every user-facing failure is a SponsonError with a stable code.
- * The CLI maps codes to exit codes; the JSON output includes them verbatim
- * so agents can branch on them without parsing prose.
+ * Every user-facing failure is a SponsonError with a stable code. The codes are data: each one says
+ * which exit code the CLI uses for it and, when the remedy is a CLI flag, the hint the CLI prints.
+ * The engine never names CLI flags itself; it speaks in run options (`approvedBy`, `reconcile`).
+ *
+ * Exit codes: 0 ok (including partial), 1 failed, 2 the invocation / plan / reference / environment /
+ * parameter is wrong, 3 the scope's lock is held or was lost (wait, do not force).
  */
-export type ErrorCode =
-  | "PLAN_PARSE"
-  | "PLAN_INVALID"
-  | "REF_UNKNOWN"
-  | "REF_CYCLE"
-  | "REF_FILTERED"
-  | "CTX_NULL"
-  | "ENV_UNKNOWN"
-  | "ENV_NOT_APPROVED"
-  | "SECRET_LITERAL"
-  | "SECRET_UNRESOLVED"
-  | "ADAPTER_UNKNOWN"
-  | "OP_UNKNOWN"
-  | "DRIFT_CHANGED"
-  | "LOCK_HELD"
-  | "RECEIPT_CORRUPT"
-  | "RECEIPT_VERSION"
-  | "STORE_PERMISSION"
-  | "APPLY_FAILED"
-  | "WAIT_TIMEOUT"
-  | "LOCK_LOST"
-  | "STORE_CONTENDED"
-  | "STORE_REJECTED"
-  | "OWNED_BY_OTHER_SCOPE"
-  | "REF_OUTPUT_UNKNOWN"
-  | "USAGE"
-  | "INTERNAL"
-  // Provider errors, classified by the HTTP layer so agents can branch on them.
-  | "PROVIDER_TRANSIENT"
-  | "PROVIDER_CONFLICT"
-  | "PROVIDER_NOT_FOUND"
-  | "PROVIDER_AUTH"
-  | "PROVIDER_INVALID"
-  | "PROVIDER_TIMEOUT"
-  | "PROVIDER_RESPONSE"
-  | "PARAM_INVALID"
-  | "DEPENDENCY_BLOCKED"
-  | "EXTERNAL_FAILED"
-  | "INTERRUPTED"
-  | "INTENT_UNRESOLVED"
-  | "ROLLBACK_FAILED"
-  | "DESTROY_FAILED"
-  | "STALE";
+export type ExitCode = 0 | 1 | 2 | 3;
+
+export interface ErrorCodeSpec {
+  exit: ExitCode;
+  /** What the code means, for docs and agents. */
+  doc?: string;
+  /** How to act on it from the command line; the CLI appends it to the message. */
+  cliHint?: string;
+}
+
+export const ERROR_CODES = {
+  PLAN_PARSE: { exit: 2, doc: "The plan file cannot be read or is not valid YAML." },
+  PLAN_INVALID: { exit: 2, doc: "The plan does not match the schema." },
+  REF_UNKNOWN: { exit: 2, doc: "A `from:` reference names a line that does not exist." },
+  REF_CYCLE: { exit: 2, doc: "References form a cycle." },
+  REF_FILTERED: { exit: 2, doc: "A reference crosses an environment filter." },
+  REF_OUTPUT_UNKNOWN: { exit: 2, doc: "A `from:` reference names an output the op does not declare." },
+  CTX_NULL: { exit: 2, doc: "A `${ctx.*}` interpolation is unknown or null in this context." },
+  ENV_UNKNOWN: { exit: 2, doc: "The environment is not declared by the plan." },
+  ENV_NOT_APPROVED: {
+    exit: 2,
+    doc: "The run writes to production and no approver was given (approvedBy).",
+    cliHint: "Pass --approved-by <who> or set SPONSON_APPROVED_BY from an approval workflow.",
+  },
+  SECRET_LITERAL: { exit: 2, doc: "A parameter that looks like a secret is written as a literal." },
+  SECRET_UNRESOLVED: { exit: 1, doc: "A secret source could not resolve a reference." },
+  ADAPTER_UNKNOWN: { exit: 2, doc: "No adapter of that name is registered." },
+  OP_UNKNOWN: { exit: 2, doc: "The adapter has no op of that name." },
+  PARAM_INVALID: { exit: 2, doc: "An adapter rejected a parameter." },
+  USAGE: { exit: 2, doc: "The command line is wrong." },
+  DRIFT_CHANGED: {
+    exit: 1,
+    doc: "A resource was changed or replaced outside Sponson; the line is refused unless the run reconciles.",
+    cliHint: "Re-run with --reconcile to take the live resource over, or update the plan.",
+  },
+  LOCK_HELD: { exit: 3, doc: "Another run holds the scope's lock.", cliHint: "Wait for it, or pass --wait." },
+  LOCK_LOST: { exit: 3, doc: "The run lost the scope's lock to another run and stopped." },
+  RECEIPT_CORRUPT: { exit: 1, doc: "The receipt cannot be parsed." },
+  RECEIPT_VERSION: { exit: 1, doc: "The receipt was written by a newer Sponson." },
+  STORE_PERMISSION: { exit: 1, doc: "The receipt store cannot be read or written." },
+  STORE_CONTENDED: { exit: 1, doc: "The receipt store stayed contended past the retry budget." },
+  STORE_REJECTED: { exit: 1, doc: "The receipt store kept rejecting the receipt; a fallback copy was kept." },
+  WAIT_TIMEOUT: { exit: 1, doc: "An external event did not happen within the wait timeout." },
+  OWNED_BY_OTHER_SCOPE: { exit: 1, doc: "Another scope in this environment manages the resource." },
+  INTERNAL: { exit: 1, doc: "An unexpected error." },
+  PROVIDER_TRANSIENT: { exit: 1, doc: "The provider failed transiently (after retries)." },
+  PROVIDER_CONFLICT: { exit: 1, doc: "The provider reported a conflict." },
+  PROVIDER_NOT_FOUND: { exit: 1, doc: "The provider reported that something does not exist." },
+  PROVIDER_AUTH: { exit: 1, doc: "Credentials are missing or rejected." },
+  PROVIDER_INVALID: { exit: 1, doc: "The provider rejected the request as invalid." },
+  PROVIDER_TIMEOUT: { exit: 1, doc: "The provider did not answer in time." },
+  PROVIDER_RESPONSE: { exit: 1, doc: "The provider answered with an unexpected shape." },
+  DEPENDENCY_BLOCKED: { exit: 1, doc: "A line this one depends on failed or is blocked." },
+  EXTERNAL_FAILED: { exit: 1, doc: "The external event a line waits for failed." },
+  INTERRUPTED: { exit: 1, doc: "The run did not finish (checkpoint written before a create)." },
+  INTENT_UNRESOLVED: { exit: 1, doc: "An interrupted create cannot be located; check the provider by hand." },
+  ROLLBACK_FAILED: { exit: 1, doc: "Rolling back what the run created failed; resources were left behind." },
+  DESTROY_FAILED: { exit: 1, doc: "Destroying a resource failed." },
+  STALE: { exit: 1, doc: "The commit is older than the last applied one; nothing was changed." },
+} as const satisfies Record<string, ErrorCodeSpec>;
+
+export type ErrorCode = keyof typeof ERROR_CODES;
+
+/**
+ * Codes of non-fatal findings (parse warnings). They never fail a run and have no exit code.
+ */
+export const WARNING_CODES = {
+  YAML_ANCHOR: { doc: "The plan uses YAML anchors/aliases; allowed, but hard to read." },
+} as const satisfies Record<string, { doc: string }>;
+
+export type WarningCode = keyof typeof WARNING_CODES;
+
+export function exitCodeFor(code: ErrorCode): ExitCode {
+  return (ERROR_CODES[code] as ErrorCodeSpec | undefined)?.exit ?? 1;
+}
+
+export function cliHintFor(code: ErrorCode): string | undefined {
+  return (ERROR_CODES[code] as ErrorCodeSpec | undefined)?.cliHint;
+}
 
 export class SponsonError extends Error {
   constructor(

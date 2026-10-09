@@ -1,4 +1,4 @@
-name: 进程在第 2 行后被 kill：回执完整，重跑续上，过期锁被接管
+name: "killed after line 2: the receipt is complete, a re-run resumes, and the expired lock is taken over"
 plan: |
   version: 1
   providers:

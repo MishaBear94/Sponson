@@ -1,4 +1,4 @@
-name: 回执来自更新的版本：拒绝并提示升级
+name: "receipt from a newer version: refused with an upgrade hint"
 plan: |
   version: 1
   providers:

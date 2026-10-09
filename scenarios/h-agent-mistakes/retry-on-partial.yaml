@@ -1,4 +1,4 @@
-name: agent 读到 partial 就重试：幂等，无害
+name: "agent retries on partial: idempotent, harmless"
 plan: |
   version: 1
   providers:

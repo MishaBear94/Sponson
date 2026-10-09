@@ -1,10 +1,12 @@
 /**
  * A CI runner is SIGKILLed mid-apply (runner preempted, job cancelled, OOM). Another actor takes over later.
- * Design: "进程崩溃不释放，靠过期" (lock), "一个 scope 下的所有资源同生共死", destroy removes `created_by: sponson`.
+ * Design: a crashed process does not release its lock, the lock expires instead; all resources of a scope live and
+ * die together; destroy removes everything with `created_by: sponson`.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { startSim, type SimHandle } from "@sponson/sim";
-import { bareRemote, ctxArgs, git, humanClone, neonBranches, remoteFile, simEnv, spawnCli, tmp, waitFor, workspace } from "./helpers.js";
+import { bareRemote, checkout, ctxArgs, git, humanClone, neonBranches, remoteFile, spawnCli, tmp, waitFor } from "./helpers.js";
+import { cliEnv } from "../../support.js";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -28,13 +30,13 @@ describe("crash mid-apply, then another actor", () => {
 
     // Runner 1: slow cloud so we can kill it between "branch created" and "receipt written".
     sim.state.applyChaos({ latency_ms: 150 });
-    const a = spawnCli(["apply", ...args], await workspace(), simEnv(sim, { TMPDIR: await tmp("runner-a") }));
+    const a = spawnCli(["apply", ...args], await checkout(), cliEnv(sim, { TMPDIR: await tmp("runner-a") }));
     await waitFor(() => neonBranches(sim).includes("sponson/preview/pr-11"), 20_000, "runner 1 to create the branch");
     a.child.kill("SIGKILL");
     const killed = await a.done;
     expect(killed.signal).toBe("SIGKILL");
     sim.state.applyChaos({ latency_ms: 0 });
-    // v2 (design G1.3 write-ahead intent): a checkpoint receipt is written before every create, so the killed run left
+    // v2 (write-ahead intent): a checkpoint receipt is written before every create, so the killed run left
     // a `failed` receipt whose ledger already records the intent to create the branch. What matters is that the next run
     // claims it and destroy removes it (asserted below).
     const checkpoint = JSON.parse((await remoteFile(remote, `preview/${scope}/latest.json`))!);
@@ -44,18 +46,18 @@ describe("crash mid-apply, then another actor", () => {
     expect(await remoteFile(remote, `preview/${scope}/lock.json`)).not.toBeNull(); // lock left behind
 
     // Runner 2 (re-run of the job) while the lock is still live: refused with exit 3.
-    const b = await spawnCli(["apply", ...args], await workspace(), simEnv(sim, { TMPDIR: await tmp("runner-b") })).done;
+    const b = await spawnCli(["apply", ...args], await checkout(), cliEnv(sim, { TMPDIR: await tmp("runner-b") })).done;
     expect(b.code, b.stdout + b.stderr).toBe(3);
 
     // After expiry, runner 3 takes over and finishes the scope.
     await expireLock(remote, scope);
-    const c = await spawnCli(["apply", ...args], await workspace(), simEnv(sim, { TMPDIR: await tmp("runner-c") })).done;
+    const c = await spawnCli(["apply", ...args], await checkout(), cliEnv(sim, { TMPDIR: await tmp("runner-c") })).done;
     expect(c.code, c.stdout + c.stderr).toBe(0);
     expect(c.json?.receipt?.status).toBe("complete");
     expect(JSON.stringify(c.json?.warnings)).toMatch(/expired lock/);
 
     // PR closes: destroy must remove everything Sponson created for this scope, including the branch the killed run made.
-    const d = await spawnCli(["apply", "--destroy", ...args], await workspace(), simEnv(sim, { TMPDIR: await tmp("runner-d") })).done;
+    const d = await spawnCli(["apply", "--destroy", ...args], await checkout(), cliEnv(sim, { TMPDIR: await tmp("runner-d") })).done;
     expect(d.code, d.stdout + d.stderr).toBe(0);
     const leftovers = {
       neon: neonBranches(sim).filter((n) => n.includes(scope)),

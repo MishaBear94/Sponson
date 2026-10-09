@@ -11,11 +11,10 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { startSim, type SimHandle, type SimSeed } from "@sponson/sim";
-import { run } from "sponson";
+import { cliEnv, runCli, SHA, workspace, type CliRun, type Workspace } from "../../support.js";
 
 export interface ProxyRequest {
   method: string;
@@ -165,14 +164,9 @@ export class ChaosProxy {
   }
 }
 
-export const CTX = { env: "preview", pr: 42, branch: "feat/x", sha: "0123456789abcdef0123456789abcdef01234567" };
+export const CTX = { env: "preview", pr: 42, branch: "feat/x", sha: SHA };
 
-export interface CliResult {
-  exit: number;
-  stdout: string;
-  stderr: string;
-   
-  json: any;
+export interface CliResult extends CliRun {
   /** Sim writes (non-failed and failed) performed during this invocation. */
   writes: number;
   ms: number;
@@ -182,31 +176,20 @@ export class World {
   private constructor(
     readonly sim: SimHandle,
     readonly proxy: ChaosProxy,
-    readonly cwd: string,
+    private readonly ws: Workspace,
     readonly env: NodeJS.ProcessEnv,
   ) {}
 
   static async create(opts: { plan: string; seed?: Partial<SimSeed>; env?: Record<string, string>; direct?: boolean }): Promise<World> {
     const sim = await startSim({ seed: opts.seed });
     const proxy = await ChaosProxy.start(sim.url);
-    const cwd = await mkdtemp(join(tmpdir(), "sponson-prov-"));
-    await writeFile(join(cwd, "release.plan.yaml"), opts.plan);
-    const base = opts.direct ? sim.url : proxy.url;
-    const env: NodeJS.ProcessEnv = {
-      PATH: process.env.PATH,
-      HOME: process.env.HOME,
-      NO_COLOR: "1",
-      VERCEL_TOKEN: "tok_vercel",
-      NEON_API_KEY: "tok_neon",
-      CLERK_SECRET_KEY: "tok_clerk",
-      VERCEL_API_URL: `${base}/vercel`,
-      NEON_API_URL: `${base}/neon`,
-      CLERK_API_URL: `${base}/clerk`,
-      SPONSON_RECEIPTS_DIR: join(cwd, ".sponson/receipts"),
-      SPONSON_DEPLOY_TIMEOUT_MS: "2000",
-      ...(opts.env ?? {}),
-    };
-    return new World(sim, proxy, cwd, env);
+    const ws = await workspace("prov", { plan: opts.plan });
+    const env = cliEnv(opts.direct ? sim : proxy.url, { SPONSON_RECEIPTS_DIR: join(ws.dir, ".sponson/receipts"), SPONSON_DEPLOY_TIMEOUT_MS: "2000", ...(opts.env ?? {}) });
+    return new World(sim, proxy, ws, env);
+  }
+
+  get cwd(): string {
+    return this.ws.dir;
   }
 
   async cli(args: string, extra: string[] = []): Promise<CliResult> {
@@ -217,21 +200,12 @@ export class World {
       "--receipts", "local", "--receipts-dir", join(this.cwd, ".sponson/receipts"),
       ...extra,
     ];
-    let stdout = "";
-    let stderr = "";
     const before = this.sim.state.writes.length;
     const t0 = Date.now();
-    const exit = await run(argv, { stdout: { write: (s) => void (stdout += s) }, stderr: { write: (s) => void (stderr += s) }, env: this.env, cwd: this.cwd, color: false });
-     
-    let json: any = null;
-    if (argv.includes("--json")) {
-      try {
-        json = JSON.parse(stdout);
-      } catch {
-        throw new Error(`stdout is not JSON:\n${stdout}\n--- stderr ---\n${stderr}`);
-      }
-    }
-    return { exit, stdout, stderr, json, writes: this.sim.state.writes.length - before, ms: Date.now() - t0 };
+    const r = await runCli(argv, { env: this.env, cwd: this.cwd });
+    if (!argv.includes("--json")) r.json = null;
+    else if (r.json === null) throw new Error(`stdout is not JSON:\n${r.stdout}\n--- stderr ---\n${r.stderr}`);
+    return { ...r, writes: this.sim.state.writes.length - before, ms: Date.now() - t0 };
   }
 
   /** Every receipt/lock file's text, for leak checks. */
@@ -265,7 +239,7 @@ export class World {
   async close() {
     await this.proxy.close();
     await this.sim.close();
-    await rm(this.cwd, { recursive: true, force: true });
+    await this.ws.cleanup();
   }
 }
 

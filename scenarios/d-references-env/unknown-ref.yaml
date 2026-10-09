@@ -1,4 +1,4 @@
-name: 引用不存在的 id
+name: reference to an id that does not exist
 plan: |
   version: 1
   providers:

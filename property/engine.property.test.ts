@@ -1,16 +1,26 @@
 /**
- * Property-based layer from brainstorm/design/验收策略.md.
+ * Property-based layer of the acceptance suite: random plans (DAGs of fake.item lines), random pre-existing
+ * resources, random failures, random console edits between runs. Only the eight engine invariants are checked
+ * (the scenario runner and the journeys cite them by these numbers); fast-check prints any failing case as a
+ * minimal counterexample that can be turned into a scenario.
  *
- * Random plans (DAGs of fake.item lines), random pre-existing resources, random failures,
- * random console edits between runs. Only the seven invariants are checked; any failing
- * case is printed by fast-check as a minimal counterexample and can be turned into a scenario.
+ *   I1  No secret value appears in any output.
+ *   I2  When a line fails, rollback restores the set of resources that existed before the run.
+ *   I3  Apply is idempotent: a second apply against an unchanged world writes nothing.
+ *   I4  Plan is read-only: it performs zero writes.
+ *   I5  Resources Sponson does not manage are never touched.
+ *   I6  The receipt a run writes is parseable.
+ *   I7  Production is never written without explicit approval.
+ *   I8  Once destroy succeeds, nothing Sponson created survives, whatever failed, crashed or was lost before.
  */
 import fc from "fast-check";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { applyRun, destroyRun, FakeCloud, fakeSecretSource, LocalReceiptStore, parsePlan, planRun, Redactor, Registry, type Ctx, type RunOptions } from "@sponson/core";
+import { applyRun, destroyRun, LocalReceiptStore, parsePlan, planRun, Redactor, Registry, type Ctx, type RunOptions } from "@sponson/core";
+// The fixtures are published as `@sponson/core/testing`; the root alias maps only the package root, so import the source.
+import { FakeCloud, fakeSecretSource } from "../packages/core/src/testing/fake.js";
 
 const ctx: Ctx = { env: "preview", git: { branch: "feat/p", sha: "0123456789abcdef", short_sha: "0123456" }, pr: { number: 7 }, scope: "pr-7" };
 const SECRET = "very-secret-value-42";
@@ -139,7 +149,7 @@ describe("engine invariants", () => {
         if (c.driftAt !== null && !c.reconcile && a1.receipt.lines[`n${c.driftAt}`]?.status === "applied" && cloud.items.has(`n${c.driftAt}`)) {
           // a value we applied, then someone edited: either refused (DRIFT_CHANGED) or nothing to change
           const line = a3.receipt.lines[`n${c.driftAt}`]!;
-          if (line.status === "failed") expect(line.error).toMatch(/--reconcile/);
+          if (line.status === "failed") expect(line.error).toMatch(/reconcile/);
         }
 
         // destroy, with an optional injected failure

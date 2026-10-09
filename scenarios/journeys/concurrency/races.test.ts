@@ -5,7 +5,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { startSim, type SimHandle } from "@sponson/sim";
 import { applyRun, destroyRun, GitBranchReceiptStore, LocalReceiptStore, type Receipt } from "@sponson/core";
-import { bareRemote, engineOpts, exec, git, humanClone, neonBranches, remoteFile, simEnv, tmp, waitFor, workspace } from "./helpers.js";
+import { bareRemote, checkout, engineOpts, exec, git, humanClone, neonBranches, remoteFile, tmp, waitFor } from "./helpers.js";
+import { cliEnv } from "../../support.js";
 
 let sim: SimHandle;
 afterEach(async () => sim?.close());
@@ -21,8 +22,8 @@ function scopeResources(sim: SimHandle, pr: number) {
 describe("apply vs destroy on one scope", () => {
   it("PR closed (destroy --wait) while a late push re-runs apply --wait: they serialize, and the cloud matches whichever receipt is last", async () => {
     sim = await startSim();
-    const cwd = await workspace();
-    const env = simEnv(sim);
+    const cwd = await checkout();
+    const env = cliEnv(sim);
     const root = await tmp("ad-local");
     const results: string[] = [];
     for (let round = 0; round < 3; round++) {
@@ -52,8 +53,8 @@ describe("a human tampers with the receipts branch mid-run", () => {
     // lock vanished, or the newcomer is refused), and the end state is fully accounted for.
     sim = await startSim();
     const remote = await bareRemote();
-    const cwd = await workspace();
-    const env = simEnv(sim);
+    const cwd = await checkout();
+    const env = cliEnv(sim);
     sim.state.applyChaos({ latency_ms: 80 });
     const events: string[] = [];
     const a = applyRun(await engineOpts(cwd, env, 91, new GitBranchReceiptStore({ remote, workdir: await tmp("wd-a"), fallbackDir: await tmp("wd-a-unpushed") })))
@@ -74,8 +75,8 @@ describe("a human tampers with the receipts branch mid-run", () => {
   it("branch force-rewound to an older commit mid-run (no second actor): the run still lands its receipt and releases cleanly", async () => {
     sim = await startSim();
     const remote = await bareRemote();
-    const cwd = await workspace();
-    const env = simEnv(sim);
+    const cwd = await checkout();
+    const env = cliEnv(sim);
     // History: PR 92's earlier receipt exists, then PR 93's apply starts.
     await applyRun(await engineOpts(cwd, env, 92, new GitBranchReceiptStore({ remote, workdir: await tmp("wd-0"), fallbackDir: await tmp("wd-0-unpushed") })));
     const old = (await exec("git", ["--git-dir", remote, "rev-parse", "sponson/receipts"])).stdout.trim();

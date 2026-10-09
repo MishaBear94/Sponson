@@ -1,5 +1,20 @@
-import { SponsonError, isKeepMarker, isPendingMarker, pendingRef, sha256, type AdapterContext, type DiffSide, type ResolvedParams, type ResourceDiff, type ResourceRecord } from "@sponson/core";
+import { SponsonError, markerKind, pendingRef, sha256, type AdapterContext, type DiffSide, type ResolvedParams, type ResourceDiff, type ResourceRecord } from "@sponson/core";
 import { apiClient, isProviderError, type ApiClient } from "./http.js";
+
+/**
+ * The adapter authoring API. These helpers are stable and exported from `@sponson/adapters`; third-party
+ * adapters should use them rather than re-implementing the contracts they encode:
+ *
+ *   clientFor              HTTP client with retry policy and redaction from the adapter context
+ *   requireEnv             a credential from the environment, PROVIDER_AUTH when missing
+ *   requireProvider        a `providers.<adapter>.<key>` value, PLAN_INVALID when missing
+ *   stringParam/paramError a string param with a default, PARAM_INVALID otherwise
+ *   desiredSide/diffValue  the marker contract (pending / secret / keep) applied to one value's diff
+ *   assertNoPending        apply-time guard that the engine resolved every reference
+ *   deleteIgnoringNotFound destroy's "already gone is success" rule
+ *
+ * Anything else in this file is internal and may change.
+ */
 
 export function requireEnv(env: NodeJS.ProcessEnv, name: string, adapter: string): string {
   const v = env[name];
@@ -30,7 +45,8 @@ export function paramError(adapter: string, message: string, param: string): Spo
 /** The engine never passes a pending marker into apply; if one arrives, something upstream is wrong. */
 export function assertNoPending(params: ResolvedParams, adapter: string): void {
   const walk = (v: unknown, path: string): void => {
-    if (isPendingMarker(v)) throw new SponsonError("INTERNAL", `${adapter}: param ${path} is still pending (${pendingRef(v)}); apply must not be called before its inputs resolve`, { adapter, param: path });
+    const marker = markerKind(v);
+    if (marker === "pending" || marker === "secret") throw new SponsonError("INTERNAL", `${adapter}: param ${path} is still pending (${pendingRef(v as string)}); apply must not be called before its inputs resolve`, { adapter, param: path });
     if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${path}[${i}]`));
     else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) walk(x, path ? `${path}.${k}` : k);
   };
@@ -46,10 +62,8 @@ export const SENSITIVE: DiffSide = { state: "sensitive" };
 
 /** A desired value as a diff side: pending markers name their reference (secret refs are URLs: `env://X`). */
 export function desiredSide(v: unknown, sensitive: boolean): DiffSide {
-  if (isPendingMarker(v)) {
-    const ref = pendingRef(v);
-    return { state: ref.includes("://") ? "secret" : "pending", ref };
-  }
+  const marker = markerKind(v);
+  if (marker === "pending" || marker === "secret") return { state: marker, ref: pendingRef(v as string) };
   return sensitive ? SENSITIVE : { state: "literal", value: String(v) };
 }
 
@@ -59,14 +73,15 @@ export function desiredSide(v: unknown, sensitive: boolean): DiffSide {
  */
 export function diffValue(opts: { key: string; label: string; live: ResourceRecord | undefined; desired: unknown; sensitive: boolean; liveValue?: string }): ResourceDiff {
   const { key, label, live, desired, sensitive } = opts;
-  if (isKeepMarker(desired)) {
+  const marker = markerKind(desired);
+  if (marker === "keep") {
     if (live) return { key, kind: "unchanged", label };
     throw new SponsonError("PARAM_INVALID", `${label} is declared \`{ keep: true }\` but does not exist, so there is no value to keep. Give it a value or remove it.`, { key });
   }
   const after = desiredSide(desired, sensitive);
   if (!live) return { key, kind: "create", label, before: ABSENT, after };
   const before: DiffSide = sensitive || opts.liveValue === undefined ? SENSITIVE : { state: "literal", value: opts.liveValue };
-  if (!isPendingMarker(desired) && live.hash === sha256(String(desired))) return { key, kind: "unchanged", label };
+  if (marker === null && live.hash === sha256(String(desired))) return { key, kind: "unchanged", label };
   return { key, kind: "update", label, before, after };
 }
 

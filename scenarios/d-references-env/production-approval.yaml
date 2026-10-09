@@ -1,4 +1,4 @@
-name: 生产必须显式审批：没有审批标记零写入
+name: "production needs explicit approval: zero writes without the approval flag"
 plan: |
   version: 1
   providers:

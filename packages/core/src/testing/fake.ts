@@ -1,5 +1,5 @@
 import { sha256 } from "../hash.js";
-import { isPendingMarker, pendingRef } from "../resolve.js";
+import { isPendingMarker, markerKind, pendingRef } from "../resolve.js";
 import type { ApplyResult, DiffSide, LiveState, ResourceAdapter, ResourceRecord, SecretSource } from "../types.js";
 
 /**
@@ -94,9 +94,8 @@ export class FakeCloud {
             const n = String(p.name);
             const want = p.value;
             const current = live?.resources.find((r) => r.key === key(n));
-            const after: DiffSide = isPendingMarker(want)
-              ? { state: pendingRef(want).includes("://") ? "secret" : "pending", ref: pendingRef(want) }
-              : { state: "literal", value: String(want) };
+            const marker = markerKind(want);
+            const after: DiffSide = marker === "pending" || marker === "secret" ? { state: marker, ref: pendingRef(want as string) } : { state: "literal", value: String(want) };
             if (!current) return [{ key: key(n), label: n, kind: "create", after }];
             if (!isPendingMarker(want) && current.hash === sha256(String(want))) return [{ key: key(n), label: n, kind: "unchanged" }];
             return [{ key: key(n), label: n, kind: "update", before: { state: "sensitive" }, after }];

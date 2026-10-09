@@ -1,8 +1,8 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { GitBranchReceiptStore, planRun, type Drift, type Redactor } from "@sponson/core";
+import { GitBranchReceiptStore, isKeepRef, planRun, walkParams, type Ctx, type Drift, type Redactor, type Registry } from "@sponson/core";
 import { Document, isMap, isScalar, isSeq, parseDocument, visit } from "yaml";
-import { UsageError, buildRunContext, planPathFor, toRunOptions, type GlobalOpts, type IO } from "../context.js";
+import { UsageError, buildInvocation, planPathFor, toRunOptions, type GlobalOpts, type IO } from "../context.js";
 import { withRedactorWarnings } from "../output.js";
 
 export interface InitOpts extends GlobalOpts {
@@ -37,9 +37,9 @@ export async function initCommand(opts: InitOpts, io: IO, redactor: Redactor): P
     result.created = true;
     text.push(`Wrote ${planPath}`);
   } else {
-    const rc = await buildRunContext(opts, io, redactor);
-    const plan = await planRun(toRunOptions(rc, io));
-    result.warnings.push(...rc.warnings, ...plan.warnings);
+    const inv = await buildInvocation(opts, io, redactor);
+    const plan = await planRun(toRunOptions(inv, io));
+    result.warnings.push(...inv.warnings, ...plan.warnings);
     let unmanaged = plan.drift.filter((d) => d.kind === "unmanaged");
     if (opts.adopt !== undefined) {
       const wanted = opts.adopt;
@@ -47,21 +47,22 @@ export async function initCommand(opts: InitOpts, io: IO, redactor: Redactor): P
       unmanaged = unmanaged.filter((d) => [d.resource.key, d.resource.id, d.resource.label].includes(wanted));
       if (unmanaged.length === 0) {
         throw new UsageError(
-          `Nothing to adopt: no unmanaged resource in ${rc.ctx.env}/${rc.ctx.scope} matches \`${wanted}\`. ` +
+          `Nothing to adopt: no unmanaged resource in ${inv.ctx.env}/${inv.ctx.scope} matches \`${wanted}\`. ` +
             (adoptable.length ? `Adoptable keys: ${adoptable.join(", ")}` : "There are no unmanaged resources to adopt."),
           { adopt: wanted, adoptable },
         );
       }
     }
-    const adoptions = adoptChanges(unmanaged, rc.ctx.env, rc.plan.changes.map((c) => c.id), rc.plan.changes, rc.ctx.git.branch);
+    const { adoptions, warnings } = adoptChanges(unmanaged, inv.registry, inv.ctx, inv.plan.changes.map((c) => c.id));
+    result.warnings.push(...warnings);
     if (adoptions.length > 0) {
       await writeFile(planPath, appendChanges(existing, adoptions.map((a) => a.change)), "utf8");
       result.added = adoptions.map((a) => ({ id: a.change.id, adapter: String(a.change.adapter), op: String(a.change.op), keys: a.keys }));
     }
-    if (result.added.length === 0) text.push(`${planPath} already covers everything in ${rc.ctx.env}. Nothing to adopt.`);
+    if (result.added.length === 0) text.push(`${planPath} already covers everything in ${inv.ctx.env}. Nothing to adopt.`);
     else {
       text.push(`Added ${result.added.length} line${result.added.length === 1 ? "" : "s"} to ${planPath}: ${result.added.map((a) => a.id).join(", ")}`);
-      if (adoptions.some((a) => a.change.adapter === "vercel")) {
+      if (adoptions.some((a) => keepsValues(a.change))) {
         text.push("Adopted variables are written as `{ keep: true }`: Sponson keeps their live values and never destroys them. Replace `{ keep: true }` with a value or `{ secret: \"env://KEY\" }` to let Sponson manage the value.");
       }
     }
@@ -144,25 +145,6 @@ async function ensureGitignore(cwd: string): Promise<boolean> {
 
 type ChangeDoc = Record<string, unknown> & { id: string };
 
-/**
- * Resource keys are `kind:name` (neon `branch:x`, clerk `redirect:url`) or, for vercel,
- * `env:<target>:<git branch or *>:NAME` (a variable name never contains `:`, a branch may).
- */
-function parseKey(d: Drift): { kind: string; target?: string; branch?: string; name: string } {
-  const key = d.resource.key;
-  const i = key.indexOf(":");
-  if (i < 0) return { kind: "", name: d.resource.label ?? key };
-  const kind = key.slice(0, i);
-  const rest = key.slice(i + 1);
-  if (kind === "env") {
-    const j = rest.indexOf(":");
-    const k = rest.lastIndexOf(":");
-    if (j >= 0 && k > j) return { kind, target: rest.slice(0, j), branch: rest.slice(j + 1, k), name: rest.slice(k + 1) };
-    if (j >= 0) return { kind, target: rest.slice(0, j), name: rest.slice(j + 1) };
-  }
-  return { kind, name: rest };
-}
-
 export interface Adoption {
   change: ChangeDoc;
   /** Resource keys this line adopts. */
@@ -170,60 +152,52 @@ export interface Adoption {
 }
 
 /**
- * Group unmanaged drift into plan lines. Values are never written: adopted variables are
- * `{ keep: true }` — Sponson takes over that they exist, not what they contain.
- * Vercel lines are grouped by (target, git branch) so a project-wide variable is adopted as
- * project-wide (`branch: "*"`), never re-created as a branch-scoped copy.
+ * Turn unmanaged drift into plan lines. What a line looks like is provider knowledge, so each op that listed
+ * the resources builds its own lines (`OpSpec.adopt`); this only groups, makes ids unique and scopes the lines
+ * to the current environment. Resources whose op cannot adopt are reported as warnings, never guessed at.
  */
-export function adoptChanges(unmanaged: Drift[], env: string, takenIds: string[], existing: Array<{ id: string; adapter: string; op: string; params: Record<string, unknown> }>, currentBranch?: string): Adoption[] {
+export function adoptChanges(unmanaged: Drift[], registry: Registry, ctx: Ctx, takenIds: string[]): { adoptions: Adoption[]; warnings: string[] } {
   const ids = new Set(takenIds);
   const uniqueId = (base: string) => {
-    let id = base.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^[^a-z]+/, "") || "adopted";
+    const root = base.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^[^a-z]+/, "") || "adopted";
+    let id = root;
     let n = 2;
-    const root = id;
     while (ids.has(id)) id = `${root}-${n++}`;
     ids.add(id);
     return id;
   };
-  const out: Adoption[] = [];
-  const vercelGroups = new Map<string, { target: string; branch?: string; vars: Array<{ name: string; key: string }> }>();
 
+  const groups = new Map<string, { adapter: string; op: string | undefined; drift: Drift[] }>();
   for (const d of unmanaged) {
-    const { target, branch, name } = parseKey(d);
-    const keys = [d.resource.key];
-    switch (d.adapter) {
-      case "vercel": {
-        const t = target ?? "preview";
-        const group = `${t}\u0000${branch ?? ""}`;
-        const g = vercelGroups.get(group) ?? { target: t, ...(branch ? { branch } : {}), vars: [] };
-        g.vars.push({ name, key: d.resource.key });
-        vercelGroups.set(group, g);
-        break;
-      }
-      case "neon":
-        out.push({ change: { id: uniqueId(`db-${name}`), adapter: "neon", op: "branch", name, environments: [env] }, keys });
-        break;
-      case "clerk":
-        out.push({ change: { id: uniqueId("callback"), adapter: "clerk", op: "redirect_allow", url: name, environments: [env] }, keys });
-        break;
-      default: {
-        const like = existing.find((c) => c.adapter === d.adapter);
-        out.push({ change: { id: uniqueId(`${d.adapter}-${name}`), adapter: d.adapter, op: like?.op ?? "unknown", name, environments: [env] }, keys });
-      }
+    const k = `${d.adapter}\u0000${d.op ?? ""}`;
+    const g = groups.get(k) ?? { adapter: d.adapter, op: d.op, drift: [] };
+    g.drift.push(d);
+    groups.set(k, g);
+  }
+
+  const adoptions: Adoption[] = [];
+  const warnings: string[] = [];
+  for (const { adapter, op, drift } of groups.values()) {
+    const keys = drift.map((d) => d.resource.key).join(", ");
+    const spec = op === undefined ? undefined : registry.op(adapter, op);
+    if (!spec?.adopt) {
+      warnings.push(`cannot adopt ${keys}: adapter ${adapter}${op ? ` (op ${op})` : ""} has no adopt()`);
+      continue;
+    }
+    for (const line of spec.adopt(drift.map((d) => d.resource), ctx)) {
+      adoptions.push({ change: { id: uniqueId(line.id), adapter, op: op!, ...line.params, environments: [ctx.env] }, keys: line.keys });
     }
   }
-  for (const { target, branch, vars } of vercelGroups.values()) {
-    const values: Record<string, { keep: true }> = {};
-    for (const v of vars) values[v.name] = { keep: true };
-    // The op defaults `branch` to the current git branch for preview; only write it when it differs.
-    const branchParam = branch === undefined || branch === currentBranch ? {} : { branch };
-    const suffix = branch === "*" ? "-shared" : branch && branch !== currentBranch ? `-${branch}` : "";
-    out.push({
-      change: { id: uniqueId(`env-${target}${suffix}`), adapter: "vercel", op: "env", target, ...branchParam, values, environments: [env] },
-      keys: vars.map((v) => v.key),
-    });
-  }
-  return out;
+  return { adoptions, warnings };
+}
+
+/** Whether a line adopts values as `{ keep: true }` (and so needs the note on how to take them over). */
+function keepsValues(change: ChangeDoc): boolean {
+  let found = false;
+  walkParams(change, [], (_p, v) => {
+    if (isKeepRef(v)) found = true;
+  });
+  return found;
 }
 
 /**

@@ -1,4 +1,4 @@
-name: 被改动：plan 警告，apply 拒绝，--reconcile 覆盖并记录
+name: "changed: plan warns, apply refuses, --reconcile overwrites and records it"
 plan: |
   version: 1
   providers:
@@ -36,7 +36,7 @@ steps:
       exit: 1
       status: failed
       lines: { db: unchanged, env: blocked, callback: skipped }
-      errors: { env: "--reconcile" }
+      errors: { env: "reconcile" }
   - sim:
       vercel_env: { preview: { DATABASE_URL: edited-in-console } }
   - run: apply --reconcile --json

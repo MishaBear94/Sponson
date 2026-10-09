@@ -1,6 +1,6 @@
 /** Test-only harness: an in-process sim plus an AdapterContext pointed at it. Excluded from the build. */
 import type { AdapterContext, Ctx } from "@sponson/core";
-import { startSim, type ChaosConfig, type ChaosRequest, type SimHandle, type SimSeed, type WriteLogEntry } from "@sponson/sim";
+import { simEnv, startSim, type ChaosConfig, type ChaosRequest, type SimHandle, type SimSeed, type WriteLogEntry } from "@sponson/sim";
 
 /** What an adapter told the engine, in order, with how many sim writes had happened at that moment. */
 export interface IntentEvent {
@@ -26,12 +26,7 @@ export async function harness(seed?: Partial<SimSeed>): Promise<Harness> {
   const sim = await startSim({ seed });
   const ctx: Ctx = { env: "preview", git: { branch: "feat/x", sha: SHA, short_sha: SHA.slice(0, 7) }, pr: { number: 42 }, scope: "pr-42" };
   const env: NodeJS.ProcessEnv = {
-    VERCEL_TOKEN: "test-vercel-token",
-    VERCEL_API_URL: `${sim.url}/vercel`,
-    NEON_API_KEY: "test-neon-key",
-    NEON_API_URL: `${sim.url}/neon`,
-    CLERK_SECRET_KEY: "test-clerk-key",
-    CLERK_API_URL: `${sim.url}/clerk`,
+    ...simEnv(sim),
     // Keep retries fast in unit tests.
     SPONSON_HTTP_RETRY_BASE_MS: "5",
     SPONSON_HTTP_TIMEOUT_MS: "2000",

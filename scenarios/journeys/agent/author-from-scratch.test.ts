@@ -2,8 +2,8 @@
 /**
  * Task: "add a preview database to this feature".
  * The agent writes release.plan.yaml from scratch and makes the mistakes LLMs make. After each `plan --json`
- * it may only use the error JSON to decide what to fix. Correct behaviour (SKILL.md + design 产品定义.md
- * "agent 看 --json, 没有例外", errors.ts "every user-facing failure is a SponsonError with a stable code"):
+ * it may only use the error JSON to decide what to fix. Correct behaviour (SKILL.md: agents read `--json`, no
+ * exceptions; errors.ts "every user-facing failure is a SponsonError with a stable code"):
  * every rejection is JSON on stdout with `ok: false`, a documented `error.code`, a pointer to the offending
  * line, and the right exit code; and a plan that exits 0 does not fail on apply for a reason plan could see.
  */
@@ -46,7 +46,7 @@ describe("agent authors a plan from scratch and recovers using only error JSON",
     mutate(p);
     await w.writePlan(p);
     const r = await w.cli(["plan", "--json"]);
-    expect(r.json, `stdout must be JSON, got: ${r.out || r.err}`).not.toBeNull();
+    expect(r.json, `stdout must be JSON, got: ${r.stdout || r.stderr}`).not.toBeNull();
     expect(r.json.ok).toBe(false);
     expect(r.json.error.code).toBe(code);
     expect(DOCUMENTED_CODES).toContain(r.json.error.code);
@@ -63,7 +63,7 @@ describe("agent authors a plan from scratch and recovers using only error JSON",
     await w.writePlan(p);
     const plan = await w.cli(["plan", "--json"]);
     const env = plan.json?.lines?.find((l: any) => l.id === "env");
-    // v2 (design G6.4, SKILL.md error table): a wrong output name is its own code, REF_OUTPUT_UNKNOWN, and the
+    // v2 (SKILL.md error table): a wrong output name is its own code, REF_OUTPUT_UNKNOWN, and the
     // message lists the valid output names.
     const OUT_CODES = ["REF_UNKNOWN", "REF_OUTPUT_UNKNOWN"];
     const caught =

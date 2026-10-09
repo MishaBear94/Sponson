@@ -1,4 +1,4 @@
-name: 未知密钥 scheme：说明已知的有哪些
+name: "unknown secret scheme: lists the known ones"
 plan: |
   version: 1
   providers:

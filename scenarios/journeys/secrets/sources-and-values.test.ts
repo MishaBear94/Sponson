@@ -3,8 +3,8 @@
  *
  * Promises: README "Secrets are references ... redacted from every byte of output. A literal that looks like a
  * secret is rejected at parse time"; README "Every command takes --json"; SKILL.md rule 3 and rule 6
- * ("Secrets and sensitive outputs are never in the receipt"); 验收策略.md E ("plan 与 apply 之间密钥版本变了 →
- * fingerprint 不一致，apply 警告并使用新值").
+ * ("Secrets and sensitive outputs are never in the receipt"); and when a secret changes between plan and
+ * apply, the fingerprints differ and apply warns and uses the new value.
  */
 import { createHash, createHmac } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
@@ -56,7 +56,7 @@ describe("secret sources via fake CLIs on PATH", () => {
     expect(live).toBe("sk_old_rotating_00000");
     // The receipt must fingerprint what was actually written.
     const fp = r.json.receipt.lines.env.secretFingerprints["doppler://shop/prd/STRIPE_KEY"];
-    // v0.2 (决策-v0.2 G5.5, types.ts Receipt.hashKey): fingerprints are HMAC(hashKey, sha256(value)), not a bare sha256 prefix.
+    // v0.2 (types.ts Receipt.hashKey): fingerprints are HMAC(hashKey, sha256(value)), not a bare sha256 prefix.
     const keyed = (v: string) => createHmac("sha256", r.json.receipt.hashKey).update(sha256(v)).digest("hex");
     expect.soft(fp, "fingerprint is of a value Sponson never wrote").toBe(keyed("sk_old_rotating_00000"));
     // And plan must not call the stale live value up to date.
