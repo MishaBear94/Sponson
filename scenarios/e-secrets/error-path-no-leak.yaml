@@ -1,0 +1,35 @@
+name: 错误路径不泄露：adapter 报错、回执、stdout/stderr 都不含密钥与连接串
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        DATABASE_URL: { from: db.connection_string }
+        STRIPE_KEY: { secret: "env://STRIPE_KEY" }
+      environments: [preview]
+env: { STRIPE_KEY: "sk_test_supersecret_123456" }
+secrets: ["sk_test_supersecret_123456", "neondb_owner:pw_"]
+chaos: { fail_on: "POST /vercel/*", fail_next: 1, status: 500 }
+steps:
+  - run: plan
+    expect: { exit: 0, stdout: ["(secret ← env://STRIPE_KEY)", "(pending ← db.connection_string)"] }
+  - run: apply
+    expect: { exit: 1, stdout: ["failed"] }
+  - run: apply --json
+    expect: { exit: 0, status: complete }
+  - run: plan
+    expect: { exit: 0, stdout: ["= env", "unchanged"] }
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { db: unchanged, env: unchanged } }
+  - sim:
+      vercel_env: { preview: { STRIPE_KEY: "sk_test_supersecret_123456" } }

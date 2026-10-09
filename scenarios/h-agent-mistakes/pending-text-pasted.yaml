@@ -1,0 +1,15 @@
+name: agent 把显示文本当值写回
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values: { DATABASE_URL: "(pending ← db.connection_string)" }
+steps:
+  - run: plan
+    expect: { exit: 2, stderr: ["PLAN_INVALID", "display text", "{ from: \"db.connection_string\" }"] }

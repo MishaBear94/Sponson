@@ -1,0 +1,6 @@
+brainstorm/
+node_modules/
+dist/
+*.tsbuildinfo
+.sponson/
+coverage/

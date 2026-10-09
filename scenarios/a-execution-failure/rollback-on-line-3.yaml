@@ -1,0 +1,42 @@
+name: 第 3 行失败时回滚前 2 行
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      parent: main
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        DATABASE_URL: { from: db.connection_string }
+      environments: [preview]
+    - id: callback
+      adapter: clerk
+      op: redirect_allow
+      url: { from: env.preview_url }
+      environments: [preview]
+chaos: { fail_on: "POST /clerk/redirect_urls", fail_next: 1, status: 500 }
+secrets: ["neondb_owner:pw_"]
+steps:
+  - run: apply --json
+    expect:
+      exit: 1
+      status: failed
+      lines: { db: rolled_back, env: rolled_back, callback: failed }
+      errors: { callback: "500" }
+  - sim:
+      neon_branches: { "sponson/preview/pr-42": absent }
+      vercel_env: { preview: { DATABASE_URL: absent } }
+      write_order: ["DELETE /vercel", "DELETE /neon"]
+  - chaos: { fail_on: "POST /clerk/redirect_urls", fail_next: 1, status: 500 }
+  - run: apply
+    expect:
+      exit: 1
+      stdout: ["apply failed", "rolled_back"]

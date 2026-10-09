@@ -1,0 +1,17 @@
+name: agent 自己给生产加审批：机制上允许，但 SKILL 禁止；没有标记则零写入
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: env
+      adapter: vercel
+      op: env
+      target: production
+      values: { FEATURE: "on" }
+      environments: [production]
+ctx: { env: production, pr: 9 }
+steps:
+  - run: apply --json
+    expect: { exit: 2, error: ENV_NOT_APPROVED, writes: 0 }

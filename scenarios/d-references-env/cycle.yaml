@@ -1,0 +1,14 @@
+name: 环引用：plan 阶段报错并指出环路
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - { id: a, adapter: clerk, op: redirect_allow, url: { from: b.id } }
+    - { id: b, adapter: clerk, op: redirect_allow, url: { from: a.id } }
+steps:
+  - run: plan --json
+    expect: { exit: 2, error: REF_CYCLE, writes: 0 }
+  - run: plan
+    expect: { exit: 2, stderr: ["Reference cycle", "a → b → a"] }

@@ -1,0 +1,40 @@
+name: 丢失：回执有、实况没有，直接重建
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      parent: main
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        DATABASE_URL: { from: db.connection_string }
+      environments: [preview]
+    - id: callback
+      adapter: clerk
+      op: redirect_allow
+      url: { from: env.preview_url }
+      environments: [preview]
+steps:
+  - run: apply --json
+    expect: { exit: 0 }
+  - chaos: { drift: { "neon.branch.sponson/preview/pr-42": delete } }
+  - run: plan --json
+    expect:
+      exit: 0
+      drift: [{ kind: missing, line: db }]
+      plan_lines: { db: create }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { db: applied }
+  - sim:
+      neon_branches: { "sponson/preview/pr-42": exists }

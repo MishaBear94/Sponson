@@ -1,0 +1,39 @@
+name: 同一 scope 已有 apply 在跑：拒绝并退出码 3；过期锁可接管
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      parent: main
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        DATABASE_URL: { from: db.connection_string }
+      environments: [preview]
+    - id: callback
+      adapter: clerk
+      op: redirect_allow
+      url: { from: env.preview_url }
+      environments: [preview]
+steps:
+  - lock: held
+  - run: apply --json
+    expect:
+      exit: 3
+      error: LOCK_HELD
+      writes: 0
+  - run: plan --json
+    expect: { exit: 0 }
+  - lock: expired
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      warnings: ["expired lock held by other-expired"]

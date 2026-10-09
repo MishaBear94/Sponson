@@ -1,0 +1,27 @@
+name: 没有回执：报"无可销毁"，退出 0
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      parent: main
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        DATABASE_URL: { from: db.connection_string }
+      environments: [preview]
+    - id: callback
+      adapter: clerk
+      op: redirect_allow
+      url: { from: env.preview_url }
+      environments: [preview]
+steps:
+  - run: apply --destroy --json
+    expect: { exit: 0, warnings: ["Nothing to destroy"], writes: 0 }

@@ -1,0 +1,12 @@
+name: 重复 id
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - { id: db, adapter: neon, op: branch }
+    - { id: db, adapter: neon, op: branch }
+steps:
+  - run: plan
+    expect: { exit: 2, stderr: ["Duplicate change id `db`"] }

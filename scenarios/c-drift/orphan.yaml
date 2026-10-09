@@ -1,0 +1,57 @@
+name: 孤儿行：plan 删了一行，资源留着，只有 --destroy 才删
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      parent: main
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        DATABASE_URL: { from: db.connection_string }
+      environments: [preview]
+    - id: callback
+      adapter: clerk
+      op: redirect_allow
+      url: { from: env.preview_url }
+      environments: [preview]
+steps:
+  - run: apply --json
+    expect: { exit: 0 }
+  - plan: |
+      version: 1
+      providers:
+        vercel: { project: prj_demo }
+        neon: { project: proj_demo }
+      changes:
+        - id: db
+          adapter: neon
+          op: branch
+          parent: main
+          environments: [preview]
+        - id: env
+          adapter: vercel
+          op: env
+          target: preview
+          values:
+            DATABASE_URL: { from: db.connection_string }
+          environments: [preview]
+  - run: plan --json
+    expect:
+      exit: 0
+      drift: [{ kind: orphan, line: callback }]
+  - run: apply --json
+    expect: { exit: 0, status: complete }
+  - sim:
+      clerk_redirects: { "https://prj_demo-01234567.vercel.app": exists }
+  - run: apply --destroy --json
+    expect: { exit: 0, lines: { callback: destroyed } }
+  - sim:
+      clerk_redirects: { "https://prj_demo-01234567.vercel.app": absent }

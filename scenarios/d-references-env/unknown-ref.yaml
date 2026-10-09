@@ -1,0 +1,11 @@
+name: 引用不存在的 id
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - { id: a, adapter: clerk, op: redirect_allow, url: { from: nope.id } }
+steps:
+  - run: plan
+    expect: { exit: 2, stderr: ["REF_UNKNOWN", "unknown id `nope`"] }

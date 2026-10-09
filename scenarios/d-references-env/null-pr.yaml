@@ -1,0 +1,18 @@
+name: 本地没有 PR 但分支名用了 ctx.pr.number：说清楚哪行、为什么、怎么补
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      name: "preview-${ctx.pr.number}"
+ctx: { pr: null, branch: feat/no-pr }
+steps:
+  - run: plan
+    expect: { exit: 2, stderr: ["CTX_NULL", "line `db`", "ctx.pr.number", "is null here", "--pr"] }
+  - ctx: { pr: 7 }
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { db: create } }

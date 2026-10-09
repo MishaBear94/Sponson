@@ -1,0 +1,11 @@
+name: environments 写成字符串：拒绝并给出正确写法
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - { id: db, adapter: neon, op: branch, environments: preview }
+steps:
+  - run: plan
+    expect: { exit: 2, stderr: ["environments must be a list", "environments: [preview]"] }

@@ -1,0 +1,38 @@
+name: 进程在第 2 行后被 kill：回执完整，重跑续上，过期锁被接管
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      parent: main
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        DATABASE_URL: { from: db.connection_string }
+      environments: [preview]
+    - id: callback
+      adapter: clerk
+      op: redirect_allow
+      url: { from: env.preview_url }
+      environments: [preview]
+steps:
+  - crash_after: env
+  - run: plan --json
+    expect:
+      exit: 0
+      plan_lines: { db: unchanged, env: unchanged, callback: create }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { db: unchanged, env: unchanged, callback: applied }
+      warnings: ["expired lock"]
+  - sim:
+      clerk_redirects: { "https://prj_demo-01234567.vercel.app": exists }

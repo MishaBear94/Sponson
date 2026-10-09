@@ -1,0 +1,33 @@
+{
+  "name": "sponson-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Sponson: one release, one plan. Declares and applies everything that ships beside the code.",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@11.5.1",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r --filter './packages/*' run build",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:scenarios": "vitest run --project scenarios",
+    "test:property": "vitest run --project property",
+    "lint": "eslint .",
+    "sim": "tsx packages/sim/src/bin.ts",
+    "sponson": "tsx packages/cli/src/bin.ts"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@types/node": "^24.3.0",
+    "eslint": "^9.34.0",
+    "fast-check": "^4.3.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.42.0",
+    "vitest": "^3.2.4",
+    "yaml": "^2.9.1"
+  }
+}

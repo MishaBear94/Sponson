@@ -1,0 +1,28 @@
+name: --wait 超时：退出非 0，不挂死
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      parent: main
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        DATABASE_URL: { from: db.connection_string }
+      environments: [preview]
+    - id: callback
+      adapter: clerk
+      op: redirect_allow
+      url: { from: env.preview_url }
+      environments: [preview]
+chaos: { deploy: never }
+steps:
+  - run: apply --wait --wait-timeout 1 --json
+    expect: { exit: 1, error: WAIT_TIMEOUT }

@@ -1,0 +1,36 @@
+name: 回滚本身失败：记录遗留资源，不静默
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      parent: main
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        DATABASE_URL: { from: db.connection_string }
+      environments: [preview]
+    - id: callback
+      adapter: clerk
+      op: redirect_allow
+      url: { from: env.preview_url }
+      environments: [preview]
+# The clerk call fails, then the rollback's DELETE of the Neon branch fails too.
+steps:
+  - chaos: { fail_on: ["POST /clerk/*", "DELETE /neon/*"], fail_next: 2, status: 500 }
+  - run: apply --json
+    expect:
+      exit: 1
+      status: failed
+      lines: { db: rollback_failed, env: rolled_back, callback: failed }
+      errors: { db: "resources left behind.*sponson/preview/pr-42" }
+  - sim:
+      neon_branches: { "sponson/preview/pr-42": exists }
+      vercel_env: { preview: { DATABASE_URL: absent } }

@@ -1,0 +1,41 @@
+name: 未管理资源：列出来，永远不碰
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      parent: main
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        DATABASE_URL: { from: db.connection_string }
+      environments: [preview]
+    - id: callback
+      adapter: clerk
+      op: redirect_allow
+      url: { from: env.preview_url }
+      environments: [preview]
+seed:
+  vercel: { projects: { prj_demo: { envs: [{ key: LEGACY_KEY, value: keep-me, target: preview, gitBranch: feat/x }] } } }
+  neon: { projects: { proj_demo: { branches: [{ name: main }, { name: sponson/preview/old-one }] } } }
+steps:
+  - run: plan --json
+    expect:
+      exit: 0
+      drift:
+        - { kind: unmanaged, key: "env:preview:LEGACY_KEY" }
+        - { kind: unmanaged, key: "branch:sponson/preview/old-one" }
+  - run: apply --json
+    expect: { exit: 0, status: complete }
+  - run: apply --destroy --json
+    expect: { exit: 0 }
+  - sim:
+      vercel_env: { preview: { LEGACY_KEY: keep-me } }
+      neon_branches: { "sponson/preview/old-one": exists }

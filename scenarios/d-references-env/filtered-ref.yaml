@@ -1,0 +1,20 @@
+name: preview 的行引用了 production-only 的行：说明是环境过滤导致
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      environments: [production]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values: { DATABASE_URL: { from: db.connection_string } }
+      environments: [preview]
+steps:
+  - run: plan
+    expect: { exit: 2, stderr: ["REF_FILTERED", "filtered out of this environment", "environments: [production]"] }

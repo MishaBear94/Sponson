@@ -1,0 +1,12 @@
+name: 用了 YAML anchor：允许但警告
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - &base { id: a, adapter: clerk, op: redirect_allow, url: https://a.example.com }
+    - { <<: *base, id: b, url: https://b.example.com }
+steps:
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { a: create, b: create }, warnings: ["anchors"] }

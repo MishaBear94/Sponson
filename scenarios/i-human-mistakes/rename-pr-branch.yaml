@@ -1,0 +1,30 @@
+name: 重命名 PR 分支：scope 是 pr-N，不受影响
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      parent: main
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        DATABASE_URL: { from: db.connection_string }
+      environments: [preview]
+    - id: callback
+      adapter: clerk
+      op: redirect_allow
+      url: { from: env.preview_url }
+      environments: [preview]
+steps:
+  - run: apply --json
+    expect: { exit: 0 }
+  - ctx: { branch: feat/renamed }
+  - run: apply --json
+    expect: { exit: 0, lines: { db: unchanged } }

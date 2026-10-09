@@ -1,0 +1,49 @@
+name: 被改动：plan 警告，apply 拒绝，--reconcile 覆盖并记录
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      parent: main
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        DATABASE_URL: { from: db.connection_string }
+      environments: [preview]
+    - id: callback
+      adapter: clerk
+      op: redirect_allow
+      url: { from: env.preview_url }
+      environments: [preview]
+steps:
+  - run: apply --json
+    expect: { exit: 0, status: complete }
+  - chaos: { drift: { "vercel.env.preview.DATABASE_URL": "edited-in-console" } }
+  - run: plan --json
+    expect:
+      exit: 0
+      drift: [{ kind: changed, line: env }]
+      plan_lines: { env: update }
+  - run: apply --json
+    expect:
+      exit: 1
+      status: failed
+      lines: { db: unchanged, env: failed, callback: skipped }
+      errors: { env: "--reconcile" }
+  - sim:
+      vercel_env: { preview: { DATABASE_URL: edited-in-console } }
+  - run: apply --reconcile --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { env: applied }
+      notes: { env: { reconciled: true } }
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { env: unchanged } }

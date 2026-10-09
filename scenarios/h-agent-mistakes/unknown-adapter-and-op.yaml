@@ -1,0 +1,18 @@
+name: 不存在的 adapter 或 op：列出已知的
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - { id: a, adapter: launchdarkly, op: flag }
+steps:
+  - run: plan
+    expect: { exit: 2, stderr: ["ADAPTER_UNKNOWN", "Known: "] }
+  - plan: |
+      version: 1
+      providers: { neon: { project: proj_demo } }
+      changes:
+        - { id: a, adapter: neon, op: database }
+  - run: plan
+    expect: { exit: 2, stderr: ["OP_UNKNOWN", "no op `database`", "branch"] }

@@ -1,0 +1,49 @@
+name: partial 状态下改 plan 再 apply：续跑 + 按新 plan diff
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      parent: main
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        DATABASE_URL: { from: db.connection_string }
+      environments: [preview]
+    - id: callback
+      adapter: clerk
+      op: redirect_allow
+      url: { from: env.preview_url }
+      environments: [preview]
+chaos: { deploy: never }
+steps:
+  - run: apply --json
+    expect: { exit: 0, status: partial }
+  - plan: |
+      version: 1
+      providers:
+        vercel: { project: prj_demo }
+        neon: { project: proj_demo }
+      changes:
+        - id: db
+          adapter: neon
+          op: branch
+          parent: main
+        - id: env
+          adapter: vercel
+          op: env
+          target: preview
+          values:
+            DATABASE_URL: { from: db.connection_string }
+            FEATURE_X: "on"
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { db: unchanged, env: applied } }
+  - sim:
+      vercel_env: { preview: { FEATURE_X: "on" } }

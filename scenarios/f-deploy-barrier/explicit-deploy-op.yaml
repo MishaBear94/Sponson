@@ -1,0 +1,32 @@
+name: 显式 op deploy：没有屏障，一次跑完
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values: { DATABASE_URL: { from: db.connection_string } }
+    - id: deploy
+      adapter: vercel
+      op: deploy
+      depends_on: [env]
+    - id: callback
+      adapter: clerk
+      op: redirect_allow
+      url: { from: deploy.preview_url }
+chaos: { deploy: never }
+steps:
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { deploy: applied, callback: applied }
+  - sim:
+      write_order: ["POST /vercel/v10/projects", "POST /vercel/v13/deployments", "POST /clerk"]

@@ -1,0 +1,37 @@
+name: 失败后修复原因重跑：从零完整跑完
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      parent: main
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        DATABASE_URL: { from: db.connection_string }
+      environments: [preview]
+    - id: callback
+      adapter: clerk
+      op: redirect_allow
+      url: { from: env.preview_url }
+      environments: [preview]
+chaos: { fail_on: "POST /vercel/*", fail_next: 1, status: 503 }
+steps:
+  - run: apply --json
+    expect:
+      exit: 1
+      status: failed
+      lines: { db: rolled_back, env: failed, callback: skipped }
+      errors: { callback: "depends on `env`" }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { db: applied, env: applied, callback: applied }

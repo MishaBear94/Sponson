@@ -1,0 +1,17 @@
+name: providers 里写错 project id：plan 报 404，不是堆栈
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_typo }
+    neon: { project: proj_demo }
+  changes:
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values: { A: "1" }
+steps:
+  - run: plan
+    expect: { exit: 1, stdout: ["! env", "404"] }
+  - run: apply --json
+    expect: { exit: 1, lines: { env: failed }, errors: { env: "404" } }

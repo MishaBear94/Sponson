@@ -4,7 +4,48 @@ Sponson is the plan for everything that ships beside the code.
 
 A sponson is the float welded to the side of a hull so the boat does not roll. The code is the hull. The preview database, environment variables, callbacks, and feature flags are the float. Sponson writes that float into one file an agent can read and a human can diff.
 
-This repository is the start of that format. The CLI is not here yet.
+```yaml
+# release.plan.yaml
+version: 1
+providers:
+  vercel: { project: prj_xxx }
+  neon:   { project: proj_xxx }
+
+changes:
+  - id: db
+    adapter: neon
+    op: branch
+    parent: main
+    environments: [preview]
+
+  - id: env
+    adapter: vercel
+    op: env
+    target: preview
+    values:
+      DATABASE_URL: { from: db.connection_string }      # a reference, never a value
+      STRIPE_KEY:   { secret: "env://STRIPE_KEY" }      # a reference, never a value
+    environments: [preview]
+
+  - id: callback
+    adapter: clerk
+    op: redirect_allow
+    url: { from: env.preview_url }                      # exists only after the deploy
+    environments: [preview]
+```
+
+```
+$ sponson plan
+sponson plan · preview · pr-42 · plan 7aba4410
+
++ db        neon.branch           create     Neon branch sponson/preview/pr-42
++ env       vercel.env            create
+    + DATABASE_URL (preview)  (pending ← db.connection_string)
+    + STRIPE_KEY (preview)    (secret ← env://STRIPE_KEY)
+? callback  clerk.redirect_allow  pending    waiting on `env` (deploy)
+
+2 to create, 1 pending
+```
 
 ## Why this exists
 
@@ -12,63 +53,101 @@ Agents can already change a repository. They cannot safely change the rest of a 
 
 The code lands in Git. The things that have to move with it do not. A preview database lives in the database console. Environment variables live in the deploy console. OAuth callbacks live in an identity console. Feature flags live in a fourth. A person copies state between them by hand. An agent does the same thing with no shared record of what it intended, what it tried, and what a human approved.
 
-Existing tools each own one slice. Terraform and Pulumi plan resources, not the preview data and callback that belong to this release. Vercel and Railway deploy the app, not the secrets and flags that have to match it. Doppler and Infisical hold secrets, not the release those secrets belong to. The Model Context Protocol revision of 28 July 2026 removed protocol-level sessions, so a sequence of tool calls is not itself a record. A release needs its own file.
+Existing tools each own one slice. Terraform and Pulumi plan resources, not the preview data and callback that belong to this release. Vercel and Railway deploy the app, not the secrets and flags that have to match it. Doppler and Infisical hold secrets, not the release those secrets belong to. A sequence of agent tool calls is not itself a record. A release needs its own file.
 
-Sponson is that file. The format is the product. A hosted preview control plane can come later. A new cloud does not.
+Sponson is that file. The format is the product. A hosted approval inbox can come later. A new cloud does not.
 
-## What it solves
+## What it does
 
-One release, one plan.
+One release, one plan. Three commands.
 
-- The plan lists every side effect of this commit: a database branch, a secret reference injected into a preview environment, a callback URL, a flag change.
-- Secrets appear as references, never as values.
-- `plan` reads current state and prints a diff. Nothing runs.
-- `apply` runs only that file. A failed line tears down what this plan created.
-- A human, or a CI rule, approves before the same plan can touch production.
-- The receipt is written back into the file. The agent's next step reads the receipt, not its own memory.
+| Command | What it does | Writes anything? |
+|---|---|---|
+| `sponson init` | Detects your Vercel and Neon projects and writes a starter plan. Run again to adopt resources the plan does not know about. | the plan file only |
+| `sponson plan` | Reads live state, prints the diff and any drift. | no |
+| `sponson apply` | Runs the plan in dependency order. Rolls back what this run created if a line fails. Writes a receipt. | yes |
 
-The first adapters are Vercel preview variables and Neon branches. Social-login callbacks and flag targeting are out of the first cut: provider allow-lists and per-environment flag rules are still console-owned.
+- **Secrets are references.** `{ secret: "env://NAME" }`, `doppler://`, `op://`. Values are resolved inside `apply`, handed to the adapter, and redacted from every byte of output. A literal that looks like a secret is rejected at parse time.
+- **References cross lines.** `{ from: db.connection_string }` reads another line's output. Outputs that only exist after an external event (a deploy) stop the run with status `partial`; the next `apply` continues from there. Same command, no flags.
+- **Drift is reported, never silently overwritten.** Something changed in a console since the last apply? `plan` says so; `apply` refuses that line until you pass `--reconcile`. Something exists that the plan does not mention? It is listed and left alone.
+- **Receipts are the agent's memory.** Each run writes what actually happened — which resources, their value hashes, which lines waited or failed — to an orphan branch `sponson/receipts` in your repo. The agent reads the receipt, not its own last tool call.
+- **Production needs a human.** `--env production` without `--approved-by` is refused before any adapter is touched. The default environment is always `preview`; nothing is inferred from a branch name.
+- **Destroy is symmetric.** `sponson apply --destroy` removes what Sponson created, in reverse order, and never touches resources it merely adopted.
 
-## Architecture
+## Quick start
 
-```text
-repo
-  release.plan          the intent and, after apply, the receipt
-        |
-        v
-  sponson plan          read adapters, diff against the file
-        |
-        v
-  sponson apply         run the file, in dependency order
-        |
-        +-- vercel adapter     preview env vars, secret values only in-process
-        +-- neon adapter       branch, schema diff, delete on failure
-        |
-        v
-  receipt in release.plan
+```bash
+npx sponson init          # writes release.plan.yaml, adds .sponson/ to .gitignore
+npx sponson plan          # read-only diff
+npx sponson apply         # creates the branch, injects the variable, waits for the deploy
 ```
 
-The plan is a text file committed next to the change. Each line is one change, with an id, an adapter, an operation, and a reference to any line it waits on. Apply order is explicit. A preview URL does not exist until deploy finishes, so a callback line depends on the deploy line instead of assuming an instant result.
+Credentials come from the providers' own conventions — `VERCEL_TOKEN`, `NEON_API_KEY`, `CLERK_SECRET_KEY` — Sponson has no credential store of its own.
 
-Adapters read and write one system. They do not own the record. `plan` re-reads live state on every run and marks drift it did not author. It does not overwrite that drift.
+In GitHub Actions, one workflow with three triggers calls the same action:
 
-Secret values are resolved inside `apply`, sent to the adapter, and left out of the file and the logs. The file keeps the reference.
+```yaml
+on:
+  pull_request: { types: [opened, synchronize, closed] }
+  deployment_status:
+permissions: { contents: write, pull-requests: write }
+jobs:
+  sponson:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: sponson/sponson/action@v1
+        with:
+          command: ${{ github.event.action == 'closed' && 'destroy' || 'apply' }}
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+```
 
-There is no control plane in this repository. The standard is the file other tools and agent skills agree to write.
+The action comments the plan and the receipt on the pull request. See [action/README.md](action/README.md).
 
-## User journey
+### For agents
 
-1. A person, or an agent, changes the app and declares the side effects in `release.plan`: branch the database, point the preview environment at that branch.
-2. `sponson plan` reads Vercel and Neon and prints the diff. The agent stops. The person reads the same file in the pull request.
-3. `sponson apply` creates the Neon branch, injects the connection reference into the Vercel preview environment, and waits for the preview URL.
-4. A line fails. Apply deletes the branch it created and writes the failed line into the receipt. Nothing is left to clean up by hand.
-5. The preview is good. A person approves, or CI policy passes. The same file is applied to production. The receipt records which lines landed and which were rejected.
-6. The agent reads the receipt and continues. It does not infer success from its last tool call.
+`sponson mcp` exposes `sponson_plan`, `sponson_apply` and `sponson_receipt` over stdio. [SKILL.md](SKILL.md) tells an agent when to write a plan line, when to stop and show a human the diff, what `partial` means, and why it must never write a secret value or approve production itself. Every command takes `--json`; pending and secret values are `null` there, never placeholder text.
+
+## How it works
+
+```text
+release.plan.yaml ──▶ sponson plan ──▶ diff + drift        (reads adapters, writes nothing)
+                 └──▶ sponson apply ─▶ receipt            (dependency order, rollback on failure)
+                                        │
+                        ┌───────────────┼────────────────┐
+                        ▼               ▼                ▼
+                   neon.branch     vercel.env      clerk.redirect_allow
+                                        │
+                                   ── deploy ──   external event: stop, record `waiting`,
+                                        │         resume on the next apply
+                                        ▼
+                                   preview_url ──▶ callback
+```
+
+A plan is a flat list. Each line is one adapter op, filtered by `environments:`. Order is derived from references. Values have four states — `literal`, `resolved`, `pending`, `secret` — and the JSON output carries the state explicitly so an agent never has to parse prose.
+
+Receipts live on an orphan git branch so CI runs, which start from nothing, can still see what the last run did. The store is an interface; `local` is the alternative, and a hosted one is where a control plane would plug in.
+
+## Verification without a cloud account
+
+This repository was built and accepted entirely against a local fake cloud, because no real Vercel, Neon or Clerk account was available during development.
+
+- `packages/sim` serves the API subsets the adapters use, with a chaos endpoint: latency, failing the next N writes matching a rule, console-style drift, and five deploy behaviours (`ok`, `never`, `fail`, `stale`, `delay`, `double`).
+- `scenarios/` holds 53 YAML scenarios across nine categories — mid-run failure, concurrency, drift, references, secrets, the deploy barrier, destroy, mistakes agents make, mistakes humans make. After every step the runner checks that no secret appears anywhere, that `plan` wrote nothing, and that every receipt parses.
+- `property/` generates random plans, failures and drift and checks only the invariants, 1000 cases per run.
+
+What the fake cannot prove is that the real APIs behave as assumed. The three assumptions most likely to be wrong are written at the top of `packages/sim/src/server.ts`; the first thing to do with a real account is check them.
 
 ## Status
 
-The format and the two adapters are the first milestone. Social login callbacks, feature-flag targeting, and a hosted approval inbox are not.
+Format, engine, three adapters (Neon branches, Vercel env + deploy, Clerk redirect URLs), three secret sources, local and git-branch receipt stores, CLI, MCP server, GitHub Action. Not yet: feature-flag targeting, social-login callbacks beyond Clerk, a hosted approval inbox, garbage collection of scopes whose PR closed without the action running.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Adding an adapter is one file plus its sim routes plus one scenario.
 
 ## License
 
-Apache-2.0, to be added with the first code.
+Apache-2.0.

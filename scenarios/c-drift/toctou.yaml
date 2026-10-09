@@ -1,0 +1,37 @@
+name: plan 和 apply 之间控制台被改：apply 重读实况，不信快照
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      parent: main
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        DATABASE_URL: { from: db.connection_string }
+      environments: [preview]
+    - id: callback
+      adapter: clerk
+      op: redirect_allow
+      url: { from: env.preview_url }
+      environments: [preview]
+steps:
+  - run: apply --json
+    expect: { exit: 0 }
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { env: unchanged } }
+  - chaos: { drift: { "vercel.env.preview.DATABASE_URL": "edited-after-plan" } }
+  - run: apply --json
+    expect:
+      exit: 1
+      lines: { env: failed }
+      errors: { env: "changed outside Sponson" }
+  - sim:
+      vercel_env: { preview: { DATABASE_URL: edited-after-plan } }

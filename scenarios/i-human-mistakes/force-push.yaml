@@ -1,0 +1,36 @@
+name: force-push 改了 sha：scope 不变，回执按 scope 找到
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      parent: main
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        DATABASE_URL: { from: db.connection_string }
+      environments: [preview]
+    - id: callback
+      adapter: clerk
+      op: redirect_allow
+      url: { from: env.preview_url }
+      environments: [preview]
+steps:
+  - run: apply --json
+    expect: { exit: 0 }
+  - ctx: { sha: "fedcba9876543210fedcba9876543210fedcba98" }
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { db: unchanged, env: unchanged, callback: create } }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { db: unchanged, env: unchanged, callback: applied } }
+  - sim:
+      clerk_redirects:
+        "https://prj_demo-01234567.vercel.app": exists
+        "https://prj_demo-fedcba98.vercel.app": exists

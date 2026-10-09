@@ -1,0 +1,36 @@
+name: 两个 PR 各自 apply：互不影响
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      parent: main
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        DATABASE_URL: { from: db.connection_string }
+      environments: [preview]
+    - id: callback
+      adapter: clerk
+      op: redirect_allow
+      url: { from: env.preview_url }
+      environments: [preview]
+steps:
+  - run: apply --json
+    expect: { exit: 0, status: complete }
+  - ctx: { pr: 43, branch: feat/y }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { db: applied, env: applied } }
+  - sim:
+      neon_branches: { "sponson/preview/pr-42": exists, "sponson/preview/pr-43": exists }
+  - run: apply --destroy --json
+    expect: { exit: 0 }
+  - sim:
+      neon_branches: { "sponson/preview/pr-42": exists, "sponson/preview/pr-43": absent }

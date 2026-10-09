@@ -1,0 +1,36 @@
+name: 回执被删：一切当作未管理/收编，不崩
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      parent: main
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        DATABASE_URL: { from: db.connection_string }
+      environments: [preview]
+    - id: callback
+      adapter: clerk
+      op: redirect_allow
+      url: { from: env.preview_url }
+      environments: [preview]
+steps:
+  - run: apply --json
+    expect: { exit: 0 }
+  - receipt: delete
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { db: unchanged, env: unchanged, callback: unchanged } }
+  - run: apply --json
+    expect: { exit: 0, status: complete, writes: 0 }
+  - run: apply --destroy --json
+    expect: { exit: 0, lines: { db: skipped, env: skipped, callback: skipped } }
+  - sim:
+      neon_branches: { "sponson/preview/pr-42": exists }

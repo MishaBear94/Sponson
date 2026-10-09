@@ -1,0 +1,173 @@
+# Sponson GitHub Action
+#
+# Runs `sponson plan`, `sponson apply` or `sponson apply --destroy` with `--json`, exposes the JSON
+# as the `result` output, and on pull_request events upserts one PR comment per environment.
+#
+# Required workflow permissions:
+#   contents: write        apply pushes receipts to the orphan branch `sponson/receipts`
+#   pull-requests: write   plan/apply comment on the PR
+#
+# The same action serves all three triggers: pull_request (opened, synchronize) -> apply,
+# deployment_status -> apply (finishes lines that waited on the deploy), pull_request (closed) -> destroy.
+# See README.md next to this file for the full workflow.
+
+name: Sponson
+description: One release, one plan. Plan, apply or destroy everything that ships beside the code.
+author: Sponson
+
+inputs:
+  command:
+    description: plan | apply | destroy
+    default: plan
+  env:
+    description: Environment to plan or apply. Production is never inferred.
+    default: preview
+  approved-by:
+    description: Who approved this run. Required for env=production; supply it from an approval workflow, never from an agent.
+    required: false
+  plan:
+    description: "Path to release.plan.yaml (default: repository root)."
+    required: false
+  version:
+    description: Version of the `sponson` npm package to run.
+    default: latest
+  node-version:
+    description: Node.js version to run the CLI with.
+    default: "22"
+  github-token:
+    description: Token used to push receipts and comment on the PR.
+    default: ${{ github.token }}
+
+outputs:
+  result:
+    description: The CLI's JSON output (plan or receipt), verbatim.
+    value: ${{ steps.run.outputs.result }}
+  status:
+    description: For apply/destroy, the receipt status (complete | partial | failed). For plan, "ok" or "error".
+    value: ${{ steps.run.outputs.status }}
+  exit-code:
+    description: The CLI's exit code (0 ok, 1 failed, 2 usage/plan/approval, 3 lock held).
+    value: ${{ steps.run.outputs.exit }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    # Resolve the PR/branch/sha for the scope. deployment_status events run on the default branch,
+    # so the PR has to be looked up from the deployment's ref.
+    - id: scope
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const ev = context.payload;
+          let pr = null, branch = null, sha = null;
+          if (ev.pull_request) {
+            pr = ev.pull_request.number; branch = ev.pull_request.head.ref; sha = ev.pull_request.head.sha;
+          } else if (ev.deployment) {
+            sha = ev.deployment.sha; branch = ev.deployment.ref;
+            if (/^[0-9a-f]{40}$/.test(branch)) branch = null;
+            const { data } = await github.rest.repos.listPullRequestsAssociatedWithCommit({ ...context.repo, commit_sha: sha });
+            const open = data.find((p) => p.state === "open") ?? data[0];
+            if (open) { pr = open.number; branch ??= open.head.ref; }
+          }
+          core.setOutput("pr", pr ?? "");
+          core.setOutput("branch", branch ?? "");
+          core.setOutput("sha", sha ?? "");
+
+    - id: run
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        SPONSON_APPROVED_BY: ${{ inputs.approved-by }}
+        SPONSON_RECEIPTS_REMOTE: https://x-access-token:${{ inputs.github-token }}@github.com/${{ github.repository }}.git
+        SPONSON_RECEIPTS_DIR: ${{ runner.temp }}/sponson-receipts
+        SCOPE_PR: ${{ steps.scope.outputs.pr }}
+        SCOPE_BRANCH: ${{ steps.scope.outputs.branch }}
+        SCOPE_SHA: ${{ steps.scope.outputs.sha }}
+      run: |
+        set +e
+        case "${{ inputs.command }}" in
+          plan)    cmd=(plan) ;;
+          apply)   cmd=(apply) ;;
+          destroy) cmd=(apply --destroy) ;;
+          *) echo "::error::unknown command '${{ inputs.command }}' (plan | apply | destroy)"; exit 2 ;;
+        esac
+        args=(--json --env "${{ inputs.env }}")
+        [ -n "${{ inputs.plan }}" ] && args+=(--plan "${{ inputs.plan }}")
+        [ -n "$SCOPE_PR" ] && args+=(--pr "$SCOPE_PR")
+        [ -n "$SCOPE_BRANCH" ] && args+=(--branch "$SCOPE_BRANCH")
+        [ -n "$SCOPE_SHA" ] && args+=(--sha "$SCOPE_SHA")
+        npx -y "sponson@${{ inputs.version }}" "${cmd[@]}" "${args[@]}" > "$RUNNER_TEMP/sponson-result.json"
+        code=$?
+        cat "$RUNNER_TEMP/sponson-result.json"
+        {
+          echo "result<<SPONSON_EOF"
+          cat "$RUNNER_TEMP/sponson-result.json"
+          echo "SPONSON_EOF"
+          echo "exit=$code"
+          echo "status=$(node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(r.receipt?r.receipt.status:(r.ok?"ok":"error"))' "$RUNNER_TEMP/sponson-result.json" 2>/dev/null || echo error)"
+        } >> "$GITHUB_OUTPUT"
+        exit 0
+
+    - id: comment
+      if: github.event_name == 'pull_request' || steps.scope.outputs.pr != ''
+      uses: actions/github-script@v7
+      env:
+        RESULT_PATH: ${{ runner.temp }}/sponson-result.json
+        SPONSON_ENV: ${{ inputs.env }}
+        SPONSON_COMMAND: ${{ inputs.command }}
+        SPONSON_EXIT: ${{ steps.run.outputs.exit }}
+        SPONSON_PR: ${{ steps.scope.outputs.pr }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require("fs");
+          const env = process.env.SPONSON_ENV, command = process.env.SPONSON_COMMAND, exit = Number(process.env.SPONSON_EXIT);
+          const marker = `<!-- sponson:${env} -->`;
+          let r; try { r = JSON.parse(fs.readFileSync(process.env.RESULT_PATH, "utf8")); } catch { r = null; }
+
+          const PLAN = { create: "+", update: "~", unchanged: "=", pending: "?", blocked: "-", error: "!" };
+          const LINE = { applied: "+", unchanged: "=", waiting: "?", failed: "!", rolled_back: "-", rollback_failed: "!", skipped: "-", destroyed: "-", destroy_failed: "!" };
+          const esc = (s) => String(s ?? "").replace(/\|/g, "\\|").replace(/\n/g, " ");
+          const rows = [];
+          let title, tail = "";
+          if (!r) {
+            title = `${command} crashed (exit ${exit})`;
+          } else if (r.ok === false && r.error) {
+            title = `${command} failed: \`${r.error.code}\``;
+            tail = `\n\n${esc(r.error.message)}`;
+          } else if (r.command === "plan") {
+            title = `plan · ${r.environment} · ${r.scope} · plan ${r.planHash.slice(0, 8)}`;
+            for (const l of r.lines) {
+              const detail = l.status === "pending" ? `waiting on \`${l.waitingOn}\`` : l.error ?? l.diffs.map((d) => `${d.label}${d.after !== undefined ? ` ${d.before !== undefined ? d.before + " → " : ""}${d.after}` : ""}`).join("<br>");
+              rows.push(`| \`${PLAN[l.status] ?? " "}\` | \`${l.id}\` | ${l.adapter}.${l.op} | ${l.status} | ${esc(detail)} |`);
+            }
+          } else {
+            const rc = r.receipt;
+            title = `${rc.destroy ? "destroy" : "apply"} · ${rc.environment} · ${rc.scope} · **${rc.status}** (run ${rc.runId})`;
+            for (const l of Object.values(rc.lines)) {
+              const detail = l.status === "waiting" ? `waiting on ${l.waitingFor}` : l.error ?? [...l.resources.map((x) => x.label ?? x.key), ...Object.entries(l.outputs).map(([k, v]) => `${k} = ${v}`)].join("<br>");
+              rows.push(`| \`${LINE[l.status] ?? " "}\` | \`${l.id}\` | ${l.adapter}.${l.op} | ${l.status} | ${esc(detail)} |`);
+            }
+            if (rc.status === "partial") tail += "\n\nSome lines are waiting on a deploy. The `deployment_status` run will finish them; nothing to retry.";
+          }
+          if (r?.drift?.length) tail += "\n\n**Drift**\n" + r.drift.map((d) => `- \`${d.kind}\` ${d.adapter}: ${esc(d.message)}`).join("\n");
+          if (r?.warnings?.length) tail += "\n\n**Warnings**\n" + r.warnings.map((w) => `- ${esc(w)}`).join("\n");
+          const table = rows.length ? `\n\n| | line | adapter | status | detail |\n|---|---|---|---|---|\n${rows.join("\n")}` : "";
+          const body = `${marker}\n### Sponson ${title}${table}${tail}\n\n<sub>${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}</sub>`;
+
+          const issue_number = context.payload.pull_request?.number ?? Number(process.env.SPONSON_PR);
+          const comments = await github.paginate(github.rest.issues.listComments, { ...context.repo, issue_number, per_page: 100 });
+          const mine = comments.find((c) => c.body?.startsWith(marker));
+          if (mine) await github.rest.issues.updateComment({ ...context.repo, comment_id: mine.id, body });
+          else await github.rest.issues.createComment({ ...context.repo, issue_number, body });
+
+    - shell: bash
+      env:
+        SPONSON_EXIT: ${{ steps.run.outputs.exit }}
+      run: |
+        if [ "$SPONSON_EXIT" != "0" ]; then echo "::error::sponson ${{ inputs.command }} exited with $SPONSON_EXIT"; exit "$SPONSON_EXIT"; fi

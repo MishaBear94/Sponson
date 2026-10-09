@@ -1,0 +1,28 @@
+name: 生产必须显式审批：没有审批标记零写入
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: env-prod
+      adapter: vercel
+      op: env
+      target: production
+      values:
+        DATABASE_URL: { secret: "env://PROD_DATABASE_URL" }
+      environments: [production]
+ctx: { env: production, pr: null, branch: main }
+env: { PROD_DATABASE_URL: "postgres://prod-secret-dsn" }
+secrets: ["prod-secret-dsn"]
+steps:
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { env-prod: create } }
+  - run: apply --json
+    expect: { exit: 2, error: ENV_NOT_APPROVED, writes: 0 }
+  - sim:
+      vercel_env: { production: { DATABASE_URL: absent } }
+  - run: apply --approved-by alice --json
+    expect: { exit: 0, status: complete }
+  - sim:
+      vercel_env: { production: { DATABASE_URL: "postgres://prod-secret-dsn" } }

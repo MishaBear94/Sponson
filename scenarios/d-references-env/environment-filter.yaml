@@ -1,0 +1,40 @@
+name: 同一文件两套环境：preview 只跑 preview 行，production 只跑 production 行
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values: { DATABASE_URL: { from: db.connection_string } }
+      environments: [preview]
+    - id: env-prod
+      adapter: vercel
+      op: env
+      target: production
+      values: { DATABASE_URL: { secret: "env://PROD_DB" } }
+      environments: [production]
+    - id: shared
+      adapter: clerk
+      op: redirect_allow
+      url: https://app.example.com/callback
+env: { PROD_DB: "postgres://prod" }
+steps:
+  - run: apply --json
+    expect:
+      exit: 0
+      lines: { db: applied, env: applied, shared: applied }
+  - ctx: { env: production, pr: null, branch: main }
+  - run: apply --approved-by ci --json
+    expect:
+      exit: 0
+      lines: { env-prod: applied, shared: unchanged }
+  - sim:
+      vercel_env: { preview: { DATABASE_URL: exists }, production: { DATABASE_URL: "postgres://prod" } }

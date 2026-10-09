@@ -1,0 +1,35 @@
+name: 部署永远不来：默认模式停下记录 partial，退出码 0；部署来了之后续上
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      parent: main
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        DATABASE_URL: { from: db.connection_string }
+      environments: [preview]
+    - id: callback
+      adapter: clerk
+      op: redirect_allow
+      url: { from: env.preview_url }
+      environments: [preview]
+chaos: { deploy: never }
+steps:
+  - run: apply
+    expect: { exit: 0, stdout: ["apply partial", "waiting", "deploy"] }
+  - run: apply --json
+    expect: { exit: 0, status: partial, writes: 0, lines: { callback: waiting } }
+  - chaos: { deploy: ok }
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { callback: create } }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { callback: applied } }
