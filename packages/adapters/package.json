@@ -19,7 +19,7 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "prepack": "tsc -b && node -e \"require('node:fs').copyFileSync('../../LICENSE', 'LICENSE')\""
+    "prepack": "tsc -b && node -e \"const fs=require('node:fs');if(!fs.existsSync('./dist/index.js'))throw new Error('prepack: ./dist/index.js missing after build - refusing to pack an empty package');fs.copyFileSync('../../LICENSE','LICENSE')\""
   },
   "dependencies": {
     "@sponson/core": "workspace:*"
@@ -29,6 +29,7 @@
   },
   "files": [
     "dist",
+    "!dist/.tsbuildinfo",
     "README.md",
     "LICENSE"
   ],
