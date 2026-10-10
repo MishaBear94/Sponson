@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { dependentsOf } from "../graph.js";
+import { SponsonError } from "../errors.js";
 import { dependenciesOf } from "../plan.js";
 import type { LineOutputs } from "../resolve.js";
 import type { ApplyResult, Change, LedgerEntry, LiveState, Literal, OpSpec, Receipt, ReceiptLine, ResourceRecord, RunStatus } from "../types.js";
@@ -8,7 +9,7 @@ import { scopeDrift } from "./drift.js";
 import { staleness } from "./history.js";
 import { identity } from "./ledger.js";
 import { inspectLine, waitingOn, type Inspection } from "./inspect.js";
-import { Lease } from "./lease.js";
+import { isParentLockLoss, Lease, withParentLock } from "./lease.js";
 import { hasExternalOutputs, publicOutputs } from "./outputs.js";
 import { prepare, requireApproval, type Prepared } from "./prepare.js";
 import { receiptSkeleton, rereadLine, toRecord } from "./receipt.js";
@@ -55,6 +56,8 @@ class ApplyRun {
   private readonly dead = new Set<string>();
   private readonly waiting = new Set<string>();
   private failed = false;
+  /** The lease on the shared parent object the current line writes (ADR 0019), while it is held. */
+  private parentLease: Lease | null = null;
   /** A deploy failed or never came within --wait: nothing to roll back, but the plan was not realised. */
   private externalFailed = false;
 
@@ -142,18 +145,11 @@ class ApplyRun {
       this.lease.assertHeld();
       const inspection = await this.inspectWhenReady(c, op);
       if (!inspection) return true;
-      this.inspections.set(c.id, inspection);
-      if (inspection.refusal) {
-        this.receipt.lines[c.id] = this.line(c, { status: "blocked", error: inspection.refusal.message, errorCode: inspection.refusal.code });
-        this.dead.add(c.id);
-        this.failed = true;
-        return false;
-      }
-      await this.writeAndRecord(c, op, inspection);
-      return true;
+      return await this.underParentLock(c, op, inspection);
     } catch (e) {
       const err = this.rc.errorText(e);
-      if (err.code === "LOCK_LOST") {
+      // Losing a parent object's lease stops this line only; losing the scope's stops the run.
+      if (err.code === "LOCK_LOST" && !isParentLockLoss(e)) {
         // Record what this run did so far, if the store still lets us (fenced), then stop.
         this.receipt.lines[c.id] = this.line(c, { status: "failed", error: err.message, errorCode: "LOCK_LOST" });
         this.skipRemaining();
@@ -165,6 +161,46 @@ class ApplyRun {
       this.failed = true;
       return false;
     }
+  }
+
+  /**
+   * A line that writes a shared parent object (`OpSpec.lockOn`) writes it holding that object's lease, from live
+   * state read again under it: what was read before the lock may already be stale (ADR 0019). Other lines go
+   * straight on.
+   */
+  private async underParentLock(c: Change, op: OpSpec, inspection: Inspection): Promise<boolean> {
+    const parent = inspection.refusal || isUnchanged(inspection) ? undefined : this.parentOf(c, op, inspection);
+    return withParentLock(this.rc.opts, this.lease.holder, parent, this.rc.warnings, async (lease) => {
+      if (!lease) return this.refuseOrWrite(c, op, inspection);
+      this.parentLease = lease;
+      try {
+        return await this.refuseOrWrite(c, op, await inspectLine(this.rc, c, op, this.prepared.params.get(c.id)!, this.outputs));
+      } finally {
+        this.parentLease = null;
+      }
+    });
+  }
+
+  /** Record a refusal (and stop the run), or write the line. */
+  private async refuseOrWrite(c: Change, op: OpSpec, inspection: Inspection): Promise<boolean> {
+    this.inspections.set(c.id, inspection);
+    if (inspection.refusal) {
+      this.receipt.lines[c.id] = this.line(c, { status: "blocked", error: inspection.refusal.message, errorCode: inspection.refusal.code });
+      this.dead.add(c.id);
+      this.failed = true;
+      return false;
+    }
+    await this.writeAndRecord(c, op, inspection);
+    return true;
+  }
+
+  /** The parent object a line's writes go to, checked: it lands in receipts and messages, so never a secret. */
+  private parentOf(c: Change, op: OpSpec, inspection: Inspection): string | undefined {
+    const parent = op.lockOn?.(inspection.resolved.params, inspection.provider) ?? undefined;
+    if (parent !== undefined && this.rc.redactor.leaks(parent).length > 0) {
+      throw new SponsonError("INTERNAL", `${c.adapter}.${c.op}: lockOn returned an identity containing a secret value; an identity is written to receipts, so it must name the object, not carry a credential.`);
+    }
+    return parent;
   }
 
   /** A line whose dependency failed is skipped; one whose dependency is waiting waits for the same thing. */
@@ -221,18 +257,19 @@ class ApplyRun {
     if (Object.keys(fingerprints).length) line.secretFingerprints = fingerprints;
 
     let result: ApplyResult;
-    if (inspection.diffs.every((d) => d.kind === "unchanged") && (inspection.live || inspection.diffs.length === 0)) {
+    if (isUnchanged(inspection)) {
       line.status = "unchanged";
       result = { resources: inspection.live?.resources ?? [], outputs: inspection.live?.outputs ?? {}, created: [] };
     } else {
       const actx = this.rc.adapterContext(c.adapter, inspection.provider, (keys) => this.intend(c, inspection.provider, keys));
       actx.log(`apply ${c.id}`);
+      this.parentLease?.assertHeld();
       result = await op.apply(actx, inspection.resolved.params, inspection.live);
       if (this.rc.opts.reconcile && inspection.drift.some((d) => d.kind === "changed")) line.notes = { ...line.notes, reconciled: true };
     }
     if (result.notes) line.notes = { ...line.notes, ...result.notes };
     this.rc.guardOutputs(result.outputs, op.outputs);
-    this.record(c, inspection, result);
+    this.record(c, inspection, result, this.parentOf(c, op, inspection));
 
     const values: Record<string, unknown> = { ...result.outputs };
     if (op.awaitExternal && hasExternalOutputs(op.outputs)) {
@@ -247,12 +284,15 @@ class ApplyRun {
   /** Persist the intent before the adapter sends the create, so nothing created can be forgotten. */
   private async intend(c: Change, provider: Record<string, unknown>, keys: string[]): Promise<void> {
     this.lease.assertHeld();
+    this.parentLease?.assertHeld();
     const mine = this.intents.get(c.id) ?? new Set<string>();
     this.intents.set(c.id, mine);
+    const parent = this.parentLease?.parent;
     for (const key of keys) {
       mine.add(key);
       // A create makes a new object; whatever the ledger said about a previous one with this key no longer applies.
-      this.rc.ledger.put({ adapter: c.adapter, op: c.op, provider, key, id: "", hash: "", createdBy: "intent", line: c.id });
+      // The parent is recorded already, so a destroy after a crash locks the object too.
+      this.rc.ledger.put({ adapter: c.adapter, op: c.op, provider, key, id: "", hash: "", createdBy: "intent", line: c.id, ...(parent ? { parent } : {}) });
     }
     await this.checkpoint(c);
   }
@@ -270,7 +310,7 @@ class ApplyRun {
   }
 
   /** Bring the ledger in line with what this line now manages. */
-  private record(c: Change, inspection: Inspection, result: ApplyResult): void {
+  private record(c: Change, inspection: Inspection, result: ApplyResult, parent?: string): void {
     const { provider } = inspection;
     const keys = new Set<string>();
     const createdNow = new Set(result.created);
@@ -282,7 +322,7 @@ class ApplyRun {
       // Sponson keeps what it already owned, unless it was replaced outside Sponson or another scope manages it.
       const stillOurs = prev?.createdBy === "sponson" && (!prev.id || prev.id === r.id) && !this.rc.foreignScopeOf({ adapter: c.adapter, provider, key: r.key });
       const createdBy: LedgerEntry["createdBy"] = created || stillOurs ? "sponson" : "adopted";
-      this.rc.ledger.put({ adapter: c.adapter, op: c.op, provider, key: r.key, id: r.id, hash: this.rc.ledger.keyed(r.hash), ...(r.label ? { label: r.label } : {}), createdBy, line: c.id });
+      this.rc.ledger.put({ adapter: c.adapter, op: c.op, provider, key: r.key, id: r.id, hash: this.rc.ledger.keyed(r.hash), ...(r.label ? { label: r.label } : {}), createdBy, line: c.id, ...(parent ? { parent } : {}) });
       if (created) this.markCreated(c, r.key);
     }
     this.dropUnmaterialisedIntents(c, provider, keys);
@@ -378,8 +418,10 @@ class ApplyRun {
       const provider = this.rc.provider(c.adapter);
       const entries = [...keys].map((k) => this.rc.ledger.get(c.adapter, provider, k)).filter((e): e is LedgerEntry => !!e);
       const receiptLine = this.receipt.lines[c.id]!;
+      // A rollback that gives up on a busy parent object leaves resources behind: it always waits (ADR 0019).
+      const parent = entries.find((e) => e.parent)?.parent;
       try {
-        await this.prepared.ops.get(c.id)!.destroy(this.rc.adapterContext(c.adapter, provider), entries.map(toRecord));
+        await withParentLock(this.rc.opts, this.lease.holder, parent, this.rc.warnings, () => this.prepared.ops.get(c.id)!.destroy(this.rc.adapterContext(c.adapter, provider), entries.map(toRecord)), true);
         for (const e of entries) this.rc.ledger.delete(e);
         if (receiptLine.status !== "failed" && receiptLine.status !== "blocked") receiptLine.status = "rolled_back";
       } catch (e) {
@@ -469,4 +511,9 @@ class ApplyRun {
       ...fields,
     };
   }
+}
+
+/** Nothing to write: every diff is unchanged, and the line exists (or declares nothing). */
+function isUnchanged(inspection: Inspection): boolean {
+  return inspection.diffs.every((d) => d.kind === "unchanged") && (inspection.live !== null || inspection.diffs.length === 0);
 }

@@ -1,4 +1,5 @@
 import { SponsonError } from "../errors.js";
+import { sha256 } from "../hash.js";
 import type { LedgerEntry, LockInfo, Receipt, ReceiptLine } from "../types.js";
 
 // Both receipt stores share one directory layout:
@@ -27,6 +28,18 @@ export function runPath(environment: string, scope: string, runId: string): stri
 /** Path of a scope's lock, relative to the store root. */
 export function lockPath(environment: string, scope: string): string {
   return `${receiptDir(environment, scope)}/lock.json`;
+}
+
+/**
+ * The reserved environment under which parent-object locks live (ADR 0019): `_locks/<parentLockScope>/lock.json`,
+ * on the git-branch store the branch `sponson-receipts/_locks/<hash>`. A plan may declare an environment of that name
+ * without colliding: its scopes are always `pr-<n>`, `branch-<name>` or `main`, never a bare hash.
+ */
+export const PARENT_LOCKS_ENVIRONMENT = "_locks";
+
+/** The lock-only "scope" of a parent object: the first 32 hex digits of the sha256 of its identity. */
+export function parentLockScope(parent: string): string {
+  return sha256(parent).slice(0, 32);
 }
 
 /** One path segment made filesystem-safe: every run of characters outside `[a-zA-Z0-9._-]` becomes `-`. */

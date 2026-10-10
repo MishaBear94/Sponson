@@ -187,3 +187,87 @@ describe("engine invariants", () => {
     );
   }, 300_000);
 });
+
+// ---------------------------------------------------------------------------
+// Shared parent objects (ADR 0019): several scopes add and remove their own members of one list that lives on a
+// shared provider object, concurrently, by read-modify-write. The parent-object lock must make that lossless.
+// ---------------------------------------------------------------------------
+
+interface SharedCase {
+  /** Per scope: how many members it declares on the shared list. */
+  scopes: number[];
+  /** A scope whose apply fails on one of its members (by index), so its rollback runs concurrently with the others. */
+  fail: { scope: number; member: number; kind: "create" | "lost" } | null;
+  /** Scopes destroyed (concurrently) at the end; the others must keep every member. */
+  destroy: boolean[];
+}
+
+const sharedArb: fc.Arbitrary<SharedCase> = fc.array(fc.integer({ min: 1, max: 3 }), { minLength: 2, maxLength: 4 }).chain((scopes) =>
+  fc.record({
+    scopes: fc.constant(scopes),
+    fail: fc.option(
+      fc.integer({ min: 0, max: scopes.length - 1 }).chain((scope) =>
+        fc.record({ scope: fc.constant(scope), member: fc.integer({ min: 0, max: scopes[scope]! - 1 }), kind: fc.constantFrom("create" as const, "lost" as const) }),
+      ),
+      { nil: null },
+    ),
+    destroy: fc.array(fc.boolean(), { minLength: scopes.length, maxLength: scopes.length }),
+  }),
+);
+
+const memberOf = (scope: number, i: number) => `s${scope}m${i}`;
+
+function sharedYaml(scope: number, members: number): string {
+  const lines = Array.from({ length: members }, (_, i) => `  - id: m${i}\n    adapter: fake\n    op: member\n    list: shared\n    value: ${memberOf(scope, i)}`);
+  return `version: 1\nchanges:\n${lines.join("\n")}\n`;
+}
+
+describe("shared parent objects", () => {
+  it("concurrent scopes writing one list never lose an item: rollback, idempotence and destroy hold per scope", async () => {
+    await fc.assert(
+      fc.asyncProperty(sharedArb, async (c) => {
+        const cloud = new FakeCloud();
+        cloud.listLatencyMs = 4;
+        const registry = new Registry().addAdapter(cloud.adapter());
+        const store = new LocalReceiptStore(await mkdtemp(join(tmpdir(), "sponson-prop-shared-")));
+        const opts = (scope: number): RunOptions => ({
+          plan: parsePlan(sharedYaml(scope, c.scopes[scope]!)).plan,
+          ctx: { ...ctx, pr: { number: 100 + scope }, scope: `pr-${100 + scope}` },
+          registry,
+          store,
+          env: {},
+          wait: true,
+          pollIntervalMs: 2,
+        });
+        const members = () => [...(cloud.lists.get("shared") ?? [])].sort();
+        const all = (scopes: number[]) => scopes.flatMap((s) => Array.from({ length: c.scopes[s]! }, (_, i) => memberOf(s, i))).sort();
+        const indexes = c.scopes.map((_, s) => s);
+
+        if (c.fail) cloud.failNext(c.fail.kind, memberOf(c.fail.scope, c.fail.member));
+        const first = await Promise.all(indexes.map((s) => applyRun(opts(s))));
+        // I2 per scope: the failing scope rolled back exactly its own members; nobody else lost one.
+        const failed = indexes.filter((s) => first[s]!.receipt.status === "failed");
+        expect(failed).toEqual(c.fail ? [c.fail.scope] : []);
+        for (const s of failed) expect(Object.values(first[s]!.receipt.lines).some((l) => l.status === "rollback_failed")).toBe(false);
+        expect(members()).toEqual(all(indexes.filter((s) => !failed.includes(s))));
+
+        // Converge, then I3: applying every scope again (concurrently) writes nothing.
+        await Promise.all(failed.map((s) => applyRun(opts(s))));
+        expect(members()).toEqual(all(indexes));
+        const writes = cloud.writes.length;
+        const again = await Promise.all(indexes.map((s) => applyRun(opts(s))));
+        expect(cloud.writes.length).toBe(writes);
+        for (const r of again) for (const l of Object.values(r.receipt.lines)) expect(l.status).toBe("unchanged");
+
+        // I8 per scope, concurrently with the survivors re-applying: destroyed scopes leave nothing, the rest lose nothing.
+        const gone = indexes.filter((s) => c.destroy[s]);
+        const kept = indexes.filter((s) => !c.destroy[s]);
+        const last = await Promise.all([...gone.map((s) => destroyRun(opts(s))), ...kept.map((s) => applyRun(opts(s)))]);
+        for (const r of last) expect(r.receipt.status).toBe("complete");
+        expect(members()).toEqual(all(kept));
+        expect(await store.readParentLock("fake:list:shared")).toBeNull();
+      }),
+      { numRuns: Number(process.env.SPONSON_PROPERTY_RUNS ?? 300) / 6, verbose: true },
+    );
+  }, 300_000);
+});

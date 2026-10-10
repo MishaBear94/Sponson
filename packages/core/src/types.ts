@@ -268,6 +268,18 @@ export interface OpSpec {
    * whatever the run's environment is. Return null when the op is not environment-specific.
    */
   writesEnvironment?(params: ResolvedParams, ctx: Ctx): string | null;
+  /**
+   * The shared provider object this line's resources live in, when its writes are read-modify-write of something
+   * other scopes write too: one callback array on an Auth0 application, Supabase's `uri_allow_list`, a Firebase
+   * authorized-domains list. Return a stable identity naming the provider, the account and the object, e.g.
+   * `auth0:<tenant>:client:<client id>`; null when the line's resources are objects of their own.
+   *
+   * The engine then holds a lease on that identity (ADR 0019) across scopes and environments around every write the
+   * line makes: re-reading live state, `apply`, and the `destroy` of rollback and `apply --destroy` (which use the
+   * identity recorded in the ledger, so a line removed from the plan is still locked correctly). The identity is
+   * written to receipts and shown in messages: never put a secret in it. Pure: no provider calls.
+   */
+  lockOn?(params: ResolvedParams, provider: Record<string, unknown>): string | null;
   /** Find what currently exists for this change. Null when nothing exists. Must not write. */
   read(actx: AdapterContext, params: ResolvedParams): Promise<LiveState | null>;
   /**
@@ -451,6 +463,8 @@ export interface LedgerEntry {
   orphan?: boolean;
   /** Non-sensitive outputs last seen for the owning line (including external ones like preview_url). */
   outputs?: Record<string, Literal>;
+  /** The shared parent object the resource lives in (`OpSpec.lockOn`); rollback and destroy lock it (ADR 0019). */
+  parent?: string;
 }
 
 /**
@@ -515,6 +529,20 @@ export interface ReceiptStore {
   /** Current lock, or null. Never throws for a missing/unreadable lock. */
   readLock(environment: string, scope: string): Promise<LockInfo | null>;
   releaseLock(environment: string, scope: string, holder: string): Promise<void>;
+  /**
+   * Parent-object locks (ADR 0019): a lease on a shared provider object (`OpSpec.lockOn`), one per object across
+   * every scope and environment, with the same semantics as the scope lock (`LockHeldError`, expiry and takeover,
+   * `LockLostError` on a renewal by someone who lost it). `parent` is the identity the op returned; stores key it by
+   * `parentLockScope(parent)`. Optional: the engine falls back to the scope-lock methods under the reserved
+   * environment `PARENT_LOCKS_ENVIRONMENT`, which every store supports.
+   */
+  acquireParentLock?(parent: string, holder: string, ttlMs: number): Promise<LockInfo | null>;
+  /** Extend a parent lock we hold. Throws LockLostError when someone else holds it now. */
+  renewParentLock?(parent: string, holder: string, ttlMs: number): Promise<void>;
+  /** Current parent lock, or null. Never throws for a missing/unreadable lock. */
+  readParentLock?(parent: string): Promise<LockInfo | null>;
+  /** Release a parent lock; a no-op when `holder` does not hold it. */
+  releaseParentLock?(parent: string, holder: string): Promise<void>;
   /** Release what the store holds locally (a temporary working clone). Whoever constructed the store calls it once done. */
   close?(): Promise<void>;
 }
