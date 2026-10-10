@@ -344,6 +344,18 @@ const env: OpSpec = {
     return context === "production" ? "production" : context;
   },
 
+  /**
+   * A variable is a parent object every scope writing a value of it shares: the create (one POST per new name) and
+   * destroy's "delete the variable once no value is left" race another scope's write without a lock. `lockOn` names
+   * one object per line and a line declares several variables, so the only identity that makes every two lines
+   * sharing a variable exclude each other is the site's variable collection, `netlify:<site>:env` (ADR 0019).
+   * Only ids: never a value or a credential.
+   */
+  lockOn(_params, provider) {
+    const site = provider.site;
+    return typeof site === "string" && site !== "" ? `netlify:${site}:env` : null;
+  },
+
   async read(actx, params) {
     const scope = envScope(params);
     const c = client(actx);

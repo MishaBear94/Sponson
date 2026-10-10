@@ -320,6 +320,13 @@ values again (except in `dev`), so such a value is written on every apply. A var
 deploy contexts fails the line with `PROVIDER_CONFLICT`: give it per-context values in the Netlify UI first.
 Destroy deletes the line's values one by one, then deletes a variable only when no value is left in it.
 
+A variable is shared by every scope that writes a value of it, so `netlify.env` lines lock the site's variables,
+parent object `netlify:<site>:env` ([ADR 0019](adr/0019-parent-object-locks.md)): lines of different pull requests
+on one site write, roll back and destroy one at a time. Two pull requests creating the same variable at once, or one
+destroying the variable's last value while another adds its own, therefore never lose a value. The lock is per site,
+not per variable, because a lock names one object per line and a line declares several variables; lines of other
+sites never wait for each other.
+
 `preview_url`, `deploy_id` and `deploy_preview_url` are external outputs: they become available when the newest
 deploy of the current commit that reads the line's context (production deploys for `production`, Deploy Previews
 for `deploy-preview`, branch deploys for `branch-deploy`, and both for `branch`) is `ready` **and started after the
