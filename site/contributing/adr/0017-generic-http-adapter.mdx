@@ -101,6 +101,11 @@ Adapters that do not define them behave exactly as before.
   `PARAM_INVALID` at plan time.
 - `exists_status` / `gone_status` add a provider's own statuses for "already exists" and "gone"; `destroy: keep`
   leaves the object in place.
+- *Amended:* `create` and `update` take per-request `headers` (values may be references) and `send_fields: false`
+  (the declared `fields` are compared but not put in the body, for an API that takes them in headers, as QStash takes
+  a schedule's cron in `Upstash-Cron`); a path placeholder written `{+name}` keeps `/` and `:` (RFC 6570 reserved
+  expansion), for an API that takes a URL in the path. The sim's REST styles gained `header_fields` and
+  `suffix_field` to stand in for such APIs in the recipe tests.
 
 ### Op `list_item`: one entry in a collection on a parent
 

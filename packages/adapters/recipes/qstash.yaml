@@ -1,0 +1,125 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Upstash QStash recipes (its own API and token; Upstash Redis is recipes/upstash.yaml).
+# Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: qstash
+title: Upstash QStash
+category: queues
+verified_on: "2026-10-11"
+docs:
+  - title: Authentication
+    url: https://upstash.com/docs/qstash/api/authentication
+  - title: Create a schedule
+    url: https://upstash.com/docs/qstash/api-reference/schedules/create-a-schedule
+  - title: Get a schedule
+    url: https://upstash.com/docs/qstash/api-reference/schedules/get-a-schedule
+  - title: Delete a schedule
+    url: https://upstash.com/docs/qstash/api-reference/schedules/delete-a-schedule
+  - title: API examples (raw destination URL in the path)
+    url: https://upstash.com/docs/qstash/overall/apiexamples
+  - title: Multi-region (base URLs, tokens)
+    url: https://upstash.com/docs/qstash/howto/multi-region
+api:
+  base_url: https://qstash.upstash.io
+  base_url_env: QSTASH_API_URL
+  auth: { bearer_env: QSTASH_TOKEN }
+assumptions:
+  - id: QS1
+    verified: true
+    text: "Requests authenticate with the QStash token as `Authorization: Bearer`; the SDKs read it from `QSTASH_TOKEN`."
+    source: https://upstash.com/docs/qstash/api/authentication
+  - id: QS2
+    verified: true
+    text: "Each region (`qstash.upstash.io` = EU, `qstash-us-east-1.upstash.io`) has its own token and its own schedules; the default here is the EU URL, and a US account overrides `base_url` in its block."
+    source: https://upstash.com/docs/qstash/howto/multi-region
+  - id: QS3
+    verified: true
+    text: "`POST /v2/schedules/{destination}` creates a schedule: the cron in `Upstash-Cron`, the method used to call the destination in `Upstash-Method` (default POST), the request body as the message delivered on every run. It answers `{ scheduleId }`."
+    source: https://upstash.com/docs/qstash/api-reference/schedules/create-a-schedule
+  - id: QS4
+    verified: true
+    text: "With `Upstash-Schedule-Id`, a schedule with that id is updated with the new settings if it exists (an upsert): the id is the client's, the read path names it, and the same request is both create and update."
+    source: https://upstash.com/docs/qstash/api-reference/schedules/create-a-schedule
+  - id: QS5
+    verified: true
+    text: "The official example writes the destination URL in the path as it is (`/v2/schedules/https://example.com`), hence the `{+destination}` placeholder."
+    source: https://upstash.com/docs/qstash/overall/apiexamples
+  - id: QS6
+    verified: false
+    text: "A destination URL with a query string arrives intact with its `?` escaped as `%3F` (a raw `?` would end the path); not documented."
+  - id: QS7
+    verified: true
+    text: "`GET /v2/schedules/{scheduleId}` answers the schedule bare with `scheduleId`, `cron`, `destination`, `method` and `body`, and 404 when there is none; `DELETE` on the same path removes it."
+    source: https://upstash.com/docs/qstash/api-reference/schedules/get-a-schedule
+  - id: QS8
+    verified: false
+    text: "Deleting a schedule that is already gone answers 404 (only 200 is documented), which destroy treats as done."
+    source: https://upstash.com/docs/qstash/api-reference/schedules/delete-a-schedule
+  - id: QS9
+    verified: true
+    text: "Schedule ids are alphanumerics, hyphens, periods and underscores (400 otherwise); a cron may carry a `CRON_TZ=<zone>` prefix and runs at most once a minute."
+    source: https://upstash.com/docs/qstash/api-reference/schedules/create-a-schedule
+  - id: QS10
+    verified: false
+    text: "`GET` returns `cron`, `destination` and `method` exactly as they were sent (the cron string unnormalised), so comparing them is not drift on every plan."
+    source: https://upstash.com/docs/qstash/api-reference/schedules/get-a-schedule
+ops:
+  schedule:
+    kind: resource
+    title: Schedule
+    summary: "A cron schedule that calls a preview's URL, such as `/api/cron` of `pr-42`, under a schedule id per scope. Created and updated by the same upsert (QS4); a console edit of its cron, destination or method is drift; destroy deletes it. The message body is sent on create and update but not compared."
+    covers: [qstash-schedule]
+    params:
+      schedule_id:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9._-]+$"
+        description: The schedule's id, chosen by the plan (one per scope).
+        example: "cron-${ctx.scope}"
+      destination:
+        type: string
+        required: true
+        pattern: "^https?://"
+        description: The URL the schedule calls.
+        example: "https://${ctx.scope}.preview.example.com/api/cron"
+      cron:
+        type: string
+        required: true
+        description: "The cron expression, optionally prefixed `CRON_TZ=<zone> `."
+        example: "*/15 * * * *"
+      method:
+        type: string
+        default: POST
+        enum: [GET, POST, PUT, PATCH, DELETE]
+        description: The HTTP method used to call the destination.
+      body:
+        type: map
+        description: The JSON message delivered on every run (sent, not compared).
+    http:
+      read: { path: "/v2/schedules/{schedule_id}" }
+      create:
+        path: "/v2/schedules/{+destination}"
+        headers:
+          Upstash-Schedule-Id: { param: schedule_id }
+          Upstash-Cron: { param: cron }
+          Upstash-Method: { param: method }
+        send_fields: false
+        body: { param: body }
+      update:
+        method: POST
+        path: "/v2/schedules/{+destination}"
+        headers:
+          Upstash-Schedule-Id: { param: schedule_id }
+          Upstash-Cron: { param: cron }
+          Upstash-Method: { param: method }
+        send_fields: false
+        body: { param: body }
+      id_path: /scheduleId
+      fields:
+        cron: { param: cron }
+        destination: { param: destination }
+        method: { param: method }
+    sim:
+      header_fields: { upstash-schedule-id: scheduleId, upstash-cron: cron, upstash-method: method }
+      suffix_field: destination
+    live:
+      params: { destination: SPONSON_LIVE_QSTASH_DESTINATION }

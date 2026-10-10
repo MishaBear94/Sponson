@@ -150,7 +150,7 @@ the tables below are generated from it: edit the data, then run `pnpm docs:gen`.
 | Provider | Side effect | API shape | Generic? | Pri | Now |
 |---|---|---|---|---|---|
 | Upstash Redis | Database per PR, REST URL and token out | Developer API `POST /v2/redis/database`, `DELETE /v2/redis/database/{id}`; Basic (email:key); object | Y | P2 | **yes** (recipe [`upstash.redis_database`](recipes.md#upstashredis_database)) |
-| Upstash QStash | Schedule that calls the preview URL | `POST /v2/schedules/{destination}` with `Upstash-Schedule-Id` (idempotent upsert), `DELETE /v2/schedules/{id}`; bearer; object | Y | P2 | no |
+| Upstash QStash | Schedule that calls the preview URL | `POST /v2/schedules/{destination}` with `Upstash-Schedule-Id` (idempotent upsert), `DELETE /v2/schedules/{id}`; bearer; object | Y | P2 | **yes** (recipe [`qstash.schedule`](recipes.md#qstashschedule)) |
 | Inngest | Sync the preview deployment into its branch environment | `PUT {preview_url}/api/inngest` (the app registers itself) or the Vercel integration; branch env selected by `INNGEST_ENV` var | Y (one call, no destroy; archive via dashboard) | P1 | no |
 
 ### Search, payments test mode
@@ -193,18 +193,18 @@ Counted over the 56 side-effect rows of the matrix (rows marked `n/a` have nothi
 
 | Measure | Covered | Coverage |
 |---|---|---|
-| Rows | 16 of 56 | **28.6%** |
-| Weighted by priority | 36 of 90 | **40.0%** |
+| Rows | 17 of 56 | **30.4%** |
+| Weighted by priority | 37 of 90 | **41.1%** |
 | P0 rows only | 7 of 9 | 77.8% |
-| Rows an API reaches (all but `manual`) | 16 of 53 | 30.2% |
-| Weighted, rows an API reaches | 36 of 85 | 42.4% |
+| Rows an API reaches (all but `manual`) | 17 of 53 | 32.1% |
+| Weighted, rows an API reaches | 37 of 85 | 43.5% |
 | Secret sources (separate) | 4 of 9 vendors; weighted 7 of 14 | 44.4%; 50.0% |
 
-Covered: Vercel (`vercel.env`, `vercel.deploy`); Netlify (`netlify.env`); Cloudflare Pages / Workers (`cloudflare.pages_env`); Render (recipe [`render.env_var`](recipes.md#renderenv_var)); Heroku (recipe [`heroku.config_var`](recipes.md#herokuconfig_var)); Neon (`neon.branch`); Supabase (`supabase.branch`); PlanetScale (`planetscale.branch`, `planetscale.password`); Turso (recipe [`turso.database_branch`](recipes.md#tursodatabase_branch)); Prisma Postgres (recipe [`prisma.database`](recipes.md#prismadatabase), recipe [`prisma.database_copy`](recipes.md#prismadatabase_copy)); Clerk (`clerk.redirect_allow`); Supabase Auth (`supabase.auth_redirect`); LaunchDarkly (`launchdarkly.flag_target`); Cloudflare DNS (recipe [`cloudflare.dns_cname`](recipes.md#cloudflaredns_cname)); Vercel domains (recipe [`vercel.project_domain`](recipes.md#vercelproject_domain)); Upstash Redis (recipe [`upstash.redis_database`](recipes.md#upstashredis_database)).
+Covered: Vercel (`vercel.env`, `vercel.deploy`); Netlify (`netlify.env`); Cloudflare Pages / Workers (`cloudflare.pages_env`); Render (recipe [`render.env_var`](recipes.md#renderenv_var)); Heroku (recipe [`heroku.config_var`](recipes.md#herokuconfig_var)); Neon (`neon.branch`); Supabase (`supabase.branch`); PlanetScale (`planetscale.branch`, `planetscale.password`); Turso (recipe [`turso.database_branch`](recipes.md#tursodatabase_branch)); Prisma Postgres (recipe [`prisma.database`](recipes.md#prismadatabase), recipe [`prisma.database_copy`](recipes.md#prismadatabase_copy)); Clerk (`clerk.redirect_allow`); Supabase Auth (`supabase.auth_redirect`); LaunchDarkly (`launchdarkly.flag_target`); Cloudflare DNS (recipe [`cloudflare.dns_cname`](recipes.md#cloudflaredns_cname)); Vercel domains (recipe [`vercel.project_domain`](recipes.md#vercelproject_domain)); Upstash Redis (recipe [`upstash.redis_database`](recipes.md#upstashredis_database)); Upstash QStash (recipe [`qstash.schedule`](recipes.md#qstashschedule)).
 
 Automated coverage counts only rows an op manages without a person. Rows no API reaches (`manual`, or a `manual.step` line that records the step a person does; weight 5): Google OAuth clients (no public API for standard OAuth web clients); Clerk webhooks (Clerk's API manages the Svix app, not its endpoints); Stripe sandboxes (no public API for account sandboxes). They cap coverage at 53 rows, 85 of 90 weighted (94.4%).
 
-Recipe candidates, rows the generic adapter can express fully (`Y`) that nothing covers yet: 25 (Auth0, Firebase Auth, WorkOS, Stytch, Okta, Kinde, PostHog, Statsig, GrowthBook, Unleash, Flagsmith, ConfigCat, Split (Harness FME), GitHub, Svix (as a sender), Resend, Postmark, SendGrid, Sentry, Datadog, Honeycomb, Firebase Storage (GCS bucket), Upstash QStash, Inngest, Stripe test-mode objects).
+Recipe candidates, rows the generic adapter can express fully (`Y`) that nothing covers yet: 24 (Auth0, Firebase Auth, WorkOS, Stytch, Okta, Kinde, PostHog, Statsig, GrowthBook, Unleash, Flagsmith, ConfigCat, Split (Harness FME), GitHub, Svix (as a sender), Resend, Postmark, SendGrid, Sentry, Datadog, Honeycomb, Firebase Storage (GCS bucket), Inngest, Stripe test-mode objects).
 <!-- generated:coverage-numbers:end -->
 
 ## Strategy

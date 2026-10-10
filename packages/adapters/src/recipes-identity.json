@@ -46,6 +46,17 @@
     "key": "/projects/proj_cm1a2b3c4d5e6f7g8h9/databases[name=app-pr-42]",
     "id": "DELETE /databases/ID"
   },
+  "qstash.schedule": {
+    "provider": {
+      "base_url": "https://qstash.upstash.io",
+      "base_url_env": "QSTASH_API_URL",
+      "auth": {
+        "bearer_env": "QSTASH_TOKEN"
+      }
+    },
+    "key": "/v2/schedules/cron-pr-42",
+    "id": "DELETE /v2/schedules/cron-pr-42"
+  },
   "render.env_var": {
     "provider": {
       "base_url": "https://api.render.com/v1",

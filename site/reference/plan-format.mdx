@@ -501,7 +501,8 @@ providers:
 
 A malformed block, or a line naming an API that is not configured, is `PLAN_INVALID` before any request is sent;
 a malformed line is `PARAM_INVALID` naming the field. Paths take `{id}` (the object's id, once known) and
-`{name}` placeholders filled from the line's `vars:` (literals or references; URI-encoded). Fields are a top-level
+`{name}` placeholders filled from the line's `vars:` (literals or references; URI-encoded as one path segment, or
+written as they are with `{+name}`, for an API that takes a URL in the path). Fields are a top-level
 name (`url`) or a JSON pointer (`/config/url`); write a key that is literally `from`, `secret` or `keep` as a pointer
 (`/from`), since a map holding one of those keys is a [reference](/reference/plan-format#values).
 
@@ -515,8 +516,8 @@ One object per item: a feature flag, a webhook endpoint, a DNS record.
 | `vars` | map | `{}` | Values for `{name}` placeholders in paths. |
 | `find` | `{ path, list_path?, match, next?, cursor_param? }` | — | Locate the object by natural key: GET `path`, take the array at `list_path` (default: the whole body), keep the objects whose fields equal every `match` value. More than one is `PARAM_INVALID`. With `next` (a pointer to the next page's cursor), pages are followed, sending the cursor as `cursor_param` (default `cursor`); without it only the first page is read. |
 | `read` | `{ path }` | — | GET the object. With `find`, the path takes `{id}` and fetches the found object's detail; without `find`, it must be a path that names the object (a client-chosen id or key). One of `find` and `read` is required. 404 means it does not exist. |
-| `create` | `{ method?, path, body?, content_type?, idempotency_key? }` | (required) | `POST` (or `PUT`, `PATCH`) to create. The body is `match`, then `fields`, then `body` merged. `idempotency_key: true` sends an `Idempotency-Key` derived from the resource key, the commit and the body, and lets a create whose connection dropped be sent again. |
-| `update` | `{ method?, path?, body?, content_type? }` | none | `PATCH` (or `PUT`, `POST`) when `fields` differ from live; path defaults to `read.path`. `PATCH` and `POST` send the declared fields; `PUT` sends the whole declared state (`match`, `fields`, kept values). Without `update`, a difference is `PARAM_INVALID`. |
+| `create` | `{ method?, path, body?, content_type?, idempotency_key?, headers?, send_fields? }` | (required) | `POST` (or `PUT`, `PATCH`) to create. The body is `match`, then `fields`, then `body` merged (`send_fields: false`: `body` alone, for an API that takes the declared fields in headers). `headers` are sent with this request only (values may be references; not `Authorization`, `Accept`, `Content-Type` or `Idempotency-Key`). `idempotency_key: true` sends an `Idempotency-Key` derived from the resource key, the commit and the body, and lets a create whose connection dropped be sent again. |
+| `update` | `{ method?, path?, body?, content_type?, headers?, send_fields? }` | none | `PATCH` (or `PUT`, `POST`) when `fields` differ from live; path defaults to `read.path`. `PATCH` and `POST` send the declared fields; `PUT` sends the whole declared state (`match`, `fields`, kept values); `send_fields: false` sends `body` alone. `headers` as for `create`. Without `update`, a difference is `PARAM_INVALID`. |
 | `delete` | `{ method?, path? }` | `DELETE read.path` | How the object is removed (`DELETE` or `POST`). Its answer is not read: any 2xx is success, JSON or not (`OK`). |
 | `destroy` | `delete` \| `keep` | `delete` | `keep` leaves the object in place when the scope is destroyed. |
 | `item_path` | JSON pointer | `""` | Where the object is in read, create and update answers (`/data` for a `{ data: {...} }` envelope). |

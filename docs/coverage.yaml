@@ -429,7 +429,7 @@ categories:
         api_shape: "`POST /v2/schedules/{destination}` with `Upstash-Schedule-Id` (idempotent upsert), `DELETE /v2/schedules/{id}`; bearer; object"
         generic: Y
         priority: P2
-        covered_by: null
+        covered_by: recipe:qstash.schedule
       - id: inngest-sync
         provider: Inngest
         side_effect: Sync the preview deployment into its branch environment
