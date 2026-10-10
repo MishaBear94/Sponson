@@ -10,14 +10,16 @@
  *
  * Assumptions it encodes (about "a conventional JSON REST API", not about one provider; every real API the adapter
  * is pointed at is described by its plan line or recipe instead, see docs/api-verification.md):
- *   R1. Credentials arrive as `Authorization: Bearer <token>`, `Authorization: Basic <base64>` or a header whose
- *       name ends in `-api-key`, `-key` or `-token` (`X-Api-Key`, `Statsig-Api-Key`, `X-Auth-Token`); anything
- *       else is 401.
+ *   R1. Credentials arrive as `Authorization: Bearer <token>`, `Authorization: Basic <base64>`, a bare token in
+ *       `Authorization` (`Authorization: <token>`, as Unleash takes it) or a header whose name ends in `-api-key`,
+ *       `-key` or `-token` (`X-Api-Key`, `Statsig-Api-Key`, `X-Auth-Token`); anything else is 401.
  *   R2. Collection objects are answered in a `{ data: <object> }` envelope, lists as `{ data: [...], next_cursor }`,
  *       paged with `?cursor=` under chaos `page_size` (`next_cursor` is null on the last page). Objects that are
  *       not in a collection are answered bare. A collection's style (seed `styles`, by collection path) changes the
  *       envelopes, the cursor's place, and the id's field and type, so that a recipe is tested in its provider's
- *       own response shapes.
+ *       own response shapes. An object's style (by its path) may give it an `item_path` envelope for reads; writes
+ *       go to the object itself. A create may be posted to another path than the collection's (seed `aliases`:
+ *       `POST /gates/g/rule` adds to `/gates/g/rules`).
  *   R3. A path is known once seeded or created: a POST to an unknown path creates the collection; a GET of an
  *       unknown path is 404. A create may choose the id (the id field, or the style's `id_from` field, in the
  *       body, like a flag key or a database name); otherwise the sim assigns `it_<n>` (the next integer with
@@ -59,6 +61,8 @@ export interface RestState {
   collections: Record<string, RestItem[]>;
   objects: Record<string, Record<string, unknown>>;
   styles: Record<string, RestStyle>;
+  /** A path a create is posted to → the collection it adds to. */
+  aliases: Record<string, string>;
 }
 
 /** Initial REST state, by path: objects per collection (ids assigned when absent), stand-alone objects, styles. */
@@ -67,6 +71,8 @@ export interface RestSeed {
   objects?: Record<string, Record<string, unknown>>;
   /** How each collection answers, by collection path (assumption R2). */
   styles?: Record<string, RestStyle>;
+  /** Create paths that add to another collection, by path: `{ "/gates/g/rule": "/gates/g/rules" }`. */
+  aliases?: Record<string, string>;
 }
 
 /** Simulated generic REST API; see the assumptions at the top of this file. */
@@ -78,7 +84,7 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
   },
 
   reset(core, seed) {
-    const state: RestState = { collections: {}, objects: structuredClone(seed?.objects ?? {}), styles: structuredClone(seed?.styles ?? {}) };
+    const state: RestState = { collections: {}, objects: structuredClone(seed?.objects ?? {}), styles: structuredClone(seed?.styles ?? {}), aliases: structuredClone(seed?.aliases ?? {}) };
     for (const [path, items] of Object.entries(seed?.collections ?? {})) {
       const field = styleOf(state, path).id_field;
       state.collections[path] = items.map((i) => ({ ...structuredClone(i), [field]: isId(i[field]) ? i[field] : newId(core, state, path) }));
@@ -110,7 +116,8 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
 };
 
 function authorized(headers: IncomingHttpHeaders): boolean {
-  if (/^(Bearer|Basic)\s+\S+$/.test(headers.authorization ?? "")) return true;
+  const a = headers.authorization ?? "";
+  if (/^(Bearer|Basic)\s+\S+$/.test(a) || (/^\S+$/.test(a) && !/^(Bearer|Basic)$/i.test(a))) return true;
   return Object.entries(headers).some(([name, v]) => /(^|-)(api-key|key|token)$/.test(name) && typeof v === "string" && v.trim() !== "");
 }
 
@@ -269,17 +276,18 @@ const routes = router<RestState>(
   [
     route("GET", "/*path", ({ core, state, params, url }) => {
       const t = resolve(state, `/${params.path}`);
-      if (t.kind === "object") return new Reply(200, t.object);
+      if (t.kind === "object") return new Reply(200, envelope(state.styles[t.path]?.item_path ?? "", t.object));
       if (t.kind === "item") return new Reply(200, envelope(styleOf(state, t.collection).item_path, t.item));
       if (t.kind === "none") return notFound();
       return list(core, state, t, url.searchParams.get("cursor"));
     }),
 
     route("POST", "/*path", ({ core, state, params, body }) => {
-      const t = resolve(state, `/${params.path}`);
+      const alias = state.aliases[`/${params.path}`];
+      const t = resolve(state, alias ?? `/${params.path}`);
       if (t.kind === "object") return patch(state, t, body);
       if (t.kind === "item") return error(405, "cannot POST to an object of a collection");
-      return create(core, state, t.kind === "collection" ? t.path : `/${params.path}`, body);
+      return create(core, state, t.kind === "collection" ? t.path : (alias ?? `/${params.path}`), body);
     }),
 
     route("PATCH", "/*path", ({ state, params, body }) => patch(state, resolve(state, `/${params.path}`), body)),

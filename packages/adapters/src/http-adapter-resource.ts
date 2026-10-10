@@ -198,10 +198,11 @@ async function create(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, 
     if (!existing) throw new SponsonError("PROVIDER_CONFLICT", `${ADAPTER}: ${label(spec, key)}: the provider says it exists, but it cannot be found with the line's \`find\`/\`read\``, { adapter: ADAPTER, key });
     return { resources: [record(spec, key, existing)], outputs: outputsOf(spec, existing.item, existing.id), created: [] };
   }
-  let item = itemOf(sent.response, spec.itemPath);
+  // `create.locate`: the answer is not the object (the parent it was added to, an acknowledgement).
+  let item = spec.create.locate ? undefined : itemOf(sent.response, spec.itemPath);
   let id = idOf(item, spec.idPath);
   if (id === undefined) {
-    // Some APIs answer a create with no body (201, 204): find what was created.
+    // Some APIs answer a create with no body (201, 204), or with something else: find what was created.
     const l = await locate(api, spec);
     if (!l) throw noId(spec, `the answer to ${spec.create.method} ${path}`);
     ({ id, item } = l);
