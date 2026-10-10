@@ -7,12 +7,15 @@ import { apiClient, isProviderError, type ApiClient } from "./http.js";
  *
  *   clientFor              HTTP client with retry policy and redaction from the adapter context
  *   requireEnv             a credential from the environment, PROVIDER_AUTH when missing
+ *   optionalEnv            an optional setting from the environment (a base URL override)
  *   requireProvider        a `providers.<adapter>.<key>` value, PLAN_INVALID when missing
  *   stringParam/paramError a string param with a default, PARAM_INVALID otherwise
  *   desiredSide/diffValue  the marker contract (pending / secret / keep) applied to one value's diff
  *   assertNoPending        apply-time guard that the engine resolved every reference
  *   deleteIgnoringNotFound destroy's "already gone is success" rule
  *
+ * The HTTP side of the authoring API (ApiClient, Page, Shape, ShapeError, isObject, obj, records, listAll,
+ * withQuery, isProviderError) lives in http.ts; packages/adapters/src/index.ts lists the whole API.
  * Anything else in this file is internal and may change.
  */
 
@@ -23,7 +26,7 @@ export function requireEnv(env: NodeJS.ProcessEnv, name: string, adapter: string
   return v;
 }
 
-/** An optional setting from the environment (a base URL override); blank counts as unset. */
+/** An optional setting from the environment (a base URL override); blank counts as unset. Stable authoring API. */
 export function optionalEnv(env: NodeJS.ProcessEnv, name: string): string | undefined {
   const v = env[name];
   return v === undefined || v === "" ? undefined : v;

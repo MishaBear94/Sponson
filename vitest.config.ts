@@ -18,7 +18,11 @@ export default defineConfig({
       provider: "v8",
       include: ["packages/*/src/**/*.ts"],
       exclude: ["**/*.test.ts", "packages/adapters/src/testing.ts", "packages/*/src/bin.ts"],
-      reporter: ["text-summary", "text"],
+      // json-summary feeds the CI job summary.
+      reporter: ["text-summary", "text", "json-summary"],
+      // Enforced by `pnpm test:coverage`, locally and in CI alike. They sit just under today's numbers, so a change
+      // that adds untested code fails. Raise them when coverage rises; never lower them silently.
+      thresholds: { statements: 95, branches: 87, functions: 95 },
     },
     projects: [
       { resolve: { alias }, test: { name: "unit", include: ["packages/*/src/**/*.test.ts"], testTimeout: 20000 } },

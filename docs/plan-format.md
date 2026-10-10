@@ -77,7 +77,7 @@ Each change ("line") is one adapter op:
 
 ## Values
 
-Every parameter, at any depth (inside maps and lists too), is one of four forms:
+Every parameter, at any depth (inside maps and lists too), takes one of these forms:
 
 | Form | Example | Meaning |
 |---|---|---|
@@ -101,18 +101,23 @@ Every parameter, at any depth (inside maps and lists too), is one of four forms:
 
 ### `{ secret }` references
 
-Built-in schemes:
+#### Secret schemes
 
+The schemes that ship with Sponson (`createRegistry()` in `@sponson/adapters`):
+
+<!-- generated:secret-schemes:start (scripts/gen-docs.ts; run `pnpm docs:gen`) -->
 | Scheme | Form | Resolved by |
 |---|---|---|
 | `env` | `env://NAME` | the process environment; unset or empty is `SECRET_UNRESOLVED` |
-| `doppler` | `doppler://project/config/NAME` | `doppler secrets get NAME --project project --config config --plain` |
+| `doppler` | `doppler://project/config/NAME` | `doppler secrets get NAME --project project --config config --plain` (Doppler CLI) |
 | `op` | `op://vault/item/field` | `op read op://vault/item/field --no-newline` (1Password CLI) |
 | `aws-sm` | `aws-sm://secret-id` or `aws-sm://secret-id#KEY` | `aws secretsmanager get-secret-value --secret-id secret-id --query SecretString --output json` (AWS CLI; region and credentials from `AWS_REGION`, `AWS_PROFILE` and the CLI's other conventions). `secret-id` is a name or an ARN; `#KEY` picks one key of a JSON key/value secret. Binary secrets are not supported. |
+<!-- generated:secret-schemes:end -->
 
-Plugins can add schemes. A `secret:` that is not a URL (`scheme://…`) is `PLAN_INVALID`. Every command resolves the
-secrets of the active lines first, so their values can be masked in all output before anything is printed; only
-`apply` passes them to an adapter. A secret that cannot be resolved makes its line `blocked` (`SECRET_UNRESOLVED`).
+Plugins can add schemes. A `secret:` that is not a URL (`scheme://…`) is `PLAN_INVALID`. Every command (`plan` and
+`apply --destroy` included) resolves the secrets of the active lines first, so their values can be masked in all
+output before anything is printed; a scheme backed by a CLI therefore runs that CLI on `plan` too. Only `apply`
+passes the values to an adapter. A secret that cannot be resolved makes its line `blocked` (`SECRET_UNRESOLVED`).
 
 **Secret-looking names take references, never literals.** A parameter whose name ends in `_KEY`, `_SECRET`,
 `_TOKEN`, `PASSWORD`, `_PASS`, `PASSWD` or `PRIVATE` (any case) and whose value is a literal string or number is
@@ -208,14 +213,17 @@ special in the file: Sponson stops at them and the next `apply` continues (see
 
 ## Built-in ops
 
-Credentials come from each provider's own variable; Sponson has no credential store. `*_API_URL` overrides the API
-base URL (the test suites point it at the local fake cloud).
+The adapters that ship with Sponson (`createRegistry()` in `@sponson/adapters`) and their ops. Plugins loaded with
+`SPONSON_PLUGINS` can add more. Credentials come from each provider's own variable; Sponson has no credential store.
+The base URL override replaces the provider's API base URL (the test suites point it at the local fake cloud).
 
-| Adapter | Credential | Base URL override |
-|---|---|---|
-| `neon` | `NEON_API_KEY` | `NEON_API_URL` |
-| `vercel` | `VERCEL_TOKEN` | `VERCEL_API_URL` |
-| `clerk` | `CLERK_SECRET_KEY` | `CLERK_API_URL` |
+<!-- generated:adapters:start (scripts/gen-docs.ts; run `pnpm docs:gen`) -->
+| Adapter | Ops | Credential | Base URL override |
+|---|---|---|---|
+| `neon` | [`neon.branch`](#neonbranch) | `NEON_API_KEY` | `NEON_API_URL` |
+| `vercel` | [`vercel.env`](#vercelenv), [`vercel.deploy`](#verceldeploy) | `VERCEL_TOKEN` | `VERCEL_API_URL` |
+| `clerk` | [`clerk.redirect_allow`](#clerkredirect_allow) | `CLERK_SECRET_KEY` | `CLERK_API_URL` |
+<!-- generated:adapters:end -->
 
 A missing credential fails the line with `PROVIDER_AUTH`. Every resource has a key that identifies it within the
 adapter and provider block; the ledger treats two resources with the same key as the same resource.
@@ -310,6 +318,6 @@ The schema checks each part of the file on its own. These need the whole documen
 (`scenarios/docs/schema.test.ts` pins the list): duplicate ids; a line environment the top-level `environments` does
 not declare; `depends_on` or `from:` naming an id that does not exist; referenced outputs; cycles; `${ctx.*}` names.
 
-The schema is stricter than the parser in three places, each a likely typo the runtime would ignore or report later:
+The schema is stricter than the parser in these places, each a likely typo the runtime would ignore or report later:
 unknown top-level keys; unknown parameters of the built-in ops (for example `from: main` instead of `parent: main` on
 `neon.branch`); and extra keys next to `from`, `secret` or `keep`.

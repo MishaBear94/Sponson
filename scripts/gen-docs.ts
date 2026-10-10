@@ -2,11 +2,22 @@
  * Generates the parts of the documentation that restate code, so they cannot drift from it:
  *
  *   docs/errors.md          entirely, from ERROR_CODES and WARNING_CODES (packages/core/src/errors.ts)
- *   docs/plan-format.md     the block between the `generated:outputs` markers, from the outputs each
- *                           built-in op declares (packages/adapters)
+ *   docs/plan-format.md     the blocks between `generated:<name>` markers, from the registry `createRegistry()`
+ *                           builds (packages/adapters):
+ *                             adapters        every built-in adapter, its ops, credential and base-URL variable
+ *                             secret-schemes  every built-in secret scheme, its form and what resolves it
+ *                             outputs         the outputs each built-in op declares
  *
- * Run `pnpm docs:gen` after changing either source. scenarios/docs/errors.test.ts fails when a generated
- * file is out of date.
+ * These tables are the only place the docs enumerate adapters, ops or secret schemes; everything else (README,
+ * SKILL.md, ARCHITECTURE.md, the schema, package descriptions) links here and gives at most one example.
+ * scenarios/docs/no-enumeration.test.ts keeps it that way.
+ *
+ * Everything comes from the registry: adapters declare `about` (credential and base-URL variables) and secret
+ * sources declare `form` and `resolvedBy`, next to the code that uses them. Generation fails when a built-in adapter
+ * or source leaves those out, or when a built-in op has no `### \`adapter.op\`` section in docs/plan-format.md.
+ * So adding an adapter or a secret source means: declare them on it, run `pnpm docs:gen`, commit the result.
+ *
+ * scenarios/docs/errors.test.ts fails when a generated file is out of date.
  */
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -73,8 +84,6 @@ export function renderErrors(): string {
   return lines.join("\n");
 }
 
-export const OUTPUTS_START = "<!-- generated:outputs:start (scripts/gen-docs.ts; run `pnpm docs:gen`) -->";
-export const OUTPUTS_END = "<!-- generated:outputs:end -->";
 
 /** The outputs every built-in op declares, as a table. */
 export function renderOutputs(): string {
@@ -89,6 +98,49 @@ export function renderOutputs(): string {
         rows.push(`| \`${name}.${opName}\` | \`${out}\` | ${available} | ${spec.sensitive ? "yes" : "no"} |`);
       }
     }
+  }
+  return rows.join("\n");
+}
+
+/** Markers around one generated block of a Markdown file. */
+export function markers(name: string): { start: string; end: string } {
+  return { start: `<!-- generated:${name}:start (scripts/gen-docs.ts; run \`pnpm docs:gen\`) -->`, end: `<!-- generated:${name}:end -->` };
+}
+
+/** GitHub's anchor for a Markdown heading (enough of github-slugger for our headings). */
+export function slug(heading: string): string {
+  return heading
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, "")
+    .replace(/ /g, "-");
+}
+
+/** The built-in adapters and their ops, linked to each op's section of `doc` (which must exist). */
+export function renderAdapters(doc: string): string {
+  const registry = createRegistry();
+  const rows: string[] = ["| Adapter | Ops | Credential | Base URL override |", "|---|---|---|---|"];
+  for (const name of registry.adapterNames()) {
+    const ops = Object.keys(registry.adapter(name).ops).map((op) => {
+      const heading = `### \`${name}.${op}\``;
+      if (!doc.split("\n").includes(heading)) throw new Error(`docs/plan-format.md has no \`${heading}\` section for the built-in op ${name}.${op}: write one`);
+      return `[\`${name}.${op}\`](#${slug(heading.slice(4))})`;
+    });
+    const about = registry.adapter(name).about;
+    if (!about) throw new Error(`built-in adapter \`${name}\` declares no \`about\` (credentialEnv, baseUrlEnv): set it on the adapter object`);
+    rows.push(`| \`${name}\` | ${ops.join(", ")} | \`${about.credentialEnv}\` | ${about.baseUrlEnv ? `\`${about.baseUrlEnv}\`` : "—"} |`);
+  }
+  return rows.join("\n");
+}
+
+/** The built-in secret schemes. */
+export function renderSecretSchemes(): string {
+  const registry = createRegistry();
+  const rows: string[] = ["| Scheme | Form | Resolved by |", "|---|---|---|"];
+  for (const scheme of registry.secretSchemes()) {
+    const source = registry.secretSource(`${scheme}://`);
+    if (!source.form || !source.resolvedBy) throw new Error(`built-in secret source \`${scheme}\` declares no \`form\`/\`resolvedBy\`: set them on the source`);
+    rows.push(`| \`${scheme}\` | ${cell(source.form)} | ${cell(source.resolvedBy)} |`);
   }
   return rows.join("\n");
 }
@@ -110,10 +162,19 @@ export interface GeneratedFile {
 /** What every generated file should contain, given the current sources. */
 export async function generate(): Promise<GeneratedFile[]> {
   const planFormat = "docs/plan-format.md";
-  const current = await readFile(join(REPO, planFormat), "utf8");
+  let doc = await readFile(join(REPO, planFormat), "utf8");
+  const blocks: Array<[string, (doc: string) => string]> = [
+    ["adapters", renderAdapters],
+    ["secret-schemes", () => renderSecretSchemes()],
+    ["outputs", () => renderOutputs()],
+  ];
+  for (const [name, render] of blocks) {
+    const { start, end } = markers(name);
+    doc = withBlock(doc, start, end, render(doc));
+  }
   return [
     { path: "docs/errors.md", content: renderErrors() },
-    { path: planFormat, content: withBlock(current, OUTPUTS_START, OUTPUTS_END, renderOutputs()) },
+    { path: planFormat, content: doc },
   ];
 }
 

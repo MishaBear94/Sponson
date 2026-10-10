@@ -68,7 +68,7 @@ describe("secret sources via fake CLIs on PATH", () => {
     expect(t.stdout).toMatch(/= env/);
   });
 
-  it("D9: a secret that rotates between resolve() and fingerprint() records a fingerprint for a value that was never written; plan then claims `unchanged`", async () => {
+  it("D9: a secret that rotates mid-run is fingerprinted as the value actually written, and plan then reports it out of date", async () => {
     const w = await world(PLAN_ENV(`      STRIPE_KEY: { secret: "doppler://shop/prd/STRIPE_KEY" }`));
     const counter = `${w.cwd}/.doppler-calls`;
     // First call returns the old value, every later call the rotated one (rotation lands mid-run).
@@ -92,7 +92,7 @@ describe("secret sources via fake CLIs on PATH", () => {
 });
 
 describe("awkward secret values", () => {
-  it("D10: a secret shorter than 4 chars is silently not redacted (undocumented) and leaks through a provider echo", async () => {
+  it("D10: a secret shorter than 4 chars echoed by a provider is masked, or the run warns that it cannot be", async () => {
     const pin = "917";
     const w = await world(PLAN_ENV(`      DOOR_PIN_SECRET: { secret: "env://DOOR_PIN_SECRET" }`), {
       env: { DOOR_PIN_SECRET: pin },
@@ -106,7 +106,7 @@ describe("awkward secret values", () => {
     expect(leaked && !warned, `3-char secret echoed unmasked with no warning: ${r.json.receipt.lines.env.error}`).toBe(false);
   });
 
-  it("D11: a secret equal to a common token (`true`, `applied`) is redacted out of the JSON structure: --json breaks or lies", async () => {
+  it("D11: a secret equal to a common token (`true`, `applied`) never corrupts the --json structure", async () => {
     for (const value of ["true", "applied"]) {
       const w = await world(PLAN_ENV(`      FEATURE_SECRET: { secret: "env://FEATURE_SECRET" }`), { env: { FEATURE_SECRET: value } });
       const r = await w.cli("apply --json");
@@ -116,7 +116,7 @@ describe("awkward secret values", () => {
     }
   });
 
-  it("D12: a secret-named key with a numeric literal is accepted (SECRET_LITERAL only checks strings) and printed by plan", async () => {
+  it("D12: a secret-named key with a numeric literal is rejected with SECRET_LITERAL and never printed", async () => {
     const w = await world(PLAN_ENV(`      ADMIN_PASSWORD: 84736291`));
     const r = await w.cli("plan --json");
     expect(r.code, `plan accepted a literal password:\n${r.stdout.slice(0, 400)}`).toBe(2);
@@ -124,7 +124,7 @@ describe("awkward secret values", () => {
     expect(r.stdout).not.toContain("84736291");
   });
 
-  it("D13: the receipt stores an unsalted SHA-256 of each secret, so a dictionary-word secret is recoverable from the receipts branch", async () => {
+  it("D13: the receipt never stores an unsalted SHA-256 of a secret, so a dictionary-word secret cannot be looked up from it", async () => {
     const secret = "correcthorsebatterystaple";
     const w = await world(PLAN_ENV(`      APP_SECRET: { secret: "env://APP_SECRET" }`), { env: { APP_SECRET: secret } });
     const r = await w.cli("apply --json");

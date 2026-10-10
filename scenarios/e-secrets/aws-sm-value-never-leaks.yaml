@@ -1,0 +1,33 @@
+name: "aws-sm:// through a fake aws CLI: plan resolves the value only to mask it, apply sends it, and it never appears in any output or receipt"
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values: { STRIPE_KEY: { secret: "aws-sm://prod/stripe#STRIPE_KEY" } }
+# The fake `aws` checks it was asked the right question, then answers like `--query SecretString --output json`
+# does for a key/value secret: a JSON string holding a JSON object.
+bins:
+  aws: |
+    [ "$*" = "secretsmanager get-secret-value --secret-id prod/stripe --query SecretString --output json" ] || { echo "unexpected: aws $*" >&2; exit 1; }
+    echo '"{\"STRIPE_KEY\":\"fake_ts_awssm_7f3k9q2x\",\"OTHER\":\"fake_ts_awssm_other_55\"}"'
+secrets: ["fake_ts_awssm_7f3k9q2x", "fake_ts_awssm_other_55"]
+chaos: { fail_on: "POST /vercel/*", fail_next: 1, status: 500 }
+steps:
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { env: create } }
+  - run: plan
+    expect: { exit: 0, stdout: ["(secret)"] }
+  - run: apply --json
+    expect: { exit: 1, status: failed }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { env: applied } }
+  - sim:
+      vercel_env: { preview: { STRIPE_KEY: "fake_ts_awssm_7f3k9q2x" } }
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { env: unchanged } }

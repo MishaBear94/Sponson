@@ -7,8 +7,8 @@ in [docs/plan-format.md](docs/plan-format.md).
 
 ## The shape of the system
 
-Sponson reads `release.plan.yaml`, a flat list of lines, each one adapter op (`neon.branch`, `vercel.env`,
-`clerk.redirect_allow`). It compares each line with live state at the provider and with the **ledger** of what it
+Sponson reads `release.plan.yaml`, a flat list of lines, each one adapter op (such as `neon.branch`; the built-in ones
+are listed under [built-in ops](docs/plan-format.md#built-in-ops)). It compares each line with live state at the provider and with the **ledger** of what it
 already manages, then either reports the difference (`plan`) or makes it real (`apply`). Every writing run leaves a
 **receipt**, stored outside the working tree, which the next run starts from.
 
@@ -27,7 +27,7 @@ already manages, then either reports the difference (`plan`) or makes it real (`
                          └──────────────────┬────────────────────────┘
                                             │ OpSpec: read / diff / apply / destroy / awaitExternal
                          ┌──────────────────▼─ packages/adapters ────┐
-                         │ neon.ts  vercel.ts  clerk.ts  secrets.ts   │ ──▶ provider HTTP APIs
+                         │ <adapter>.ts (one per adapter) secrets.ts  │ ──▶ provider HTTP APIs
                          │ http.ts: retries, timeouts, pagination     │     (or packages/sim in tests)
                          └────────────────────────────────────────────┘
 ```
@@ -37,7 +37,7 @@ already manages, then either reports the difference (`plan`) or makes it real (`
 | Package | Contains | Depends on |
 |---|---|---|
 | `packages/core` (`@sponson/core`) | the plan model and parser, context interpolation, the dependency graph, reference resolution, the engine, the ledger, both receipt stores, the redactor, the adapter and secret-source interfaces, `ERROR_CODES` | nothing in the repo (`yaml`, `zod`) |
-| `packages/adapters` (`@sponson/adapters`) | the Neon, Vercel and Clerk adapters, the `env`/`doppler`/`op`/`aws-sm` secret sources, the shared HTTP client, the adapter authoring helpers (`common.ts`) | `core` |
+| `packages/adapters` (`@sponson/adapters`) | the [built-in adapters](docs/plan-format.md#built-in-ops) and [secret sources](docs/plan-format.md#secret-schemes), the shared HTTP client, the adapter authoring helpers (`common.ts`) | `core` |
 | `packages/sim` (`@sponson/sim`) | the local fake cloud: a provider-neutral core (`state.ts`, `server.ts`, `chaos.ts`) and one routes file per provider | nothing |
 | `packages/cli` (`sponson`) | the `sponson` binary, context detection, receipt-store selection, plugin loading, text rendering, the JSON envelope, the MCP server | `core`, `adapters` |
 
@@ -78,7 +78,9 @@ Root-level suites (`scenarios/`, `property/`) import the packages by name; `vite
 4. **Load** (`engine/run-context.ts`, `RunContext`): register every credential-looking environment variable with the
    redactor; read this scope's receipt and build the `Ledger` from it; list the other scopes' ledgers in this
    environment (resources they manage are *foreign*); inherit the head branch's scope when this is a pull request
-   (see [Scopes](#scopes-leases-and-succession)); resolve every secret and register its value.
+   (see [Scopes](#scopes-leases-and-succession)). Then `resolveSecrets()` resolves every secret the active lines use
+   and registers its value with the redactor, so a CLI-backed secret source runs its CLI in `plan` too; a secret
+   that fails is remembered and blocks its line in step 5.
 5. **Inspect each line, in order** (`engine/plan.ts` → `inspectLine` in `engine/inspect.ts`): resolve references
    against the outputs of earlier lines (`resolveParams` in `resolve.ts`), call the op's `read` and `diff`, scrub the
    diff of anything matching a registered secret, then judge it against the ledger: drift `missing` or `changed`,
@@ -101,22 +103,23 @@ Steps 1–3 are the same. Then `applyRun()` (`engine/apply.ts`):
    production and `approvedBy` is blank.
 2. **Lease.** `Lease.acquire()` (`engine/lease.ts`) takes the scope's lock or fails with `LOCK_HELD` (exit 3); with
    `--wait` it polls. The lease renews itself in the background.
-3. **Load** as in plan. If this commit is older than the last one applied to the scope (`staleness()` in
-   `engine/history.ts`, using receipt history and `git merge-base --is-ancestor`), the run writes nothing and returns
-   a receipt with `stale: true`.
+3. **Load** as in plan, but without secrets. If this commit is older than the last one applied to the scope
+   (`staleness()` in `engine/history.ts`, using receipt history and `git merge-base --is-ancestor`), the run writes
+   nothing and returns a receipt with `stale: true`, without resolving a single secret. Only after this staleness
+   check does `resolveSecrets()` resolve and register every secret, as in plan.
 4. **Each line, in order** (`ApplyRun.processLine`):
    - a dependency failed → `skipped` (`DEPENDENCY_BLOCKED`); a dependency is waiting → `waiting` for the same event;
    - inspect (as in plan, against live state read *now*, not the plan's snapshot);
    - an input is an external output not yet available → `awaitExternal`: without `--wait`, the line is `waiting` and
      the run will end `partial`; with `--wait`, poll until it arrives, fails (`EXTERNAL_FAILED`) or times out
      (`WAIT_TIMEOUT`);
-   - a refusal → `blocked`, and the run stops;
+   - a refusal → `blocked`, and the run stops and rolls back exactly as on a failure (step 5);
    - every diff `unchanged` → `unchanged`, no adapter call;
    - otherwise `op.apply()`. Before sending any create, the adapter calls `actx.intend(keys)`; the engine writes those
      keys to the ledger as `intent` and **checkpoints the receipt** (a fenced write) before the request leaves. Then
      `record()` updates the ledger from the result, and outputs (including external ones that already exist) are
      stored on the ledger entries.
-5. **On failure**: remaining lines are `skipped`; `rollback()` first re-reads lines with unresolved intents (a create
+5. **On failure or refusal**: remaining lines are `skipped`; `rollback()` first re-reads lines with unresolved intents (a create
    whose answer was lost may have succeeded), then destroys what *this run* created, newest first. A destroy that fails
    leaves `rollback_failed` with the resources named.
 6. **Settle** (`settleOrphans`): ledger entries no current line declares become `orphan` (if Sponson created them) or
@@ -127,11 +130,12 @@ Steps 1–3 are the same. Then `applyRun()` (`engine/apply.ts`):
 
 `apply --destroy` runs `destroyRun()` (`engine/destroy.ts`) instead: it walks the **ledger**, not the plan, in reverse
 creation order, using the provider block recorded with each entry. Entries created by Sponson are destroyed, adopted
-ones are forgotten, intents are located first (or reported as `INTENT_UNRESOLVED`).
+ones are forgotten, intents are located first (or reported as `INTENT_UNRESOLVED`). It resolves the plan's secrets
+too, only so that a provider error echoing one is masked.
 
 ## The ledger
 
-A receipt (`Receipt` in `types.ts`, version 2) has two halves: `lines` says what *this run* did per plan line; `ledger`
+A receipt (`Receipt` in `types.ts`, format version `RECEIPT_VERSION`) has two halves: `lines` says what *this run* did per plan line; `ledger`
 says what Sponson *manages* in this environment and scope after the run, independent of lines and of any single run.
 
 - **Identity** is `adapter + provider block + key` (`identity()` in `engine/ledger.ts`). The key comes from the
@@ -231,9 +235,9 @@ running, 3 lock) and the CLI hint. [docs/errors.md](docs/errors.md) is generated
 | Layer | Where | What it proves |
 |---|---|---|
 | unit | `packages/*/src/**/*.test.ts` | parser, graph, redactor, stores, adapters against the sim |
-| scenarios | `scenarios/<a-i>/*.yaml`, run by `scenarios/runner.test.ts` | one failure mode per file, end to end through the CLI; invariants I1, I4, I6 after every step |
-| journeys | `scenarios/journeys/<dimension>/` | long programmatic stories along six dimensions (lifecycle, concurrency, providers, agent, humans, secrets) |
-| property | `property/engine.property.test.ts` | the eight invariants on random plans, failures and drift |
+| scenarios | every `*.yaml` under `scenarios/` (by convention `scenarios/<category>/<name>.yaml`), run by `scenarios/runner.test.ts` | one failure mode per file, end to end through the CLI; invariants I1, I4, I6 after every step |
+| journeys | `scenarios/journeys/<dimension>/` | long programmatic stories, one directory per dimension (such as `lifecycle` or `secrets`) |
+| property | `property/engine.property.test.ts` | the invariants numbered at the top of the file, on random plans, failures and drift |
 | contract | `scenarios/contract.test.ts` | the sim's API assumptions; against real accounts with `pnpm test:live` |
 | docs | `scenarios/docs/` | the schema, the examples and the generated docs match the code |
 

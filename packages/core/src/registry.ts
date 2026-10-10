@@ -59,7 +59,13 @@ export class Registry {
     return s;
   }
 
+  /** Names of the registered adapters, in registration order (the CLI's `Known:` lists, docs:gen). */
   adapterNames(): string[] {
     return [...this.adapters.keys()];
+  }
+
+  /** Schemes of the registered secret sources (`env`, not `env://`), in registration order. */
+  secretSchemes(): string[] {
+    return [...this.secrets.keys()];
   }
 }

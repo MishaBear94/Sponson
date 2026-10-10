@@ -4,9 +4,15 @@ import { neonAdapter } from "./neon.js";
 import { awsSecretsManagerSource, dopplerSecretSource, envSecretSource, opSecretSource } from "./secrets.js";
 import { vercelAdapter } from "./vercel.js";
 
+/**
+ * The stable adapter authoring API: what templates/adapter (`pnpm new:adapter`) uses, and what an out-of-tree
+ * adapter may rely on across minor releases. From common.ts: the helpers below (see the comment at its top).
+ * From http.ts: `ApiClient`, `Page`, `Shape`, `ShapeError`, `isObject`, `obj`, `records`, `listAll`,
+ * `withQuery` and `isProviderError`; the rest of http.ts is exported for the built-in adapters and tests.
+ * scenarios/tooling/new-adapter.test.ts fails if the template imports a helper that is not exported here.
+ */
+export { clientFor, requireEnv, optionalEnv, requireProvider, diffValue, desiredSide, assertNoPending, deleteIgnoringNotFound, paramError, stringParam } from "./common.js";
 export * from "./http.js";
-/** The stable adapter authoring API; see the comment at the top of common.ts. */
-export { clientFor, requireEnv, requireProvider, diffValue, desiredSide, assertNoPending, deleteIgnoringNotFound, paramError, stringParam } from "./common.js";
 export * from "./neon.js";
 export * from "./vercel.js";
 export * from "./clerk.js";

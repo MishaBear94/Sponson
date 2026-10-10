@@ -3,6 +3,9 @@ import { SponsonError, sha256, type AdapterContext, type Ctx, type Literal, type
 import { ABSENT, assertNoPending, clientFor, deleteIgnoringNotFound, diffValue, optionalEnv, optionalProvider, paramError, requireEnv, requireProvider, stringParam } from "./common.js";
 import { ShapeError, isTransient, listAll, obj, records, type ApiClient, type Page } from "./http.js";
 
+/** The environment vercel reads; declared once, used by the code below and by the generated docs. */
+const ABOUT = { credentialEnv: "VERCEL_TOKEN", baseUrlEnv: "VERCEL_API_URL" } as const;
+
 /** Vercel's API base URL; `VERCEL_API_URL` overrides it (the sim and tests use that). */
 export const VERCEL_DEFAULT_API_URL = "https://api.vercel.com";
 
@@ -35,9 +38,9 @@ interface Client {
 }
 
 function client(actx: AdapterContext): Client {
-  const token = requireEnv(actx.env, "VERCEL_TOKEN", "vercel");
+  const token = requireEnv(actx.env, ABOUT.credentialEnv, "vercel");
   const project = requireProvider(actx, "project", "vercel");
-  return { api: clientFor(actx, "vercel", { baseUrl: optionalEnv(actx.env, "VERCEL_API_URL") ?? VERCEL_DEFAULT_API_URL, token }), project, team: optionalProvider(actx, "team") };
+  return { api: clientFor(actx, "vercel", { baseUrl: optionalEnv(actx.env, ABOUT.baseUrlEnv) ?? VERCEL_DEFAULT_API_URL, token }), project, team: optionalProvider(actx, "team") };
 }
 
 function query(c: Client, extra: Record<string, string | undefined> = {}): string {
@@ -443,4 +446,4 @@ const deploy: OpSpec = {
  * Vercel: op `env` manages environment variables per target and git branch; op `deploy` triggers or watches a
  * deployment and outputs its `preview_url`. Needs `VERCEL_TOKEN` and `providers.vercel.project`.
  */
-export const vercelAdapter: ResourceAdapter = { name: "vercel", ops: { env, deploy } };
+export const vercelAdapter: ResourceAdapter = { name: "vercel", ops: { env, deploy }, about: ABOUT };

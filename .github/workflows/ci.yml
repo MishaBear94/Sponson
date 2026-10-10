@@ -40,8 +40,8 @@ jobs:
       - run: pnpm test
 
   coverage:
-    # Thresholds sit just under today's numbers (96.8% statements, 88.8% branches, 97.8% functions)
-    # so a PR that adds untested code fails here. Raise them when coverage rises; never lower them silently.
+    # The thresholds live in vitest.config.ts (test.coverage.thresholds), so `pnpm test:coverage` fails the
+    # same way locally as here.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,12 +52,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: vitest --coverage with thresholds
-        run: >-
-          pnpm exec vitest run --project unit --project scenarios --project property --coverage
-          --coverage.reporter=text-summary --coverage.reporter=text --coverage.reporter=json-summary
-          --coverage.thresholds.statements=95
-          --coverage.thresholds.branches=87
-          --coverage.thresholds.functions=95
+        run: pnpm test:coverage
       - name: Coverage summary
         if: always()
         run: |

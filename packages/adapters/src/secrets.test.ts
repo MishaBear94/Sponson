@@ -34,7 +34,7 @@ describe("doppler secret source", () => {
     const src = dopplerSecretSource(async () => {
       throw new Error("doppler secrets failed: Could not find requested secret");
     });
-    await expect(src.resolve("doppler://p/c/K", {})).rejects.toMatchObject({ code: "SECRET_UNRESOLVED", message: "secret doppler://p/c/K: doppler secrets failed: Could not find requested secret" });
+    await expect(src.resolve("doppler://p/c/K", {})).rejects.toMatchObject({ code: "SECRET_UNRESOLVED", message: "doppler secrets failed: Could not find requested secret", details: { ref: "doppler://p/c/K" } });
   });
 });
 
@@ -113,6 +113,38 @@ describe("aws-sm secret source", () => {
     const src = awsSecretsManagerSource(async () => {
       throw new Error("aws secretsmanager failed: An error occurred (ResourceNotFoundException)");
     });
-    await expect(src.resolve("aws-sm://nope", {})).rejects.toMatchObject({ code: "SECRET_UNRESOLVED", message: "secret aws-sm://nope: aws secretsmanager failed: An error occurred (ResourceNotFoundException)" });
+    await expect(src.resolve("aws-sm://nope", {})).rejects.toMatchObject({ code: "SECRET_UNRESOLVED", message: "aws secretsmanager failed: An error occurred (ResourceNotFoundException)", details: { ref: "aws-sm://nope" } });
+  });
+});
+
+describe("CLI-backed sources share one message shape", () => {
+  const sources = [
+    ["doppler", dopplerSecretSource(), "doppler://p/c/K"],
+    ["op", opSecretSource(), "op://v/i/f"],
+    ["aws", awsSecretsManagerSource(), "aws-sm://prod/app#K"],
+  ] as const;
+
+  it.each(sources)("a missing `%s` binary says so, without repeating the ref or leaking ENOENT", async (bin, src, ref) => {
+    const err = await src.resolve(ref, { PATH: "/sponson-test-no-such-dir" }).then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(err).toMatchObject({ code: "SECRET_UNRESOLVED", message: `the \`${bin}\` CLI is not installed or not on PATH`, details: { ref } });
+  });
+
+  it("a binary that cannot be executed is named too", async () => {
+    const src = opSecretSource(async () => {
+      throw Object.assign(new Error("spawn op EACCES"), { code: "EACCES" });
+    });
+    await expect(src.resolve("op://v/i/f", {})).rejects.toMatchObject({ message: "the `op` CLI on PATH is not executable" });
+  });
+});
+
+describe("createRegistry", () => {
+  it("lists every built-in secret scheme, and each resolves to its own source", async () => {
+    const { createRegistry } = await import("./index.js");
+    const registry = createRegistry();
+    expect(registry.secretSchemes()).toContain("env");
+    for (const scheme of registry.secretSchemes()) expect(registry.secretSource(`${scheme}://x`).scheme).toBe(scheme);
   });
 });

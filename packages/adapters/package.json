@@ -1,7 +1,7 @@
 {
   "name": "@sponson/adapters",
   "version": "0.2.0",
-  "description": "Resource adapters (Neon, Vercel, Clerk) and secret sources (env, doppler, op, aws-sm) for Sponson.",
+  "description": "The built-in resource adapters and secret sources for Sponson.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

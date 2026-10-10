@@ -2,6 +2,9 @@ import { canonicalJson, isPendingMarker, sha256, type AdapterContext, type LiveS
 import { ABSENT, assertNoPending, clientFor, deleteIgnoringNotFound, desiredSide, optionalEnv, paramError, requireEnv, requireProvider, stringParam } from "./common.js";
 import { ShapeError, isProviderError, listAll, obj, records, type ApiClient, type Page } from "./http.js";
 
+/** The environment neon reads; declared once, used by the code below and by the generated docs. */
+const ABOUT = { credentialEnv: "NEON_API_KEY", baseUrlEnv: "NEON_API_URL" } as const;
+
 /** Neon's API base URL; `NEON_API_URL` overrides it (the sim and tests use that). */
 export const NEON_DEFAULT_API_URL = "https://console.neon.tech/api/v2";
 
@@ -20,9 +23,9 @@ interface Client {
 }
 
 function client(actx: AdapterContext): Client {
-  const token = requireEnv(actx.env, "NEON_API_KEY", "neon");
+  const token = requireEnv(actx.env, ABOUT.credentialEnv, "neon");
   const project = requireProvider(actx, "project", "neon");
-  return { api: clientFor(actx, "neon", { baseUrl: optionalEnv(actx.env, "NEON_API_URL") ?? NEON_DEFAULT_API_URL, token }), project };
+  return { api: clientFor(actx, "neon", { baseUrl: optionalEnv(actx.env, ABOUT.baseUrlEnv) ?? NEON_DEFAULT_API_URL, token }), project };
 }
 
 function branchKey(name: string): string {
@@ -173,4 +176,4 @@ const branch: OpSpec = {
  * Neon: op `branch` creates a database branch per scope and outputs its connection string (sensitive). Needs
  * `NEON_API_KEY` and `providers.neon.project`.
  */
-export const neonAdapter: ResourceAdapter = { name: "neon", ops: { branch } };
+export const neonAdapter: ResourceAdapter = { name: "neon", ops: { branch }, about: ABOUT };

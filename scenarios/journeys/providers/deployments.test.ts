@@ -44,7 +44,7 @@ function lifecycle(world: World, stateFor: (ageMs: number, real: string) => stri
 }
 
 describe("deployment lifecycle", () => {
-  it("explicit deploy op follows QUEUED → BUILDING → READY and feeds preview_url to the callback (passes)", async () => {
+  it("explicit deploy op follows QUEUED → BUILDING → READY and feeds preview_url to the callback", async () => {
     w = await World.create({ plan: DEPLOY_PLAN });
     w.sim.state.applyChaos({ deploy: "never" }); // team turned off auto preview deploys
     lifecycle(w, (age, real) => (real !== "READY" ? real : age < 300 ? "QUEUED" : age < 700 ? "BUILDING" : "READY"));

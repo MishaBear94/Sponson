@@ -67,7 +67,7 @@ One release, one plan. Three commands.
 | `sponson plan` | Reads live state, prints the diff and any drift. | no |
 | `sponson apply` | Runs the plan in dependency order. Rolls back what this run created if a line fails. Writes a receipt. | yes |
 
-- **Secrets are references.** `{ secret: "env://NAME" }`, `doppler://`, `op://`, `aws-sm://`. Values are resolved inside `apply`, handed to the adapter, and redacted from every byte of output. A literal that looks like a secret is rejected at parse time.
+- **Secrets are references.** `{ secret: "env://NAME" }`, or any other [secret scheme](docs/plan-format.md#secret-schemes). Every command resolves them, `plan` and `apply --destroy` included (so a scheme backed by a secret manager's CLI runs that CLI on `plan` too), and registers each value for masking before anything is printed; only `apply` hands values to an adapter. They are redacted from every byte of output. A literal that looks like a secret is rejected at parse time.
 - **References cross lines.** `{ from: db.connection_string }` reads another line's output. Outputs that only exist after an external event (a deploy) stop the run with status `partial`; the next `apply` continues from there. Same command, no flags.
 - **Drift is reported, never silently overwritten.** Something changed in a console since the last apply? `plan` says so; `apply` refuses that line until you pass `--reconcile`. Something exists that the plan does not mention? It is listed and left alone.
 - **Receipts are the agent's memory.** Each run writes what actually happened to an orphan branch `sponson/receipts` in your repo: a ledger of every resource the scope owns (kept across failed, refused and crashed runs), what each line did, and which commits were applied. Creates are recorded before they are sent, so even a write whose response was lost is never forgotten. The agent reads the receipt, not its own last tool call.
@@ -85,7 +85,7 @@ npx sponson apply         # creates the branch, injects the variable, waits for 
 
 Third-party adapters and secret sources load as plugins: `SPONSON_PLUGINS=sponson-adapter-x,./local-adapter.mjs`, each module exporting `register(registry)`.
 
-Credentials come from the providers' own conventions — `VERCEL_TOKEN`, `NEON_API_KEY`, `CLERK_SECRET_KEY` — Sponson has no credential store of its own.
+Credentials come from the providers' own conventions (`VERCEL_TOKEN` for Vercel; every adapter's variable is listed under [built-in ops](docs/plan-format.md#built-in-ops)). Sponson has no credential store of its own.
 
 In GitHub Actions, one workflow with three triggers calls the same action:
 
@@ -138,24 +138,24 @@ release.plan.yaml ──▶ sponson plan ──▶ diff + drift        (reads ad
                                    preview_url ──▶ callback
 ```
 
-A plan is a flat list. Each line is one adapter op, filtered by `environments:`. Order is derived from references. Values have five states — `literal`, `resolved`, `pending`, `secret`, `kept` — and the JSON output carries the state explicitly so an agent never has to parse prose.
+A plan is a flat list. Each line is one adapter op, filtered by `environments:`. Order is derived from references. Every value has a state (`literal`, `resolved`, `pending`, `secret` or `kept`), and the JSON output carries it explicitly so an agent never has to parse prose.
 
 Receipts live on an orphan git branch so CI runs, which start from nothing, can still see what the last run did. The store is an interface; `local` is the alternative, and a hosted one is where a control plane would plug in.
 
 ## Verification without a cloud account
 
-This repository was built and accepted entirely against a local fake cloud, because no real Vercel, Neon or Clerk account was available during development.
+This repository was built and accepted entirely against a local fake cloud, because no real provider account was available during development.
 
 - `packages/sim` serves the API subsets the adapters use, with a chaos endpoint: latency, failing or hanging the next N requests matching a rule, `429` with `Retry-After`, lost responses after a successful write, pagination, Neon's asynchronous operations, deployment lifecycles, and console-style drift (edit, delete, delete-and-recreate).
-- `scenarios/*/` holds 54 YAML scenarios across nine categories — mid-run failure, concurrency, drift, references, secrets, the deploy barrier, destroy, mistakes agents make, mistakes humans make.
-- `scenarios/journeys/` holds long system tests along six independent dimensions: a week of a team's CI lifecycle, many actors at once on real git receipts (including SIGKILL mid-apply), providers misbehaving like real clouds, an agent driving Sponson only through MCP and JSON, humans editing consoles and refactoring plans, and every channel a secret could leak through (including the receipts branch history and PR comments).
-- `property/` generates random plans, failures (including lost responses) and drift, and checks eight invariants — among them that `plan` writes nothing and that nothing Sponson created survives a successful destroy — 1000 cases per run.
+- `scenarios/` holds the acceptance scenarios: one YAML file per failure mode (anywhere under `scenarios/`, grouped by failure family such as mid-run failure, concurrency, drift, secrets, the deploy barrier and mistakes agents or humans make), each run end to end through the CLI by `scenarios/runner.test.ts`.
+- `scenarios/journeys/` holds long system tests, one directory per dimension: among them a week of a team's CI lifecycle, many actors at once on real git receipts (including SIGKILL mid-apply), providers misbehaving like real clouds, an agent driving Sponson only through MCP and JSON, humans editing consoles and refactoring plans, and every channel a secret could leak through (including the receipts branch history and PR comments).
+- `property/` generates random plans, failures (including lost responses) and drift, and checks the invariants numbered at the top of `property/engine.property.test.ts`, among them that `plan` writes nothing and that nothing Sponson created survives a successful destroy, over hundreds of generated cases per run (`SPONSON_PROPERTY_RUNS` sets how many).
 
 What the fake cannot prove is that the real APIs behave as assumed. The assumptions are numbered at the top of each provider's routes file in `packages/sim/src/routes/`, and `scenarios/contract.test.ts` pins the critical ones: it runs against the sim by default and against the real APIs with `pnpm test:live` (see the file header for the required variables). It has not yet been run against real accounts.
 
 ## Status
 
-Format, engine, three adapters (Neon branches, Vercel env + deploy, Clerk redirect URLs), four secret sources, local and git-branch receipt stores, CLI, MCP server, GitHub Action. Not yet: feature-flag targeting, social-login callbacks beyond Clerk, a hosted approval inbox, garbage collection of scopes whose PR closed without the action running.
+Format, engine, the [built-in adapters](docs/plan-format.md#built-in-ops) and [secret schemes](docs/plan-format.md#secret-schemes), local and git-branch receipt stores, CLI, MCP server, GitHub Action. Not yet: feature-flag targeting, social-login callbacks beyond Clerk, a hosted approval inbox, garbage collection of scopes whose PR closed without the action running.
 
 ## Documentation
 

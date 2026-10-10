@@ -45,7 +45,7 @@ describe("provider error bodies that echo request data", () => {
     expect(await everything(w, json, text)).not.toContain(secret);
   });
 
-  it("D1: a multi-line PEM secret echoed by the provider is not masked (whitespace flattening / JSON \\n escaping)", async () => {
+  it("D1: a multi-line PEM secret echoed by the provider is masked, whether flattened to one line or JSON-escaped", async () => {
     const pem = [
       "-----BEGIN PRIVATE KEY-----",
       "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj",
@@ -78,7 +78,7 @@ describe("provider error bodies that echo request data", () => {
     }
   });
 
-  it("D2: JSON-escaped, URL-encoded and base64 forms of an echoed secret slip past the redactor (it masks one byte form only)", async () => {
+  it("D2: JSON-escaped, URL-encoded and base64 forms of an echoed secret are all masked", async () => {
     const secret = 'Zq9"Top/Secret+Middle=Part&\\Tail 0042';
     const w = await world(PLAN_ENV(`      API_SECRET: { secret: "env://API_SECRET" }`), {
       env: { API_SECRET: secret },
@@ -99,7 +99,7 @@ describe("provider error bodies that echo request data", () => {
     expect.soft(all, "base64 secret leaked").not.toContain(Buffer.from(`user:${secret}`).toString("base64"));
   });
 
-  it("D4: an echoed secret that straddles the 500-char error excerpt boundary leaks its prefix", async () => {
+  it("D4: an echoed secret cut by the 500-char error excerpt boundary leaves no prefix behind", async () => {
     // No digit run: "0123456789" is a prefix of the fixture SHA, so it would "leak" via the receipt's ctx.git.sha.
     const secret = "fake_lv_PREFIXLEAKSqwrtzpvmnk_SUFFIXisCUT";
     const w = await world(PLAN_ENV(`      STRIPE_KEY: { secret: "env://STRIPE_KEY" }`), {
@@ -122,7 +122,7 @@ describe("provider error bodies that echo request data", () => {
     expect(partialLeaks(all, secret, 10), "a prefix of the secret survived truncation").toEqual([]);
   });
 
-  it("D5: the password inside a sensitive connection string leaks when a downstream provider echoes it in another form", async () => {
+  it("D5: the password inside a sensitive connection string stays masked when a downstream provider echoes it in another form", async () => {
     const w = await world(PLAN_DB_ENV(), {
       rules: [
         echoEnvPost((body) => {
@@ -142,7 +142,7 @@ describe("provider error bodies that echo request data", () => {
     expect(passwords.filter((p) => p !== "[REDACTED]"), `connection-string password leaked: ${all.match(/password=\S+/)?.[0]}`).toEqual([]);
   });
 
-  it("D6: --destroy redacts nothing: a provider that echoes the env var on a failed DELETE leaks the secret into the receipt", async () => {
+  it("D6: --destroy redacts too: a provider that echoes the env var on a failed DELETE never puts the secret in the receipt", async () => {
     const secret = "whsec_destroyPathSecret_77aa";
     const w = await world(PLAN_ENV(`      WEBHOOK_SECRET: { secret: "env://WEBHOOK_SECRET" }`), { env: { WEBHOOK_SECRET: secret } });
     const ok = await w.cli("apply --json");
@@ -165,7 +165,7 @@ describe("provider error bodies that echo request data", () => {
     }
   });
 
-  it("D7: plan never resolves secrets, so a read error that echoes live values leaks an env:// secret into plan output", async () => {
+  it("D7: a provider echo during plan never leaks a secret (plan resolves secrets to mask them)", async () => {
     const secret = "fake_lv_planPathLeak_31337abc";
     const w = await world(PLAN_DB_ENV(`      STRIPE_KEY: { secret: "env://STRIPE_KEY" }\n`), { env: { STRIPE_KEY: secret } });
     const ok = await w.cli("apply --json");
@@ -193,7 +193,7 @@ describe("provider error bodies that echo request data", () => {
     }
   });
 
-  it("D8: a provider 401 that echoes the credential leaks VERCEL_TOKEN into the receipt and output", async () => {
+  it("D8: a provider 401 that echoes the credential never puts VERCEL_TOKEN in the receipt or output", async () => {
     const w = await world(PLAN_ENV(`      FEATURE_FLAG: "on"`));
     const token = w.env.VERCEL_TOKEN!;
     const { startEchoProxy } = await import("./helpers.js");

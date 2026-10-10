@@ -143,7 +143,18 @@ export interface ResourceRecord {
   key: string;
   /** Provider-side identifier used to update or delete it. */
   id: string;
-  /** sha256 of the current value, or of a canonical representation. */
+  /**
+   * sha256 of the current value, or of a canonical representation. One hash per resource, and it must cover
+   * every field the plan controls (`sha256(canonicalJson({ value, type }))` for two): the engine detects console
+   * drift only by comparing it with the hash it recorded, so a field left out can change unnoticed. Ids, timestamps
+   * and other provider bookkeeping stay out.
+   *
+   * The engine stores it (keyed) in the ledger. Changing what it covers is therefore a breaking change: every
+   * existing ledger entry then disagrees with live state, which is accepted silently while the plan matches live
+   * but reported as `changed` drift (apply refuses without `--reconcile`) as soon as the plan changes that
+   * resource. Ship it with a `**Breaking:**` changeset telling users to run `sponson apply` once with an
+   * unchanged plan after upgrading (that re-records every hash) before changing those lines.
+   */
   hash: string;
   /** Human label for display. */
   label?: string;
@@ -259,7 +270,15 @@ export interface OpSpec {
   writesEnvironment?(params: ResolvedParams, ctx: Ctx): string | null;
   /** Find what currently exists for this change. Null when nothing exists. Must not write. */
   read(actx: AdapterContext, params: ResolvedParams): Promise<LiveState | null>;
-  /** Compare live state against desired params. Must not write. Params may carry markers (see the marker contract above). */
+  /**
+   * Compare live state against desired params. Must not write. Params may carry markers (see the marker contract
+   * above).
+   *
+   * Exactly one diff per resource the line manages, whatever the number of fields: `key` is the resource's
+   * `ResourceRecord.key` (the ledger key) and `kind` is `update` when any field differs. Compare fields through the
+   * same canonical form `ResourceRecord.hash` uses, so `diff` and drift detection agree on what "equal" means.
+   * Resources with independent lifecycles (Vercel: one env var per target) are separate resources and diffs.
+   */
   diff(live: LiveState | null, params: ResolvedParams): ResourceDiff[];
   /**
    * Create or update. Must be idempotent: calling with the same params twice performs no writes the second time.
@@ -330,6 +349,19 @@ export interface OpSpec {
 export interface ResourceAdapter {
   name: string;
   ops: Record<string, OpSpec>;
+  /**
+   * What a user must configure, declared once and used by the adapter's own code and by the generated
+   * docs (docs/plan-format.md). Built-in adapters must set it; plugins should.
+   */
+  about?: AdapterAbout;
+}
+
+/** The environment an adapter reads: its credential, and the variable that overrides its API base URL. */
+export interface AdapterAbout {
+  /** Environment variable holding the credential, e.g. `NEON_API_KEY`. */
+  credentialEnv: string;
+  /** Environment variable that overrides the API base URL (the sim and tests use it), when there is one. */
+  baseUrlEnv?: string;
 }
 
 /**
@@ -337,9 +369,17 @@ export interface ResourceAdapter {
  * new secret manager.
  */
 export interface SecretSource {
-  /** URL scheme, e.g. `env`, `doppler`, `op`. */
+  /** URL scheme (the part before `://`). */
   scheme: string;
-  /** Resolve the value. Called by every command so the value can be registered for redaction; only apply sends it anywhere. */
+  /** The reference form users write, for docs, e.g. "`env://NAME`". Built-in sources must set it. */
+  form?: string;
+  /** How a reference is resolved, for docs (which CLI or API, where configuration comes from). */
+  resolvedBy?: string;
+  /**
+   * Resolve the value. Called by every command so the value can be registered for redaction; only apply sends it anywhere.
+   * Throw a reason only ("the `aws` CLI is not installed or not on PATH"); the engine prefixes the reference once,
+   * and the message must never contain the value.
+   */
   resolve(ref: string, env: NodeJS.ProcessEnv): Promise<string>;
 }
 

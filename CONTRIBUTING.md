@@ -39,11 +39,11 @@ Useful elsewhere: [ROADMAP.md](ROADMAP.md) (what is next), [CHANGELOG.md](CHANGE
 ```
 packages/core       plan model, parser, engine (engine/: ledger, inspect, plan, apply, destroy, lease, receipt),
                     receipt stores, adapter interfaces, error codes (errors.ts: ERROR_CODES)
-packages/adapters   neon, vercel, clerk adapters; env / doppler / op / aws-sm secret sources; the stable authoring helpers (common.ts)
+packages/adapters   built-in adapters and secret sources (listed in docs/plan-format.md); the stable authoring helpers
 packages/sim        local fake cloud: provider-neutral core (state.ts, server.ts, chaos.ts) + one routes file per provider
 packages/cli        `sponson` CLI, MCP server, plugin loading
 scenarios/          YAML scenarios + runner, MCP and contract suites; support.ts is the shared harness
-scenarios/journeys/ long system tests along six dimensions (lifecycle, concurrency, providers, agent, humans, secrets)
+scenarios/journeys/ long system tests, one directory per dimension (team lifecycle, concurrency, providers, …)
 property/           property-based tests over random plans
 action/             GitHub Action
 docs/adr/           architecture decision records
@@ -61,7 +61,7 @@ pnpm typecheck            # sources and tests
 pnpm lint
 pnpm test                 # unit + scenarios + journeys + property, then the tooling suites (~2 min)
 pnpm test:tooling         # scaffold and docs-as-code checks only (they run tsc/eslint; kept separate on purpose)
-pnpm test:coverage        # same, with a coverage table
+pnpm test:coverage        # same, with a coverage table; fails below the thresholds CI enforces
 pnpm test:scenarios       # the acceptance catalogue only
 pnpm test:live            # contract suite against the real APIs (needs credentials, see scenarios/contract.test.ts)
 pnpm sim                  # start the fake cloud on :4777 for manual poking
@@ -71,9 +71,10 @@ pnpm changeset            # describe a user-visible change for the changelog
 ```
 
 CI (`.github/workflows/ci.yml`) runs typecheck, lint and tests on Node 22 and 24 (and macOS on 24), a coverage
-job that fails below 95% statements, 87% branches or 95% functions, and a packaging job that builds from clean,
-packs every package and installs the tarballs into an empty project. Use `pnpm test:coverage` to see what a
-change leaves uncovered.
+job, and a packaging job that builds from clean, packs every package and installs the tarballs into an empty
+project. The coverage thresholds are configured once, in `vitest.config.ts`, and CI runs the same
+`pnpm test:coverage` you do: if it passes locally, the coverage job passes. Use it to see what a change leaves
+uncovered.
 
 ## Adding an adapter
 
@@ -86,20 +87,35 @@ pnpm new:adapter acme
 ```
 
 It writes the four files below from `templates/adapter/` — a complete example op (`item`: a named value per
-scope, with read/diff/apply/destroy/listScope/adopt) built on the helpers, seven unit tests, a `ProviderSim`
-with numbered assumptions, and a scenario covering create, idempotent re-apply, drift and destroy — and makes
-the registrations in step 2 and 3 (it prints each edit; re-running it is safe). Everything it generates passes
-`pnpm typecheck`, `pnpm lint` and `pnpm test` as is (`scenarios/tooling/new-adapter.test.ts` checks that), so
-you can change it one step at a time and keep the tests green. Then replace the TODOs with the real API.
+scope, with read/diff/apply/destroy/listScope/adopt) built on the helpers, unit tests against the sim, a `ProviderSim`
+with numbered assumptions, and a scenario covering create, idempotent re-apply, drift and destroy — makes the
+registrations in steps 2 and 3, adds the names the new files export to the public-API list
+(`packages/core/src/public-api.test.ts`), starts the docs of step 5 (a section for the example op in
+`docs/plan-format.md`), and runs `pnpm docs:gen`, which reads the adapter's `about` (credential and base-URL
+variables) from the registry. It prints each edit; re-running it is safe;
+`--dry-run` shows what it would do and `--help` how to call it. Right after it, `pnpm typecheck && pnpm lint &&
+pnpm test` passes with no manual edit — `scenarios/tooling/new-adapter.test.ts` scaffolds a copy of the
+repository and runs every check of those that a scaffold can affect, so this stays true. Change it one step at a
+time and keep the tests green while you replace the TODOs with the real API.
 
 The checklist, in full:
 
-1. **The adapter file**, `packages/adapters/src/<name>.ts`, built with the exported helpers from `@sponson/adapters` (`clientFor`, `diffValue`, `desiredSide`, `requireEnv`, `requireProvider`, `deleteIgnoringNotFound`, `assertNoPending`, `paramError`, `stringParam`). Implement `adopt()` on each op that `sponson init` should be able to adopt, and `writesEnvironment()` when the op targets a deployment environment.
+1. **The adapter file**, `packages/adapters/src/<name>.ts`, built only with the stable authoring API of `@sponson/adapters` (below). Implement `adopt()` on each op that `sponson init` should be able to adopt, and `writesEnvironment()` when the op targets a deployment environment. Every export carries a doc comment and is listed in `PUBLIC_API` (`packages/core/src/public-api.test.ts`); the scaffold does this for the names the template exports, so only renamed or new exports need adding by hand.
 2. **Register it**: in-tree, add it to `createRegistry()` in `packages/adapters/src/index.ts`; out of tree, publish a module exporting `register(registry)` and load it with `SPONSON_PLUGINS=<module>`.
 3. **Sim routes**: `packages/sim/src/routes/<name>.ts` implementing `ProviderSim` (seed, reset, drift, routes, and its `env` token/URL variable names), plus one entry in `PROVIDERS` in `packages/sim/src/state.ts`. Write the API assumptions your routes encode at the top of that file, numbered.
 4. **One scenario** under `scenarios/`, and an adapter unit test against the sim (`packages/adapters/src/testing.ts`).
+5. **Docs and schema**: run `pnpm docs:gen` (it rewrites every generated part of the docs from the registry), then write what it does not generate: each op's section under "Built-in ops" in `docs/plan-format.md` (params, resource keys, what counts as drift; the scaffold's section describes the example op), and in `schema/release.plan.schema.json` the `providers.<name>` block and each op's params definition, wherever they are not generated. `scenarios/docs/` fails when a generated part is stale, an op has no section, or the schema disagrees with the parser.
+6. **A changeset** (`pnpm changeset`), then `pnpm typecheck && pnpm lint && pnpm test`.
 
 Harnesses pick up the new provider's environment from `simEnv(sim)`; nothing else needs editing.
+
+The **stable authoring API** — everything the template uses, exported from `@sponson/adapters` and kept
+compatible across minor releases, so an out-of-tree plugin can copy the template and import the same names from
+the package: `clientFor`, `requireEnv`, `optionalEnv`, `requireProvider`, `stringParam`, `paramError`,
+`diffValue`, `desiredSide`, `assertNoPending`, `deleteIgnoringNotFound` (common.ts) and `ApiClient`, `Page`,
+`Shape`, `ShapeError`, `isObject`, `obj`, `records`, `listAll`, `withQuery`, `isProviderError` (http.ts). Other
+exports are for the built-in adapters and may change. The template imports nothing else from the package, and
+the scaffold test fails if it ever does.
 
 Rules the engine relies on:
 
@@ -109,19 +125,33 @@ Rules the engine relies on:
 - Resource keys must include every dimension that makes two resources distinct in the provider (Vercel: target and git branch).
 - Use `clientFor`: it owns retries, timeouts, pagination and error classification. Redact provider text with `actx.redact` before truncating it.
 - `diff` returns `DiffSide` data, never display strings. Params may carry markers (`markerKind`): `pending`/`secret` (not yet known; `apply` must never see one) and `keep` (equal to whatever is live).
+- One diff per resource, however many fields it has: its `key` is the resource's `ResourceRecord.key`, which is the ledger key, and it is `update` when any field differs.
+- A resource's `hash` covers every field the plan controls, in one canonical form (`sha256(canonicalJson({ … }))`, as `branchHash` in `packages/adapters/src/neon.ts` does); `diff` compares through the same form. Drift is detected only through the hash, so a field left out can be changed in the console unnoticed.
+- Changing what a hash covers is a breaking change: existing ledger entries stop matching, and the first apply that changes such a resource reports `changed` drift and refuses without `--reconcile`. Say so in a `**Breaking:**` changeset and tell users to run `sponson apply` once with an unchanged plan after upgrading (unchanged lines re-record their hashes) before editing those lines.
 - `destroy` treats "already gone" as success.
 - Outputs marked `sensitive` may be returned, but never logged by the adapter; the engine redacts them.
 - Throw `SponsonError` with a code from `ERROR_CODES`; adding a code means adding it there, with its exit code and, if the CLI has a remedy, a `cliHint`.
 
+## Adding a secret source
+
+A secret source resolves `{ secret: "<scheme>://…" }` references. The scheme lists in the docs are generated, so
+the checklist is short:
+
+1. **The source** in `packages/adapters/src/secrets.ts`, implementing `SecretSource` from `@sponson/core`, with a doc comment and its `form` and `resolvedBy` (the generated docs read them); throw reasons only — the engine prefixes the reference, and a message must never contain the value. Add it to `PUBLIC_API` in `packages/core/src/public-api.test.ts`.
+2. **Register it** with `.addSecretSource(…)` in `createRegistry()` (`packages/adapters/src/index.ts`).
+3. **A unit test** in `packages/adapters/src/secrets.test.ts`: resolution, a missing value, the tool or service being unavailable.
+4. **A scenario or journey proving the value never leaks** (invariant 1) — stdout, stderr, receipts and plan text — like `scenarios/e-secrets/aws-sm-value-never-leaks.yaml`, plus the unavailable case.
+5. **A changeset** and `pnpm docs:gen`; then `pnpm typecheck && pnpm lint && pnpm test`.
+
 ## Adding a scenario
 
-Scenarios live in `scenarios/<category>/<name>.yaml` and are documented at the top of `scenarios/runner.test.ts`. A scenario is a plan, a sim seed, optional chaos, a list of steps, and expectations. After every `run` step the runner checks invariants I1, I4 and I6 below; put scenario-specific expectations under `expect`. Longer, programmatic tests go in `scenarios/journeys/<dimension>/` and use `scenarios/support.ts`.
+Scenarios are `*.yaml` files anywhere under `scenarios/` (by convention `scenarios/<category>/<name>.yaml`), documented at the top of `scenarios/runner.test.ts`. A scenario is a plan, a sim seed, optional chaos, a list of steps, and expectations. After every `run` step the runner checks invariants I1, I4 and I6 below; put scenario-specific expectations under `expect`. Longer, programmatic tests go in `scenarios/journeys/<dimension>/` and use `scenarios/support.ts`.
 
 If the property suite finds a failing case, turn its counterexample into a scenario before fixing the bug.
 
 ## The invariants
 
-`property/engine.property.test.ts` checks all eight on random plans, failures and drift:
+`property/engine.property.test.ts` checks every one of them on random plans, failures and drift:
 
 1. No output (stdout, stderr, receipts, plan text) contains a registered secret value.
 2. When a line fails and rollback succeeds, the set of resources is what it was before the run.
@@ -146,19 +176,20 @@ The [PR template](.github/PULL_REQUEST_TEMPLATE.md) asks for:
 
 - `pnpm typecheck && pnpm lint && pnpm test` passing locally;
 - a test for new behaviour (a unit test, a YAML scenario or a journey) — a bug fix starts with a failing one;
-- for adapters, the rules above, sim routes with numbered assumptions, and a scenario;
+- for adapters, the rules above, sim routes with numbered assumptions, a scenario, and the docs and schema step;
 - a changeset for any user-visible change;
-- docs updated where behaviour changed, and an ADR for design changes;
-- which of the eight invariants the change could affect, and how they are still checked.
+- docs updated where behaviour changed, and an ADR when one is needed (see below) — or a line saying why not;
+- which invariants (listed below) the change could affect, and how they are still checked.
 
 Keep a PR to one concern. Review rules (one approval; a maintainer's for security-sensitive code) are in
 [MAINTAINERS.md](MAINTAINERS.md).
 
 ## Decisions and ADRs
 
-Changes to the plan or receipt format, the adapter contract, the JSON output, error or exit codes, an invariant,
-or the set of CLI commands need an architecture decision record in `docs/adr/` (next free number; context,
-decision, alternatives, consequences), merged before or with the code. Open an issue or a draft PR with the ADR
+Changes to the plan format or its semantics, receipts, the safety rules (invariants, approval, drift handling),
+the public API (the adapter contract, the JSON output, error or exit codes, the set of CLI commands) need an
+architecture decision record in `docs/adr/` (next free number; context, decision, alternatives, consequences),
+merged before or with the code. A new adapter or secret source that follows the existing patterns does not. Open an issue or a draft PR with the ADR
 first if you are not sure; MAINTAINERS.md describes how it is accepted.
 
 ## Changesets

@@ -12,6 +12,7 @@
  */
 import { page, Reply, type CreatedBy, type ProviderSim, type SimCore } from "../provider.js";
 
+/** An item as the simulated __Name__ stores it, with the bookkeeping the sim adds (`createdBy`). */
 export interface __Name__Item {
   id: string;
   name: string;
@@ -20,15 +21,18 @@ export interface __Name__Item {
   createdBy: CreatedBy;
 }
 
+/** The simulated __Name__'s state: items per project. */
 export interface __Name__State {
   projects: Record<string, { items: __Name__Item[] }>;
 }
 
+/** What a scenario or test seeds the simulated __Name__ with (`seed: { __name__: … }`). */
 export interface __Name__Seed {
   /** Project id → items that already exist (created "by a human", so unmanaged). */
   projects: Record<string, Array<{ name: string; value: string }>>;
 }
 
+/** The simulated __Name__ API, registered in `PROVIDERS` (packages/sim/src/state.ts) and served under `/__name__`. */
 export const __name__Sim: ProviderSim<__Name__State, __Name__Seed> = {
   env: { token: "__NAME___TOKEN", url: "__NAME___API_URL", testToken: "tok___name__" },
   defaultSeed: { projects: { demo: [] } },

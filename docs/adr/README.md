@@ -20,6 +20,7 @@ Nygard's format). They explain *why* the code is the way it is; [ARCHITECTURE.md
 | [0012](0012-flat-plan-with-environment-filters.md) | One flat plan with per-line environment filters; production is never inferred | Accepted |
 | [0013](0013-rollback-undoes-only-this-run.md) | Rollback undoes only what this run created | Accepted |
 | [0014](0014-secrets-are-references.md) | Secrets are references, never values | Accepted |
+| [0015](0015-adapters-describe-themselves.md) | Adapters and secret sources describe themselves | Accepted |
 
 ## Writing a new record
 

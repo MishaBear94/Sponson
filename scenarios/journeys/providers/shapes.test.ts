@@ -54,7 +54,7 @@ changes:
     expect(r2.writes).toBe(0);
   });
 
-  it("unicode and 30 KB values through a provider that escapes non-ASCII as \\uXXXX and adds unknown fields: stored byte-exact, second apply writes nothing (passes)", async () => {
+  it("unicode and 30 KB values through a provider that escapes non-ASCII as \\uXXXX and adds unknown fields: stored byte-exact, second apply writes nothing", async () => {
     const tagline = "Café — 日本語 ✓ 🚀 «ünïcödé» \"quoted\" \\ back";
     const big = "é".repeat(15000) + "x".repeat(15000);
     w = await World.create({

@@ -7,11 +7,17 @@
  * CONTRIBUTING.md ("Adding an adapter") and on `OpSpec` in packages/core/src/types.ts.
  */
 import { markerKind, sha256, type AdapterContext, type Literal, type OpSpec, type ResourceAdapter, type ResourceRecord } from "@sponson/core";
+// Only the stable authoring API exported from `@sponson/adapters` (listed in CONTRIBUTING.md). In-tree adapters
+// import it from ./common.js and ./http.js; an out-of-tree plugin imports the same names from "@sponson/adapters".
 import { assertNoPending, clientFor, deleteIgnoringNotFound, diffValue, optionalEnv, paramError, requireEnv, requireProvider, stringParam } from "./common.js";
 import { ShapeError, isObject, isProviderError, listAll, records, type ApiClient, type Page } from "./http.js";
 
 const ADAPTER = "__name__";
-// TODO: the real API's base URL. Tests and scenarios point __NAME___API_URL at the sim instead.
+/** The environment __Name__ reads; declared once, used by the code below and by the generated docs (`about`). */
+const ABOUT = { credentialEnv: "__NAME___TOKEN", baseUrlEnv: "__NAME___API_URL" } as const;
+
+// TODO: the real API's base URL.
+/** __Name__'s API base URL. `__NAME___API_URL` overrides it; tests and scenarios point that at the sim. */
 export const __NAME___DEFAULT_API_URL = "https://api.__name__.example/v1";
 
 interface Item {
@@ -22,9 +28,9 @@ interface Item {
 
 /** The HTTP client: credentials from the environment, the project from `providers.__name__.project`. */
 function client(actx: AdapterContext): { api: ApiClient; project: string } {
-  const token = requireEnv(actx.env, "__NAME___TOKEN", ADAPTER);
+  const token = requireEnv(actx.env, ABOUT.credentialEnv, ADAPTER);
   const project = requireProvider(actx, "project", ADAPTER);
-  return { api: clientFor(actx, ADAPTER, { baseUrl: optionalEnv(actx.env, "__NAME___API_URL") ?? __NAME___DEFAULT_API_URL, token }), project };
+  return { api: clientFor(actx, ADAPTER, { baseUrl: optionalEnv(actx.env, ABOUT.baseUrlEnv) ?? __NAME___DEFAULT_API_URL, token }), project };
 }
 
 const ITEM_PREFIX = "item:";
@@ -37,6 +43,13 @@ function itemKey(name: string): string {
   return `${ITEM_PREFIX}${name}`;
 }
 
+/**
+ * One resource per item, under the key its diff uses. `hash` must cover every field the plan controls: a field
+ * left out is invisible to drift detection (a console edit of it goes unnoticed). With more fields, hash them
+ * together, e.g. `sha256(canonicalJson({ value: i.value, note: i.note }))` (see `branchHash` in neon.ts), and
+ * compare the desired fields the same way in `diff` and `apply`. Changing what the hash covers later is a
+ * breaking change: see "Adding an adapter" in CONTRIBUTING.md.
+ */
 function record(i: Item): ResourceRecord {
   return { key: itemKey(i.name), id: i.id, hash: sha256(i.value), label: `__Name__ item ${i.name}` };
 }
@@ -149,4 +162,8 @@ const item: OpSpec = {
   },
 };
 
-export const __name__Adapter: ResourceAdapter = { name: ADAPTER, ops: { item } };
+/**
+ * The __Name__ adapter (`adapter: __name__` in a plan). Registered in `createRegistry()`; needs `__NAME___TOKEN`
+ * and `providers.__name__.project`.
+ */
+export const __name__Adapter: ResourceAdapter = { name: ADAPTER, ops: { item }, about: ABOUT };

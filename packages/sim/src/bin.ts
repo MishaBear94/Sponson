@@ -11,7 +11,9 @@ if (!Number.isInteger(port) || port < 0) {
 
 const sim = await startSim({ port });
 console.log(`sponson-sim listening on ${sim.url}`);
-console.log(`  ${Object.entries(simEnv(sim, { tokens: false })).map(([k, v]) => `${k}=${v}`).join("  ")}`);
+// Everything the adapters need to talk to the sim, base URLs and placeholder tokens alike, ready to paste into a shell.
+console.log("# paste into another shell to point sponson at the sim:");
+for (const [k, v] of Object.entries(simEnv(sim))) console.log(`export ${k}=${v}`);
 
 const stop = () => {
   void sim.close().finally(() => process.exit(0));

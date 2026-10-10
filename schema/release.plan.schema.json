@@ -75,7 +75,7 @@
     },
     "secretRef": {
       "type": "object",
-      "description": "A secret, resolved only inside Sponson: `{ secret: \"env://NAME\" }`, `doppler://project/config/NAME`, `op://vault/item/field`, `aws-sm://secret-id#KEY`.",
+      "description": "A secret reference, resolved only inside Sponson, e.g. `{ secret: \"env://NAME\" }`. Schemes: docs/plan-format.md#secret-schemes.",
       "required": ["secret"],
       "additionalProperties": false,
       "properties": {

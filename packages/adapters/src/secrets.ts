@@ -4,17 +4,28 @@ import { SponsonError, type SecretSource } from "@sponson/core";
 /** Runs a CLI and returns its stdout. Injected in tests so no real `doppler`/`op`/`aws` is needed. */
 export type Exec = (file: string, args: string[], env: NodeJS.ProcessEnv) => Promise<string>;
 
-/** Runs the real binary from PATH; rejects with its stderr when it fails. */
+/**
+ * Runs the real binary from PATH; rejects with its stderr when it fails. A binary that cannot be started keeps the
+ * system error's `code` (`ENOENT`, `EACCES`), so the caller can say what is wrong instead of echoing it.
+ */
 export const defaultExec: Exec = (file, args, env) =>
   new Promise((resolve, reject) => {
     execFile(file, args, { env, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) reject(new Error(`${file} ${args[0] ?? ""} failed: ${String(stderr || err.message).trim()}`));
-      else resolve(stdout);
+      if (!err) return resolve(stdout);
+      const spawnCode = typeof err.code === "string" ? err.code : undefined;
+      const failure = new Error(`${file} ${args[0] ?? ""} failed: ${String(stderr || err.message).trim()}`) as NodeJS.ErrnoException;
+      if (spawnCode) failure.code = spawnCode;
+      reject(failure);
     });
   });
 
-function unresolved(ref: string, why: string): SponsonError {
-  return new SponsonError("SECRET_UNRESOLVED", `secret ${ref}: ${why}`, { ref });
+/**
+ * The one shape of every SECRET_UNRESOLVED a built-in source throws: the reason only. The engine prefixes the
+ * reference when it reports the line (`aws-sm://x: <reason>`), so the message never names the ref twice; the ref is
+ * in `details.ref` for callers that use a source directly. Never put the value, or any part of it, in `why`.
+ */
+function unresolved(ref: string, why: string, details: Record<string, unknown> = {}): SponsonError {
+  return new SponsonError("SECRET_UNRESOLVED", why, { ref, ...details });
 }
 
 function stripScheme(ref: string, scheme: string): string {
@@ -28,11 +39,18 @@ function stripTrailingNewline(out: string): string {
   return out.replace(/(\r\n|\n|\r)$/, "");
 }
 
-/** Run a secret CLI; any failure (missing binary, not signed in, unknown item) is SECRET_UNRESOLVED naming the ref. */
+/**
+ * Run a secret CLI; any failure is SECRET_UNRESOLVED. Every CLI-backed source goes through here, so a missing binary
+ * reads the same for all of them ("the `aws` CLI is not installed or not on PATH"), and any other failure (not signed
+ * in, unknown item) carries the CLI's own error text, which never contains the value it failed to read.
+ */
 async function runCli(exec: Exec, ref: string, file: string, args: string[], env: NodeJS.ProcessEnv): Promise<string> {
   try {
     return stripTrailingNewline(await exec(file, args, env));
   } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") throw unresolved(ref, `the \`${file}\` CLI is not installed or not on PATH`);
+    if (code === "EACCES") throw unresolved(ref, `the \`${file}\` CLI on PATH is not executable`);
     throw unresolved(ref, (e as Error).message);
   }
 }
@@ -40,10 +58,12 @@ async function runCli(exec: Exec, ref: string, file: string, args: string[], env
 /** `env://NAME` → process environment. Zero configuration; the CI default. */
 export const envSecretSource: SecretSource = {
   scheme: "env",
+  form: "`env://NAME`",
+  resolvedBy: "the process environment; unset or empty is `SECRET_UNRESOLVED`",
   async resolve(ref, env) {
     const name = stripScheme(ref, "env");
     const v = env[name];
-    if (v === undefined || v === "") throw new SponsonError("SECRET_UNRESOLVED", `secret ${ref}: environment variable ${name} is not set`, { ref, variable: name });
+    if (v === undefined || v === "") throw unresolved(ref, `environment variable ${name} is not set`, { variable: name });
     return v;
   },
 };
@@ -52,6 +72,8 @@ export const envSecretSource: SecretSource = {
 export function dopplerSecretSource(exec: Exec = defaultExec): SecretSource {
   return {
     scheme: "doppler",
+    form: "`doppler://project/config/NAME`",
+    resolvedBy: "`doppler secrets get NAME --project project --config config --plain` (Doppler CLI)",
     async resolve(ref, env) {
       const parts = stripScheme(ref, "doppler").split("/");
       if (parts.length !== 3 || parts.some((p) => p === "")) throw unresolved(ref, "expected doppler://project/config/NAME");
@@ -65,6 +87,8 @@ export function dopplerSecretSource(exec: Exec = defaultExec): SecretSource {
 export function opSecretSource(exec: Exec = defaultExec): SecretSource {
   return {
     scheme: "op",
+    form: "`op://vault/item/field`",
+    resolvedBy: "`op read op://vault/item/field --no-newline` (1Password CLI)",
     async resolve(ref, env) {
       const path = stripScheme(ref, "op");
       if (path.split("/").length < 3) throw unresolved(ref, "expected op://vault/item/field");
@@ -82,6 +106,9 @@ export function opSecretSource(exec: Exec = defaultExec): SecretSource {
 export function awsSecretsManagerSource(exec: Exec = defaultExec): SecretSource {
   return {
     scheme: "aws-sm",
+    form: "`aws-sm://secret-id` or `aws-sm://secret-id#KEY`",
+    resolvedBy:
+      "`aws secretsmanager get-secret-value --secret-id secret-id --query SecretString --output json` (AWS CLI; region and credentials from `AWS_REGION`, `AWS_PROFILE` and the CLI's other conventions). `secret-id` is a name or an ARN; `#KEY` picks one key of a JSON key/value secret. Binary secrets are not supported.",
     async resolve(ref, env) {
       const path = stripScheme(ref, "aws-sm");
       const hash = path.indexOf("#");

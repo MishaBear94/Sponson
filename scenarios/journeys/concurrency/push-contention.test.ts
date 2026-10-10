@@ -16,6 +16,9 @@ import { cliEnv } from "../../support.js";
 let sim: SimHandle;
 afterEach(async () => sim?.close());
 
+/** The receipts store's push budget for these runs; the test timeout is derived from it. */
+const STORE_BUDGET_MS = 90_000;
+
 describe("push contention across scopes", () => {
   it("eight PRs on eight runners apply at once: every run completes and every scope has its receipt and no stale lock", async () => {
     sim = await startSim();
@@ -24,7 +27,7 @@ describe("push contention across scopes", () => {
     const runs = await Promise.all(
       prs.map(async (pr) => {
         const cwd = await checkout();
-        return spawnCli(["apply", "--json", "--receipts", "git-branch", "--receipts-remote", remote, ...ctxArgs(pr)], cwd, cliEnv(sim, { TMPDIR: await tmp(`ci-${pr}`) })).done;
+        return spawnCli(["apply", "--json", "--receipts", "git-branch", "--receipts-remote", remote, ...ctxArgs(pr)], cwd, cliEnv(sim, { TMPDIR: await tmp(`ci-${pr}`), SPONSON_STORE_BUDGET_MS: String(STORE_BUDGET_MS) })).done;
       }),
     );
     const summary: Record<number, string> = {};
@@ -36,7 +39,7 @@ describe("push contention across scopes", () => {
       expect(await remoteFile(remote, `preview/pr-${pr}/lock.json`), `stale lock for pr-${pr}`).toBeNull();
     }
     expect(neonBranches(sim).filter((n) => n.startsWith("sponson/")).sort()).toEqual(prs.map((p) => `sponson/preview/pr-${p}`).sort());
-  });
+  }, STORE_BUDGET_MS + 60_000); // only the product's own budget may give up first, never the test's timer
 
   it("when the receipt push keeps failing, the receipt really is 'kept locally' as the error says, and the error names what was created", async () => {
     // Error text in git.ts: "Could not push to … Receipt kept locally in <workdir>." A user (or agent) will go look there.

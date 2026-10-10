@@ -26,6 +26,9 @@ function toolJson(r: unknown): Record<string, any> {
   return JSON.parse(text.split("\n")[0]!);
 }
 
+/** The receipts store's push budget for these runs; the test timeout is derived from it. */
+const STORE_BUDGET_MS = 60_000;
+
 describe("developer terminal + agent on one machine", () => {
   it("different scopes (dev on PR 51, agent on PR 52) via the git-branch store with the default working clone: both succeed and both receipts land", async () => {
     // Expected: scopes are independent, each with its own lock and receipt. Sharing a laptop must not make two unrelated PRs collide.
@@ -37,7 +40,7 @@ describe("developer terminal + agent on one machine", () => {
     for (let round = 0; round < 3; round++) {
       const devPr = 51 + round * 2;
       const agentPr = devPr + 1;
-      const env = cliEnv(sim, { TMPDIR: sharedTmp });
+      const env = cliEnv(sim, { TMPDIR: sharedTmp, SPONSON_STORE_BUDGET_MS: String(STORE_BUDGET_MS) });
       const agent = await mcpAgent(await checkout(), env, ["--receipts", "git-branch", "--receipts-remote", remote, ...ctxArgs(agentPr)]);
       try {
         const [dev, viaMcp] = await Promise.all([
@@ -53,7 +56,7 @@ describe("developer terminal + agent on one machine", () => {
       }
     }
     expect(failures).toEqual([]);
-  });
+  }, 3 * STORE_BUDGET_MS + 60_000); // three rounds; only the product's own budget may give up first
 
   it("same scope: the agent's sponson_apply and the developer's apply race on PR 60 (local store): one applies, the other gets LOCK_HELD, one branch", async () => {
     sim = await startSim();

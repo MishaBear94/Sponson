@@ -2,6 +2,9 @@
  * The one HTTP layer every adapter uses: timeout, retry policy, failure classification, response-shape checks and
  * pagination. Adapters never see a raw fetch error or a non-2xx status; they see a SponsonError with a PROVIDER_*
  * code, so "already exists" (→ re-read and claim), "gone" (→ fine on delete) and "try later" are decided here once.
+ *
+ * Part of the stable adapter authoring API (see packages/adapters/src/index.ts): ApiClient, Page, Shape,
+ * ShapeError, isObject, obj, records, listAll, withQuery, isProviderError. The rest may change.
  */
 import { setTimeout as sleep } from "node:timers/promises";
 import { SponsonError, isSponsonError, type ErrorCode } from "@sponson/core";
@@ -32,7 +35,7 @@ export interface ProviderErrorDetails {
 
 /**
  * True when `e` is a provider failure, optionally of the given code(s). Adapters use it to branch on "already
- * exists" or "not found" instead of reading HTTP statuses.
+ * exists" or "not found" instead of reading HTTP statuses. Stable authoring API.
  */
 export function isProviderError(e: unknown, code?: ProviderErrorCode | ProviderErrorCode[]): e is SponsonError & { details: ProviderErrorDetails } {
   if (!isSponsonError(e) || !e.code.startsWith("PROVIDER_")) return false;
@@ -65,12 +68,13 @@ export interface ApiClientOptions {
 /**
  * Validates a parsed response body and returns it typed. Throw `ShapeError` (or return via the `shape` helpers)
  * when it is not what the adapter consumes; the client turns that into PROVIDER_RESPONSE naming the endpoint.
+ * Stable authoring API.
  */
 export type Shape<T> = (body: unknown) => T;
 
 /**
  * Thrown by a `Shape` when a response body is not what the adapter expects; the client reports it as
- * PROVIDER_RESPONSE.
+ * PROVIDER_RESPONSE. Stable authoring API.
  */
 export class ShapeError extends Error {
   constructor(message: string) {
@@ -81,7 +85,7 @@ export class ShapeError extends Error {
 
 /**
  * A JSON client bound to one provider: retries, timeouts and error classification are built in. Get one from
- * `clientFor`.
+ * `clientFor`. Stable authoring API.
  */
 export interface ApiClient {
   readonly adapter: string;
@@ -265,18 +269,18 @@ export function apiClient(opts: ApiClientOptions): ApiClient {
 // Shape helpers: small checks with messages that name the field, instead of a TypeError three frames later.
 // ---------------------------------------------------------------------------
 
-/** True for a plain JSON object (not null, not an array). For hand-written `Shape`s. */
+/** True for a plain JSON object (not null, not an array). For hand-written `Shape`s. Stable authoring API. */
 export function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-/** `v` must be an object; returns it. */
+/** `v` must be an object; returns it. Stable authoring API. */
 export function obj(v: unknown, what: string): Record<string, unknown> {
   if (!isObject(v)) throw new ShapeError(`expected ${what} to be an object, got ${kindOf(v)}`);
   return v;
 }
 
-/** `v[field]` must be an array of objects each having the string fields named. */
+/** `v` must be an array of objects each having the string fields named; returns them typed. Stable authoring API. */
 export function records<K extends string>(v: unknown, what: string, fields: readonly K[]): Array<Record<K, string> & Record<string, unknown>> {
   if (!Array.isArray(v)) throw new ShapeError(`expected ${what} to be an array, got ${kindOf(v)}`);
   return v.map((item, i) => {
@@ -294,7 +298,7 @@ function kindOf(v: unknown): string {
 // Pagination
 // ---------------------------------------------------------------------------
 
-/** One page of a list, as the `page` callback of `listAll` describes it. */
+/** One page of a list, as the `page` callback of `listAll` describes it. Stable authoring API. */
 export interface Page<T> {
   items: T[];
   /** Query parameters for the next page, or null when this was the last one. */
@@ -307,6 +311,7 @@ export const MAX_PAGES = 1000;
 /**
  * Fetch every page of a list. `page` validates one response body and says how to ask for the next page.
  * Stops on a null cursor, an empty page, or a cursor seen before (a provider that repeats the last cursor).
+ * Stable authoring API.
  */
 export async function listAll<T>(api: ApiClient, path: string, page: (body: unknown, pageNo: number) => Page<T>): Promise<T[]> {
   const out: T[] = [];
@@ -325,7 +330,7 @@ export async function listAll<T>(api: ApiClient, path: string, page: (body: unkn
   return out;
 }
 
-/** `path` with `extra` appended as query parameters (after any it already has). */
+/** `path` with `extra` appended as query parameters (after any it already has). Stable authoring API. */
 export function withQuery(path: string, extra: Record<string, string>): string {
   const entries = Object.entries(extra);
   if (entries.length === 0) return path;

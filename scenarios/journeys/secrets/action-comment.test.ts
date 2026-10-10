@@ -193,7 +193,7 @@ describe("PR comment rendering from real --json output", () => {
     expect(crash.body).toContain("apply crashed (exit 1)");
   });
 
-  it("D15: a CRLF error message (multi-line stderr from a secret-source CLI) splits the comment's table row", async () => {
+  it("D15: a CRLF error message (multi-line stderr from a secret-source CLI) stays inside one table row of the comment", async () => {
     const w = await World.create(`version: 1
 providers:
   vercel: { project: prj_demo }
@@ -221,7 +221,7 @@ changes:
     expect(tableProblems(body), body).toEqual([]);
   });
 
-  it("D16: an HTML error page from a provider (truncated mid `<!--`) opens an HTML comment that swallows the rest of the PR comment", async () => {
+  it("D16: an HTML error page from a provider (truncated mid `<!--`) is neutralised and cannot swallow the rest of the PR comment", async () => {
     const page =
       `<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body><h1>Bad gateway</h1>` +
       `<p>${"The web server reported a bad gateway error. ".repeat(8)}</p>` +
@@ -260,7 +260,7 @@ describe("scope derivation (action.yml step `scope`)", () => {
     expect(String(c.reason)).toMatch(/no open pull request/);
   });
 
-  it("D17: a deployment whose commit belongs only to a merged/closed PR is attributed to that PR, so `apply` re-creates the scope `destroy` just removed", async () => {
+  it("D17: a deployment whose commit belongs only to a merged/closed PR is not attributed to it, so `apply` never re-creates the scope `destroy` removed", async () => {
     const code = await script("scope");
     // Squash-merge of PR 42 lands on main; Vercel deploys main; deployment_status fires for the merge commit.
     const prs = [{ number: 42, state: "closed", head: { ref: "feat/x" } }];
@@ -268,7 +268,7 @@ describe("scope derivation (action.yml step `scope`)", () => {
     expect(out.pr, "closed PR picked as the scope of a deployment_status apply").toBe("");
   });
 
-  it("D18: the documented workflow runs `destroy` without provider credentials, so closing a PR leaves every resource behind", async () => {
+  it("D18: the documented workflow's `destroy` step has the provider credentials it needs, so closing a PR removes every resource", async () => {
     const readme = await readFile(join(root, "action/README.md"), "utf8");
     const block = readme.match(/## Example workflow[\s\S]*?```yaml\n([\s\S]*?)```/)![1]!;
     const wf = parseYaml(block) as { jobs: Record<string, { steps: Step[]; env?: Record<string, string> }> };

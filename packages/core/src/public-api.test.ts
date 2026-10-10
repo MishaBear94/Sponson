@@ -3,6 +3,10 @@
  * widening the API is a decision made in review rather than a side effect of `export *`; a removed one fails it
  * too (it may break users). Every export must also carry a doc comment that says when to use it.
  *
+ * `pnpm new:adapter <name>` adds the names its generated files export (one line per package, at the end of that
+ * package's list) and prints the edit, so a scaffolded adapter passes as is. Keep each package's list as a
+ * `"<package>": [ … ],` array of string literals closed by `  ],` on its own line: that is the shape it edits.
+ *
  * Lives in core because core is the root of the dependency graph; it only reads the other packages' sources.
  */
 import { fileURLToPath } from "node:url";
@@ -11,7 +15,7 @@ import { describe, expect, it } from "vitest";
 
 const PUBLIC_API: Record<string, string[]> = {
   "@sponson/core": [
-    "AdapterContext", "AdoptedLine", "AncestryCheck", "ApplyResult", "ApplyResultSummary", "Change", "Ctx",
+    "AdapterAbout", "AdapterContext", "AdoptedLine", "AncestryCheck", "ApplyResult", "ApplyResultSummary", "Change", "Ctx",
     "DiffKind", "DiffSide", "Drift", "DriftKind", "ERROR_CODES", "ErrorCode", "ErrorCodeSpec", "ExitCode", "FromRef",
     "GitBranchReceiptStore", "GitBranchStoreOptions", "KeepRef", "Ledger", "LedgerEntry", "LineOutputs", "LineStatus",
     "Literal", "LiveState", "LocalReceiptStore", "LockHeldError", "LockInfo", "LockLostError", "MASK",
@@ -33,7 +37,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "Page", "ProviderErrorCode", "ProviderErrorDetails", "Shape", "ShapeError", "VERCEL_DEFAULT_API_URL", "apiClient",
     "assertNoPending", "awsSecretsManagerSource", "backoffMs", "classifyStatus", "clerkAdapter", "clientFor", "createRegistry", "defaultExec",
     "deleteIgnoringNotFound", "desiredSide", "diffValue", "dopplerSecretSource", "envSecretSource", "excerptOf",
-    "isObject", "isProviderError", "isTransient", "listAll", "neonAdapter", "obj", "opSecretSource", "paramError",
+    "isObject", "isProviderError", "isTransient", "listAll", "neonAdapter", "obj", "opSecretSource", "optionalEnv", "paramError",
     "records", "requireEnv", "requireProvider", "retryAfterMs", "stringParam", "vercelAdapter", "withQuery",
   ],
   "@sponson/sim": [

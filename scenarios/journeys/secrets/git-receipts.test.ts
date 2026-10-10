@@ -97,7 +97,7 @@ describe("git-branch receipts", () => {
     }
   });
 
-  it("D14: a receipts remote answering 404 (GitHub's answer for a token without access to a private repo) is read as 'no receipts yet': plan exits 0 and drift detection silently turns off", async () => {
+  it("D14: a receipts remote answering 404 (GitHub's answer for a token without access to a private repo) is STORE_PERMISSION, never read as 'no receipts yet'", async () => {
     const server = createServer((_req, res) => {
       res.writeHead(404, { "content-type": "text/plain" });
       res.end("Repository not found.");

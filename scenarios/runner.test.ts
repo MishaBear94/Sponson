@@ -2,7 +2,8 @@
  * Scenario runner: the acceptance suite, one YAML file per failure scenario, each run end to end through the
  * in-process CLI against a fresh sim.
  *
- * Every `scenarios/<category>/<name>.yaml` is one scenario:
+ * Every `.yaml` file anywhere under `scenarios/` is one scenario (by convention `scenarios/<category>/<name>.yaml`,
+ * where the category directory names the failure family):
  *
  *   name: human title
  *   plan: |                      release.plan.yaml contents (providers default to prj_demo / proj_demo)
@@ -10,6 +11,9 @@
  *   chaos: { ... }               initial POST /_chaos body
  *   ctx: { env, pr, branch, sha } defaults: preview / 42 / feat/x / <fixed sha>
  *   env: { NAME: value }         extra process env (secrets, tokens)
+ *   bins: { NAME: |              fake executables: each body becomes `#!/bin/sh` + body in a scenario-private
+ *     <shell script> }           directory prepended to the scenario's PATH (after `env:`), so a scenario can
+ *                                stand in for a CLI such as `aws`, `doppler` or `op`. "$@" are the arguments.
  *   secrets: [value, ...]        values that must never appear in any output (I1)
  *   steps:
  *     - run: "apply --json"      CLI args; ctx flags and a local receipts dir are appended
@@ -45,8 +49,8 @@
  *   I4  a `plan` or `status` step performed zero sim writes;
  *   I6  every latest.json receipt parses (except content the scenario itself tampered with).
  */
-import { readdir, readFile, mkdir, writeFile, rm } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { chmod, readdir, readFile, mkdir, writeFile, rm } from "node:fs/promises";
+import { delimiter, join, relative } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { describe, expect, it } from "vitest";
 import { startSim, type SimHandle, type SimSeed } from "@sponson/sim";
@@ -98,6 +102,7 @@ interface Scenario {
   chaos?: Record<string, unknown>;
   ctx?: { env?: string; pr?: number | null; branch?: string; sha?: string };
   env?: Record<string, string>;
+  bins?: Record<string, string>;
   secrets?: string[];
   steps: Step[];
 }
@@ -147,6 +152,7 @@ class Harness {
     const sim = await startSim({ seed: s.seed });
     const ws = await workspace("scn", { plan: s.plan });
     const env = cliEnv(sim, { SPONSON_RECEIPTS_DIR: join(ws.dir, ".sponson/receipts"), ...(s.env ?? {}) });
+    if (s.bins) env.PATH = [await plantBins(join(ws.dir, ".scenario-bin"), s.bins), env.PATH].filter(Boolean).join(delimiter);
     const ctx = { ...DEFAULT_CTX, ...(s.ctx ?? {}) };
     if (s.chaos) await sim.state.applyChaos(s.chaos as never);
     return new Harness(s, sim, ws, env, ctx);
@@ -327,6 +333,18 @@ class Harness {
     this.tampered.add(JSON.stringify(r));
     await writeFile(latest, JSON.stringify(r));
   }
+}
+
+/** Write each `bins:` entry as an executable shell script in `dir`; returns `dir` for the front of PATH. */
+async function plantBins(dir: string, bins: Record<string, string>): Promise<string> {
+  await mkdir(dir, { recursive: true });
+  for (const [name, body] of Object.entries(bins)) {
+    if (!/^[A-Za-z0-9._-]+$/.test(name)) throw new Error(`bins: \`${name}\` is not a plain executable name`);
+    const file = join(dir, name);
+    await writeFile(file, `#!/bin/sh\n${body}`);
+    await chmod(file, 0o755);
+  }
+  return dir;
 }
 
 function scopeOf(ctx: typeof DEFAULT_CTX): string {

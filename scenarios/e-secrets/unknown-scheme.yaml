@@ -1,4 +1,4 @@
-name: "unknown secret scheme: lists the known ones"
+name: "unknown secret scheme: the line is blocked and the message lists the known schemes"
 plan: |
   version: 1
   providers:
@@ -9,10 +9,10 @@ plan: |
       adapter: vercel
       op: env
       target: preview
-      values: { STRIPE_KEY: { secret: "vault://x/y" } }
+      values: { STRIPE_KEY: { secret: "nosuch://x/y" } }
 steps:
   - run: apply --json
     expect:
       exit: 1
       lines: { env: blocked }
-      errors: { env: "No secret source for `vault://`.*env://" }
+      errors: { env: "nosuch://x/y: No secret source for `nosuch://`.*env://" }

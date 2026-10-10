@@ -17,7 +17,10 @@ Thanks for contributing! Keep the PR to one concern. Security issues: do not ope
 - [ ] Adapters only: the op follows the rules in CONTRIBUTING.md (`read`/`diff` never write, `apply` idempotent, `actx.intend` before every create, `destroy` treats "gone" as success), has sim routes with numbered API assumptions, and a scenario.
 - [ ] A changeset (`pnpm changeset`) describes any user-visible change — or this PR is docs/tests/CI only.
 - [ ] Docs updated where behaviour changed (README, SKILL.md, package READMEs, `docs/`).
-- [ ] An ADR in `docs/adr/` if this changes the plan or receipt format, the adapter contract, the JSON output, error/exit codes, an invariant, or adds a CLI command.
+- [ ] Adapters only: `pnpm docs:gen` run, the op's section written in `docs/plan-format.md`, and its provider block and params in `schema/release.plan.schema.json`.
+- ADR (tick one). Needed for changes to the plan format or its semantics, receipts, the safety rules (invariants, approval, drift), or the public API (adapter contract, JSON output, error/exit codes, CLI commands); not for a new adapter or secret source that follows the existing patterns.
+  - [ ] An ADR in `docs/adr/` is included or already merged: <!-- link -->
+  - [ ] Not needed because: <!-- one line, e.g. "new adapter following the existing pattern" -->
 
 ### Invariants touched
 

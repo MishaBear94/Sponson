@@ -36,6 +36,7 @@ export async function inspectLine(rc: RunContext, change: Change, op: OpSpec, pa
 
   const missingSecret = resolved.secrets.find((s) => rc.secrets.failures.has(s.ref));
   if (missingSecret) {
+    // The one place a secret failure gets its reference: sources throw the reason only, so it is never named twice.
     inspection.refusal = { code: "SECRET_UNRESOLVED", message: `${missingSecret.ref}: ${rc.secrets.failures.get(missingSecret.ref)}` };
   }
 
