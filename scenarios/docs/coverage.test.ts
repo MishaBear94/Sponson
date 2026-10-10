@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { describe, expect, it } from "vitest";
 import { createRegistry, loadRecipes } from "@sponson/adapters";
-import { coverageNumbers, coverRefs, loadCoverage, type CoverageRow } from "../../scripts/coverage-data.js";
+import { coverageNumbers, coverRefs, isCovered, isManualStep, loadCoverage, type CoverageRow } from "../../scripts/coverage-data.js";
 import { REPO, scenarioPlans } from "./plans.js";
 
 const data = await loadCoverage();
@@ -114,7 +114,7 @@ describe("docs/coverage.md states the numbers the data gives", async () => {
   });
 
   it("every row's coverage mark", () => {
-    const covered = (r: CoverageRow) => coverRefs(r).length > 0;
+    const covered = (r: CoverageRow) => isCovered(r) || isManualStep(r);
     for (const r of rows.filter((x) => x.counted !== false)) {
       const line = doc.split("\n").find((l) => l.startsWith(`| ${r.provider} | `) && l.includes(r.side_effect.slice(0, 20).replace(/\|/g, "\\|")));
       expect(line, `the table row of ${r.id}`).toBeDefined();

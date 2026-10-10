@@ -30,11 +30,11 @@ categories:
           - vercel.deploy
       - id: netlify-env
         provider: Netlify
-        side_effect: Env var values per deploy context (`deploy-preview`, `branch` + `context_parameter`)
+        side_effect: Env var values per deploy context (`deploy-preview`, `branch` + `context_parameter`); wait for the deploy of the commit, rebuild if it started before the write
         api_shape: REST `POST /api/v1/accounts/{account}/env?site_id=`, `PATCH .../env/{key}`; bearer; object per key, values list per context; deploys only see values set before they started
         generic: P (deploy barrier like Vercel)
         priority: P0
-        covered_by: null
+        covered_by: netlify.env
       - id: cloudflare-pages-env
         provider: Cloudflare Pages / Workers
         side_effect: "Pages: `deployment_configs.preview.env_vars` (all previews share one set, no per-branch values). Workers: secrets per script / preview version"
@@ -111,17 +111,20 @@ categories:
       - id: supabase-branch
         provider: Supabase
         side_effect: Preview branch per PR (a separate project with its own ref, keys and URL)
-        api_shape: Management API `POST /v1/projects/{ref}/branches`, `DELETE /v1/branches/{id}`, bearer PAT; object; async provisioning, migrations run by Supabase
+        api_shape: Management API `POST /v1/projects/{ref}/branches`, `GET`/`DELETE /v1/branches/{ref}`, bearer PAT; object; async provisioning (`ACTIVE_HEALTHY`), migrations run by Supabase
         generic: P (async, outputs from a second project)
         priority: P0
-        covered_by: null
+        covered_by: supabase.branch
       - id: planetscale-branch
         provider: PlanetScale
         side_effect: Branch per PR; password (credential) per branch; deploy request on merge
         api_shape: REST `POST /v1/organizations/{o}/databases/{d}/branches`, `.../branches/{b}/passwords`; service token header; object; branch `ready` async; password plaintext returned once
         generic: P (async, once-only secret)
         priority: P1
-        covered_by: null
+        covered_by:
+          - planetscale.branch
+          - planetscale.password
+        note: deploy requests on merge are not managed
       - id: turso-database
         provider: Turso
         side_effect: "Database branched from a parent (`seed: {type: database}`), token per DB"
@@ -180,7 +183,7 @@ categories:
         api_shape: Management API `PATCH /v1/projects/{ref}/config/auth` with `uri_allow_list`, bearer; **list** encoded as one comma-separated string; send only that field
         generic: Y (list mode over a delimited string)
         priority: P0
-        covered_by: recipe:supabase.auth_redirect_url
+        covered_by: supabase.auth_redirect
       - id: firebase-auth-domains
         provider: Firebase Auth
         side_effect: Preview domain in `authorizedDomains`

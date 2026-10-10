@@ -1,10 +1,12 @@
+import { isSponsonError } from "../errors.js";
 import { resolveParams, type LineOutputs, type ResolveResult } from "../resolve.js";
 import type { Change, DiffSide, Drift, LiveState, OpSpec, ResourceDiff, ResourceRecord } from "../types.js";
+import { holdsCurrentValue } from "./once.js";
 import type { RunContext } from "./run-context.js";
 
 /** Why apply would refuse a line, before writing anything. */
 export interface Refusal {
-  code: "DRIFT_CHANGED" | "OWNED_BY_OTHER_SCOPE" | "SECRET_UNRESOLVED";
+  code: "DRIFT_CHANGED" | "OWNED_BY_OTHER_SCOPE" | "SECRET_UNRESOLVED" | "OUTPUT_UNAVAILABLE";
   message: string;
 }
 
@@ -28,11 +30,13 @@ export interface Inspection {
  */
 export async function inspectLine(rc: RunContext, change: Change, op: OpSpec, params: Record<string, unknown>, outputs: Map<string, LineOutputs>): Promise<Inspection> {
   const provider = rc.provider(change);
-  const resolved = resolveParams(params, outputs, rc.secrets.values);
+  const resolved = resolveParams(params, outputs, rc.secrets.values, (ref, line, output) => holdsCurrentValue(rc.ledger.all(), change.id, ref, line, output));
   const live = await op.read(rc.adapterContext(change.adapter, provider), resolved.params);
   if (live) rc.guardOutputs(live.outputs, op.outputs);
-  const diffs = op.diff(live, resolved.params).map((d) => scrubDiff(rc, d));
+  const spent = diffOrSpent(change, op, live, resolved, changedOutside(rc, change, provider, live));
+  const diffs = spent.diffs.map((d) => scrubDiff(rc, d));
   const inspection: Inspection = { change, op, provider, resolved, live, diffs, drift: [], desired: new Set(diffs.map((d) => d.key)) };
+  if (spent.refusal) inspection.refusal = spent.refusal;
 
   const missingSecret = resolved.secrets.find((s) => rc.secrets.failures.has(s.ref));
   if (missingSecret) {
@@ -48,6 +52,48 @@ export async function inspectLine(rc: RunContext, change: Change, op: OpSpec, pa
     if (verdict.refusal) inspection.refusal ??= verdict.refusal;
   }
   return inspection;
+}
+
+/**
+ * The line's diffs. A spent `once` output reaches the line as `{ keep: true }` only when the ledger shows the line
+ * holds the current value (`holdsCurrentValue`). The line is refused, naming the output, when it cannot be shown to
+ * hold it (added later, or the producer was adopted), was edited outside Sponson since (keep would accept the edit),
+ * or would have to write the value (its resource is missing, or its adapter rejects the keep marker as
+ * PARAM_INVALID, as `diffValue` does): no later run has the value.
+ */
+function diffOrSpent(change: Change, op: OpSpec, live: LiveState | null, resolved: ResolveResult, edited: boolean): { diffs: ResourceDiff[]; refusal?: Refusal } {
+  const spent = resolved.spent[0];
+  if (!spent) return { diffs: op.diff(live, resolved.params) };
+  const refuse = (why: string, diffs: ResourceDiff[] = []) => ({ diffs, refusal: outputUnavailable(change, spent, why) });
+  const unproven = resolved.spent.find((s) => !s.kept);
+  if (unproven) return { diffs: op.diff(live, resolved.params), refusal: outputUnavailable(change, unproven, "this line was not written with the current value") };
+  if (edited) return refuse("this line was changed outside Sponson since it was written with it, so keeping what is there would keep the edit");
+  if (!live) return refuse("this line's resource does not exist and would have to be written with it");
+  try {
+    const diffs = op.diff(live, resolved.params);
+    return diffs.some((d) => d.kind === "create") ? refuse("this line would have to create a resource with it", diffs) : { diffs };
+  } catch (e) {
+    if (!isSponsonError(e) || e.code !== "PARAM_INVALID") throw e;
+    return refuse("this line would have to be written with it");
+  }
+}
+
+function outputUnavailable(change: Change, spent: ResolveResult["spent"][number], why: string): Refusal {
+  return {
+    code: "OUTPUT_UNAVAILABLE",
+    message:
+      `\`${change.id}\` needs \`${spent.ref}\`, which the provider reveals only when \`${spent.line}\` creates its resource, and that happened in an earlier run; ${why}. ` +
+      `Nothing was written. To pass a new value on, make \`${spent.line}\` create a new one: recreate it (recreate), delete it in the provider (the next apply re-creates it) or give it a new name in the plan. ` +
+      `Or keep the value in a secret manager and reference it with \`{ secret: … }\`.`,
+  };
+}
+
+/** Whether a resource of the line was changed outside Sponson since it was last written (its hash moved). */
+function changedOutside(rc: RunContext, change: Change, provider: Record<string, unknown>, live: LiveState | null): boolean {
+  return (live?.resources ?? []).some((r) => {
+    const e = rc.ledger.get(change.adapter, provider, r.key);
+    return e !== undefined && e.createdBy !== "intent" && e.hash !== "" && rc.ledger.keyed(r.hash) !== e.hash;
+  });
 }
 
 /** What one diffed resource means against the ledger: drift to report, and why apply must refuse it. */

@@ -1,0 +1,75 @@
+# The Netlify adapter end to end through the CLI against the sim. Format: see the top of scenarios/runner.test.ts.
+name: "netlify: create, apply twice without writes, drift refused until --reconcile, destroy removes only Sponson's values"
+plan: |
+  version: 1
+  providers:
+    netlify: { site: site_demo, account: acme }
+  changes:
+    - id: env
+      adapter: netlify
+      op: env
+      values:
+        API_URL: https://preview.example.com
+        FEATURE_FLAG: "on"
+      environments: [preview]
+seed:
+  netlify:
+    sites:
+      site_demo:
+        name: demo-site
+        account: acme
+        # A human set API_URL for production; Sponson adds the git branch's value next to it and never touches it.
+        envs:
+          - key: API_URL
+            values: [{ context: production, value: https://api.example.com }]
+steps:
+  - run: plan --json
+    expect:
+      exit: 0
+      plan_lines: { env: create }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { env: applied }
+  - sim:
+      write_order: ["POST /netlify/accounts/acme/env", "PATCH /netlify/accounts/acme/env/API_URL"]
+      state:
+        "netlify.sites.site_demo.envs.0.values.0.context": production
+        "netlify.sites.site_demo.envs.0.values": { includes: { context: branch, context_parameter: feat/x, value: https://preview.example.com } }
+  - run: apply --json
+    expect:
+      exit: 0
+      writes: 0
+      lines: { env: unchanged }
+  # A human edits the branch value in the Netlify UI: plan reports it, apply refuses it until --reconcile.
+  - chaos:
+      drift: { "netlify.env.branch@feat/x.FEATURE_FLAG": "off" }
+  - run: plan --json
+    expect:
+      exit: 1
+      drift: [{ kind: changed, line: env }]
+      plan_lines: { env: blocked }
+  - run: apply --json
+    expect:
+      exit: 1
+      status: failed
+      lines: { env: blocked }
+      errors: { env: "reconcile" }
+  - run: apply --reconcile --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { env: applied }
+  - run: apply --destroy --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { env: destroyed }
+  - sim:
+      write_order: ["DELETE /netlify/accounts/acme/env/", "DELETE /netlify/accounts/acme/env/FEATURE_FLAG"]
+      state:
+        # The human's production value survives; FEATURE_FLAG, which only Sponson's value kept alive, is gone.
+        "netlify.sites.site_demo.envs": { length: 1 }
+        "netlify.sites.site_demo.envs.0.values": { length: 1 }
+        "netlify.sites.site_demo.envs.0.values.0.value": https://api.example.com

@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/MishaBear94/Sponson/main/schema/release.plan.schema.json
+#
+# A Next.js app on Vercel with Supabase. Every pull request gets its own Supabase preview branch (a
+# project of its own, with its own database, API URL and Auth settings); that pull request's preview
+# deployments get the branch's connection string and URL, and the preview URL is allowed as an Auth
+# redirect on the branch.
+version: 1
+providers:
+  vercel: { project: prj_acme_web }                  # .vercel/project.json → projectId
+  supabase: { project: acmewebprojectrefxyz }        # `supabase link` → supabase/.temp/project-ref; branching enabled
+
+changes:
+  # One preview branch per scope. `name` defaults to sponson-<env>-<scope>, so pull request 42 gets
+  # `sponson-preview-pr-42`. Apply waits until the branch is up (SPONSON_SUPABASE_TIMEOUT_MS).
+  - id: db
+    adapter: supabase
+    op: branch
+    environments: [preview]
+
+  # Preview variables for the current git branch only.
+  - id: env
+    adapter: vercel
+    op: env
+    target: preview
+    values:
+      DATABASE_URL: { from: db.connection_string }   # sensitive: never printed, never in a receipt
+      NEXT_PUBLIC_SUPABASE_URL: { from: db.api_url } # https://<branch ref>.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: { secret: "env://SUPABASE_PREVIEW_ANON_KEY" } # the branch's keys are not an output yet
+    environments: [preview]
+
+  # The preview's URL on the branch's own Auth redirect allow-list. `project` points the line at the
+  # branch; without it, the line edits the allow-list of providers.supabase.project.
+  - id: auth_callback
+    adapter: supabase
+    op: auth_redirect
+    project: { from: db.project_ref }
+    url: { from: env.preview_url }
+    environments: [preview]

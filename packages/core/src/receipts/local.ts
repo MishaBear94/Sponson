@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { SponsonError } from "../errors.js";
 import { LockHeldError, LockLostError, type LockInfo, type Receipt, type ReceiptStore } from "../types.js";
-import { latestPath, lockExpired, lockPath, parseLock, parseReceipt, receiptDir, runPath, serialize } from "./layout.js";
+import { latestPath, lockExpired, lockPath, PARENT_LOCKS_ENVIRONMENT, parentLockScope, parseLock, parseReceipt, receiptDir, runPath, serialize } from "./layout.js";
 
 /** A mutex file older than this belongs to a process that died while holding it. Every critical section is a few file ops. */
 const MUTEX_STALE_MS = 10_000;
@@ -132,6 +132,25 @@ export class LocalReceiptStore implements ReceiptStore {
       if (cur.lock && cur.lock.holder === holder) await removeVia(path);
     });
     this.fences.delete(fenceKey(environment, scope));
+  }
+
+  // Parent-object locks (ADR 0019) are lock-only directories, `_locks/<hash>/lock.json`, with the scope lock's
+  // machinery: link(2) creation, the mutex around takeover, renew and release.
+
+  async acquireParentLock(parent: string, holder: string, ttlMs: number): Promise<LockInfo | null> {
+    return this.acquireLock(PARENT_LOCKS_ENVIRONMENT, parentLockScope(parent), holder, ttlMs);
+  }
+
+  async renewParentLock(parent: string, holder: string, ttlMs: number): Promise<void> {
+    return this.renewLock(PARENT_LOCKS_ENVIRONMENT, parentLockScope(parent), holder, ttlMs);
+  }
+
+  async readParentLock(parent: string): Promise<LockInfo | null> {
+    return this.readLock(PARENT_LOCKS_ENVIRONMENT, parentLockScope(parent));
+  }
+
+  async releaseParentLock(parent: string, holder: string): Promise<void> {
+    return this.releaseLock(PARENT_LOCKS_ENVIRONMENT, parentLockScope(parent), holder);
   }
 
   // -------------------------------------------------------------------------

@@ -1,0 +1,61 @@
+# The Supabase adapter's `auth_redirect` op end to end through the CLI against the sim. Format: see the top of
+# scenarios/runner.test.ts.
+name: "supabase.auth_redirect: add to the allow-list, apply twice without writes, removed by a human re-added, destroy leaves the other entries"
+plan: |
+  version: 1
+  providers:
+    supabase: { project: demoprojectrefabcdef }
+  changes:
+    - id: callback
+      adapter: supabase
+      op: auth_redirect
+      url: https://pr-42.preview.example.com/auth/callback
+      environments: [preview]
+seed:
+  supabase:
+    projects:
+      demoprojectrefabcdef: { uri_allow_list: "http://localhost:3000/**,https://app.example.com/**" }
+steps:
+  - run: plan --json
+    expect:
+      exit: 0
+      plan_lines: { callback: create }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { callback: applied }
+      outputs: { callback: { url: https://pr-42.preview.example.com/auth/callback } }
+  - sim:
+      write_order: ["PATCH /supabase/projects/demoprojectrefabcdef/config/auth"]
+      state:
+        "supabase.projects.demoprojectrefabcdef.auth.uri_allow_list": "http://localhost:3000/**,https://app.example.com/**,https://pr-42.preview.example.com/auth/callback"
+  - run: apply --json
+    expect:
+      exit: 0
+      writes: 0
+      lines: { callback: unchanged }
+  # A human removes the entry in the dashboard: missing drift never blocks; apply adds it back.
+  - chaos:
+      drift: { "supabase.redirect.https://pr-42.preview.example.com/auth/callback": delete }
+  - run: plan --json
+    expect:
+      exit: 0
+      drift: [{ kind: missing, line: callback }]
+      plan_lines: { callback: create }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { callback: applied }
+  # Someone adds an entry of their own meanwhile: destroy must leave it, and every other entry.
+  - chaos:
+      drift: { "supabase.redirect.https://staging.example.com/**": add }
+  - run: apply --destroy --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { callback: destroyed }
+  - sim:
+      state:
+        "supabase.projects.demoprojectrefabcdef.auth.uri_allow_list": "http://localhost:3000/**,https://app.example.com/**,https://staging.example.com/**"

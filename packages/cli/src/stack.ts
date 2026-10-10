@@ -7,7 +7,8 @@
  * names are kept. The one exception is a database URL, whose host is classified against known provider domains
  * (`*.neon.tech`, `*.supabase.co`, …) inside `dbHostProvider`; the URL itself, its credentials and the host are
  * dropped there and only the provider's id comes out. Ids that are not secrets (`.vercel/project.json`, `.neon`,
- * `VERCEL_PROJECT_ID` / `VERCEL_ORG_ID` / `NEON_PROJECT_ID` in the process environment) are read as values.
+ * `supabase/.temp/project-ref`, `.netlify/state.json`, `VERCEL_PROJECT_ID` / `VERCEL_ORG_ID` / `NEON_PROJECT_ID` /
+ * `NETLIFY_SITE_ID` in the process environment) are read as values.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -38,11 +39,11 @@ export interface UnsupportedFinding extends Finding {
 }
 
 export interface StackDetection {
-  /** What Sponson can use, in a fixed order: providers (vercel, neon, clerk, launchdarkly), then frameworks, then ORMs. */
+  /** What Sponson can use, in a fixed order: providers (vercel, neon, planetscale, clerk, launchdarkly, supabase, netlify), then frameworks, then ORMs. */
   found: Finding[];
   /** Detected but not managed by any built-in adapter. Never silently dropped. */
   unsupported: UnsupportedFinding[];
-  ids: { vercelProject?: string; vercelTeam?: string; vercelProjectFrom?: string; neonProject?: string; neonProjectFrom?: string };
+  ids: { vercelProject?: string; vercelTeam?: string; vercelProjectFrom?: string; neonProject?: string; neonProjectFrom?: string; supabaseProject?: string; supabaseProjectFrom?: string; netlifySite?: string; netlifySiteFrom?: string };
   /** The variable the app reads its database URL from (DATABASE_URL unless the code says otherwise). */
   databaseVar: string;
   /** Where `databaseVar` came from, for the comment in the plan; undefined for the default. */
@@ -62,7 +63,7 @@ export const ENV_FILES = [".env.example", ".env.sample", ".env.template", ".env.
 
 /** Files whose mere presence is a signal. */
 const MARKER_FILES = [
-  "vercel.json", ".vercel/project.json", ".neon", "supabase/config.toml", "netlify.toml", ".netlify/state.json",
+  "vercel.json", ".vercel/project.json", ".neon", "supabase/config.toml", "supabase/.temp/project-ref", "netlify.toml", ".netlify/state.json",
   "wrangler.toml", "wrangler.json", "wrangler.jsonc", "fly.toml", "railway.json", "railway.toml", "firebase.json",
   "sentry.client.config.ts", "sentry.client.config.js", "sentry.server.config.ts", "sentry.server.config.js",
   "prisma/schema.prisma", "schema.prisma", "drizzle.config.ts", "drizzle.config.js", "drizzle.config.mjs", "drizzle.config.cjs",
@@ -169,8 +170,11 @@ interface Rule {
 const SUPPORTED: Rule[] = [
   { id: "vercel", name: "Vercel", kind: "provider", deps: ["vercel", "@vercel/"], env: /^VERCEL_/, files: ["vercel.json", ".vercel/project.json"] },
   { id: "neon", name: "Neon", kind: "provider", deps: ["@neondatabase/", "@prisma/adapter-neon", "neonctl"], env: /^NEON_/, files: [".neon"] },
+  { id: "planetscale", name: "PlanetScale", kind: "provider", deps: ["@planetscale/"], env: /^PLANETSCALE_/ },
   { id: "clerk", name: "Clerk", kind: "provider", deps: ["@clerk/"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_|NUXT_PUBLIC_)?CLERK_/ },
   { id: "launchdarkly", name: "LaunchDarkly", kind: "provider", deps: ["@launchdarkly/", "launchdarkly-node-server-sdk", "launchdarkly-js-client-sdk", "launchdarkly-react-client-sdk"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_)?LAUNCHDARKLY_/ },
+  { id: "supabase", name: "Supabase", kind: "provider", deps: ["@supabase/"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_|NUXT_PUBLIC_)?SUPABASE_/, files: ["supabase/config.toml", "supabase/.temp/project-ref"] },
+  { id: "netlify", name: "Netlify", kind: "provider", deps: ["@netlify/", "netlify-cli"], env: /^NETLIFY_/, files: ["netlify.toml", ".netlify/state.json"] },
   { id: "next", name: "Next.js", kind: "framework", deps: ["next"] },
   { id: "remix", name: "Remix", kind: "framework", deps: ["@remix-run/"] },
   { id: "sveltekit", name: "SvelteKit", kind: "framework", deps: ["@sveltejs/kit"] },
@@ -182,11 +186,8 @@ const SUPPORTED: Rule[] = [
 
 /** Detected and reported, but not managed yet. Never silently ignored. */
 const UNSUPPORTED: Rule[] = [
-  { id: "supabase", name: "Supabase", kind: "service", deps: ["@supabase/"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_)?SUPABASE_/, files: ["supabase/config.toml"], pointer: `database branches and Auth redirect URLs: ${ROADMAP_ADAPTERS}; issue #16 (https://github.com/MishaBear94/Sponson/issues/16)` },
-  { id: "planetscale", name: "PlanetScale", kind: "service", deps: ["@planetscale/"], env: /^PLANETSCALE_/, pointer: `database branches: ${ROADMAP_ADAPTERS}` },
   { id: "turso", name: "Turso", kind: "service", deps: ["@libsql/client"], env: /^TURSO_/, pointer: NEW_ISSUE },
   { id: "auth0", name: "Auth0", kind: "service", deps: ["auth0", "@auth0/"], env: /^AUTH0_/, pointer: "allowed callback URLs: issue #16 (https://github.com/MishaBear94/Sponson/issues/16)" },
-  { id: "netlify", name: "Netlify", kind: "service", deps: ["@netlify/", "netlify-cli"], env: /^NETLIFY_/, files: ["netlify.toml", ".netlify/state.json"], pointer: `deploy-target env vars: ${ROADMAP_ADAPTERS}` },
   { id: "cloudflare", name: "Cloudflare", kind: "service", deps: ["wrangler", "@cloudflare/"], env: /^(CLOUDFLARE_|CF_)/, files: ["wrangler.toml", "wrangler.json", "wrangler.jsonc"], pointer: NEW_ISSUE },
   { id: "railway", name: "Railway", kind: "service", env: /^RAILWAY_/, files: ["railway.json", "railway.toml"], pointer: `deploy-target env vars: ${ROADMAP_ADAPTERS}` },
   { id: "fly", name: "Fly.io", kind: "service", files: ["fly.toml"], env: /^FLY_/, pointer: `deploy-target env vars: ${ROADMAP_ADAPTERS}` },
@@ -215,10 +216,10 @@ function unique<T>(xs: T[]): T[] {
 // ---------------------------------------------------------------------------
 
 /** The variables that may carry provider ids into `init` (ids, not secrets). */
-export type IdEnv = Partial<Record<"VERCEL_PROJECT_ID" | "VERCEL_ORG_ID" | "NEON_PROJECT_ID", string>>;
+export type IdEnv = Partial<Record<"VERCEL_PROJECT_ID" | "VERCEL_ORG_ID" | "NEON_PROJECT_ID" | "NETLIFY_SITE_ID", string>>;
 
 /**
- * Detect the stack of the repository `reader` reads. `env` is the process environment, from which only the three
+ * Detect the stack of the repository `reader` reads. `env` is the process environment, from which only the
  * provider id variables of `IdEnv` are read (they win over the files, as `init` always did).
  */
 export async function detectStack(reader: RepoReader, env: IdEnv = {}): Promise<StackDetection> {
@@ -229,6 +230,7 @@ export async function detectStack(reader: RepoReader, env: IdEnv = {}): Promise<
     const evidence = evidenceFor(rule, s);
     if (rule.id === "vercel" && env.VERCEL_PROJECT_ID) evidence.push("VERCEL_PROJECT_ID in the environment");
     if (rule.id === "neon" && env.NEON_PROJECT_ID) evidence.push("NEON_PROJECT_ID in the environment");
+    if (rule.id === "netlify" && env.NETLIFY_SITE_ID) evidence.push("NETLIFY_SITE_ID in the environment");
     if (evidence.length > 0) found.push({ id: rule.id, name: rule.name, kind: rule.kind, evidence });
   }
   const unsupported: UnsupportedFinding[] = [];
@@ -265,7 +267,21 @@ function providerIds(s: Signals, env: IdEnv): StackDetection["ids"] {
     ids.neonProject = neonProject;
     ids.neonProjectFrom = env.NEON_PROJECT_ID ? "NEON_PROJECT_ID" : ".neon";
   }
-  return ids;
+  // `supabase link` writes the linked project's ref to `supabase/.temp/project-ref`. (`project_id` in
+  // `supabase/config.toml` names the local stack, not the remote project, so it is not used.)
+  const supabaseRef = str(s.files.get("supabase/.temp/project-ref"));
+  if (supabaseRef && /^[a-z]{20}$/.test(supabaseRef)) {
+    ids.supabaseProject = supabaseRef;
+    ids.supabaseProjectFrom = "supabase/.temp/project-ref";
+  }
+  return { ...ids, ...netlifyIds(s, env) };
+}
+
+/** `netlify link` writes `.netlify/state.json` (`{ "siteId": … }`); NETLIFY_SITE_ID is the same Project ID and wins. */
+function netlifyIds(s: Signals, env: IdEnv): Pick<StackDetection["ids"], "netlifySite" | "netlifySiteFrom"> {
+  const site = env.NETLIFY_SITE_ID ?? str(jsonFile(s.files.get(".netlify/state.json")).siteId);
+  if (!site) return {};
+  return { netlifySite: site, netlifySiteFrom: env.NETLIFY_SITE_ID ? "NETLIFY_SITE_ID" : ".netlify/state.json" };
 }
 
 function jsonFile(text: string | undefined): Record<string, unknown> {

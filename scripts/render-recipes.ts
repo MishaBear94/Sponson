@@ -7,7 +7,7 @@ import { Document, isScalar, stringify, visit } from "yaml";
 import { loadRecipes, type Recipe, type RecipeOp } from "../packages/adapters/src/index.js";
 import { cell, show, slug } from "./md.js";
 
-/** The heading of a recipe op's section, and so its anchor (`supabaseauth_redirect_url`). */
+/** The heading of a recipe op's section, and so its anchor (`cloudflaredns_cname`). */
 export function recipeHeading(provider: string, op: string): string {
   return `### \`${provider}.${op}\``;
 }
@@ -127,14 +127,15 @@ export function renderRecipes(): string {
     "```yaml",
     "providers:",
     "  http:",
-    "    supabase: { recipe: supabase }   # optional: the recipe's API defaults; override base_url, auth, headers here",
+    "    cloudflare: { recipe: cloudflare }   # optional: the recipe's API defaults; override base_url, auth, headers here",
     "changes:",
-    "  - id: auth_redirect",
+    "  - id: preview_dns",
     "    adapter: http",
-    "    op: list_item                    # the recipe's kind: resource or list_item",
-    "    recipe: supabase.auth_redirect_url",
-    "    project_ref: abcdefghijklmnopqrst",
-    "    url: \"https://${ctx.scope}.preview.example.app/**\"",
+    "    op: resource                         # the recipe's kind: resource or list_item",
+    "    recipe: cloudflare.dns_cname",
+    "    zone_id: 023e105f4ecef8ad9ca31a8372d0c353",
+    "    name: \"${ctx.scope}.preview.example.com\"",
+    "    target: preview-host.example.net",
     "```",
     "",
     "- `recipe: <provider>.<op>` picks the operation; `api` defaults to `<provider>`, and so does its block under",

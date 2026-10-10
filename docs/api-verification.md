@@ -11,7 +11,7 @@ silent; needs a live account.
 
 ## Sources
 
-All fetched on 2026-10-10 (LaunchDarkly: 2026-10-11) and treated as data; none is vendored into the repository.
+All fetched on 2026-10-10 (LaunchDarkly, PlanetScale, Supabase, Netlify: 2026-10-11) and treated as data; none is vendored into the repository.
 
 | Provider | Source | Version |
 |---|---|---|
@@ -20,10 +20,16 @@ All fetched on 2026-10-10 (LaunchDarkly: 2026-10-11) and treated as data; none i
 | Clerk | Backend API OpenAPI, https://github.com/clerk/openapi-specs `bapi/2026-05-12.yml` (commit `3b078e5`); the `/redirect_urls` section is identical in `bapi/2021-02-05.yml` | `2026-05-12` |
 | Clerk | Official SDK sources, for the list envelope the spec does not describe: RedirectUrlApi.ts (backend package) in clerk/javascript, redirecturl/client.go in clerk/clerk-sdk-go (v2) | `main` / `v2` on that date |
 | LaunchDarkly | REST API reference: overview (authentication, errors, rate limits, semantic patch) https://launchdarkly.com/docs/api, "Get feature flag" https://launchdarkly.com/docs/api/feature-flags/get-feature-flag, "Update feature flag" https://launchdarkly.com/docs/api/feature-flags/patch-feature-flag | as served on that date (API `v2`) |
+| PlanetScale | OpenAPI document, https://planetscale.com/docs/openapi.yaml (fetched 2026-10-11); service tokens, https://planetscale.com/docs/api/reference/service-tokens; CLI references https://planetscale.com/docs/cli/service-tokens.md, https://planetscale.com/docs/cli/branch.md, https://planetscale.com/docs/cli/password.md; Node.js connection string, https://planetscale.com/docs/vitess/tutorials/connect-nodejs-app | `v1` |
+| Supabase | Management API OpenAPI document, https://api.supabase.com/api/v1-json (rendered at https://supabase.com/docs/reference/api/introduction) | `1.0.0` as served on that date |
+| Supabase | Docs pages, for what the spec does not say: Auth's `URI_ALLOW_LIST` format (https://github.com/supabase/auth, README "General Config"), the direct connection string (https://supabase.com/docs/guides/database/connecting-to-postgres), the project API URL (https://supabase.com/docs/guides/api), Branching (https://supabase.com/docs/guides/deployment/branching), redirect URL wildcards (https://supabase.com/docs/guides/auth/redirect-urls) | as served on that date |
+| Netlify | OpenAPI document, https://github.com/netlify/open-api/blob/master/swagger.yml (rendered at https://open-api.netlify.com/), fetched 2026-10-11 | `master` on that date |
+| Netlify | Docs, fetched 2026-10-11: API guide https://docs.netlify.com/api-and-cli-guides/api-guides/get-started-with-api/, env vars https://docs.netlify.com/build/environment-variables/overview/ and …/get-started/, Secrets Controller https://docs.netlify.com/build/environment-variables/secrets-controller/, deploy overview https://docs.netlify.com/deploy/deploy-overview/ | as served on that date |
 
 Vercel, Neon and Clerk use bearer authentication (`securitySchemes`), which is what the shared HTTP client sends
 by default: ✅. LaunchDarkly takes the access token as the whole `Authorization` value, without `Bearer`; the adapter
-sends it that way (`authHeader: "header:authorization"`): ✅.
+sends it that way (`authHeader: "header:authorization"`): ✅. PlanetScale service tokens are not bearer tokens
+either; see below. Supabase's Management API and Netlify's API use bearer tokens: ✅.
 
 ## Vercel
 
@@ -132,6 +138,48 @@ target are set operations, so repeating one changes nothing more.
 | LD6 | `405` when approvals are required; `409` for a concurrent change; error body `{ code, message }` | verified |
 | LD7 | a patch is visible to the next GET | ❓ (pinned by the contract suite) |
 
+## PlanetScale
+
+Paths are relative to `https://api.planetscale.com/v1` (the spec's `servers`) and, below the first row, to
+`/organizations/{organization}/databases/{database}`.
+
+### Calls the adapter makes
+
+| Call | What the adapter sends and reads | Spec | Notes |
+|---|---|---|---|
+| every request | `Authorization: <PLANETSCALE_SERVICE_TOKEN_ID>:<PLANETSCALE_SERVICE_TOKEN>` | ✅ | Service tokens page; the spec's `securitySchemes` lists only OAuth. Variable names as in the CLI docs. Accesses needed: `create_branch`, `read_branch`, `delete_branch`, `connect_branch`, `delete_branch_password` (each endpoint's "Service Token Accesses"). |
+| `GET /branches` (`list_branches`) | `page` from `next_page`; reads `data[].id`, `name`, `parent_branch`, `production`, `ready` | ✅ | Default `per_page` 25. Used by `listScope` only. |
+| `GET /branches/{branch}` (`get_branch`) | by **name**; `404` → absent; reads `id`, `name`, `parent_branch`, `production`, `ready` | ✅ | `state` (`pending` … `ready`) is also returned; the adapter relies on the boolean `ready`. |
+| `POST /branches` (`create_branch`) | `{ name, parent_branch }`; `201` | ✅ | `parent_branch` is optional in the spec (defaults to the database's default branch); the adapter always sends it, after checking it exists with `get_branch`. |
+| same, duplicate name | any `409` or `422` → `get_branch` by name, claim it if found | ❓ | The spec lists `422` and no `409`; the wording is undocumented (PS5). |
+| `DELETE /branches/{branch}` (`delete_branch`) | by name, after `get_branch` confirmed the id the ledger recorded; `404` is success | ✅ path and `204`; ❓ timing | Whether deletion is synchronous needs a live run (PS7). |
+| `GET /branches/{branch}/passwords` (`list_passwords`) | `page` from `next_page`; reads `data[].id`, `name`, `role`, `username`, `access_host_url` | ✅ | `plain_text` is "Null except in the response from the create endpoint". The `q` search is not used (its matching rules are undocumented); the adapter filters names itself. |
+| `POST /branches/{branch}/passwords` (`create_password`) | `{ name, role }`; reads `id`, `role`, `username`, `access_host_url`, `plain_text` | ✅ | Roles `reader`, `writer`, `admin`, `readwriter`. `name` is "optional"; uniqueness is not documented (PS9). |
+| `DELETE /branches/{branch}/passwords/{id}` (`delete_password`) | `404` is success | ✅ | `204`. |
+| connection string | `mysql://<username>:<plain_text>@<access_host_url>/<database>?ssl={"rejectUnauthorized":true}` | ✅ | The Node.js tutorial's form; Prisma's `sslaccept=strict` via `connection_params`. |
+
+Not used: `PATCH …/passwords/{id}` takes only `name` and `cidrs` (✅), so a role cannot change in place (PS10), and
+the adapter never calls `…/passwords/{id}/renew`, which would rotate the plaintext.
+
+### Sim assumptions (`packages/sim/src/routes/planetscale.ts`)
+
+| Id | Assumption | Status |
+|---|---|---|
+| PS1 | `Authorization: <id>:<token>`; the sim refuses `Bearer` | verified (pinned by the contract suite) |
+| PS2 | paths under organization and database; branches addressed by name | verified |
+| PS3 | `{ data, next_page }`, `?page=`, 25 per page | verified |
+| PS4 | a created branch is `ready: false` at first and becomes ready later | fields verified; initial state through the CLI's `--wait` only; duration ❓ (pinned) |
+| PS5 | a duplicate branch name answers `422` | ❓ (the adapter accepts `409` or `422`) |
+| PS6 | an unknown parent answers `404` | ❓ (the adapter checks the parent first) |
+| PS7 | branch deletion is synchronous and takes the passwords with it | `204` verified; timing ❓ |
+| PS8 | `plain_text` only in the create answer | verified (pinned) |
+| PS9 | password names are not unique | ❓ (the adapter refuses two of one name) |
+| PS10 | a password's role cannot change in place | verified |
+| PS11 | password delete `204`; `404` when gone | `204` verified; `404` ❓ |
+| PS12 | a password on a branch that is not ready is refused | ❓ (the adapter waits for `ready` first, so either answer is fine) |
+| PS13 | error bodies are `{ code, message }` | ❓ (never read by the adapter) |
+| PS14 | branch name characters | ❓ (the default name uses only `a-z`, `0-9`, `-`) |
+
 ## The generic `http` adapter
 
 The `http` adapter makes the calls a plan line declares, so there is no provider to verify it against: a line is
@@ -154,6 +202,83 @@ They describe a conventional JSON REST API, not one provider; the adapter's test
 | R4 | PATCH is a JSON merge patch (RFC 7396); PUT replaces; JSON or form bodies; no preconditions | RFC 7396 for PATCH; the rest convention |
 | R5 | DELETE answers `{ id, deleted }`; unknown is 404 | convention (`gone_status` covers providers that answer otherwise) |
 
+## Supabase
+
+Written against the spec from the start (the adapter is newer than this page), so there is no ⚠️ column history: every
+call below was checked before the first commit. Base URL `https://api.supabase.com/v1`; the spec's paths carry the
+`/v1` prefix.
+
+### Calls the adapter makes
+
+| Call | What the adapter sends and reads | Spec | Notes |
+|---|---|---|---|
+| `GET /v1/projects/{ref}/branches` | reads `[].name`, `project_ref`, `is_default` | ✅ | `v1-list-all-branches`: a bare array of `BranchResponse`, no page parameters. The default branch is skipped and never managed. |
+| `POST /v1/projects/{ref}/branches` | `{ branch_name }`; reads `name`, `project_ref` from the `201` | ✅ | `CreateBranchBody` requires only `branch_name`; `git_branch`, `persistent`, `with_data`, `region` and the rest are optional and not sent. |
+| same, refusals | a duplicate name → re-read and claim; any other refusal reported | ❓ | Only `201`, `401`, `403`, `429` and `500` are documented. The adapter checks the list after a `409`, `400` or `422` before reporting (S5). A `500` ("Failed to create database branch") is not retried: the create may have happened, and the intent plus find-by-name recovers it on the next run. |
+| `GET /v1/branches/{branch_id_or_ref}` | the branch's ref; reads `status`, `db_host`, `db_port`, `db_user`, `db_pass` | ✅ fields; ❓ readiness | `BranchDetailResponse`. `status` is the project status enum; `ACTIVE_HEALTHY` is taken as ready and `INIT_FAILED`, `REMOVED`, `GOING_DOWN`, `INACTIVE`, `PAUSING`, `PAUSE_FAILED`, `RESTORE_FAILED` as never-ready. `db_user` and `db_pass` are optional in the spec; without them the line fails with `PROVIDER_RESPONSE` rather than outputting a broken URI. A `404` while the branch comes up is treated as "not yet". The ref form of the path parameter is used: the uuid form is marked deprecated. |
+| `DELETE /v1/branches/{branch_id_or_ref}` | the branch's ref; `404` is success | ✅ path, `200`; ❓ `404` | "By default, deletes immediately" (`force=false` would schedule it). No `404` is documented; an unknown ref's status needs a live run. The parent project's own ref is never sent. |
+| `GET /v1/projects/{ref}/config/auth` | reads `uri_allow_list` (nullable string) | ✅ | `AuthConfigResponse`; `uri_allow_list` is required and nullable. |
+| `PATCH /v1/projects/{ref}/config/auth` | `{ uri_allow_list }` alone; retried as idempotent | ✅ | `UpdateAuthConfigBody` has no required field, so a body with one field touches one field. Sending only that field also avoids the reported failure when re-sending a whole config with auth hooks enabled (supabase/supabase#36861). No ETag or version: the write is unconditional, so the adapter re-reads and repeats (three rounds) when a concurrent writer overwrote it. |
+
+Derived outputs: `api_url` is `https://<ref>.supabase.co` (the project URL format in the API docs) and
+`connection_string` is `postgresql://<db_user>:<db_pass>@<db_host>:<db_port>/postgres`, matching the documented
+direct connection string (`postgres` database; the password percent-encoded). The direct host resolves over IPv6
+unless the project has the IPv4 add-on.
+
+### Sim assumptions (`packages/sim/src/routes/supabase.ts`)
+
+| Id | Assumption | Status |
+|---|---|---|
+| S1 | create takes `{ branch_name }` and answers `201` `BranchResponse` with the branch's own `project_ref` | verified (schema); that `project_ref` is usable before provisioning finishes ❓ (pinned) |
+| S2 | the list is a bare unpaged array, and includes the project's own default branch | array verified; the default branch's presence ❓ (pinned; the adapter skips it either way) |
+| S3 | the detail answers `200` with `COMING_UP` until ready, then `ACTIVE_HEALTHY` | fields and enum verified; the progression and the `200` while coming up ❓ (pinned) |
+| S4 | detail carries `db_user`/`db_pass`; database `postgres`; API URL `https://<ref>.supabase.co` | optional fields verified; that a personal access token gets `db_pass` ❓ (pinned); database name and URL verified in the docs |
+| S5 | a duplicate branch name answers `409` | ❓ (pinned; the adapter accepts `400`/`409`/`422`) |
+| S6 | delete answers `200 { message: "ok" }`, gone from the list at once; unknown ref `404` | `200` and immediacy of the default verified; list visibility and `404` ❓ (pinned) |
+| S7 | `uri_allow_list` nullable string; a one-field PATCH changes one field; no precondition | verified |
+| S8 | the allow-list is comma-separated; stored verbatim | format verified (Auth's `URI_ALLOW_LIST`); verbatim storage ❓ (pinned) |
+| S9 | a branch has its own Auth config at `/v1/projects/{branch ref}/config/auth` | ❓ |
+
+## Netlify
+
+Written against the specification and docs from the start (no earlier version to correct), so the table records
+what each call relies on rather than fixes.
+
+### Calls the adapter makes
+
+| Call | What the adapter sends and reads | Spec | Notes |
+|---|---|---|---|
+| `GET /sites/{site_id}` | reads `name`, `account_id` (else `account_slug`) | ✅ | getSite. Only to name the account when the plan does not, and to build URLs from `name`. That `name` is the `<name>.netlify.app` subdomain is the docs' example (`mysitename.netlify.app`), not a statement (NL2, pinned). |
+| `GET /accounts/{account_id}/env` | `site_id`; reads `[].key`, `values[].id`, `value`, `context`, `context_parameter`, `is_secret`, `updated_at` | ✅ | getEnvVars; "If specified, only return environment variables set on this site", so shared (account) variables never enter a line's scope. `{account_id}` may be the slug (API guide). No page parameters are documented; the adapter reads one answer. |
+| `POST /accounts/{account_id}/env` | `site_id`; body `[{ key, values: [{ context, value, context_parameter? }] }]`; reads `201` list of `envVar` | ✅ | createEnvVars. `scopes` and `is_secret` are left out: "By default, environment variables apply to all scopes" (overview); a variable Sponson creates is not secret, so its values stay comparable. |
+| same, an existing key | re-list, then PATCH instead | ❓ | The status is not documented (NL5); the adapter treats `400`, `409` and `422` alike and only falls back when the re-list shows every key. |
+| `PATCH /accounts/{account_id}/env/{key}` | `site_id`; body `{ context, value, context_parameter? }`; reads `201` `envVar` | ✅ | setEnvVarValue: "updates or creates a new value for an existing environment variable". Sent as idempotent (it sets state). That it leaves other contexts' values and keeps the replaced value's id is ❓ (NL3, pinned). |
+| `DELETE /accounts/{account_id}/env/{key}/value/{id}` | `site_id`; `404` is success | ✅ | deleteEnvVarValue, `204`. Destroy removes only the line's values. |
+| `GET /accounts/{account_id}/env/{key}` | `site_id`; reads `values` | ✅ | getEnvVar, after a value delete: is anything left? |
+| `DELETE /accounts/{account_id}/env/{key}` | `site_id`; `404` is success | ✅ | deleteEnvVar, `204`; only when the variable has no value left (NL6). |
+| `GET /sites/{site_id}/deploys` | `page=1&per_page=100`; reads `[].id`, `state`, `context`, `commit_ref`, `review_id`, `created_at` | ✅ fields; ❓ order and `context` values | listSiteDeploys; `page`/`per_page` from the API guide. `state` values from the operation's `state` filter enum (`ready`; `error`, `rejected` treated as failed; the rest in progress). `context` and `review_id` have no enum or description in the spec (NL7, pinned). The adapter sorts by `created_at` and filters by commit itself. |
+| `POST /sites/{site_id}/builds` | `branch` (absent: production) | ✅ | createSiteBuild: "No branch means production … Otherwise it's a branch deploy." Used to rebuild a production or branch deploy that predates a write. Whether it builds a branch whose branch deploys are off is ❓ (NL11). |
+
+Deploy Previews cannot be rebuilt through any documented call (the docs describe "Retry deploy" in the UI only), so a
+`context: deploy-preview` line reports the stale deploy (`notes.stale_deploy`) and waits for a newer one.
+
+### Sim assumptions (`packages/sim/src/routes/netlify.ts`)
+
+| Id | Assumption | Status |
+|---|---|---|
+| NL1 | base URL `https://api.netlify.com/api/v1`, bearer | ✅ verified |
+| NL2 | env paths, statuses (`201`, `204`); account slug accepted; site `name`, `account_id`, `account_slug` | ✅ verified; `name` = subdomain ❓ (pinned) |
+| NL3 | `envVar` / `envVarValue` shapes and contexts; `branch` needs `context_parameter`; default scopes | ✅ verified; PATCH leaves other values and keeps the id ❓ (pinned) |
+| NL4 | secret values write-only except `dev` | ✅ verified (Secrets Controller); how a masked value is returned ❓ (the adapter ignores it) |
+| NL5 | duplicate key on POST → `400`; `all` cannot sit with contextual values | ❓ (pinned: `400` or `409`) |
+| NL6 | a variable keeps existing with no values | ❓ (pinned: the adapter deletes it either way) |
+| NL7 | deploy list newest first, its fields; `context` values; `review_id` = PR number | fields ✅; order and values ❓ (pinned) |
+| NL8 | deploy `state` values | ✅ verified (enum of the `state` filter) |
+| NL9 | permalink and Deploy Preview URL formats | ✅ verified (deploy overview) |
+| NL10 | builds read the values set when they started; `updated_at` changes with a value | first ✅ verified; that PATCH bumps `updated_at` ❓ (pinned) |
+| NL11 | `POST /sites/{site_id}/builds` with and without `branch` | ✅ verified; branch deploys turned off ❓ |
+| NL12 | a `branch` value reaches that branch's Deploy Previews | ✅ verified ("used for deploy permalinks, Deploy Previews, and branch deploys for the specified branch") |
+
 ## What still needs a live account
 
 - Vercel: V1 (propagation of env writes), the deployment list's order, whether `decrypt=true` still decrypts,
@@ -164,5 +289,15 @@ They describe a conventional JSON REST API, not one provider; the adapter's test
 - Clerk: C1 (status and wording of a duplicate), C2 (the envelope, confirmed only through the SDKs).
 - LaunchDarkly: LD5 (re-adding a target the variation already serves; the status of a two-variation refusal), LD7
   (read-after-write), LD2 (an unknown environment), LD3 (the `user` placeholders in `contextTargets`).
+- PlanetScale: PS4 (a new branch is not ready at first; how long provisioning takes), PS5 (status of a duplicate
+  branch name), PS7 (deletion timing), PS9 (duplicate password names), PS12 (a password on a branch still
+  provisioning), and PS1 and PS8 end to end.
+- Supabase: S1 and S3 (a branch's ref is usable at once; the detail's status while it comes up), S4 (`db_pass` for a
+  personal access token), S5 (status of a duplicate name), S6 (`404` for an unknown ref, list visibility after
+  delete), S8 (verbatim storage of the list), S9 (a branch's own Auth config through the same endpoint). The
+  Supabase block of the contract suite is optional in a live run (branching needs a paid plan).
+- Netlify: NL2 (`name` is the subdomain), NL3 (PATCH leaves other values and keeps ids), NL5 (status of a
+  duplicate key), NL6 (an emptied variable), NL7 (deploy order, `context` values, `review_id`), NL10 (`updated_at`
+  on PATCH), NL11 (a build of a branch whose branch deploys are off).
 
 Run them with `pnpm test:live`; see the header of `scenarios/contract.test.ts`.

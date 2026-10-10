@@ -8,8 +8,11 @@ export * from "./state.js";
 export * from "./routes/vercel.js";
 export * from "./routes/neon.js";
 export * from "./routes/clerk.js";
+export * from "./routes/netlify.js";
+export * from "./routes/planetscale.js";
 export * from "./routes/launchdarkly.js";
 export * from "./routes/rest.js";
+export * from "./routes/supabase.js";
 export { createSimServer } from "./server.js";
 
 /**
@@ -45,7 +48,7 @@ export async function startSim(opts: { port?: number; seed?: Partial<SimSeed> } 
 }
 
 /** A placeholder credential per provider (`VERCEL_TOKEN: "tok_vercel"`, …). The sim accepts any non-empty token. */
-export const SIM_TOKENS: Readonly<Record<string, string>> = Object.fromEntries(providerEntries().map(([, p]) => [p.env.token, p.env.testToken]));
+export const SIM_TOKENS: Readonly<Record<string, string>> = Object.fromEntries(providerEntries().flatMap(([, p]) => [[p.env.token, p.env.testToken], ...Object.entries(p.env.more ?? {})]));
 
 /**
  * The env that points every provider's adapter at a sim (or at a proxy in front of one): each `*_API_URL`

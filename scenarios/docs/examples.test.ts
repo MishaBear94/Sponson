@@ -61,7 +61,11 @@ function seedFor(file: string, plan: Plan): Partial<SimSeed> {
   const seed: Partial<SimSeed> = {};
   if (plan.providers.vercel) seed.vercel = { projects: { [project(plan, "vercel")]: { envs: [] } } };
   if (plan.providers.neon) seed.neon = { projects: { [project(plan, "neon")]: { branches: [{ name: "main" }] } } };
+  if (plan.providers.netlify) seed.netlify = { sites: { [String(plan.providers.netlify.site)]: { name: "acme-web", account: "acme" } } };
+  const ps = plan.providers.planetscale;
+  if (ps) seed.planetscale = { organizations: { [String(ps.organization)]: { [String(ps.database)]: [{ name: "main", production: true }] } } };
   if (plan.providers.launchdarkly) seed.launchdarkly = { projects: { [project(plan, "launchdarkly")]: launchdarklyProject(plan) } };
+  if (plan.providers.supabase) seed.supabase = { projects: { [project(plan, "supabase")]: {} } };
   return { ...seed, ...(SEEDS[file]?.(plan) ?? {}) };
 }
 

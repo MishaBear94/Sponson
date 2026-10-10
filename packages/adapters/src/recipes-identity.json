@@ -10,17 +10,6 @@
     "key": "/zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records?type=CNAME&name.exact=pr-42.preview.example.com[name=pr-42.preview.example.com,type=CNAME]",
     "id": "DELETE /zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records/ID"
   },
-  "supabase.auth_redirect_url": {
-    "provider": {
-      "base_url": "https://api.supabase.com/v1",
-      "base_url_env": "SUPABASE_API_URL",
-      "auth": {
-        "bearer_env": "SUPABASE_ACCESS_TOKEN"
-      }
-    },
-    "key": "/projects/abcdefghijklmnopqrst/config/auth#/uri_allow_list=https://pr-42.preview.example.app/**",
-    "id": "{\"item\":\"https://pr-42.preview.example.app/**\",\"list\":\"/uri_allow_list\",\"read\":\"/projects/abcdefghijklmnopqrst/config/auth\",\"send\":\"field\",\"sep\":\",\",\"shape\":\"delimited\",\"write\":\"PATCH /projects/abcdefghijklmnopqrst/config/auth\"}"
-  },
   "turso.database_branch": {
     "provider": {
       "base_url": "https://api.turso.tech/v1",

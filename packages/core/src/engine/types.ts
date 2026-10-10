@@ -17,6 +17,12 @@ export interface RunOptions {
   approvedBy?: string;
   /** Overwrite values changed outside Sponson. `plan` uses it to predict what apply will do. */
   reconcile?: boolean;
+  /**
+   * Lines whose resources to delete and create again in this run, so the `once` outputs (ADR 0018) only a create
+   * returns reach their dependents. Only resources Sponson created in this scope are ever deleted; a recreated
+   * resource replaces one that existed, so rollback does not remove it.
+   */
+  recreate?: string[];
   /** Poll for external events and locks instead of stopping. */
   wait?: boolean;
   waitTimeoutMs?: number;

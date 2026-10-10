@@ -10,14 +10,15 @@ apply, drift by hash, destroy only what Sponson created). Why and how: [ADR 0020
 ```yaml
 providers:
   http:
-    supabase: { recipe: supabase }   # optional: the recipe's API defaults; override base_url, auth, headers here
+    cloudflare: { recipe: cloudflare }   # optional: the recipe's API defaults; override base_url, auth, headers here
 changes:
-  - id: auth_redirect
+  - id: preview_dns
     adapter: http
-    op: list_item                    # the recipe's kind: resource or list_item
-    recipe: supabase.auth_redirect_url
-    project_ref: abcdefghijklmnopqrst
-    url: "https://${ctx.scope}.preview.example.app/**"
+    op: resource                         # the recipe's kind: resource or list_item
+    recipe: cloudflare.dns_cname
+    zone_id: 023e105f4ecef8ad9ca31a8372d0c353
+    name: "${ctx.scope}.preview.example.com"
+    target: preview-host.example.net
 ```
 
 - `recipe: <provider>.<op>` picks the operation; `api` defaults to `<provider>`, and so does its block under
@@ -38,7 +39,6 @@ names are set.
 | Recipe | Op | What it manages | Credential |
 |---|---|---|---|
 | [`cloudflare.dns_cname`](#cloudflaredns_cname) | `resource` | DNS CNAME record | `CLOUDFLARE_API_TOKEN` (bearer) |
-| [`supabase.auth_redirect_url`](#supabaseauth_redirect_url) | `list_item` | Auth redirect URL | `SUPABASE_ACCESS_TOKEN` (bearer) |
 | [`turso.database_branch`](#tursodatabase_branch) | `resource` | Database branch | `TURSO_API_TOKEN` (bearer) |
 
 ## Cloudflare
@@ -122,63 +122,6 @@ fields:
   comment: { param: comment }
 outputs:
   hostname: /name
-```
-
-## Supabase
-
-Recipe file: [`packages/adapters/recipes/supabase.yaml`](../packages/adapters/recipes/supabase.yaml). Verified on 2026-10-11 against:
-
-- [Management API introduction (base URL, bearer access token)](https://supabase.com/docs/reference/api/introduction)
-- [Get auth service config](https://supabase.com/docs/reference/api/v1-get-auth-service-config)
-- [Update auth service config](https://supabase.com/docs/reference/api/v1-update-auth-service-config)
-- [Redirect URLs (wildcards)](https://supabase.com/docs/guides/auth/redirect-urls)
-- [Self-hosted Auth config (GOTRUE_URI_ALLOW_LIST is comma-separated)](https://supabase.com/docs/guides/self-hosting/auth/config)
-
-| API default | Value |
-|---|---|
-| `base_url` | `https://api.supabase.com/v1` |
-| `base_url_env` | `SUPABASE_API_URL` |
-| Credential | `SUPABASE_ACCESS_TOKEN` (bearer) |
-
-Assumptions:
-
-- **SB1** (verified, [source](https://supabase.com/docs/reference/api/introduction)): The Management API is served from https://api.supabase.com/v1 and takes a personal (or OAuth) access token as `Authorization: Bearer`.
-- **SB2** (verified, [source](https://supabase.com/docs/reference/api/v1-get-auth-service-config)): `GET /v1/projects/{ref}/config/auth` returns the project's auth config with `uri_allow_list`, a string.
-- **SB3** (verified, [source](https://supabase.com/docs/reference/api/v1-update-auth-service-config)): `PATCH /v1/projects/{ref}/config/auth` with only `uri_allow_list` changes the redirect allow-list and leaves the other auth settings alone; the token needs `auth_config_write` and `project_admin_write`.
-- **SB4** **(unverified)**: `uri_allow_list` is the comma-separated list of Additional Redirect URLs. Verified for the self-hosted GOTRUE_URI_ALLOW_LIST it maps to; the hosted reference only types it as a string.
-- **SB5** (verified, [source](https://supabase.com/docs/guides/auth/redirect-urls)): Redirect URLs may use `*` and `**` wildcards, so one entry can allow every path of a preview host.
-- **SB6** **(unverified)**: The API offers no precondition (ETag) on the auth config, so two runs editing the list at the same moment can lose a write; Sponson re-reads after writing and reports what it sees.
-
-### `supabase.auth_redirect_url`
-
-**Auth redirect URL** (`http.list_item`). Adds a URL (usually the preview's, with a `/**` wildcard) to the project's Auth "Additional Redirect URLs", and removes it when the scope is destroyed. Every other entry is left alone.
-
-Covers: `supabase-auth-redirect` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: none.
-
-| Param | Type | Required | Default | Meaning |
-|---|---|---|---|---|
-| `project_ref` | string | yes | — | The project's ref (the subdomain of its API URL). Matches `^[a-z0-9]+$`. |
-| `url` | string | yes | — | The redirect URL to allow; wildcards as Supabase documents them. |
-
-```yaml
-# under changes: (no provider block needed)
-- id: auth_redirect_url
-  adapter: http
-  op: list_item
-  recipe: supabase.auth_redirect_url
-  project_ref: abcdefghijklmnopqrst
-  url: https://${ctx.scope}.preview.example.app/**
-```
-
-What the line expands into: the [`http.list_item`](plan-format.md#httplist_item) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
-
-```yaml
-parent:
-  path: /projects/{project_ref}/config/auth
-list_path: /uri_allow_list
-shape: delimited
-separator: ","
-item: { param: url }
 ```
 
 ## Turso

@@ -30,6 +30,7 @@ export function prepare(opts: RunOptions): Prepared {
     });
   }
   const ordered = orderChanges(changesFor(plan, ctx.env), plan.changes);
+  checkRecreate(opts.recreate ?? [], ordered, ctx.env);
   const ops = new Map<string, OpSpec>();
   const params = new Map<string, Record<string, unknown>>();
   const refs = new Set<string>();
@@ -102,4 +103,14 @@ export function requireApproval(opts: RunOptions, prepared: Prepared): string | 
     });
   }
   return approvedBy;
+}
+
+/** `recreate` may name only lines active in this environment. */
+function checkRecreate(recreate: string[], ordered: Change[], env: string): void {
+  const unknown = recreate.filter((id) => !ordered.some((c) => c.id === id));
+  if (unknown.length) {
+    throw new SponsonError("USAGE", `Cannot recreate ${unknown.map((id) => `\`${id}\``).join(", ")}: no such line in environment ${env}. Lines: ${ordered.map((c) => c.id).join(", ")}`, {
+      recreate: unknown,
+    });
+  }
 }

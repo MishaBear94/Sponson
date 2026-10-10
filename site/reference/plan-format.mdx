@@ -51,7 +51,7 @@ changes: []                               # required
 | `version` | `1` | (required) | Format version. Anything else is `PLAN_INVALID`. |
 | `environments` | non-empty list of names | `preview`, `production`, plus every name a line's `environments:` uses | The environments `--env` may name. An unknown `--env` is `ENV_UNKNOWN`; a line naming an undeclared environment is `PLAN_INVALID`. |
 | `providers` | map: adapter name → map | `{}` | Static configuration per adapter, handed to the adapter as `providers.<adapter>`. Built-in: `vercel.project` (required by the Vercel ops), `vercel.team` (optional), `neon.project` (required by the Neon op). Clerk needs none. `http.<api>` holds one block per API (see [the generic `http` adapter](/reference/plan-format#the-generic-http-adapter)). A missing required key fails the line with `PLAN_INVALID` when the adapter runs. |
-| `receipts` | `git-branch` \| `local` | `git-branch` | Where receipts are stored. `git-branch`: orphan branches `sponson-receipts/<env>/<scope>` (one per environment and scope) on the `origin` remote (override with `--receipts-remote` or `SPONSON_RECEIPTS_REMOTE`); with no remote, Sponson warns and uses `local`. `local`: `.sponson/receipts/` (override with `--receipts-dir` or `SPONSON_RECEIPTS_DIR`). The `--receipts` flag overrides this key. |
+| `receipts` | `git-branch` \| `local` | `git-branch` | Where receipts are stored. `git-branch`: orphan branches `sponson-receipts/<env>/<scope>` (one per environment and scope, plus a lock-only `sponson-receipts/_locks/<hash>` per shared provider object a line writes, [ADR 0019](/contributing/adr/0019-parent-object-locks)) on the `origin` remote (override with `--receipts-remote` or `SPONSON_RECEIPTS_REMOTE`); with no remote, Sponson warns and uses `local`. `local`: `.sponson/receipts/` (override with `--receipts-dir` or `SPONSON_RECEIPTS_DIR`). The `--receipts` flag overrides this key. |
 | `changes` | list of changes | (required) | The plan lines. Order in the file does not matter. |
 
 The parser ignores top-level keys it does not know; the schema reports them, because they are almost always typos.
@@ -229,8 +229,11 @@ The base URL override replaces the provider's API base URL (the test suites poin
 | `neon` | [`neon.branch`](/reference/plan-format#neon-branch) | `NEON_API_KEY` | `NEON_API_URL` |
 | `vercel` | [`vercel.env`](/reference/plan-format#vercel-env), [`vercel.deploy`](/reference/plan-format#vercel-deploy) | `VERCEL_TOKEN` | `VERCEL_API_URL` |
 | `clerk` | [`clerk.redirect_allow`](/reference/plan-format#clerk-redirect_allow) | `CLERK_SECRET_KEY` | `CLERK_API_URL` |
+| `planetscale` | [`planetscale.branch`](/reference/plan-format#planetscale-branch), [`planetscale.password`](/reference/plan-format#planetscale-password) | `PLANETSCALE_SERVICE_TOKEN_ID` + `PLANETSCALE_SERVICE_TOKEN` | `PLANETSCALE_API_URL` |
 | `launchdarkly` | [`launchdarkly.flag_target`](/reference/plan-format#launchdarkly-flag_target) | `LAUNCHDARKLY_ACCESS_TOKEN` | `LAUNCHDARKLY_API_URL` |
 | `http` | [`http.resource`](/reference/plan-format#http-resource), [`http.list_item`](/reference/plan-format#http-list_item) | `providers.http.<api>.auth` | `providers.http.<api>.base_url_env` |
+| `supabase` | [`supabase.branch`](/reference/plan-format#supabase-branch), [`supabase.auth_redirect`](/reference/plan-format#supabase-auth_redirect) | `SUPABASE_ACCESS_TOKEN` | `SUPABASE_API_URL` |
+| `netlify` | [`netlify.env`](/reference/plan-format#netlify-env) | `NETLIFY_AUTH_TOKEN` | `NETLIFY_API_URL` |
 
 A missing credential fails the line with `PROVIDER_AUTH`. Every resource has a key that identifies it within the
 adapter and provider block; the ledger treats two resources with the same key as the same resource.
@@ -296,6 +299,103 @@ One URL on the Clerk instance's redirect allow-list (the instance `CLERK_SECRET_
 A URL that is already on the list is taken over, not duplicated. Destroy removes the URL. For drift and adoption,
 every URL on the instance's list is in scope.
 
+### `netlify.env`
+
+Environment variable values of one Netlify deploy context. Requires `providers.netlify.site` (the site's Project ID,
+`site_id`); `providers.netlify.account` (the team's slug or id) is optional, and looked up from the site when absent.
+
+Netlify keeps one variable per name with one value per deploy context. A line owns **one context's value** of each
+variable it declares, never the variable: values someone set for other contexts are left alone, and so is the
+variable itself unless the line created it and nothing else holds a value in it.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `context` | `production` \| `deploy-preview` \| `branch-deploy` \| `dev` \| `dev-server` \| `branch` | `production` when `--env production`, else `branch` | The deploy context. `branch` is a value for one branch, which Netlify uses for that branch's Deploy Previews, branch deploys and permalinks, so two pull requests never see each other's values. `deploy-preview` is one value for every Deploy Preview of the site. `production` requires approval (see [Environments](/reference/plan-format#environments)). One value for all contexts (`all`) cannot be owned by a line. |
+| `branch` | string | the current git branch, for `context: branch` | The branch (Netlify's `context_parameter`; a trailing `*` matches a prefix, e.g. `release/*`). Only valid with `context: branch`. |
+| `values` | map: NAME → value | `{}` | The variables. Each value is a literal, `{ from }`, `{ secret }` or `{ keep: true }`. Values are shown as sensitive in diffs. |
+
+Each value is a resource with key `env:<context>:<branch or *>:<NAME>`; drift compares a hash of the value. A
+variable created by Sponson is not marked secret (its values stay readable to the token, which is what lets
+Sponson see drift). A variable already marked *Contains secret values* can be written, but Netlify never shows its
+values again (except in `dev`), so such a value is written on every apply. A variable that has one value for all
+deploy contexts fails the line with `PROVIDER_CONFLICT`: give it per-context values in the Netlify UI first.
+Destroy deletes the line's values one by one, then deletes a variable only when no value is left in it.
+
+`preview_url`, `deploy_id` and `deploy_preview_url` are external outputs: they become available when the newest
+deploy of the current commit that reads the line's context (production deploys for `production`, Deploy Previews
+for `deploy-preview`, branch deploys for `branch-deploy`, and both for `branch`) is `ready` **and started after the
+line's variables last changed** — a build reads the values set when it started, so an older deploy is never
+reported. `preview_url` is the deploy's permalink, `https://<deploy id>--<site name>.netlify.app`;
+`deploy_preview_url` is the pull request's stable URL, `https://deploy-preview-<n>--<site name>.netlify.app`, for a
+Deploy Preview, and the permalink otherwise. A deploy that ends `error` or `rejected` fails the lines waiting on it
+(`EXTERNAL_FAILED`); `dev` and `dev-server` values belong to no deploy, so reading their `preview_url` is
+`PARAM_INVALID`.
+
+After writing, if a deploy of this commit for the line's context started before the write, the adapter starts a new
+build (`POST /sites/{site_id}/builds`: production for `production`, a branch deploy of the branch otherwise) and the
+receipt line gets `notes.redeployed: true`. Netlify's API cannot rebuild a Deploy Preview, so a `deploy-preview`
+line records `notes.stale_deploy: <deploy id>` instead and waits for a newer deploy: retry the deploy in the
+Netlify UI or push a commit. For drift and adoption, every value of the line's context (and branch) is in scope.
+
+### `planetscale.branch`
+
+A development branch of a PlanetScale database (Vitess / MySQL), one per scope. Requires
+`providers.planetscale.organization` and `providers.planetscale.database`; the credential is a service token, two
+variables sent together as `Authorization: <PLANETSCALE_SERVICE_TOKEN_ID>:<PLANETSCALE_SERVICE_TOKEN>`. The token
+needs the `create_branch`, `read_branch`, `delete_branch`, `connect_branch` and `delete_branch_password` accesses on
+the database.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | string | `sponson-${ctx.env}-${ctx.scope}`, lowercased, anything but letters, digits and dashes turned into `-` | Branch name; the branch's identity (key `branch:<name>`). |
+| `parent` | string | `main` | Parent branch, by name. Used only when the branch is created; a different parent on an existing branch is not a change. An unknown parent is `PARAM_INVALID`. |
+
+PlanetScale provisions a new branch asynchronously: `apply` polls it every `SPONSON_PLANETSCALE_POLL_MS` (default
+2000) until it reports `ready`, for at most `SPONSON_PLANETSCALE_READY_TIMEOUT_MS` (default 600000), then fails with
+`WAIT_TIMEOUT` (the run's rollback deletes the branch it created). A create that meets a branch of the same name (the
+answer to an earlier create of ours was lost, or someone else made it) takes that branch instead of failing; whether
+it is Sponson's is decided by the ledger's intent, as for every adapter. Outputs: `name` (pass it to
+`planetscale.password`) and `branch_id`.
+
+A branch deleted in the console is `missing` drift and re-created by the next apply; one deleted and re-created
+under the same name is `changed` drift (a new id), refused until `--reconcile`, which takes it over as adopted.
+Destroy deletes the branch by name, and only if it is still the one the ledger recorded. For drift and adoption,
+every non-production branch of the database is in scope.
+
+### `planetscale.password`
+
+A password (credential) on a PlanetScale branch, and the connection string built from it.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `branch` | string | (required) | The branch, by name. Usually `{ from: <planetscale.branch line>.name }`. |
+| `name` | string | `sponson-${ctx.env}-${ctx.scope}`, as for the branch | The password's name on that branch; with the branch, its identity (key `password:<branch>/<name>`). |
+| `role` | `reader` \| `writer` \| `readwriter` \| `admin` | `admin` (as `pscale password create`) | The password's database role. |
+| `connection_params` | string | `ssl={"rejectUnauthorized":true}` | The query of `connection_string` (the form PlanetScale documents for Node.js drivers). Prisma wants `sslaccept=strict`. |
+
+`connection_string` is `mysql://<username>:<password>@<access host>/<database>?<connection_params>`. Before
+creating the password, `apply` waits for the branch to be ready (an earlier run may have left it provisioning).
+
+**The plaintext exists once.** PlanetScale returns a password's plaintext only in the answer that creates it; no
+later request can read it, and Sponson never stores it. So `password` and `connection_string` are sensitive
+[once-only outputs](/reference/plan-format#once-only-outputs):
+
+- In the run that creates the password, they reach the lines that reference them, like any output. Put those
+  lines in the same plan (a `vercel.env` line with `DATABASE_URL: { from: dbpw.connection_string }`).
+- In every later run they are `{ keep: true }` for those lines: a variable that already holds the value is unchanged,
+  so re-applying an unchanged plan writes nothing.
+- A line that would have to write the value again (its variable was deleted, or a new line references the password
+  after it was created) is **refused** with `OUTPUT_UNAVAILABLE`, nothing written. Sponson never re-creates or
+  renews a password on its own to get a value back: that would rotate a credential something may still be using.
+  To rotate deliberately, delete the password in PlanetScale (`missing` drift: the next apply creates a new one and
+  passes it on in that run) or change its `name` in the plan.
+
+A different `role` on an existing password is `PARAM_INVALID` at plan time: PlanetScale cannot change a role in
+place, and replacing the password is the plan's decision (a new `name`), not Sponson's. Two passwords with the line's
+name on one branch are `PROVIDER_CONFLICT` (PlanetScale does not keep names unique). Destroy deletes the password;
+destroying the branch deletes the rest. Passwords are not listed for drift or adoption. PlanetScale Postgres
+databases use roles instead of passwords and are not supported by this op.
+
 ### `launchdarkly.flag_target`
 
 Serves one variation of a LaunchDarkly feature flag to one individual target, a context key of a context kind, in one
@@ -319,6 +419,44 @@ semantic patch removes it from the old variation and adds it to the new one). De
 from whichever variation serves it; the flag's other targets and rules are untouched. An environment that requires
 approvals for flag changes fails the line with `PROVIDER_INVALID` (Sponson does not open approval requests). For drift
 and adoption, every individual target of the line's flag in the environment is in scope.
+
+### `supabase.branch`
+
+A Supabase preview branch ([Branching](https://supabase.com/docs/guides/deployment/branching)) of the project
+`providers.supabase.project` (the parent project's ref; branching must be enabled on it). Each branch is a project of
+its own, with its own ref, API URL and database.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | string | `sponson-${ctx.env}-${ctx.scope}` | Branch name; the branch's identity (key `branch:<name>`). The project's default branch is never managed: naming it is `PARAM_INVALID`. |
+
+`apply` creates the branch, then waits until its project is `ACTIVE_HEALTHY`, for at most
+`SPONSON_SUPABASE_TIMEOUT_MS` (default 600000), and fails with `WAIT_TIMEOUT` after that; the next `apply` keeps
+waiting for the same branch instead of creating another. A branch that ends `INIT_FAILED` (or another state it does
+not leave by itself) fails the line with `PROVIDER_INVALID`.
+
+Outputs: `project_ref` (the branch's own ref), `api_url` (`https://<project_ref>.supabase.co`, for
+`NEXT_PUBLIC_SUPABASE_URL`), `db_host`, and `connection_string`, sensitive: the branch's direct connection,
+`postgresql://<db_user>:<db_pass>@<db_host>:<db_port>/postgres`. Supabase's direct host resolves over IPv6 unless the
+project has the IPv4 add-on. Destroy deletes the branch. For drift and adoption, every branch except the project's
+default one is in scope; a branch deleted and re-created under the same name is `changed` drift (a new ref).
+
+### `supabase.auth_redirect`
+
+One URL in a project's Auth redirect allow-list ("Redirect URLs"), which the Management API stores as one
+comma-separated string, `uri_allow_list`.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `url` | string | (required) | The URL or pattern (Supabase accepts wildcards such as `https://*-acme.vercel.app/**`); its identity (key `redirect:<url>`). A comma or surrounding whitespace is `PARAM_INVALID`. Usually `{ from: <vercel.env line>.preview_url }`. |
+| `project` | string | `providers.supabase.project` | The ref of the project whose allow-list to edit. A preview branch is a project with its own Auth config, so a preview that talks to its branch sets `project: { from: db.project_ref }`. When set, it is part of the key (`redirect:<project>:<url>`). |
+
+`apply` reads the list, appends the URL and writes the whole field back (a `PATCH` carrying only `uri_allow_list`),
+then reads it again to confirm. The API offers no precondition, so a concurrent edit can overwrite the write; the
+re-read notices and the round is repeated (three times, then `PROVIDER_CONFLICT`). A URL already on the list is taken
+over, not duplicated. Destroy removes exactly that entry and leaves every other entry in place; when the project is
+already gone (a branch deleted first), there is nothing to remove. For drift and adoption, every URL on the list of
+`providers.supabase.project` is in scope.
 
 ### The generic `http` adapter
 
@@ -422,17 +560,18 @@ the line names it and fills in typed params instead of writing requests. Every r
 and what it was verified against: [docs/recipes.md](/reference/recipes).
 
 ```yaml
-- id: redirect
+- id: preview_dns
   adapter: http
-  op: list_item                       # the recipe's kind
-  recipe: supabase.auth_redirect_url  # <provider>.<op>
-  project_ref: abcdefghijklmnopqrst
-  url: "https://${ctx.scope}.preview.example.app/**"
+  op: resource                        # the recipe's kind
+  recipe: cloudflare.dns_cname        # <provider>.<op>
+  zone_id: 023e105f4ecef8ad9ca31a8372d0c353
+  name: "${ctx.scope}.preview.example.com"
+  target: preview-host.example.net
 ```
 
 `api` defaults to the recipe's provider, and its block under `providers.http` to `{ recipe: <provider> }`: the
 recipe's base URL, credential variable, headers and encoding. Write the block to override any of them
-(`supabase: { recipe: supabase, auth: { bearer_env: MY_SUPABASE_TOKEN } }`); a hand-written line may name such a
+(`cloudflare: { recipe: cloudflare, auth: { bearer_env: MY_CLOUDFLARE_TOKEN } }`); a hand-written line may name such a
 block too. Every key of the line other than `api`, `recipe` and `destroy` is a recipe param; an unknown recipe, op or
 param, a missing required one or a wrong value is `PARAM_INVALID` naming it before any request. The ledger records
 the resolved block and the keys the expanded requests produce, never the recipe's text
@@ -453,11 +592,46 @@ the named event. Sensitive outputs are never displayed, logged or written to rec
 | `vercel.deploy` | `preview_url` | immediate | no |
 | `vercel.deploy` | `deployment_id` | immediate | no |
 | `clerk.redirect_allow` | `id` | immediate | no |
+| `planetscale.branch` | `name` | immediate | no |
+| `planetscale.branch` | `branch_id` | immediate | no |
+| `planetscale.password` | `id` | immediate | no |
+| `planetscale.password` | `username` | immediate | no |
+| `planetscale.password` | `host` | immediate | no |
+| `planetscale.password` | `role` | immediate | no |
+| `planetscale.password` | `password` | immediate, [once](/reference/plan-format#once-only-outputs) | yes |
+| `planetscale.password` | `connection_string` | immediate, [once](/reference/plan-format#once-only-outputs) | yes |
 | `launchdarkly.flag_target` | `variation_id` | immediate | no |
 | `launchdarkly.flag_target` | `variation_name` | immediate | no |
 | `launchdarkly.flag_target` | `variation_value` | immediate | no |
 | `http.resource` | `id` | immediate | no |
 | `http.list_item` | (none) | | |
+| `supabase.branch` | `project_ref` | immediate | no |
+| `supabase.branch` | `api_url` | immediate | no |
+| `supabase.branch` | `db_host` | immediate | no |
+| `supabase.branch` | `connection_string` | immediate | yes |
+| `supabase.auth_redirect` | `url` | immediate | no |
+| `netlify.env` | `preview_url` | external (`deploy`) | no |
+| `netlify.env` | `deploy_id` | external (`deploy`) | no |
+| `netlify.env` | `deploy_preview_url` | external (`deploy`) | no |
+
+### Once-only outputs
+
+Some providers reveal a value only in the answer that creates a resource (a database password's plaintext). An op
+declares such an output `once` (always together with `sensitive`). It reaches the lines that reference it in the
+run that creates the resource; the value itself is never stored, only a keyed fingerprint of it in the ledger, on
+the producer and on each dependent written with it. In a later run, when the resource already exists, a reference to
+it resolves to `{ keep: true }` only when those fingerprints show the dependent holds the current value: it is then
+unchanged (or updated in its other fields only). Otherwise the dependent is refused with `OUTPUT_UNAVAILABLE` before
+anything is written: a line added after the producer was created, a producer Sponson adopted, a dependent edited
+outside Sponson since (even with `--reconcile`), or one whose resource has to be created again. A plan run shows such
+a dependent as unchanged or blocked, never pending forever.
+
+Nothing is re-created to get the value back unless you ask: `apply --recreate <line>` (repeatable, or
+comma-separated) deletes what that line created and creates it again in the same run, so its new value reaches every
+dependent. It never deletes a resource Sponson did not create in this scope (`USAGE`), and a later failure in the run
+does not roll the new resource back. Recreating rotates the credential, so deployments still using the old one stop
+working. The alternative is to keep the value in a secret manager and reference it with `{ secret: … }`. See
+[ADR 0018](/contributing/adr/0018-once-only-outputs).
 
 ## What is checked when
 
@@ -466,7 +640,7 @@ the named event. Sensitive outputs are never displayed, logged or written to rec
 | Editing, with the schema | shape of every key; id format; value forms; secret-looking literals; display text; the built-in ops' parameter names and `target` values | (editor diagnostics) |
 | Parsing (every command) | everything above that the parser enforces, plus unique ids, declared environments, `depends_on` and `from:` ids exist | `PLAN_PARSE`, `PLAN_INVALID`, `SECRET_LITERAL`, `REF_UNKNOWN` |
 | Preparing a run (before any provider call) | `--env` declared; adapters and ops exist; references survive the environment filter; no cycles; referenced outputs exist; `${ctx.*}` resolves; recipe lines' recipe, op and params; approval | `ENV_UNKNOWN`, `ADAPTER_UNKNOWN`, `OP_UNKNOWN`, `REF_FILTERED`, `REF_CYCLE`, `REF_OUTPUT_UNKNOWN`, `CTX_NULL`, `PARAM_INVALID`, `PLAN_INVALID`, `ENV_NOT_APPROVED` (apply only) |
-| Reading live state (per line) | parameter values; credentials; secrets resolve; drift; ownership by another scope | `PARAM_INVALID`, `PROVIDER_*`, `SECRET_UNRESOLVED`, `DRIFT_CHANGED`, `OWNED_BY_OTHER_SCOPE` |
+| Reading live state (per line) | parameter values; credentials; secrets resolve; drift; ownership by another scope; once-only outputs a line would need again | `PARAM_INVALID`, `PROVIDER_*`, `SECRET_UNRESOLVED`, `DRIFT_CHANGED`, `OWNED_BY_OTHER_SCOPE`, `OUTPUT_UNAVAILABLE` |
 
 Every code is listed in [errors.md](/reference/errors).
 

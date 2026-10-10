@@ -63,7 +63,7 @@ describe("detectStack", () => {
     expect(credentialsFor(d)).toEqual(["VERCEL_TOKEN", "NEON_API_KEY", "CLERK_SECRET_KEY"]);
   });
 
-  it("Next.js + Vercel + Supabase: Supabase is reported as not supported yet, and the plan has no database line", async () => {
+  it("Next.js + Vercel + Supabase: a Supabase preview branch into the env line, the preview URL on the branch's Auth allow-list", async () => {
     const d = await detectStack(
       repo({
         "package.json": pkg({ next: "15", "@supabase/supabase-js": "2", "@supabase/ssr": "0" }),
@@ -71,16 +71,58 @@ describe("detectStack", () => {
         ".env.example": "NEXT_PUBLIC_SUPABASE_URL=\nNEXT_PUBLIC_SUPABASE_ANON_KEY=\nDATABASE_URL=postgresql://postgres:pw@db.abcd.supabase.co:5432/postgres\n",
       }),
     );
-    expect(ids(d)).toEqual(["vercel", "next"]);
-    expect(unsupportedIds(d)).toEqual(["supabase"]);
-    const supa = d.unsupported[0]!;
+    expect(ids(d)).toEqual(["vercel", "supabase", "next"]);
+    expect(unsupportedIds(d)).toEqual([]);
+    const supa = d.found.find((f) => f.id === "supabase")!;
     expect(supa.evidence).toEqual(expect.arrayContaining(["package.json: @supabase/supabase-js", "DATABASE_URL in .env.example points at *.supabase.co"]));
-    expect(supa.pointer).toMatch(/ROADMAP\.md/);
-    const text = expectValidPlan(d, ["env"]);
-    expect(text).toContain('NEXT_PUBLIC_SPONSON_SCOPE: "${ctx.scope}"');
-    expect(text).toMatch(/# Not supported yet, so no line below manages it: Supabase/);
-    expect(text).toMatch(/vercel: \{ project: "prj_xxx" \}\s+# TODO: run `vercel link`/);
+    expect(d.ids.supabaseProject).toBeUndefined();
+    const text = expectValidPlan(d, ["db", "env", "auth_redirect"]);
+    expect(text).toMatch(/supabase: \{ project: "abcdefghijklmnopqrst" \}\s+# TODO: run `supabase link`/);
+    expect(text).toContain("adapter: supabase\n    op: branch");
+    expect(text).toContain("DATABASE_URL: { from: db.connection_string }");
+    expect(text).toContain("NEXT_PUBLIC_SUPABASE_URL: { from: db.api_url }");
+    expect(text).toContain("project: { from: db.project_ref }\n    url: { from: env.preview_url }");
+    expect(text).not.toContain("Not supported yet");
     expect(text).not.toContain("neon");
+    expect(composeStarter(d).todos.map((t) => t.path)).toEqual(["providers.vercel.project", "providers.supabase.project"]);
+    expect(credentialsFor(d)).toEqual(["VERCEL_TOKEN", "SUPABASE_ACCESS_TOKEN"]);
+  });
+
+  it("Supabase: the linked project's ref from supabase/.temp/project-ref; with Neon, Neon stays the database and Supabase is the Auth line", async () => {
+    const linked = { "package.json": pkg({ next: "15", "@supabase/supabase-js": "2" }), ".vercel/project.json": { projectId: "prj_web" }, "supabase/.temp/project-ref": "qwertyuiopasdfghjklz\n" };
+    const d = await detectStack(repo(linked));
+    expect(d.ids).toMatchObject({ supabaseProject: "qwertyuiopasdfghjklz", supabaseProjectFrom: "supabase/.temp/project-ref" });
+    expect(expectValidPlan(d, ["db", "env", "auth_redirect"])).toContain('supabase: { project: "qwertyuiopasdfghjklz" }   # from supabase/.temp/project-ref');
+    expect(composeStarter(d).todos).toEqual([]);
+    // Not a ref (a local stack name): ignored.
+    expect((await detectStack(repo({ ...linked, "supabase/.temp/project-ref": "demo" }))).ids.supabaseProject).toBeUndefined();
+
+    const both = await detectStack(repo({ ...linked, "package.json": pkg({ next: "15", "@supabase/supabase-js": "2", "@neondatabase/serverless": "1" }) }));
+    const text = expectValidPlan(both, ["db", "env", "auth_redirect"]);
+    expect(text).toContain("adapter: neon");
+    expect(text.match(/adapter: supabase/g)).toHaveLength(1); // the auth_redirect line only
+    expect(text).not.toContain("project: { from: db.project_ref }");
+    expect(credentialsFor(both)).toEqual(["VERCEL_TOKEN", "NEON_API_KEY", "SUPABASE_ACCESS_TOKEN"]);
+  });
+
+  it("database precedence Neon > PlanetScale > Supabase: with PlanetScale and Supabase, PlanetScale is the database and Supabase the Auth line", async () => {
+    const d = await detectStack(repo({ "package.json": pkg({ next: "15", "@supabase/supabase-js": "2", "@planetscale/database": "1" }), ".vercel/project.json": { projectId: "prj_web" } }));
+    const text = expectValidPlan(d, ["db", "dbpw", "env", "auth_redirect"]);
+    expect(text).toContain("adapter: planetscale");
+    expect(text.match(/adapter: supabase/g)).toHaveLength(1);
+    expect(text).not.toContain("project: { from: db.project_ref }");
+    expect(text).toContain("{ from: dbpw.connection_string }");
+    expect(credentialsFor(d)).toEqual(["VERCEL_TOKEN", "PLANETSCALE_SERVICE_TOKEN_ID", "PLANETSCALE_SERVICE_TOKEN", "SUPABASE_ACCESS_TOKEN"]);
+  });
+
+  it("Supabase without a deploy target: the branch line alone, with a note on where its outputs go", async () => {
+    const d = await detectStack(repo({ "package.json": pkg({ "@supabase/supabase-js": "2" }), "supabase/config.toml": 'project_id = "demo"\n' }));
+    expect(composeStarter(d).assumed).toBe(false);
+    const text = expectValidPlan(d, ["db"]);
+    expect(text).toContain("adapter: supabase");
+    expect(text).toContain("have no deploy target Sponson manages yet");
+    expect(text).not.toContain("vercel");
+    expect(credentialsFor(d)).toEqual(["SUPABASE_ACCESS_TOKEN"]);
   });
 
   it("a bare repository: nothing detected, the Vercel + Neon template with both ids to fill in", async () => {
@@ -91,7 +133,7 @@ describe("detectStack", () => {
     expect(s.assumed).toBe(true);
     expect(s.todos.map((t) => t.path)).toEqual(["providers.vercel.project", "providers.neon.project"]);
     const text = expectValidPlan(d, ["db", "env"]);
-    expect(text).toContain("Nothing Sponson manages (Vercel, Neon) was detected");
+    expect(text).toContain("Nothing Sponson manages (Vercel, Netlify, Neon, PlanetScale) was detected");
     expect(text).toContain("DATABASE_URL: { from: db.connection_string }");
   });
 
@@ -182,22 +224,98 @@ describe("detectStack", () => {
   it("every unsupported service is reported, never silently ignored", async () => {
     const d = await detectStack(
       repo({
-        "package.json": pkg({ "@planetscale/database": "1", "@auth0/nextjs-auth0": "3", "@launchdarkly/node-server-sdk": "9", "posthog-js": "1", stripe: "16", "@sentry/nextjs": "8", firebase: "10", "@libsql/client": "0.6" }, { wrangler: "3" }),
-        "netlify.toml": "[build]\n",
+        "package.json": pkg({ "@auth0/nextjs-auth0": "3", "@launchdarkly/node-server-sdk": "9", "posthog-js": "1", stripe: "16", "@sentry/nextjs": "8", firebase: "10", "@libsql/client": "0.6" }, { wrangler: "3" }),
         "fly.toml": "app = 'x'\n",
         "railway.json": "{}",
-        ".env.example": "DATABASE_URL=mysql://u:p@aws.connect.psdb.cloud/db\n",
       }),
     );
-    expect(unsupportedIds(d)).toEqual(["planetscale", "turso", "auth0", "netlify", "cloudflare", "railway", "fly", "firebase", "posthog", "stripe", "sentry"]);
+    expect(unsupportedIds(d)).toEqual(["turso", "auth0", "cloudflare", "railway", "fly", "firebase", "posthog", "stripe", "sentry"]);
     for (const u of d.unsupported) expect(u.pointer, u.id).toMatch(/ROADMAP\.md|issues/);
     const text = expectValidPlan(d, ["db", "env"]);
     for (const u of d.unsupported) expect(text).toContain(`# Not supported yet, so no line below manages it: ${u.name}`);
   });
 
+  it("Netlify + Neon + Clerk: the site id from .netlify/state.json, a branch-context line, the callback on the Deploy Preview URL", async () => {
+    const d = await detectStack(repo({ "package.json": pkg({ "@clerk/clerk-js": "5", "@neondatabase/serverless": "1" }), "netlify.toml": "[build]\n", ".netlify/state.json": { siteId: "site-123" } }));
+    expect(ids(d)).toEqual(["neon", "clerk", "netlify"]);
+    expect(d.found.find((f) => f.id === "netlify")!.evidence).toEqual(["netlify.toml", ".netlify/state.json"]);
+    expect(unsupportedIds(d)).toEqual([]);
+    expect(d.ids).toMatchObject({ netlifySite: "site-123", netlifySiteFrom: ".netlify/state.json" });
+    const text = expectValidPlan(d, ["db", "env", "callback"]);
+    expect(text).toContain('netlify: { site: "site-123" }   # from .netlify/state.json');
+    expect(text).toMatch(/- id: env\n {4}adapter: netlify\n {4}op: env\n {4}values:\n {6}DATABASE_URL: \{ from: db\.connection_string \}/);
+    expect(text).toContain("url: { from: env.deploy_preview_url }");
+    expect(text).not.toContain("adapter: vercel");
+    expect(composeStarter(d).todos).toEqual([expect.objectContaining({ path: "providers.neon.project" })]);
+    expect(credentialsFor(d)).toEqual(["NETLIFY_AUTH_TOKEN", "NEON_API_KEY", "CLERK_SECRET_KEY"]);
+  });
+
+  it("Netlify + Supabase: the preview branch's outputs go into the Netlify line, and its Deploy Preview URL onto the branch's Auth allow-list", async () => {
+    const d = await detectStack(repo({ "package.json": pkg({ "@supabase/supabase-js": "2" }), ".netlify/state.json": { siteId: "site-123" } }));
+    const text = expectValidPlan(d, ["db", "env", "auth_redirect"]);
+    expect(text).toContain("adapter: netlify");
+    expect(text).toContain("url: { from: env.deploy_preview_url }");
+    expect(text).not.toContain("has no deploy target");
+    expect(credentialsFor(d)).toEqual(["NETLIFY_AUTH_TOKEN", "SUPABASE_ACCESS_TOKEN"]);
+  });
+
+  it("Netlify without a linked site: NETLIFY_SITE_ID wins, else a TODO; next to Vercel the line is `netlify-env`", async () => {
+    const fromEnv = await detectStack(repo({ "netlify.toml": "[build]\n", ".netlify/state.json": { siteId: "file-site" } }), { NETLIFY_SITE_ID: "env-site" });
+    expect(fromEnv.ids).toMatchObject({ netlifySite: "env-site", netlifySiteFrom: "NETLIFY_SITE_ID" });
+    const onlyEnv = await detectStack(repo({}), { NETLIFY_SITE_ID: "env-site" });
+    expect(onlyEnv.found.find((f) => f.id === "netlify")!.evidence).toEqual(["NETLIFY_SITE_ID in the environment"]);
+    const unlinked = await detectStack(repo({ "package.json": pkg({}, { "netlify-cli": "17" }) }));
+    expect(composeStarter(unlinked).todos).toEqual([expect.objectContaining({ path: "providers.netlify.site", placeholder: "your-site-id" })]);
+    expect(expectValidPlan(unlinked, ["env"])).toContain('SPONSON_SCOPE: "${ctx.scope}"');
+    const both = await detectStack(repo({ "vercel.json": "{}", "netlify.toml": "[build]\n" }));
+    expectValidPlan(both, ["env", "netlify-env"]);
+  });
+
+  it("Next.js + Vercel + PlanetScale + Prisma: a branch, a password on it, and DATABASE_URL from its connection string", async () => {
+    const d = await detectStack(
+      repo({
+        "package.json": pkg({ next: "15", "@planetscale/database": "1", "@prisma/client": "6" }),
+        ".vercel/project.json": { projectId: "prj_web123" },
+        ".env.example": `DATABASE_URL=mysql://u:${SECRET_PASSWORD}@aws.connect.psdb.cloud/db\nPLANETSCALE_SERVICE_TOKEN=\n`,
+      }),
+    );
+    expect(ids(d)).toEqual(["vercel", "planetscale", "next", "prisma"]);
+    expect(unsupportedIds(d)).toEqual([]);
+    expect(d.found.find((f) => f.id === "planetscale")!.evidence).toEqual([
+      "package.json: @planetscale/database",
+      "PLANETSCALE_SERVICE_TOKEN in .env.example",
+      "DATABASE_URL in .env.example points at *.psdb.cloud",
+    ]);
+    expect(JSON.stringify(d)).not.toContain(SECRET_PASSWORD);
+
+    const text = expectValidPlan(d, ["db", "dbpw", "env"]);
+    expect(text).toMatch(/planetscale: \{ organization: "my-org", database: "my-db" \}\s+# TODO: the name slugs of your organization and database/);
+    expect(text).toContain("adapter: planetscale\n    op: branch");
+    expect(text).toContain("branch: { from: db.name }");
+    expect(text).toContain('connection_params: "sslaccept=strict"');
+    expect(text).toContain("DATABASE_URL: { from: dbpw.connection_string }");
+    expect(text).not.toMatch(/neon|Not supported yet/);
+    expect(composeStarter(d).todos.map((t) => t.path)).toEqual(["providers.planetscale.organization", "providers.planetscale.database"]);
+    expect(credentialsFor(d)).toEqual(["VERCEL_TOKEN", "PLANETSCALE_SERVICE_TOKEN_ID", "PLANETSCALE_SERVICE_TOKEN"]);
+  });
+
+  it("PlanetScale without Vercel: no connection_params without Prisma, and the missing deploy target said in a comment", async () => {
+    const d = await detectStack(repo({ "package.json": pkg({ "@planetscale/database": "1" }) }));
+    const text = expectValidPlan(d, ["db", "dbpw"]);
+    expect(text).not.toContain("connection_params");
+    expect(text).toContain("# The password's connection string (`{ from: dbpw.connection_string }`) has no deploy target");
+  });
+
+  it("Neon and PlanetScale both: the database lines use Neon, and PlanetScale is mentioned, not dropped", async () => {
+    const d = await detectStack(repo({ "package.json": pkg({ "@neondatabase/serverless": "1", "@planetscale/database": "1" }), "vercel.json": {} }));
+    const text = expectValidPlan(d, ["db", "env"]);
+    expect(text).toContain("DATABASE_URL: { from: db.connection_string }");
+    expect(text).toContain("# PlanetScale was detected too, but the database lines below use Neon");
+  });
+
   it("broken files are no signal rather than a crash", async () => {
-    const d = await detectStack(repo({ "package.json": "{ not json", ".vercel/project.json": "[]", "vercel.json": "nope", ".neon": '{"projectId": 3}' }));
-    expect(ids(d)).toEqual(["vercel", "neon"]); // the files exist, but hold no ids
+    const d = await detectStack(repo({ "package.json": "{ not json", ".vercel/project.json": "[]", "vercel.json": "nope", ".neon": '{"projectId": 3}', ".netlify/state.json": "{" }));
+    expect(ids(d)).toEqual(["vercel", "neon", "netlify"]); // the files exist, but hold no ids
     expect(d.ids).toEqual({});
     expect(d.vercelAutoDeployOff).toBe(false);
   });

@@ -66,7 +66,8 @@ Common `errorCode`s:
 | `DRIFT_CHANGED` | someone edited the value outside Sponson | show the human; only they decide on `--reconcile` |
 | `OWNED_BY_OTHER_SCOPE` | another PR/branch manages that resource | change the name in the plan; never adopt it |
 | `PROVIDER_TRANSIENT` | provider overloaded / 5xx / rate-limited | re-run later; nothing to fix |
-| `LOCK_HELD` / `LOCK_LOST` | another apply holds (or took) this scope's lock (exit 3) | wait and re-plan; never force |
+| `OUTPUT_UNAVAILABLE` | the line needs a value its provider showed only when another line's resource was created (a password), in an earlier run | show the human; only they decide on `--recreate <line>` (it rotates the credential) or a secret-manager reference |
+| `LOCK_HELD` / `LOCK_LOST` | another apply holds (or took) this scope's lock (exit 3), or, on a line, the lock of a shared provider object such as one Auth0 application's callback list (the line fails, exit 1) | wait and re-plan; never force |
 | `ENV_NOT_APPROVED` | a line writes to production without an approver | ask a human; never pass `--approved-by` yourself |
 | `SECRET_UNRESOLVED` | a `secret:` reference has no value here | ask the human to set it; never write the value |
 | `REF_OUTPUT_UNKNOWN` | `from: line.output` names an output that line does not have | fix the name (the message lists the valid ones) |

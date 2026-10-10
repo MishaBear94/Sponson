@@ -3,7 +3,7 @@
  * secret sources (`coverage-secrets`) and every number of "Current coverage" (`coverage-numbers`). Called by
  * scripts/gen-docs.ts.
  */
-import { coverageNumbers, coverRefs, type CoverageData, type CoverageRow, type Measure } from "./coverage-data.js";
+import { coverageNumbers, coverRefs, isCovered, isManualStep, type CoverageData, type CoverageRow, type Measure } from "./coverage-data.js";
 import { cell } from "./md.js";
 import { recipeLink } from "./render-recipes.js";
 
@@ -17,6 +17,7 @@ function refText(ref: string): string {
 function nowCell(row: CoverageRow): string {
   if (row.counted === false) return "n/a";
   if (row.covered_by === "manual") return "no (no API)";
+  if (isManualStep(row)) return "manual step (`manual.step`)";
   const refs = coverRefs(row);
   if (refs.length === 0) return "no";
   return `**yes** (${refs.map(refText).join(", ")}${row.note ? `: ${row.note}` : ""})`;
@@ -45,7 +46,7 @@ const pct = (m: Measure) => `**${m.percent}%**`;
 
 export function renderNumbers(d: CoverageData): string {
   const n = coverageNumbers(d);
-  const covered = d.categories.flatMap((c) => c.rows).filter((r) => r.counted !== false && coverRefs(r).length > 0);
+  const covered = d.categories.flatMap((c) => c.rows).filter((r) => r.counted !== false && isCovered(r));
   const manualWeight = n.weighted.total - n.reachableWeighted.total;
   return [
     `Counted over the ${n.rows.total} side-effect rows of the matrix (rows marked \`n/a\` have nothing to manage). Weights: P0 = ${d.weights.P0}, P1 = ${d.weights.P1}, P2 = ${d.weights.P2} (${n.byPriority.P0} P0, ${n.byPriority.P1} P1, ${n.byPriority.P2} P2; total weight ${n.weighted.total}).`,
@@ -57,11 +58,17 @@ export function renderNumbers(d: CoverageData): string {
     `| P0 rows only | ${n.p0.covered} of ${n.p0.total} | ${n.p0.percent}% |`,
     `| Rows an API reaches (all but \`manual\`) | ${n.reachableRows.covered} of ${n.reachableRows.total} | ${n.reachableRows.percent}% |`,
     `| Weighted, rows an API reaches | ${n.reachableWeighted.covered} of ${n.reachableWeighted.total} | ${n.reachableWeighted.percent}% |`,
+    ...(n.manualSteps.length
+      ? [
+          `| Rows, including manual steps (\`manual.step\`) | ${n.withManualRows.covered} of ${n.withManualRows.total} | ${n.withManualRows.percent}% |`,
+          `| Weighted, including manual steps | ${n.withManualWeighted.covered} of ${n.withManualWeighted.total} | ${n.withManualWeighted.percent}% |`,
+        ]
+      : []),
     `| Secret sources (separate) | ${n.secretVendors.covered} of ${n.secretVendors.total} vendors; weighted ${n.secretWeighted.covered} of ${n.secretWeighted.total} | ${n.secretVendors.percent}%; ${n.secretWeighted.percent}% |`,
     "",
     `Covered: ${covered.map((r) => `${r.provider} (${coverRefs(r).map(refText).join(", ")})`).join("; ")}.`,
     "",
-    `Rows no API reaches (\`manual\`; weight ${manualWeight}): ${n.manual.map((r) => `${r.provider} (${r.why ?? "no API"})`).join("; ")}. They cap coverage at ${n.reachableRows.total} rows, ${n.reachableWeighted.total} of ${n.weighted.total} weighted (${((n.reachableWeighted.total / n.weighted.total) * 100).toFixed(1)}%).`,
+    `Automated coverage counts only rows an op manages without a person. Rows no API reaches (\`manual\`, or a \`manual.step\` line that records the step a person does; weight ${manualWeight}): ${n.manual.map((r) => `${r.provider} (${r.why ?? "no API"})`).join("; ")}. They cap coverage at ${n.reachableRows.total} rows, ${n.reachableWeighted.total} of ${n.weighted.total} weighted (${((n.reachableWeighted.total / n.weighted.total) * 100).toFixed(1)}%).`,
     "",
     `Recipe candidates, rows the generic adapter can express fully (\`Y\`) that nothing covers yet: ${n.recipeCandidates.length} (${n.recipeCandidates.map((r) => r.provider).join(", ")}).`,
   ].join("\n");

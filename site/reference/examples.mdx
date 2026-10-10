@@ -15,12 +15,15 @@ The format is specified in [docs/plan-format.md](/reference/plan-format).
 | File | Shows |
 |---|---|
 | [nextjs-neon-preview.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/nextjs-neon-preview.plan.yaml) | a database branch per pull request, wired into preview variables |
+| [nextjs-planetscale-preview.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/nextjs-planetscale-preview.plan.yaml) | a PlanetScale branch and password per pull request; a once-only output |
+| [nextjs-supabase-preview.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/nextjs-supabase-preview.plan.yaml) | a Supabase preview branch per pull request; its URL and connection string in preview variables; an Auth redirect on the branch |
 | [vercel-shared-and-branch-vars.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/vercel-shared-and-branch-vars.plan.yaml) | project-wide, per-branch and production variables; `${ctx.*}` |
 | [clerk-preview-callbacks.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/clerk-preview-callbacks.plan.yaml) | a value that exists only after the deploy; `partial` runs |
 | [launchdarkly-preview-flags.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/launchdarkly-preview-flags.plan.yaml) | flags on for a preview: its URL or the scope as the target; a variation by name |
 | [explicit-deploy.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/explicit-deploy.plan.yaml) | Sponson starting the deploy; `depends_on` |
 | [production-with-approval.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/production-with-approval.plan.yaml) | preview and production in one file; approval |
 | [adopting-an-existing-project.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/adopting-an-existing-project.plan.yaml) | what `sponson init` writes when it adopts; `{ keep: true }` |
+| [netlify-neon-preview.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/netlify-neon-preview.plan.yaml) | Netlify values per deploy context; the Deploy Preview URL |
 | [http-flags-webhooks-allowlists.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/http-flags-webhooks-allowlists.plan.yaml) | APIs with no adapter of their own, through the generic `http` adapter (illustrative) |
 
 ## nextjs-neon-preview.plan.yaml
@@ -78,6 +81,114 @@ changes:
       DATABASE_HOST: { from: db.host }                         # a plain output
       STRIPE_SECRET_KEY: { secret: "env://STRIPE_SECRET_KEY" } # read from the environment when Sponson runs
       NEXT_PUBLIC_STAGE: preview                               # a literal
+    environments: [preview]
+```
+
+## nextjs-planetscale-preview.plan.yaml
+
+The same shape with PlanetScale. `db` creates a development branch `sponson-preview-<scope>` from `main` and waits
+until PlanetScale reports it ready; `dbpw` creates a password on it; `env` writes the password's `connection_string`
+to `DATABASE_URL`. On the first plan, `dbpw` and `env` are `pending`; one `apply` creates all three, in that order.
+
+PlanetScale shows a password's plaintext only when it is created, so `connection_string` is a
+[once-only output](/reference/plan-format#once-only-outputs). `env` receives it in the run that creates the password.
+On every later run, `env` keeps the value it holds: the plan shows all three lines unchanged and `apply` writes nothing.
+If `DATABASE_URL` is deleted in Vercel, `env` is refused with `OUTPUT_UNAVAILABLE`, because no later run can read the
+value again. Sponson does not rotate the password on its own. To get a new one, delete the password in PlanetScale:
+the next `apply` creates a new password and writes its connection string. `sponson apply --destroy` deletes the
+variable, then the password, then the branch.
+
+```yaml nextjs-planetscale-preview.plan.yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/MishaBear94/Sponson/main/schema/release.plan.schema.json
+#
+# A Next.js app on Vercel with a PlanetScale (Vitess / MySQL) database. Every pull request gets its own
+# development branch and a password on it, and that pull request's preview deployments get its connection string.
+# Credentials: PLANETSCALE_SERVICE_TOKEN_ID and PLANETSCALE_SERVICE_TOKEN (a service token), VERCEL_TOKEN.
+version: 1
+providers:
+  vercel: { project: prj_acme_web }                        # .vercel/project.json → projectId
+  planetscale: { organization: acme, database: acme-db }   # https://app.planetscale.com/<organization>/<database>
+
+changes:
+  # One development branch per scope, `sponson-<env>-<scope>` (pull request 42: `sponson-preview-pr-42`),
+  # from `main`. Apply waits until PlanetScale reports it ready.
+  - id: db
+    adapter: planetscale
+    op: branch
+    parent: main
+    environments: [preview]
+
+  # A password on that branch. PlanetScale shows its plaintext once, when it is created, so `connection_string`
+  # is a once-only output: `env` below receives it in the same run, later runs keep what `env` holds and write
+  # nothing, and Sponson never rotates the password on its own.
+  - id: dbpw
+    adapter: planetscale
+    op: password
+    branch: { from: db.name }
+    role: admin
+    environments: [preview]
+
+  - id: env
+    adapter: vercel
+    op: env
+    target: preview
+    values:
+      DATABASE_URL: { from: dbpw.connection_string }   # sensitive and once-only: never printed, never stored
+      DATABASE_USERNAME: { from: dbpw.username }        # a plain output
+      NEXT_PUBLIC_STAGE: preview
+    environments: [preview]
+```
+
+## nextjs-supabase-preview.plan.yaml
+
+The Supabase version of the plan above. `db` creates a Supabase preview branch named `sponson-preview-<scope>` on the
+project (branching must be enabled on it) and waits until it is `ACTIVE_HEALTHY`; `env` writes its sensitive
+`connection_string` and its `api_url` into the preview target for the current git branch; `auth_callback` puts the
+preview URL on the branch's own Auth redirect allow-list, because a branch is a project with its own Auth settings.
+Without `project:`, an `auth_redirect` line edits the allow-list of `providers.supabase.project` instead, leaving every
+entry Sponson did not add in place.
+
+The branch's API keys are not an output yet, so the example passes the anon key as a secret.
+`sponson apply --destroy` removes the redirect, the variables, then the branch.
+
+```yaml nextjs-supabase-preview.plan.yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/MishaBear94/Sponson/main/schema/release.plan.schema.json
+#
+# A Next.js app on Vercel with Supabase. Every pull request gets its own Supabase preview branch (a
+# project of its own, with its own database, API URL and Auth settings); that pull request's preview
+# deployments get the branch's connection string and URL, and the preview URL is allowed as an Auth
+# redirect on the branch.
+version: 1
+providers:
+  vercel: { project: prj_acme_web }                  # .vercel/project.json → projectId
+  supabase: { project: acmewebprojectrefxyz }        # `supabase link` → supabase/.temp/project-ref; branching enabled
+
+changes:
+  # One preview branch per scope. `name` defaults to sponson-<env>-<scope>, so pull request 42 gets
+  # `sponson-preview-pr-42`. Apply waits until the branch is up (SPONSON_SUPABASE_TIMEOUT_MS).
+  - id: db
+    adapter: supabase
+    op: branch
+    environments: [preview]
+
+  # Preview variables for the current git branch only.
+  - id: env
+    adapter: vercel
+    op: env
+    target: preview
+    values:
+      DATABASE_URL: { from: db.connection_string }   # sensitive: never printed, never in a receipt
+      NEXT_PUBLIC_SUPABASE_URL: { from: db.api_url } # https://<branch ref>.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: { secret: "env://SUPABASE_PREVIEW_ANON_KEY" } # the branch's keys are not an output yet
+    environments: [preview]
+
+  # The preview's URL on the branch's own Auth redirect allow-list. `project` points the line at the
+  # branch; without it, the line edits the allow-list of providers.supabase.project.
+  - id: auth_callback
+    adapter: supabase
+    op: auth_redirect
+    project: { from: db.project_ref }
+    url: { from: env.preview_url }
     environments: [preview]
 ```
 
@@ -397,6 +508,64 @@ changes:
 
   # To let Sponson manage a value, replace `{ keep: true }` with a literal or a reference,
   # for example `SENTRY_DSN: { secret: "env://SENTRY_DSN" }`.
+```
+
+## netlify-neon-preview.plan.yaml
+
+The Neon branch per pull request on a Netlify site. Netlify stores one variable per name with one value per deploy
+context; a `netlify.env` line owns one context's value of each variable it declares, so values a human set for other
+contexts are never read, changed or deleted. In previews the line writes the value for the pull request's git branch
+(`context: branch`), which Netlify uses for that branch's Deploy Previews; `context: deploy-preview` would instead
+be one value shared by every pull request.
+
+`callback` reads `env.deploy_preview_url`, the pull request's `https://deploy-preview-<n>--<site>.netlify.app`. Like
+Vercel's `preview_url`, it exists only once the Deploy Preview of this commit is ready, and only a deploy that
+started after the variables were written counts: a build reads the values set when it started.
+
+```yaml netlify-neon-preview.plan.yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/MishaBear94/Sponson/main/schema/release.plan.schema.json
+#
+# A Netlify site with a Neon branch per pull request. Netlify keeps one value per deploy
+# context; in previews this plan writes the value for the pull request's git branch, which
+# Netlify uses for that branch's Deploy Previews, so two pull requests never share one.
+version: 1
+providers:
+  # The site's Project ID (Project configuration → General, or `siteId` in .netlify/state.json).
+  # `account` (the team slug) is optional: without it the site's own account is used.
+  netlify: { site: 3f1c2a9e-0b7d-4e55-9c1a-acme00000001 }
+  neon: { project: proj_acme_db }
+
+changes:
+  - id: db
+    adapter: neon
+    op: branch
+    environments: [preview]
+
+  # context defaults to `branch` (this git branch) in previews and `production` under --env production.
+  - id: env
+    adapter: netlify
+    op: env
+    values:
+      DATABASE_URL: { from: db.connection_string }
+    environments: [preview]
+
+  # Production values next to the ones a human set in the Netlify UI: Sponson owns only
+  # the production value of the variables it declares. Requires approval.
+  - id: env-production
+    adapter: netlify
+    op: env
+    context: production
+    values:
+      FEATURE_CHECKOUT_V2: "off"
+    environments: [production]
+
+  # deploy_preview_url (https://deploy-preview-<n>--<site>.netlify.app) exists once the Deploy
+  # Preview of this commit, built after the variables were written, is ready.
+  - id: callback
+    adapter: clerk
+    op: redirect_allow
+    url: { from: env.deploy_preview_url }
+    environments: [preview]
 ```
 
 ## http-flags-webhooks-allowlists.plan.yaml

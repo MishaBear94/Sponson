@@ -4,7 +4,10 @@ import { httpAdapter } from "./http-adapter.js";
 import { neonAdapter } from "./neon.js";
 import { awsSecretsManagerSource, dopplerSecretSource, envSecretSource, gcpSecretManagerSource, opSecretSource } from "./secrets.js";
 import { vercelAdapter } from "./vercel.js";
+import { netlifyAdapter } from "./netlify.js";
+import { planetscaleAdapter } from "./planetscale.js";
 import { launchdarklyAdapter } from "./launchdarkly.js";
+import { supabaseAdapter } from "./supabase.js";
 
 /**
  * The stable adapter authoring API: what templates/adapter (`pnpm new:adapter`) uses, and what an out-of-tree
@@ -21,9 +24,12 @@ export * from "./clerk.js";
 export { httpAdapter } from "./http-adapter.js";
 export { RECIPES_DIR, expandRecipe, loadRecipe, loadRecipes, recipeNames, resolveRecipeApi, type Recipe, type RecipeAssumption, type RecipeOp, type RecipeParam, type RecipeParamType, type RecipeSimHints } from "./recipes.js";
 export * from "./secrets.js";
+export * from "./planetscale.js";
 export * from "./launchdarkly.js";
+export * from "./supabase.js";
+export * from "./netlify.js";
 
 /** Every built-in adapter and secret source. The CLI uses this; tests build narrower registries. */
 export function createRegistry(): Registry {
-  return new Registry().addAdapter(neonAdapter).addAdapter(vercelAdapter).addAdapter(clerkAdapter).addAdapter(launchdarklyAdapter).addAdapter(httpAdapter).addSecretSource(envSecretSource).addSecretSource(dopplerSecretSource()).addSecretSource(opSecretSource()).addSecretSource(awsSecretsManagerSource()).addSecretSource(gcpSecretManagerSource());
+  return new Registry().addAdapter(neonAdapter).addAdapter(vercelAdapter).addAdapter(clerkAdapter).addAdapter(planetscaleAdapter).addAdapter(launchdarklyAdapter).addAdapter(httpAdapter).addAdapter(supabaseAdapter).addAdapter(netlifyAdapter).addSecretSource(envSecretSource).addSecretSource(dopplerSecretSource()).addSecretSource(opSecretSource()).addSecretSource(awsSecretsManagerSource()).addSecretSource(gcpSecretManagerSource());
 }

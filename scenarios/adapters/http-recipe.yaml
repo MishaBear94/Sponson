@@ -3,66 +3,70 @@ plan: |
   version: 1
   providers:
     http:
-      supabase: { recipe: supabase, base_url_env: REST_API_URL, auth: { bearer_env: REST_API_TOKEN } }
+      cloudflare: { recipe: cloudflare, base_url_env: REST_API_URL, auth: { bearer_env: REST_API_TOKEN } }
   changes:
-    - id: redirect
+    - id: dns
       adapter: http
-      op: list_item
-      recipe: supabase.auth_redirect_url
-      project_ref: abcdefghijklmnopqrst
-      url: "https://${ctx.scope}.preview.example.app/**"
+      op: resource
+      recipe: cloudflare.dns_cname
+      zone_id: 023e105f4ecef8ad9ca31a8372d0c353
+      name: "${ctx.scope}.preview.example.com"
+      target: preview-host.example.net
 seed:
   rest:
-    objects:
-      /projects/abcdefghijklmnopqrst/config/auth: { site_url: "https://example.app", uri_allow_list: "https://example.app/**" }
+    collections:
+      /zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records: [{ type: A, name: example.com, content: 192.0.2.1 }]
+    styles:
+      /zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records: { list_path: /result, item_path: /result, next_path: null }
 steps:
   - run: plan --json
-    expect: { exit: 0, plan_lines: { redirect: create } }
+    expect: { exit: 0, plan_lines: { dns: create } }
   - run: apply --json
-    expect: { exit: 0, status: complete, lines: { redirect: applied } }
+    expect: { exit: 0, status: complete, lines: { dns: applied }, outputs: { dns: { hostname: pr-42.preview.example.com } } }
   - sim:
       state:
-        rest.objects./projects/abcdefghijklmnopqrst/config/auth.uri_allow_list: "https://example.app/**,https://pr-42.preview.example.app/**"
-      write_order: ["PATCH /rest/projects/abcdefghijklmnopqrst/config/auth"]
+        rest.collections./zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records: { includes: { type: CNAME, name: pr-42.preview.example.com, content: preview-host.example.net, proxied: false, ttl: 1 } }
+      write_order: ["POST /rest/zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records"]
   - run: apply --json
-    expect: { exit: 0, writes: 0, lines: { redirect: unchanged } }
+    expect: { exit: 0, writes: 0, lines: { dns: unchanged } }
   # A mistyped param is refused before any request, naming the param.
   - plan: |
       version: 1
       providers:
         http:
-          supabase: { recipe: supabase, base_url_env: REST_API_URL, auth: { bearer_env: REST_API_TOKEN } }
+          cloudflare: { recipe: cloudflare, base_url_env: REST_API_URL, auth: { bearer_env: REST_API_TOKEN } }
       changes:
-        - { id: redirect, adapter: http, op: list_item, recipe: supabase.auth_redirect_url, project_ref: abcdefghijklmnopqrst, url: 42 }
+        - { id: dns, adapter: http, op: resource, recipe: cloudflare.dns_cname, zone_id: 023e105f4ecef8ad9ca31a8372d0c353, name: x.example.com, target: y.example.net, proxied: "yes" }
   - run: plan --json
-    expect: { exit: 2, error: PARAM_INVALID, stdout: ["`url` must be a string"] }
+    expect: { exit: 2, error: PARAM_INVALID, stdout: ["`proxied` must be a boolean"] }
   - plan: |
       version: 1
       changes:
-        - { id: redirect, adapter: http, op: list_item, recipe: supabase.redirects, project_ref: abcdefghijklmnopqrst, url: "https://x.example.app" }
+        - { id: dns, adapter: http, op: resource, recipe: cloudflare.dns_record, zone_id: 023e105f4ecef8ad9ca31a8372d0c353, name: x.example.com, target: y.example.net }
   - run: plan --json
-    expect: { exit: 2, error: PARAM_INVALID, stdout: ["has no op `redirects` (known: auth_redirect_url)"] }
+    expect: { exit: 2, error: PARAM_INVALID, stdout: ["has no op `dns_record` (known: dns_cname)"] }
   - plan: |
       version: 1
       changes:
-        - { id: redirect, adapter: http, op: resource, recipe: supabase.auth_redirect_url, project_ref: abcdefghijklmnopqrst, url: "https://x.example.app" }
+        - { id: dns, adapter: http, op: list_item, recipe: cloudflare.dns_cname, zone_id: 023e105f4ecef8ad9ca31a8372d0c353, name: x.example.com, target: y.example.net }
   - run: plan --json
-    expect: { exit: 2, error: PARAM_INVALID, stdout: ["write `op: list_item`"] }
-  # Back to the applied plan: destroy removes the one item and nothing else.
+    expect: { exit: 2, error: PARAM_INVALID, stdout: ["write `op: resource`"] }
+  # Back to the applied plan: destroy removes the one record and nothing else.
   - plan: |
       version: 1
       providers:
         http:
-          supabase: { recipe: supabase, base_url_env: REST_API_URL, auth: { bearer_env: REST_API_TOKEN } }
+          cloudflare: { recipe: cloudflare, base_url_env: REST_API_URL, auth: { bearer_env: REST_API_TOKEN } }
       changes:
-        - id: redirect
+        - id: dns
           adapter: http
-          op: list_item
-          recipe: supabase.auth_redirect_url
-          project_ref: abcdefghijklmnopqrst
-          url: "https://${ctx.scope}.preview.example.app/**"
+          op: resource
+          recipe: cloudflare.dns_cname
+          zone_id: 023e105f4ecef8ad9ca31a8372d0c353
+          name: "${ctx.scope}.preview.example.com"
+          target: preview-host.example.net
   - run: apply --destroy --json
-    expect: { exit: 0, status: complete, lines: { redirect: destroyed } }
+    expect: { exit: 0, status: complete, lines: { dns: destroyed } }
   - sim:
       state:
-        rest.objects./projects/abcdefghijklmnopqrst/config/auth.uri_allow_list: "https://example.app/**"
+        rest.collections./zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records: { length: 1 }

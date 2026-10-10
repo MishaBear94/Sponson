@@ -4,7 +4,8 @@ Date: 2026-10-10
 
 ## Status
 
-Accepted. Leases and succession were introduced in v0.2.
+Accepted. Leases and succession were introduced in v0.2. Extended by [0019](0019-parent-object-locks.md) (leases on
+shared parent objects).
 
 ## Context
 

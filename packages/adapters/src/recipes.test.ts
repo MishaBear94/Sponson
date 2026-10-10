@@ -13,7 +13,7 @@ import { httpAdapter } from "./http-adapter.js";
 import { listItemIdentity } from "./http-adapter-list.js";
 import { resourceIdentity } from "./http-adapter-resource.js";
 import { apiBlock, parseListItem, parseResource, placeholders } from "./http-adapter-spec.js";
-import { RECIPES_DIR, expandRecipe, loadRecipe, loadRecipes, recipeNames, resolveRecipeApi, substitute, type Recipe, type RecipeOp } from "./recipes.js";
+import { RECIPES_DIR, expandRecipe, loadRecipe, loadRecipes, recipeNames, resolveRecipeApi, substitute, useRecipe, type Recipe, type RecipeOp } from "./recipes.js";
 import { harness } from "./testing.js";
 
 const REPO = fileURLToPath(new URL("../../../", import.meta.url));
@@ -131,15 +131,15 @@ describe("recipe errors", () => {
   });
 
   it("a provider block names a recipe that exists, matches the line's, and may override any key", () => {
-    const ref = "supabase.auth_redirect_url";
-    expect(codeOf(() => apiBlock({ supabase: { recipe: "nope" } }, { recipe: ref }))).toMatch(/^PLAN_INVALID: .*providers\.http\.supabase\.recipe: no recipe `nope` \(known: /);
-    expect(codeOf(() => apiBlock({ supabase: { recipe: "turso" } }, { recipe: ref }))).toMatch(/^PLAN_INVALID: .*uses recipe `turso`, but the line's recipe is `supabase\.auth_redirect_url`/);
+    const ref = "cloudflare.dns_cname";
+    expect(codeOf(() => apiBlock({ cloudflare: { recipe: "nope" } }, { recipe: ref }))).toMatch(/^PLAN_INVALID: .*providers\.http\.cloudflare\.recipe: no recipe `nope` \(known: /);
+    expect(codeOf(() => apiBlock({ cloudflare: { recipe: "turso" } }, { recipe: ref }))).toMatch(/^PLAN_INVALID: .*uses recipe `turso`, but the line's recipe is `cloudflare\.dns_cname`/);
     expect(codeOf(() => apiBlock({}, { api: "other", recipe: ref }))).toMatch(/^PLAN_INVALID: .*no API `other` is configured/);
-    const eu = apiBlock({ eu: { recipe: "supabase", base_url: "https://eu.example.test/v1", auth: { bearer_env: "EU_SUPABASE_TOKEN" } } }, { api: "eu", recipe: ref });
-    expect(eu).toEqual({ ...loadRecipe("supabase").api, base_url: "https://eu.example.test/v1", auth: { bearer_env: "EU_SUPABASE_TOKEN" } });
-    expect(codeOf(() => apiBlock({ x: { recipe: "supabase", nope: 1 } }, { api: "x", recipe: ref }))).toMatch(/^PLAN_INVALID: .*unknown key `nope`/);
+    const eu = apiBlock({ eu: { recipe: "cloudflare", base_url: "https://eu.example.test/v4", auth: { bearer_env: "EU_CLOUDFLARE_TOKEN" } } }, { api: "eu", recipe: ref });
+    expect(eu).toEqual({ ...loadRecipe("cloudflare").api, base_url: "https://eu.example.test/v4", auth: { bearer_env: "EU_CLOUDFLARE_TOKEN" } });
+    expect(codeOf(() => apiBlock({ x: { recipe: "cloudflare", nope: 1 } }, { api: "x", recipe: ref }))).toMatch(/^PLAN_INVALID: .*unknown key `nope`/);
     // A hand-written line may use a recipe's API defaults too.
-    expect(apiBlock({ sb: { recipe: "supabase" } }, { api: "sb" })).toEqual(loadRecipe("supabase").api);
+    expect(apiBlock({ cf: { recipe: "cloudflare" } }, { api: "cf" })).toEqual(loadRecipe("cloudflare").api);
     expect(resolveRecipeApi({ base_url: "https://x.test" }, "w")).toEqual({ base_url: "https://x.test" });
   });
 
@@ -195,22 +195,47 @@ it("no recipe change re-identifies applied resources (packages/adapters/src/reci
 // ---------------------------------------------------------------------------------------------------------------
 // Through the ops, against the sim
 
+/** A list item recipe known only to this test (none is shipped): the list_item side of recipe expansion. */
+const ORIGINS: Recipe = {
+  provider: "example",
+  title: "Example",
+  category: "cors",
+  verified_on: "2026-10-11",
+  docs: [{ title: "none", url: "https://example.test" }],
+  assumptions: [{ id: "EX1", text: "a test-only recipe", verified: false }],
+  api: { base_url: "https://api.example.test/v1", base_url_env: "REST_API_URL", auth: { bearer_env: "REST_API_TOKEN" } },
+  ops: {
+    allowed_origin: {
+      kind: "list_item",
+      title: "Allowed origin",
+      summary: "An origin on an app's allow-list.",
+      covers: [],
+      params: { app: { type: "string", required: true, description: "The app.", example: "demo" }, origin: { type: "string", required: true, description: "The origin.", example: "https://pr-42.example.app" } },
+      http: { parent: { path: "/apps/{app}" }, list_path: "/allowed_origins", item: { param: "origin" } },
+    },
+  },
+};
+
 describe("a recipe line through the http ops", () => {
-  it("reads, diffs, applies and destroys like the hand-written line it expands into", async () => {
-    const h = await harness({ rest: { objects: { "/projects/abcdefghijklmnopqrst/config/auth": { uri_allow_list: "https://example.app/**" } } } });
+  it("reads, diffs, applies and destroys a list item like the hand-written line it expands into", async () => {
+    const forget = useRecipe(ORIGINS);
+    const h = await harness({ rest: { objects: { "/apps/demo": { allowed_origins: ["https://prod.example.app"] } } } });
     try {
-      const line = { recipe: "supabase.auth_redirect_url", project_ref: "abcdefghijklmnopqrst", url: "https://pr-42.preview.example.app/**" };
-      const provider = { ...listItem.providerFor!({}, line), base_url_env: "REST_API_URL", auth: { bearer_env: "REST_API_TOKEN" } };
-      const actx = h.actx("http", provider);
+      const line = { recipe: "example.allowed_origin", app: "demo", origin: "https://pr-42.example.app" };
+      expect(listItem.outputsFor!(line)).toEqual({});
+      expect(codeOf(() => listItem.outputsFor!({ ...line, origin: 1 }))).toMatch(/`origin` must be a string/);
+      const actx = h.actx("http", listItem.providerFor!({}, line));
       const params = resolveParams(line, new Map(), new Map()).params;
       expect(await listItem.read(actx, params)).toBeNull();
-      expect(listItem.diff(null, params)).toMatchObject([{ kind: "create", key: "/projects/abcdefghijklmnopqrst/config/auth#/uri_allow_list=https://pr-42.preview.example.app/**" }]);
+      expect(listItem.diff(null, params)).toMatchObject([{ kind: "create", key: "/apps/demo#/allowed_origins=https://pr-42.example.app" }]);
       const r = await listItem.apply(actx, params, null);
-      expect(h.sim.state.rest.objects["/projects/abcdefghijklmnopqrst/config/auth"]!.uri_allow_list).toBe("https://example.app/**,https://pr-42.preview.example.app/**");
+      expect(h.sim.state.rest.objects["/apps/demo"]!.allowed_origins).toEqual(["https://prod.example.app", "https://pr-42.example.app"]);
       await listItem.destroy(actx, r.resources);
-      expect(h.sim.state.rest.objects["/projects/abcdefghijklmnopqrst/config/auth"]!.uri_allow_list).toBe("https://example.app/**");
+      expect(h.sim.state.rest.objects["/apps/demo"]!.allowed_origins).toEqual(["https://prod.example.app"]);
     } finally {
+      forget();
       await h.close();
     }
+    expect(recipeNames()).not.toContain("example");
   });
 });

@@ -3,8 +3,8 @@
  * (one file per provider), so that a plan line names an operation and fills in its typed params instead of writing
  * request templates (ADR 0020, docs/recipes.md).
  *
- *   providers: { http: { supabase: { recipe: supabase } } }          # optional: the recipe's API defaults
- *   - { id: cb, adapter: http, op: list_item, recipe: supabase.auth_redirect_url, project_ref: abc, url: … }
+ *   providers: { http: { cloudflare: { recipe: cloudflare } } }       # optional: the recipe's API defaults
+ *   - { id: dns, adapter: http, op: resource, recipe: cloudflare.dns_cname, zone_id: …, name: …, target: … }
  *
  * A recipe line expands, before anything else reads it, into the `http.resource` or `http.list_item` params the
  * recipe declares, with `{ param: <name> }` values and `{<name>}` path placeholders filled from the line. Identity
@@ -91,12 +91,28 @@ export interface Recipe {
 const ADAPTER = "http";
 const cache = new Map<string, Recipe>();
 
-/** The providers that have a recipe file, sorted. */
+/** Recipes made known without a file (`useRecipe`), by provider. */
+const unshipped = new Map<string, Recipe>();
+
+/** The providers that have a recipe, sorted. */
 export function recipeNames(): string[] {
-  return readdirSync(RECIPES_DIR)
+  const files = readdirSync(RECIPES_DIR)
     .filter((f) => f.endsWith(".yaml"))
-    .map((f) => f.slice(0, -".yaml".length))
-    .sort();
+    .map((f) => f.slice(0, -".yaml".length));
+  return [...new Set([...files, ...unshipped.keys()])].sort();
+}
+
+/**
+ * Make a recipe known for this process as if it were shipped, until the returned function is called. For tests of
+ * code that recipes drive (the adapter's own tests use it for a list item recipe); not exported by the package.
+ */
+export function useRecipe(recipe: Recipe): () => void {
+  unshipped.set(recipe.provider, recipe);
+  cache.set(recipe.provider, recipe);
+  return () => {
+    unshipped.delete(recipe.provider);
+    cache.delete(recipe.provider);
+  };
 }
 
 /** A provider's recipe; PARAM_INVALID naming the known ones when there is none. */
@@ -122,7 +138,7 @@ export function loadRecipes(): Recipe[] {
 /** A line's `recipe: <provider>.<op>`, located. */
 export function recipeOp(ref: unknown): { recipe: Recipe; name: string; op: RecipeOp } {
   if (typeof ref !== "string" || !/^[a-z0-9][a-z0-9_-]*\.[a-z0-9_]+$/.test(ref)) {
-    throw paramError(ADAPTER, "`recipe` must be `<provider>.<op>`, e.g. `supabase.auth_redirect_url` (see docs/recipes.md)", "recipe");
+    throw paramError(ADAPTER, "`recipe` must be `<provider>.<op>`, e.g. `cloudflare.dns_cname` (see docs/recipes.md)", "recipe");
   }
   const [provider, name] = ref.split(".") as [string, string];
   const recipe = loadRecipe(provider);

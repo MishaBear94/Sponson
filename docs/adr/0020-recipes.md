@@ -50,14 +50,15 @@ a recipe is data like a plan.
 ```yaml
 providers:
   http:
-    supabase: { recipe: supabase }      # optional; override base_url, base_url_env, auth, headers, encoding here
+    cloudflare: { recipe: cloudflare }  # optional; override base_url, base_url_env, auth, headers, encoding here
 changes:
-  - id: redirect
+  - id: preview_dns
     adapter: http
-    op: list_item                       # the recipe's kind
-    recipe: supabase.auth_redirect_url
-    project_ref: abcdefghijklmnopqrst
-    url: "https://${ctx.scope}.preview.example.app/**"
+    op: resource                        # the recipe's kind
+    recipe: cloudflare.dns_cname
+    zone_id: 023e105f4ecef8ad9ca31a8372d0c353
+    name: "${ctx.scope}.preview.example.com"
+    target: preview-host.example.net
 ```
 
 - `recipe: <provider>.<op>`; `api` defaults to `<provider>`, and a missing `providers.http.<provider>` block means
@@ -113,15 +114,16 @@ A dedicated `adapter: <provider>` per recipe file was considered and rejected; s
 
 ### First recipes
 
-`supabase.auth_redirect_url` (P0, a delimited list on the auth config), `cloudflare.dns_cname` (P1, an object found by
-name and type) and `turso.database_branch` (P1, an object named by the client, with outputs). Stripe's webhook
-endpoint was not chosen: its signing secret exists only in the create response, which ADR 0017 does not support.
+`cloudflare.dns_cname` (P1, an object found by name and type) and `turso.database_branch` (P1, an object named by the
+client, with outputs). A Supabase redirect-URL recipe was written and dropped: the first-class
+`supabase.auth_redirect` covers that row, and a row has one way to be managed. Stripe's webhook endpoint was not
+chosen: its signing secret exists only in the create response, which the `http` adapter cannot declare.
 
 ## What it deliberately does not do
 
 - **No user-supplied recipe directories** (`SPONSON_RECIPES`): a recipe is useful because it is verified and tested
   here. A team that needs an unshipped one writes the http line by hand, or contributes the file.
-- **No recipe versions in the plan** (`recipe: supabase.auth_redirect_url@2`): identity already does not depend on the
+- **No recipe versions in the plan** (`recipe: cloudflare.dns_cname@2`): identity already does not depend on the
   recipe's text, and the lock makes the identity-changing edits explicit.
 - **No schema per recipe in `schema/release.plan.schema.json`**: an editor checks `recipe:`'s form, `sponson plan`
   checks the params.

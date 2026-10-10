@@ -131,6 +131,16 @@ export interface OutputSpec {
   event?: string;
   /** Sensitive outputs are never displayed, logged, or written to receipts. */
   sensitive?: boolean;
+  /**
+   * The provider reveals this value only in the response that creates the resource (a database password's
+   * plaintext): `read` never returns it and Sponson never stores it, so declare it `sensitive` too. It reaches
+   * dependent lines in the run that creates the resource. In any later run, a `from:` reference to it resolves to
+   * `{ keep: true }` when the ledger's fingerprints show the dependent already holds the current value; a dependent
+   * that would have to write it (or cannot be shown to hold it) is refused with OUTPUT_UNAVAILABLE instead of
+   * receiving an empty value. Nothing is re-created to get the value back unless the run asks for it (`recreate`).
+   * See docs/adr/0018-once-only-outputs.md.
+   */
+  once?: boolean;
 }
 
 /** One concrete thing in the provider. */
@@ -283,6 +293,18 @@ export interface OpSpec {
    * whatever the run's environment is. Return null when the op is not environment-specific.
    */
   writesEnvironment?(params: ResolvedParams, ctx: Ctx): string | null;
+  /**
+   * The shared provider object this line's resources live in, when its writes are read-modify-write of something
+   * other scopes write too: one callback array on an Auth0 application, Supabase's `uri_allow_list`, a Firebase
+   * authorized-domains list. Return a stable identity naming the provider, the account and the object, e.g.
+   * `auth0:<tenant>:client:<client id>`; null when the line's resources are objects of their own.
+   *
+   * The engine then holds a lease on that identity (ADR 0019) across scopes and environments around every write the
+   * line makes: re-reading live state, `apply`, and the `destroy` of rollback and `apply --destroy` (which use the
+   * identity recorded in the ledger, so a line removed from the plan is still locked correctly). The identity is
+   * written to receipts and shown in messages: never put a secret in it. Pure: no provider calls.
+   */
+  lockOn?(params: ResolvedParams, provider: Record<string, unknown>): string | null;
   /** Find what currently exists for this change. Null when nothing exists. Must not write. */
   read(actx: AdapterContext, params: ResolvedParams): Promise<LiveState | null>;
   /**
@@ -380,6 +402,8 @@ export interface AdapterAbout {
   credentialEnv: string;
   /** Environment variable that overrides the API base URL (the sim and tests use it), when there is one; or where the plan names it. */
   baseUrlEnv?: string;
+  /** Further variables the credential needs, when one is not enough (PlanetScale: the service token's id). */
+  extraCredentialEnv?: readonly string[];
 }
 
 /**
@@ -469,6 +493,18 @@ export interface LedgerEntry {
   orphan?: boolean;
   /** Non-sensitive outputs last seen for the owning line (including external ones like preview_url). */
   outputs?: Record<string, Literal>;
+  /** The shared parent object the resource lives in (`OpSpec.lockOn`); rollback and destroy lock it (ADR 0019). */
+  parent?: string;
+  /**
+   * Keyed fingerprints of the `once` outputs (ADR 0018) the line's create returned, by output name: which value is
+   * current, never the value.
+   */
+  onceFingerprints?: Record<string, string>;
+  /**
+   * Keyed fingerprints of the `once` values this resource was last written with, by reference (`line.output`). Equal
+   * to the producer's `onceFingerprints` entry means it still holds the current value (ADR 0018).
+   */
+  onceInputs?: Record<string, string>;
 }
 
 /**
@@ -533,6 +569,20 @@ export interface ReceiptStore {
   /** Current lock, or null. Never throws for a missing/unreadable lock. */
   readLock(environment: string, scope: string): Promise<LockInfo | null>;
   releaseLock(environment: string, scope: string, holder: string): Promise<void>;
+  /**
+   * Parent-object locks (ADR 0019): a lease on a shared provider object (`OpSpec.lockOn`), one per object across
+   * every scope and environment, with the same semantics as the scope lock (`LockHeldError`, expiry and takeover,
+   * `LockLostError` on a renewal by someone who lost it). `parent` is the identity the op returned; stores key it by
+   * `parentLockScope(parent)`. Optional: the engine falls back to the scope-lock methods under the reserved
+   * environment `PARENT_LOCKS_ENVIRONMENT`, which every store supports.
+   */
+  acquireParentLock?(parent: string, holder: string, ttlMs: number): Promise<LockInfo | null>;
+  /** Extend a parent lock we hold. Throws LockLostError when someone else holds it now. */
+  renewParentLock?(parent: string, holder: string, ttlMs: number): Promise<void>;
+  /** Current parent lock, or null. Never throws for a missing/unreadable lock. */
+  readParentLock?(parent: string): Promise<LockInfo | null>;
+  /** Release a parent lock; a no-op when `holder` does not hold it. */
+  releaseParentLock?(parent: string, holder: string): Promise<void>;
   /** Release what the store holds locally (a temporary working clone). Whoever constructed the store calls it once done. */
   close?(): Promise<void>;
 }

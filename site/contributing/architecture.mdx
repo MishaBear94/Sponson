@@ -124,7 +124,10 @@ Steps 1–3 are the same. Then `applyRun()` (`engine/apply.ts`):
    - otherwise `op.apply()`. Before sending any create, the adapter calls `actx.intend(keys)`; the engine writes those
      keys to the ledger as `intent` and **checkpoints the receipt** (a fenced write) before the request leaves. Then
      `record()` updates the ledger from the result, and outputs (including external ones that already exist) are
-     stored on the ledger entries.
+     stored on the ledger entries;
+   - when the op's `lockOn()` names a shared parent object (one callback list on an Auth0 application), the write
+     happens holding that object's lease: the line is inspected again under it and applied from that fresh state
+     (`underParentLock`, [ADR 0019](/contributing/adr/0019-parent-object-locks)).
 5. **On failure or refusal**: remaining lines are `skipped`; `rollback()` first re-reads lines with unresolved intents (a create
    whose answer was lost may have succeeded), then destroys what *this run* created, newest first. A destroy that fails
    leaves `rollback_failed` with the resources named.
@@ -157,16 +160,22 @@ says what Sponson *manages* in this environment and scope after the run, indepen
 - **`hash`** is an HMAC of the value's sha256 with the scope's random `hashKey`, so a receipt cannot be used to look
   up a low-entropy secret.
 - **`line`** is the line that declares it; **`orphan`** marks entries no line declares any more; **`outputs`** keeps
-  the line's non-sensitive outputs, including external ones such as `preview_url`.
+  the line's non-sensitive outputs, including external ones such as `preview_url`; **`parent`** names the shared
+  provider object it lives in, when its op declares one (`lockOn`), so rollback and destroy lock that object even
+  for a line the plan no longer has; **`onceFingerprints`** and **`onceInputs`** are keyed fingerprints of values a
+  provider shows only on create (`OutputSpec.once`), on the producer and on each dependent written with them, which
+  decide whether a later run may keep the dependent as it is ([ADR 0018](/contributing/adr/0018-once-only-outputs)).
 - Every run starts from the previous ledger and changes only entries it observed or wrote, so failed, skipped,
   waiting and refused lines never make Sponson forget what it owns.
 
 Receipts are stored by `ReceiptStore` (`types.ts`) at `<environment>/<scope>/latest.json`, one `<runId>.json` per run,
-and `lock.json` (`receipts/layout.ts`). `GitBranchReceiptStore` (`receipts/git.ts`) commits them to one orphan branch
+and `lock.json` (`receipts/layout.ts`); locks on shared parent objects live in the same layout under the reserved
+environment `_locks` (`_locks/<hash>/lock.json`). `GitBranchReceiptStore` (`receipts/git.ts`) commits them to one orphan branch
 per environment and scope, `sponson-receipts/<env>/<scope>` (`receiptsBranch()`), so unrelated scopes never race for
 a ref, and uses git's non-fast-forward rejection as compare-and-swap. A scope with no branch yet is read from the
 legacy shared branch `sponson/receipts` and moves to its own branch with its first write
-([ADR 0016](/contributing/adr/0016-one-receipts-ref-per-scope)). The store holds the policy (locks, fencing, retries,
+([ADR 0016](/contributing/adr/0016-one-receipts-ref-per-scope)); each parent-object lock gets a lock-only branch,
+`sponson-receipts/_locks/<hash>`. The store holds the policy (locks, fencing, retries,
 migration); the git plumbing under it (the working clone, credential-free errors, what a push's failure means) is
 `GitWorkdir` in `receipts/git-workdir.ts`. `LocalReceiptStore` (`receipts/local.ts`) uses `link(2)`
 and a short-lived mutex. `parseReceipt()` migrates version 1 receipts in memory
@@ -188,6 +197,13 @@ and refuses newer versions (`RECEIPT_VERSION`).
   do not use that guess: the store fences them atomically, so a run whose renewals lagged but whose lock nobody took
   still records everything it did. Releasing the lock is retried; if it still fails, the run's warnings say so and
   until when the scope stays locked.
+- **Parent-object locks** ([ADR 0019](/contributing/adr/0019-parent-object-locks)): scope locks cannot serialise two
+  scopes (or two environments) that read-modify-write one list on a shared provider object. An op that writes such a
+  list declares the object with `lockOn()`; the engine then takes a lease on it in the receipts store (one lock-only
+  ref per object, across every scope and environment) around the line's write, and around rollback and destroy of
+  its resources, with the scope lease's TTL, renewal, deadline, takeover and release-with-warning. A held one fails
+  the line with `LOCK_HELD`, or is waited for with `--wait`; rollback always waits. A run holds at most one, for one
+  line at a time, so runs cannot deadlock.
 - **Succession**: when a pull request scope runs and the head branch's own scope (`branch-<name>`) has a ledger
   (an agent applied locally before the PR existed), the PR scope inherits those entries. After a successful apply it
   rewrites the predecessor's receipt without them and with `supersededBy`, so exactly one scope owns each resource.
