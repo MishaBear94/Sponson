@@ -46,7 +46,6 @@ A secret source is an object with a `scheme` and `resolve(ref, env)` (`packages/
 | Item | Label |
 |------|-------|
 | `vault://` — HashiCorp Vault KV v2 over HTTP (`VAULT_ADDR`, `VAULT_TOKEN`) | **good first issue** |
-| `aws-sm://` — AWS Secrets Manager via the `aws` CLI (keeps the SDK out of the dependency tree) | **good first issue** |
 | `gcp-sm://` — Google Secret Manager via `gcloud` | **good first issue** |
 | `infisical://` — Infisical via its CLI | **good first issue** |
 | A scenario per new source under `scenarios/e-secrets/` proving the value never reaches any output (invariant 1) | part of each item above |

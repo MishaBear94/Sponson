@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { SponsonError, type SecretSource } from "@sponson/core";
 
-/** Runs a CLI and returns its stdout. Injected in tests so no real `doppler`/`op` is needed. */
+/** Runs a CLI and returns its stdout. Injected in tests so no real `doppler`/`op`/`aws` is needed. */
 export type Exec = (file: string, args: string[], env: NodeJS.ProcessEnv) => Promise<string>;
 
 /** Runs the real binary from PATH; rejects with its stderr when it fails. */
@@ -71,4 +71,43 @@ export function opSecretSource(exec: Exec = defaultExec): SecretSource {
       return runCli(exec, ref, "op", ["read", ref, "--no-newline"], env);
     },
   };
+}
+
+/**
+ * `aws-sm://<secret-id>` → `aws secretsmanager get-secret-value`, through the `aws` CLI so the AWS SDK stays out of
+ * the dependency tree. The secret id is a name or an ARN; region, profile and credentials come from the CLI's own
+ * conventions (`AWS_REGION`, `AWS_PROFILE`, ...). `aws-sm://<secret-id>#<key>` picks one key of a JSON secret, the
+ * shape the AWS console creates for key/value secrets.
+ */
+export function awsSecretsManagerSource(exec: Exec = defaultExec): SecretSource {
+  return {
+    scheme: "aws-sm",
+    async resolve(ref, env) {
+      const path = stripScheme(ref, "aws-sm");
+      const hash = path.indexOf("#");
+      const id = hash < 0 ? path : path.slice(0, hash);
+      const key = hash < 0 ? undefined : path.slice(hash + 1);
+      if (id === "" || key === "") throw unresolved(ref, "expected aws-sm://<secret-id> or aws-sm://<secret-id>#<key>");
+      // JSON output, not text: text prints a binary secret's missing SecretString as the word "None".
+      const out = await runCli(exec, ref, "aws", ["secretsmanager", "get-secret-value", "--secret-id", id, "--query", "SecretString", "--output", "json"], env);
+      const value = parseJson(out);
+      if (typeof value !== "string") throw unresolved(ref, "the secret has no string value (binary secrets are not supported)");
+      if (key === undefined) return value;
+      // Never echo the secret (or a fragment of it) in these messages: they end up in the receipt.
+      const fields = parseJson(value);
+      if (typeof fields !== "object" || fields === null || Array.isArray(fields)) throw unresolved(ref, `#${key} needs a JSON object secret, and this one is not`);
+      const picked = (fields as Record<string, unknown>)[key];
+      if (picked === undefined) throw unresolved(ref, `the secret has no key ${key}`);
+      if (typeof picked !== "string" && typeof picked !== "number" && typeof picked !== "boolean") throw unresolved(ref, `key ${key} is not a string, number or boolean`);
+      return String(picked);
+    },
+  };
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
 }

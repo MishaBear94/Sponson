@@ -1,0 +1,26 @@
+name: "aws-sm:// without the aws CLI: the line is blocked naming the reference, nothing is written"
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values: { STRIPE_KEY: { secret: "aws-sm://prod/stripe#STRIPE_KEY" } }
+env: { PATH: "/sponson-scenario-no-such-dir" }
+steps:
+  - run: plan --json
+    expect:
+      exit: 1
+      plan_lines: { env: blocked }
+      errors: { env: "secret aws-sm://prod/stripe#STRIPE_KEY: aws secretsmanager failed" }
+  - run: apply --json
+    expect:
+      exit: 1
+      status: failed
+      lines: { env: blocked }
+      errors: { env: "aws-sm://prod/stripe#STRIPE_KEY" }
+      writes: 0

@@ -37,7 +37,7 @@ already manages, then either reports the difference (`plan`) or makes it real (`
 | Package | Contains | Depends on |
 |---|---|---|
 | `packages/core` (`@sponson/core`) | the plan model and parser, context interpolation, the dependency graph, reference resolution, the engine, the ledger, both receipt stores, the redactor, the adapter and secret-source interfaces, `ERROR_CODES` | nothing in the repo (`yaml`, `zod`) |
-| `packages/adapters` (`@sponson/adapters`) | the Neon, Vercel and Clerk adapters, the `env`/`doppler`/`op` secret sources, the shared HTTP client, the adapter authoring helpers (`common.ts`) | `core` |
+| `packages/adapters` (`@sponson/adapters`) | the Neon, Vercel and Clerk adapters, the `env`/`doppler`/`op`/`aws-sm` secret sources, the shared HTTP client, the adapter authoring helpers (`common.ts`) | `core` |
 | `packages/sim` (`@sponson/sim`) | the local fake cloud: a provider-neutral core (`state.ts`, `server.ts`, `chaos.ts`) and one routes file per provider | nothing |
 | `packages/cli` (`sponson`) | the `sponson` binary, context detection, receipt-store selection, plugin loading, text rendering, the JSON envelope, the MCP server | `core`, `adapters` |
 

@@ -108,6 +108,7 @@ Built-in schemes:
 | `env` | `env://NAME` | the process environment; unset or empty is `SECRET_UNRESOLVED` |
 | `doppler` | `doppler://project/config/NAME` | `doppler secrets get NAME --project project --config config --plain` |
 | `op` | `op://vault/item/field` | `op read op://vault/item/field --no-newline` (1Password CLI) |
+| `aws-sm` | `aws-sm://secret-id` or `aws-sm://secret-id#KEY` | `aws secretsmanager get-secret-value --secret-id secret-id --query SecretString --output json` (AWS CLI; region and credentials from `AWS_REGION`, `AWS_PROFILE` and the CLI's other conventions). `secret-id` is a name or an ARN; `#KEY` picks one key of a JSON key/value secret. Binary secrets are not supported. |
 
 Plugins can add schemes. A `secret:` that is not a URL (`scheme://…`) is `PLAN_INVALID`. Every command resolves the
 secrets of the active lines first, so their values can be masked in all output before anything is printed; only
