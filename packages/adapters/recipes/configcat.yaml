@@ -1,0 +1,114 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# ConfigCat Public Management API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: configcat
+title: ConfigCat
+category: flags
+verified_on: "2026-10-11"
+docs:
+  - title: Public Management API
+    url: https://api.configcat.com/docs/
+  - title: OpenAPI spec (get value v2, replace value v2, targeting rule models)
+    url: https://api.configcat.com/docs/v1/swagger.json
+  - title: Terraform provider (credential variable names)
+    url: https://github.com/configcat/terraform-provider-configcat/blob/main/docs/index.md
+api:
+  base_url: https://api.configcat.com
+  base_url_env: CONFIGCAT_API_URL
+  auth: { basic: { user_env: CONFIGCAT_BASIC_AUTH_USERNAME, password_env: CONFIGCAT_BASIC_AUTH_PASSWORD } }
+assumptions:
+  - id: CC1
+    verified: true
+    text: "The API is at `https://api.configcat.com`, authenticated with Basic auth from Public API credentials (the Terraform provider's `CONFIGCAT_BASIC_AUTH_USERNAME` / `CONFIGCAT_BASIC_AUTH_PASSWORD`)."
+    source: https://api.configcat.com/docs/v1/swagger.json
+  - id: CC2
+    verified: true
+    text: "`GET /v2/environments/{environmentId}/settings/{settingId}/value` answers the setting's value in the environment bare: `defaultValue`, `targetingRules`, `percentageEvaluationAttribute` and read-only fields."
+    source: https://api.configcat.com/docs/v1/swagger.json
+  - id: CC3
+    verified: true
+    text: "`PUT` on the same path replaces the value: only `defaultValue`, `targetingRules` and `percentageEvaluationAttribute` can be set, and one not sent is reset. So those three are sent, as read, with the rule list changed (`parent.send`)."
+    source: https://api.configcat.com/docs/v1/swagger.json
+  - id: CC4
+    verified: true
+    text: "A targeting rule is `{ conditions: [{ userCondition: { comparisonAttribute, comparator, comparisonValue: { stringValue, doubleValue, listValue: [{ value, hint }] } } }], value | percentageOptions }`; rules have no id and are evaluated in order. `isOneOf` and `sensitiveIsOneOf` compare a user attribute with a list."
+    source: https://api.configcat.com/docs/v1/swagger.json
+  - id: CC5
+    verified: true
+    text: "Answers carry every member of a value (`boolValue`, `stringValue`, `intValue`, `doubleValue`, `predefinedVariationId`) and of a comparison value, the unused ones null; the rule is written with the same nulls so that it reads back equal."
+    source: https://api.configcat.com/docs/v1/swagger.json
+  - id: CC6
+    verified: false
+    text: "A condition is read back with `segmentCondition` and `prerequisiteFlagCondition` null and each list value's `hint` null, exactly as written; otherwise every plan shows the rule as changed."
+  - id: CC7
+    verified: false
+    text: "In a product with \"Config changes require a reason\" or approvals turned on, the PUT without `reason` / `bypassApproval` is refused (the query parameters are not sent); the apply then fails."
+    source: https://api.configcat.com/docs/v1/swagger.json
+ops:
+  targeting_rule:
+    kind: list_item
+    title: Feature flag targeting rule
+    summary: "A targeting rule on a boolean feature flag in one environment that serves a value to the preview, such as `IF Preview IS ONE OF [pr-42] THEN true`. Added after the flag's other rules (evaluated in order: an earlier matching rule wins); the default value and the other rules are written back as read. Identified by the matched value; a console edit of its condition or served value is drift. Destroy removes the rule."
+    covers: [configcat-rule]
+    params:
+      environment_id:
+        type: string
+        required: true
+        description: The environment's id (a UUID).
+        example: 08d8becf-d4d9-4c66-8b48-6ac74cd95fba
+      setting_id:
+        type: string
+        required: true
+        pattern: "^[0-9]+$"
+        description: The feature flag's numeric setting id.
+        example: "12345"
+      attribute:
+        type: string
+        required: true
+        description: The user attribute the rule compares (a custom attribute such as `Preview`, or `Identifier`, `Email`).
+        example: Preview
+      comparator:
+        type: string
+        default: isOneOf
+        enum: [isOneOf, sensitiveIsOneOf]
+        description: "`isOneOf`, or `sensitiveIsOneOf` (hashed in the config JSON)."
+      match:
+        type: string
+        required: true
+        description: The attribute value that is the preview; it identifies the rule.
+        example: "${ctx.scope}"
+      serve:
+        type: boolean
+        default: true
+        description: The value the flag serves to the preview.
+    http:
+      parent:
+        path: "/v2/environments/{environment_id}/settings/{setting_id}/value"
+        method: PUT
+        send: [defaultValue, percentageEvaluationAttribute]
+      list_path: /targetingRules
+      key_field: /conditions/0/userCondition/comparisonValue/listValue/0/value
+      item:
+        conditions:
+          - userCondition:
+              comparisonAttribute: { param: attribute }
+              comparator: { param: comparator }
+              comparisonValue:
+                stringValue: null
+                doubleValue: null
+                listValue: [{ value: { param: match }, hint: null }]
+            segmentCondition: null
+            prerequisiteFlagCondition: null
+        value:
+          boolValue: { param: serve }
+          stringValue: null
+          intValue: null
+          doubleValue: null
+          predefinedVariationId: null
+    sim:
+      objects:
+        "/v2/environments/{environment_id}/settings/{setting_id}/value":
+          defaultValue: { boolValue: false, stringValue: null, intValue: null, doubleValue: null, predefinedVariationId: null }
+          targetingRules: []
+          percentageEvaluationAttribute: null
+    live:
+      params: { environment_id: SPONSON_LIVE_CONFIGCAT_ENVIRONMENT_ID, setting_id: SPONSON_LIVE_CONFIGCAT_SETTING_ID }

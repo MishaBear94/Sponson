@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# PostHog private API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: posthog
+title: PostHog
+category: flags
+verified_on: "2026-10-11"
+docs:
+  - title: Private API (hosts, personal API keys)
+    url: https://posthog.com/docs/api
+  - title: Feature flags API
+    url: https://posthog.com/docs/api/feature-flags
+  - title: OpenAPI schema (FeatureFlag, PersonalAPIKeyAuth)
+    url: https://us.posthog.com/api/schema/?format=json
+  - title: Feature flag serializer (filters validation and merge)
+    url: https://github.com/PostHog/posthog/blob/master/products/feature_flags/backend/api/feature_flag.py
+  - title: Feature flag filters schema (condition groups)
+    url: https://github.com/PostHog/posthog/blob/master/products/feature_flags/backend/api/filters_schema.py
+api:
+  base_url: https://us.posthog.com
+  base_url_env: POSTHOG_API_URL
+  auth: { bearer_env: POSTHOG_PERSONAL_API_KEY }
+assumptions:
+  - id: PH1
+    verified: true
+    text: "The private API is at `https://us.posthog.com` (US cloud) or `https://eu.posthog.com` (EU cloud; set `base_url`), authenticated with a personal API key as `Authorization: Bearer`, with the `feature_flag:read` and `feature_flag:write` scopes."
+    source: https://posthog.com/docs/api
+  - id: PH2
+    verified: true
+    text: "`GET /api/projects/{project_id}/feature_flags/{id}/` (trailing slash) answers the flag bare, with its release conditions in `filters.groups`; `PATCH` on the same path updates it and answers it bare."
+    source: https://us.posthog.com/api/schema/?format=json
+  - id: PH3
+    verified: true
+    text: "A condition group is `{ properties: [{ key, type, operator, value }], rollout_percentage, variant }`; `exact` takes a list of values. Groups have no id, so the group is identified by the first value of its first property (the preview host)."
+    source: https://github.com/PostHog/posthog/blob/master/products/feature_flags/backend/api/filters_schema.py
+  - id: PH4
+    verified: true
+    text: "A PATCH of `filters` merges top-level keys into the stored filters (`{**stored_filters, **filters}`): sending `{ filters: { groups } }` replaces the groups and keeps `multivariate`, `payloads` and the rest. This is in the serializer's source, not the docs."
+    source: https://github.com/PostHog/posthog/blob/master/products/feature_flags/backend/api/feature_flag.py
+  - id: PH5
+    verified: false
+    text: "Self-hosted or older PostHog versions merge `filters` the same way (the merge arrived with 2026's validation work). On a version that replaces `filters` whole, every write would drop the flag's variants and payloads: check before pointing the recipe at one."
+  - id: PH6
+    verified: false
+    text: "A group is read back as written (the serializer drops unknown keys and adds none to the declared ones), so the compared `properties`, `rollout_percentage` and `variant` do not show as changed on every plan."
+  - id: PH7
+    verified: true
+    text: "A flag under an approval policy answers a PATCH with 409 (`approval_required` or `change_request_pending`); the apply then fails with PROVIDER_CONFLICT rather than waiting for the approval."
+    source: https://github.com/PostHog/posthog/blob/master/products/approvals/backend/decorators.py
+ops:
+  release_condition:
+    kind: list_item
+    title: Flag release condition
+    summary: "A release condition (condition group) on an existing feature flag that matches the preview, such as `$host exact [pr-42.preview.example.com]` at 100%. Groups are OR'd; the flag's other groups, variants and payloads are left as they are. A console edit of its properties, rollout or variant is drift. Destroy removes the group (with the last group gone, the flag matches no one)."
+    covers: [posthog-release-condition]
+    params:
+      project_id:
+        type: string
+        required: true
+        pattern: "^[0-9]+$"
+        description: The project's numeric id (Project settings).
+        example: "12345"
+      flag_id:
+        type: string
+        required: true
+        pattern: "^[0-9]+$"
+        description: The flag's numeric id (in the flag's URL), not its key.
+        example: "678"
+      property:
+        type: string
+        required: true
+        description: The property the condition tests. It must be known when the flag is evaluated (a person property, or one passed with the evaluation).
+        example: $host
+      property_type:
+        type: string
+        default: person
+        enum: [person, group]
+        description: Whether `property` is a person or a group property.
+      operator:
+        type: string
+        default: exact
+        enum: [exact, is_not, icontains, regex]
+        description: How the property is compared with `value`.
+      value:
+        type: string
+        required: true
+        description: The value that matches the preview (such as its host); it identifies the condition on the flag.
+        example: "${ctx.scope}.preview.example.com"
+      rollout_percentage:
+        type: integer
+        default: 100
+        description: The share of matching users the flag is on for (0–100).
+      variant:
+        type: string
+        description: For a multivariate flag, the variant the condition serves.
+    http:
+      parent: { path: "/api/projects/{project_id}/feature_flags/{flag_id}/", method: PATCH }
+      list_path: /filters/groups
+      key_field: /properties/0/value/0
+      item:
+        properties:
+          - key: { param: property }
+            type: { param: property_type }
+            operator: { param: operator }
+            value: [{ param: value }]
+        rollout_percentage: { param: rollout_percentage }
+        variant: { param: variant }
+    sim:
+      objects:
+        "/api/projects/{project_id}/feature_flags/{flag_id}":
+          id: 678
+          key: new-checkout
+          filters:
+            groups: [{ properties: [], rollout_percentage: 0 }]
+            multivariate: null
+            payloads: {}
+    live:
+      params: { project_id: SPONSON_LIVE_POSTHOG_PROJECT_ID, flag_id: SPONSON_LIVE_POSTHOG_FLAG_ID }

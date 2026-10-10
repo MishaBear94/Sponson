@@ -97,13 +97,13 @@ the tables below are generated from it: edit the data, then run `pnpm docs:gen`.
 | Provider | Side effect | API shape | Generic? | Pri | Now |
 |---|---|---|---|---|---|
 | LaunchDarkly | Flag on for a preview: target a context key or add a rule on `url`, in a per-PR or shared preview environment | `PATCH /api/v2/flags/{proj}/{flag}` with semantic patch (`Content-Type: application/json; domain-model=launchdarkly.semanticpatch`, instructions `addTargets`/`removeTargets`/`addRule`), API token; instructions are idempotent per target; approvals may gate production | P (instruction-based diff, approvals) | P0 | **yes** (`launchdarkly.flag_target`: context-key targets; `url` rules not yet) |
-| PostHog | Release condition matching the preview host on a flag | `PATCH /api/projects/{id}/feature_flags/{id}` `filters.groups`, personal API key bearer; **list** in `filters` | Y (list mode) | P1 | no |
-| Statsig | Gate rule for the preview (condition `url` or `environment_tier`) | Console API `POST /console/v1/gates/{id}/rule`, `PATCH`/`DELETE .../rules/{ruleID}`, `STATSIG-API-KEY` header; object per rule; reviews may gate changes | Y | P1 | no |
-| GrowthBook | Force rule in a per-environment feature | REST `POST /api/v1/features/{id}` with `environments.{env}.rules`, bearer; **list** per environment | Y (list mode) | P2 | no |
-| Unleash | Strategy (with constraints) on a flag in an environment | Admin API `POST /api/admin/projects/{p}/features/{f}/environments/{env}/strategies`, `DELETE .../{id}`; token header; object | Y | P2 | no |
-| Flagsmith | Segment override or a per-PR environment | `POST /api/v1/environments/`, feature-state endpoints; `Token` header; object | Y | P2 | no |
-| ConfigCat | Targeting rule on a setting in an environment | Management API v2 `PATCH /v2/environments/{e}/settings/{s}/value` (JSON Patch), Basic; **list** of rules | Y (JSON Patch body) | P2 | no |
-| Split (Harness FME) | Targeting rule / individual target in an environment | Admin API `PATCH /internal/api/v2/splits/ws/{ws}/{split}/environments/{env}` (JSON Patch), bearer; **list** **(unverified paths since the Harness migration)** | Y | P2 | no |
+| PostHog | Release condition matching the preview host on a flag | `PATCH /api/projects/{id}/feature_flags/{id}` `filters.groups`, personal API key bearer; **list** in `filters` | Y (list mode) | P1 | **yes** (recipe [`posthog.release_condition`](recipes.md#posthogrelease_condition): condition on a person or group property; needs the merging `filters` PATCH of current PostHog (PH5)) |
+| Statsig | Gate rule for the preview (condition `url` or `environment_tier`) | Console API `POST /console/v1/gates/{id}/rule` (answers the whole gate), `GET .../rules`, `PATCH`/`DELETE .../rules/{ruleID}`, `STATSIG-API-KEY` header; object per rule; reviews may gate changes | Y | P1 | **yes** (recipe [`statsig.gate_rule`](recipes.md#statsiggate_rule): gates requiring reviews: write behaviour undocumented (SG8)) |
+| GrowthBook | Force rule in a per-environment feature | REST v2 `POST /api/v2/features/{id}` replacing the top-level `rules` (each rule names its environments; v1's `environments.{env}.rules` is deprecated), bearer; **list** | Y (list mode) | P2 | **yes** (recipe [`growthbook.force_rule`](recipes.md#growthbookforce_rule): v2 API (rules with per-rule environments); approval-gated features refuse the write) |
+| Unleash | Strategy (with constraints) on a flag in an environment | Admin API `POST /api/admin/projects/{p}/features/{f}/environments/{env}/strategies`, `DELETE .../{id}`; token header; object | Y | P2 | **yes** (recipe [`unleash.flag_strategy`](recipes.md#unleashflag_strategy): deleting the last strategy turns the flag off in that environment (UN8)) |
+| Flagsmith | Segment override or a per-PR environment | `POST /api/v1/environments/`, feature-state endpoints; `Authorization: Api-Key <key>` (organisation key) or `Token <key>`; object | P (credential needs an `Api-Key` scheme prefix) | P2 | no |
+| ConfigCat | Targeting rule on a setting in an environment | Management API v2 `PUT /v2/environments/{e}/settings/{s}/value` (replaces `defaultValue`, `targetingRules`, `percentageEvaluationAttribute`; `PATCH` is JSON Patch), Basic; **list** of rules | Y (list mode, PUT with the other fields sent back) | P2 | **yes** (recipe [`configcat.targeting_rule`](recipes.md#configcattargeting_rule): boolean flags; products requiring a change reason or approval refuse the write) |
+| Split (Harness FME) | Targeting rule / individual target in an environment | Admin API `PUT /internal/api/v2/splits/ws/{ws}/{split}/environments/{env}` (full definition; `PATCH` is JSON Patch), bearer; **list**; same host and paths after the Harness migration | Y | P2 | **yes** (recipe [`split.targeting_rule`](recipes.md#splittargeting_rule): targeting rule (not individual targets); projects requiring title/comment refuse the write) |
 
 ### Webhooks registered per environment
 
@@ -193,18 +193,18 @@ Counted over the 56 side-effect rows of the matrix (rows marked `n/a` have nothi
 
 | Measure | Covered | Coverage |
 |---|---|---|
-| Rows | 11 of 56 | **19.6%** |
-| Weighted by priority | 29 of 90 | **32.2%** |
+| Rows | 17 of 56 | **30.4%** |
+| Weighted by priority | 37 of 90 | **41.1%** |
 | P0 rows only | 7 of 9 | 77.8% |
-| Rows an API reaches (all but `manual`) | 11 of 53 | 20.8% |
-| Weighted, rows an API reaches | 29 of 85 | 34.1% |
+| Rows an API reaches (all but `manual`) | 17 of 53 | 32.1% |
+| Weighted, rows an API reaches | 37 of 85 | 43.5% |
 | Secret sources (separate) | 4 of 9 vendors; weighted 7 of 14 | 44.4%; 50.0% |
 
-Covered: Vercel (`vercel.env`, `vercel.deploy`); Netlify (`netlify.env`); Cloudflare Pages / Workers (`cloudflare.pages_env`); Neon (`neon.branch`); Supabase (`supabase.branch`); PlanetScale (`planetscale.branch`, `planetscale.password`); Turso (recipe [`turso.database_branch`](recipes.md#tursodatabase_branch)); Clerk (`clerk.redirect_allow`); Supabase Auth (`supabase.auth_redirect`); LaunchDarkly (`launchdarkly.flag_target`); Cloudflare DNS (recipe [`cloudflare.dns_cname`](recipes.md#cloudflaredns_cname)).
+Covered: Vercel (`vercel.env`, `vercel.deploy`); Netlify (`netlify.env`); Cloudflare Pages / Workers (`cloudflare.pages_env`); Neon (`neon.branch`); Supabase (`supabase.branch`); PlanetScale (`planetscale.branch`, `planetscale.password`); Turso (recipe [`turso.database_branch`](recipes.md#tursodatabase_branch)); Clerk (`clerk.redirect_allow`); Supabase Auth (`supabase.auth_redirect`); LaunchDarkly (`launchdarkly.flag_target`); PostHog (recipe [`posthog.release_condition`](recipes.md#posthogrelease_condition)); Statsig (recipe [`statsig.gate_rule`](recipes.md#statsiggate_rule)); GrowthBook (recipe [`growthbook.force_rule`](recipes.md#growthbookforce_rule)); Unleash (recipe [`unleash.flag_strategy`](recipes.md#unleashflag_strategy)); ConfigCat (recipe [`configcat.targeting_rule`](recipes.md#configcattargeting_rule)); Split (Harness FME) (recipe [`split.targeting_rule`](recipes.md#splittargeting_rule)); Cloudflare DNS (recipe [`cloudflare.dns_cname`](recipes.md#cloudflaredns_cname)).
 
 Automated coverage counts only rows an op manages without a person. Rows no API reaches (`manual`, or a `manual.step` line that records the step a person does; weight 5): Google OAuth clients (no public API for standard OAuth web clients); Clerk webhooks (Clerk's API manages the Svix app, not its endpoints); Stripe sandboxes (no public API for account sandboxes). They cap coverage at 53 rows, 85 of 90 weighted (94.4%).
 
-Recipe candidates, rows the generic adapter can express fully (`Y`) that nothing covers yet: 30 (Render, Heroku, Prisma Postgres, Auth0, Firebase Auth, WorkOS, Stytch, Okta, Kinde, PostHog, Statsig, GrowthBook, Unleash, Flagsmith, ConfigCat, Split (Harness FME), GitHub, Svix (as a sender), Resend, Postmark, SendGrid, Sentry, Datadog, Honeycomb, Vercel domains, Firebase Storage (GCS bucket), Upstash Redis, Upstash QStash, Inngest, Stripe test-mode objects).
+Recipe candidates, rows the generic adapter can express fully (`Y`) that nothing covers yet: 23 (Render, Heroku, Prisma Postgres, Auth0, Firebase Auth, WorkOS, Stytch, Okta, Kinde, GitHub, Svix (as a sender), Resend, Postmark, SendGrid, Sentry, Datadog, Honeycomb, Vercel domains, Firebase Storage (GCS bucket), Upstash Redis, Upstash QStash, Inngest, Stripe test-mode objects).
 <!-- generated:coverage-numbers:end -->
 
 ## Strategy

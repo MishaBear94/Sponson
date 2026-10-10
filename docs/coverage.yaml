@@ -245,49 +245,56 @@ categories:
         api_shape: "`PATCH /api/projects/{id}/feature_flags/{id}` `filters.groups`, personal API key bearer; **list** in `filters`"
         generic: Y (list mode)
         priority: P1
-        covered_by: null
+        covered_by: recipe:posthog.release_condition
+        note: condition on a person or group property; needs the merging `filters` PATCH of current PostHog (PH5)
       - id: statsig-gate-rule
         provider: Statsig
         side_effect: Gate rule for the preview (condition `url` or `environment_tier`)
-        api_shape: Console API `POST /console/v1/gates/{id}/rule`, `PATCH`/`DELETE .../rules/{ruleID}`, `STATSIG-API-KEY` header; object per rule; reviews may gate changes
+        api_shape: Console API `POST /console/v1/gates/{id}/rule` (answers the whole gate), `GET .../rules`, `PATCH`/`DELETE .../rules/{ruleID}`, `STATSIG-API-KEY` header; object per rule; reviews may gate changes
         generic: Y
         priority: P1
-        covered_by: null
+        covered_by: recipe:statsig.gate_rule
+        note: "gates requiring reviews: write behaviour undocumented (SG8)"
       - id: growthbook-force-rule
         provider: GrowthBook
         side_effect: Force rule in a per-environment feature
-        api_shape: REST `POST /api/v1/features/{id}` with `environments.{env}.rules`, bearer; **list** per environment
+        api_shape: REST v2 `POST /api/v2/features/{id}` replacing the top-level `rules` (each rule names its environments; v1's `environments.{env}.rules` is deprecated), bearer; **list**
         generic: Y (list mode)
         priority: P2
-        covered_by: null
+        covered_by: recipe:growthbook.force_rule
+        note: v2 API (rules with per-rule environments); approval-gated features refuse the write
       - id: unleash-strategy
         provider: Unleash
         side_effect: Strategy (with constraints) on a flag in an environment
         api_shape: Admin API `POST /api/admin/projects/{p}/features/{f}/environments/{env}/strategies`, `DELETE .../{id}`; token header; object
         generic: Y
         priority: P2
-        covered_by: null
+        covered_by: recipe:unleash.flag_strategy
+        note: deleting the last strategy turns the flag off in that environment (UN8)
       - id: flagsmith-override
         provider: Flagsmith
         side_effect: Segment override or a per-PR environment
-        api_shape: "`POST /api/v1/environments/`, feature-state endpoints; `Token` header; object"
-        generic: Y
+        api_shape: "`POST /api/v1/environments/`, feature-state endpoints; `Authorization: Api-Key <key>` (organisation key) or `Token <key>`; object"
+        generic: P (credential needs an `Api-Key` scheme prefix)
         priority: P2
         covered_by: null
+        note: "not yet: the Admin API takes `Authorization: Api-Key <key>`, a scheme prefix the http adapter's auth forms do not send (Bearer only for short-lived OIDC-exchanged tokens)"
       - id: configcat-rule
         provider: ConfigCat
         side_effect: Targeting rule on a setting in an environment
-        api_shape: Management API v2 `PATCH /v2/environments/{e}/settings/{s}/value` (JSON Patch), Basic; **list** of rules
-        generic: Y (JSON Patch body)
+        api_shape: Management API v2 `PUT /v2/environments/{e}/settings/{s}/value` (replaces `defaultValue`, `targetingRules`, `percentageEvaluationAttribute`; `PATCH` is JSON Patch), Basic; **list** of rules
+        generic: Y (list mode, PUT with the other fields sent back)
         priority: P2
-        covered_by: null
+        covered_by: recipe:configcat.targeting_rule
+        note: boolean flags; products requiring a change reason or approval refuse the write
       - id: split-rule
         provider: Split (Harness FME)
         side_effect: Targeting rule / individual target in an environment
-        api_shape: Admin API `PATCH /internal/api/v2/splits/ws/{ws}/{split}/environments/{env}` (JSON Patch), bearer; **list** **(unverified paths since the Harness migration)**
+        api_shape: Admin API `PUT /internal/api/v2/splits/ws/{ws}/{split}/environments/{env}` (full definition; `PATCH` is JSON Patch), bearer; **list**; same host and paths after the Harness migration
         generic: Y
         priority: P2
-        covered_by: null
+        covered_by: recipe:split.targeting_rule
+        note: targeting rule (not individual targets); projects requiring title/comment refuse the write
   - id: webhooks
     title: Webhooks registered per environment
     rows:

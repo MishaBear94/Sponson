@@ -1,0 +1,141 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Unleash Admin API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: unleash
+title: Unleash
+category: flags
+verified_on: "2026-10-11"
+docs:
+  - title: Admin API overview (authorization, base URL)
+    url: https://docs.getunleash.io/reference/api/unleash
+  - title: Add a strategy to a flag in an environment
+    url: https://docs.getunleash.io/reference/api/unleash/add-feature-strategy
+  - title: Get feature flag strategies
+    url: https://docs.getunleash.io/reference/api/unleash/get-feature-strategies
+  - title: Update a strategy (replace)
+    url: https://docs.getunleash.io/reference/api/unleash/update-feature-strategy
+  - title: Delete a strategy
+    url: https://docs.getunleash.io/reference/api/unleash/delete-feature-strategy
+  - title: API tokens and client keys
+    url: https://docs.getunleash.io/reference/api-tokens-and-client-keys
+# Every Unleash instance has its own URL (self-hosted, or https://<region>.app.unleash-hosted.com/<instance>):
+# everything before `/api`.
+base_url_example: https://unleash.example.com
+api:
+  base_url_env: UNLEASH_API_URL
+  auth: { header: Authorization, value_env: UNLEASH_AUTH_TOKEN }
+assumptions:
+  - id: UN1
+    verified: true
+    text: "Every request carries the token as it is in `Authorization` (`Authorization: <token>`, no `Bearer`); a personal access token or service account token (admin tokens are deprecated) reaches the Admin API. The spec also lists a Bearer scheme, but the server does not strip a `Bearer ` prefix, so the bare form is used."
+    source: https://docs.getunleash.io/reference/api/unleash
+  - id: UN2
+    verified: true
+    text: "`POST /api/admin/projects/{projectId}/features/{featureName}/environments/{environment}/strategies` with `name`, `title`, `disabled`, `constraints` and `parameters` adds a strategy and answers it bare, with its server-assigned `id` (a UUID)."
+    source: https://docs.getunleash.io/reference/api/unleash/add-feature-strategy
+  - id: UN3
+    verified: true
+    text: "`GET` on the same path answers a bare array of the environment's strategies (the source returns `FeatureStrategySchema[]`; the docs page's schema shows a single strategy, which is wrong)."
+    source: https://github.com/Unleash/unleash/blob/main/src/lib/features/feature-toggle/feature-toggle-controller.ts
+  - id: UN4
+    verified: true
+    text: "`PUT .../strategies/{strategyId}` replaces a strategy's configuration (so it sends `name`, `title` and every compared field); `DELETE` on the same path removes it."
+    source: https://docs.getunleash.io/reference/api/unleash/update-feature-strategy
+  - id: UN5
+    verified: true
+    text: "A constraint is `{ contextName, operator, values, caseInsensitive, inverted }` (`caseInsensitive` and `inverted` default to false, and are written explicitly so the comparison does not depend on defaults); `parameters` is a map of strings (`rollout: \"100\"`)."
+    source: https://docs.getunleash.io/reference/api/unleash/add-feature-strategy
+  - id: UN6
+    verified: false
+    text: "`title` is optional and not unique on the server: the strategy is identified by its title in the environment, and two strategies with that title are PARAM_INVALID rather than a guess."
+    source: https://docs.getunleash.io/reference/api/unleash/add-feature-strategy
+  - id: UN7
+    verified: false
+    text: "A strategy is read back with `constraints` and `parameters` exactly as written (no extra keys such as `value: \"\"`); otherwise every plan shows it as changed."
+  - id: UN8
+    verified: true
+    text: "Deleting a strategy that is gone already answers 200 (nothing to do). Deleting the last strategy of an environment turns the flag off in that environment (the service calls `disableEnvironmentIfNoStrategies`). Adding a strategy does not turn the environment on."
+    source: https://github.com/Unleash/unleash/blob/main/src/lib/features/feature-toggle/feature-toggle-service.ts
+  - id: UN9
+    verified: true
+    text: "With change requests enabled for the environment, these writes are refused unless the caller may bypass them; the refusal fails the apply."
+    source: https://github.com/Unleash/unleash/blob/main/src/lib/features/feature-toggle/feature-toggle-service.ts
+ops:
+  flag_strategy:
+    kind: resource
+    title: Flag strategy with constraints
+    summary: "A `flexibleRollout` strategy on a flag in one environment, constrained to the preview (such as `preview IN [pr-42]`). Located by its title in the environment's strategies; a console edit of its constraints, rollout parameters or `disabled` is drift. Destroy deletes it; if it was the environment's last strategy, Unleash turns the flag off there (UN8). The environment itself must be enabled for the flag to be served."
+    covers: [unleash-strategy]
+    params:
+      project:
+        type: string
+        default: default
+        description: The project id.
+      feature:
+        type: string
+        required: true
+        description: The flag's name; also the rollout's `groupId`.
+        example: new-checkout
+      environment:
+        type: string
+        required: true
+        description: The environment the strategy is added in.
+        example: development
+      title:
+        type: string
+        required: true
+        description: The strategy's title, unique among the environment's strategies; it identifies the strategy.
+        example: "preview ${ctx.scope}"
+      context_name:
+        type: string
+        required: true
+        description: The context field the constraint tests (a custom context field such as `preview`, or `environment`, `userId`, …).
+        example: preview
+      operator:
+        type: string
+        default: IN
+        enum: [IN, NOT_IN, STR_ENDS_WITH, STR_STARTS_WITH, STR_CONTAINS]
+        description: The constraint's operator.
+      values:
+        type: list
+        required: true
+        description: The values the context field is compared with.
+        example: ["${ctx.scope}"]
+      rollout:
+        type: string
+        default: "100"
+        pattern: "^(100|[1-9]?[0-9])$"
+        description: The share of matching users the strategy enables, as a string (0–100).
+      stickiness:
+        type: string
+        default: default
+        description: The rollout's stickiness (`default`, `userId`, `sessionId`, `random`, or a context field).
+      disabled:
+        type: boolean
+        default: false
+        description: Keep the strategy but switch it off.
+    http:
+      find:
+        path: "/api/admin/projects/{project}/features/{feature}/environments/{environment}/strategies"
+        match: { title: { param: title } }
+      create:
+        path: "/api/admin/projects/{project}/features/{feature}/environments/{environment}/strategies"
+        body: { name: flexibleRollout }
+      update:
+        method: PUT
+        path: "/api/admin/projects/{project}/features/{feature}/environments/{environment}/strategies/{id}"
+        body: { name: flexibleRollout }
+      delete: { path: "/api/admin/projects/{project}/features/{feature}/environments/{environment}/strategies/{id}" }
+      fields:
+        disabled: { param: disabled }
+        constraints:
+          - contextName: { param: context_name }
+            operator: { param: operator }
+            values: { param: values }
+            caseInsensitive: false
+            inverted: false
+        parameters:
+          rollout: { param: rollout }
+          stickiness: { param: stickiness }
+          groupId: { param: feature }
+    live:
+      params: { project: SPONSON_LIVE_UNLEASH_PROJECT, feature: SPONSON_LIVE_UNLEASH_FEATURE, environment: SPONSON_LIVE_UNLEASH_ENVIRONMENT }
