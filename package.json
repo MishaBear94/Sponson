@@ -21,7 +21,7 @@
     "new:adapter": "tsx scripts/new-adapter.ts",
     "test:live": "SPONSON_LIVE=1 vitest run --project scenarios scenarios/contract.test.ts",
     "test:coverage": "vitest run --coverage --project unit --project scenarios --project property",
-    "docs:gen": "tsx scripts/gen-docs.ts",
+    "docs:gen": "tsx scripts/gen-docs.ts && tsx scripts/gen-site.ts",
     "site:gen": "tsx scripts/gen-site.ts",
     "changeset": "changeset",
     "test:tooling": "vitest run --project tooling"

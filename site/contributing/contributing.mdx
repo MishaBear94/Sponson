@@ -65,22 +65,22 @@ Dependency direction: `core` depends on nothing in the repo; `adapters` depends 
 pnpm install
 pnpm typecheck            # sources and tests
 pnpm lint
-pnpm test                 # unit + scenarios + journeys + property, then the tooling suites (~2 min)
-pnpm test:tooling         # scaffold and docs-as-code checks only (they run tsc/eslint; kept separate on purpose)
-pnpm test:coverage        # same, with a coverage table; fails below the thresholds CI enforces
+pnpm test                 # unit + scenarios + journeys + property, then the tooling suites in a second run (~2 min)
+pnpm test:tooling         # just the tooling suites: scaffold and docs-as-code checks (they run tsc/eslint)
+pnpm test:coverage        # unit + scenarios + journeys + property with a coverage table (not tooling); fails below CI's thresholds
 pnpm test:scenarios       # the acceptance catalogue only
 pnpm test:live            # contract suite against the real APIs (needs credentials, see scenarios/contract.test.ts)
 pnpm sim                  # start the fake cloud on :4777 for manual poking
 pnpm sponson plan         # run the CLI from source
 pnpm new:adapter <name>   # scaffold an adapter (add --dry-run to see what it would do)
-pnpm changeset            # describe a user-visible change for the changelog
-pnpm docs:gen             # regenerate the parts of docs/ that restate the code
-pnpm site:gen             # regenerate the documentation site in site/ from the Markdown
+pnpm changeset            # describe a user-visible change for the changelog (interactive; see below for writing one by hand)
+pnpm docs:gen             # regenerate the parts of docs/ that restate the code, then the site in site/
+pnpm site:gen             # regenerate only the documentation site in site/ from the Markdown
 ```
 
 Documentation site: `site/` is published with Mintlify and generated from the Markdown you already edit (README,
-`docs/`, `examples/`, this file and the others at the root). After changing any of them, run `pnpm site:gen` and
-commit the result; `scenarios/docs/site.test.ts` fails when you forget. Previewing it locally is described in
+`docs/`, `examples/`, this file and the others at the root). After changing any of them, run `pnpm docs:gen` (or
+`pnpm site:gen`) and commit the result; `scenarios/docs/site.test.ts` fails when you forget. Previewing it locally is described in
 [site/README.md](https://github.com/MishaBear94/Sponson/blob/main/site/README.md).
 
 CI (`.github/workflows/ci.yml`) runs typecheck, lint and tests on Node 22 and 24 (and macOS on 24), a coverage
@@ -154,9 +154,9 @@ the checklist is short:
 
 1. **The source** in `packages/adapters/src/secrets.ts`, implementing `SecretSource` from `@sponson/core`, with a doc comment and its `form` and `resolvedBy` (the generated docs read them); throw reasons only — the engine prefixes the reference, and a message must never contain the value. Add it to `PUBLIC_API` in `packages/core/src/public-api.test.ts`.
 2. **Register it** with `.addSecretSource(…)` in `createRegistry()` (`packages/adapters/src/index.ts`).
-3. **A unit test** in `packages/adapters/src/secrets.test.ts`: resolution, a missing value, the tool or service being unavailable.
-4. **A scenario or journey proving the value never leaks** (invariant 1) — stdout, stderr, receipts and plan text — like `scenarios/e-secrets/aws-sm-value-never-leaks.yaml`, plus the unavailable case.
-5. **A changeset** and `pnpm docs:gen`; remove the item from `ROADMAP.md` if it was listed there; then `pnpm typecheck && pnpm lint && pnpm test`.
+3. **A unit test** in `packages/adapters/src/secrets.test.ts`: resolution, a missing value, the tool or service being unavailable. A source that runs a CLI goes through `runCli`, listing every argument taken from the reference in `fromRef` (one starting with `-` is refused, so a reference can never pass an option to the CLI), and belongs in the "CLI-backed sources" table there; a test fails until it is added.
+4. **A scenario or journey proving the value never leaks** (invariant 1) — stdout, stderr, receipts and plan text — like `scenarios/e-secrets/aws-sm-value-never-leaks.yaml`, plus the unavailable case. The `bins:` (fake CLIs on PATH) and `secrets:` keys a scenario can use are documented at the top of `scenarios/runner.test.ts`.
+5. **A changeset** and `pnpm docs:gen` (it regenerates `docs/` and `site/`); remove the item from `ROADMAP.md` if it was listed there; then `pnpm typecheck && pnpm lint && pnpm test`.
 
 ## Adding a scenario
 
@@ -220,6 +220,18 @@ Choose the bump (before 1.0: `minor` for anything new or breaking, `patch` for f
 sentences for users. Breaking changes start with `**Breaking:**` and say what to do. The four packages are
 released together at one version (`fixed` in `.changeset/config.json`), so it does not matter which you select.
 Docs-, test- and CI-only PRs need none. Details: [.changeset/README.md](https://github.com/MishaBear94/Sponson/blob/main/.changeset/README.md).
+
+Without the interactive prompt, write the file by hand as `.changeset/<any-name>.md`:
+
+```md
+---
+"@sponson/adapters": minor
+---
+
+Add the `infisical://` secret source.
+```
+
+The package names are `sponson` (the CLI), `@sponson/core`, `@sponson/adapters` and `@sponson/sim`.
 
 ## Releasing
 

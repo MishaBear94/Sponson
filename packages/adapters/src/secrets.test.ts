@@ -169,6 +169,11 @@ describe("gcp-sm secret source", () => {
   });
 });
 
+/** An `Exec` for tests where the CLI must not be started at all. */
+const neverRuns = async (): Promise<string> => {
+  throw new Error("the CLI must not run");
+};
+
 describe("CLI-backed sources share one message shape", () => {
   const sources = [
     ["doppler", dopplerSecretSource(), "doppler://p/c/K"],
@@ -183,6 +188,24 @@ describe("CLI-backed sources share one message shape", () => {
       (e: Error) => e,
     );
     expect(err).toMatchObject({ code: "SECRET_UNRESOLVED", message: `the \`${bin}\` CLI is not installed or not on PATH`, details: { ref } });
+  });
+
+  it("covers every built-in source that runs a CLI", async () => {
+    const { createRegistry } = await import("./index.js");
+    const cliSchemes = createRegistry()
+      .secretSchemes()
+      .filter((s) => s !== "env");
+    expect(sources.map(([, src]) => src.scheme).sort(), "add the new source to this table").toEqual(cliSchemes.sort());
+  });
+
+  // A reference segment that reads as an option is refused before the CLI runs (`op` passes the whole `op://…`
+  // reference as one argument, so it cannot start with "-").
+  it.each([
+    ["doppler", dopplerSecretSource(neverRuns), "doppler://p/c/--help"],
+    ["aws", awsSecretsManagerSource(neverRuns), "aws-sm://--debug"],
+    ["gcloud", gcpSecretManagerSource(neverRuns), "gcp-sm://-p/K"],
+  ] as const)("`%s`: a reference segment starting with - never reaches the CLI", async (_bin, src, ref) => {
+    await expect(src.resolve(ref, {})).rejects.toMatchObject({ code: "SECRET_UNRESOLVED", details: { ref }, message: expect.stringMatching(/may not start with "-"|^expected gcp-sm:/) });
   });
 
   it("a binary that cannot be executed is named too", async () => {

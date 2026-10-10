@@ -43,8 +43,13 @@ function stripTrailingNewline(out: string): string {
  * Run a secret CLI; any failure is SECRET_UNRESOLVED. Every CLI-backed source goes through here, so a missing binary
  * reads the same for all of them ("the `aws` CLI is not installed or not on PATH"), and any other failure (not signed
  * in, unknown item) carries the CLI's own error text, which never contains the value it failed to read.
+ *
+ * `fromRef` lists every argument taken from the reference. A plan is reviewed as data, so none of them may read as an
+ * option to the CLI: one starting with `-` is refused before anything runs.
  */
-async function runCli(exec: Exec, ref: string, file: string, args: string[], env: NodeJS.ProcessEnv): Promise<string> {
+async function runCli(exec: Exec, ref: string, file: string, args: string[], env: NodeJS.ProcessEnv, fromRef: string[]): Promise<string> {
+  const flag = fromRef.find((a) => a.startsWith("-"));
+  if (flag !== undefined) throw unresolved(ref, `a reference segment may not start with "-" (it would reach the \`${file}\` CLI as an option)`);
   try {
     return stripTrailingNewline(await exec(file, args, env));
   } catch (e) {
@@ -78,7 +83,7 @@ export function dopplerSecretSource(exec: Exec = defaultExec): SecretSource {
       const parts = stripScheme(ref, "doppler").split("/");
       if (parts.length !== 3 || parts.some((p) => p === "")) throw unresolved(ref, "expected doppler://project/config/NAME");
       const [project, config, name] = parts as [string, string, string];
-      return runCli(exec, ref, "doppler", ["secrets", "get", name, "--project", project, "--config", config, "--plain"], env);
+      return runCli(exec, ref, "doppler", ["secrets", "get", name, "--project", project, "--config", config, "--plain"], env, [name, project, config]);
     },
   };
 }
@@ -92,7 +97,8 @@ export function opSecretSource(exec: Exec = defaultExec): SecretSource {
     async resolve(ref, env) {
       const path = stripScheme(ref, "op");
       if (path.split("/").length < 3) throw unresolved(ref, "expected op://vault/item/field");
-      return runCli(exec, ref, "op", ["read", ref, "--no-newline"], env);
+      // The reference is passed whole and always starts with `op://`, so it can never read as an option.
+      return runCli(exec, ref, "op", ["read", ref, "--no-newline"], env, [ref]);
     },
   };
 }
@@ -116,7 +122,7 @@ export function awsSecretsManagerSource(exec: Exec = defaultExec): SecretSource 
       const key = hash < 0 ? undefined : path.slice(hash + 1);
       if (id === "" || key === "") throw unresolved(ref, "expected aws-sm://<secret-id> or aws-sm://<secret-id>#<key>");
       // JSON output, not text: text prints a binary secret's missing SecretString as the word "None".
-      const out = await runCli(exec, ref, "aws", ["secretsmanager", "get-secret-value", "--secret-id", id, "--query", "SecretString", "--output", "json"], env);
+      const out = await runCli(exec, ref, "aws", ["secretsmanager", "get-secret-value", "--secret-id", id, "--query", "SecretString", "--output", "json"], env, [id]);
       const value = parseJson(out);
       if (typeof value !== "string") throw unresolved(ref, "the secret has no string value (binary secrets are not supported)");
       if (key === undefined) return value;
@@ -157,7 +163,7 @@ export function gcpSecretManagerSource(exec: Exec = defaultExec): SecretSource {
       if (!GCP_PROJECT.test(project) || !GCP_SECRET.test(secret) || !GCP_VERSION.test(version)) throw unresolved(ref, GCP_SM_FORM);
       // JSON, not the default raw output: the payload arrives base64-encoded, so a value ending in a newline survives
       // and a binary payload is recognised instead of being passed on as mangled text.
-      const out = await runCli(exec, ref, "gcloud", ["secrets", "versions", "access", version, `--secret=${secret}`, `--project=${project}`, "--format=json"], env);
+      const out = await runCli(exec, ref, "gcloud", ["secrets", "versions", "access", version, `--secret=${secret}`, `--project=${project}`, "--format=json"], env, [version, secret, project]);
       const response = parseJson(out);
       const data = isRecord(response) && isRecord(response.payload) ? response.payload.data : undefined;
       if (typeof data !== "string") throw unresolved(ref, "gcloud returned no payload");
