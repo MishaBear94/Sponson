@@ -1,9 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { Redactor, SponsonError, detectCtx, isSponsonError, loadPlan, type Plan, type Receipt } from "@sponson/core";
+import { Redactor, SponsonError, isSponsonError, loadPlan, type Plan, type Receipt } from "@sponson/core";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { detectCtx } from "../detect.js";
 import { UsageError, parsePr, planPathFor, selectStore, type GlobalOpts, type IO } from "../context.js";
 import { errorEnvelope, serialize, withRedactorWarnings } from "../output.js";
 import { applyJson, finalLine, planJson, planSummary } from "../render.js";
@@ -210,7 +211,12 @@ export async function readReceipt(opts: GlobalOpts, io: IO, redactor: Redactor):
     throw new SponsonError("ENV_UNKNOWN", `Unknown environment \`${ctx.env}\`. Declared: ${environments.join(", ")}`, { environment: ctx.env, known: environments });
   }
   const store = await selectStore(opts, kind, io, (m) => warnings.push(m));
-  const receipt = await store.read(ctx.env, ctx.scope);
+  let receipt: Receipt | null;
+  try {
+    receipt = await store.read(ctx.env, ctx.scope);
+  } finally {
+    await store.close?.();
+  }
   return { ok: true, command: "receipt", environment: ctx.env, scope: ctx.scope, receipt, warnings: withRedactorWarnings(warnings, redactor) };
 }
 

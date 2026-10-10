@@ -10,6 +10,10 @@ export * from "./routes/neon.js";
 export * from "./routes/clerk.js";
 export { createSimServer } from "./server.js";
 
+/**
+ * A running sim: its base URL (`simEnv` turns it into adapter environment), its live state for seeding and
+ * assertions, and `close`.
+ */
 export interface SimHandle {
   url: string;
   port: number;

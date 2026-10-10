@@ -1,0 +1,31 @@
+version: 2
+updates:
+  # npm (pnpm workspace): one weekly PR per group instead of one per package.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: ["dependencies"]
+    commit-message:
+      prefix: deps
+    groups:
+      dev-tooling:
+        dependency-type: development
+        update-types: [minor, patch]
+      runtime:
+        dependency-type: production
+        update-types: [minor, patch]
+    # Majors arrive as individual PRs so each can be read against its changelog.
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    labels: ["dependencies", "area/ci"]
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ["*"]

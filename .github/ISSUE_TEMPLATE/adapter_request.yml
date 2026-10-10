@@ -1,0 +1,62 @@
+name: Adapter request
+description: Ask for (or offer to build) support for another provider — a database, deploy target, identity provider, feature-flag service or secret source.
+labels: ["adapter", "enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        An adapter is one TypeScript file, one sim routes file and one scenario. `pnpm new:adapter <name>` scaffolds
+        all of them; CONTRIBUTING.md has the checklist. If you want to build it yourself, say so below and a
+        maintainer will help you scope it.
+  - type: input
+    id: provider
+    attributes:
+      label: Provider
+      placeholder: "LaunchDarkly"
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - Resource adapter (something Sponson creates per preview/environment)
+        - Secret source (a new `scheme://` for `{ secret: … }`)
+        - Receipt store
+    validations:
+      required: true
+  - type: textarea
+    id: ops
+    attributes:
+      label: Ops and the release story
+      description: |
+        What should one plan line do, per preview or environment? Name each op, its params and its outputs, and
+        what other lines would reference (`{ from: <id>.<output> }`).
+      placeholder: |
+        op: flag_target — turn flag `new-checkout` on for the preview's URL
+        params: flag, project, environment, url ({ from: env.preview_url })
+        outputs: none
+    validations:
+      required: true
+  - type: textarea
+    id: api
+    attributes:
+      label: API endpoints
+      description: Links to the API docs for list / create / update / delete. Note pagination, rate limits, and how a duplicate create is answered (409? 422? 200?) — the adapter and its sim depend on these.
+    validations:
+      required: true
+  - type: textarea
+    id: identity
+    attributes:
+      label: Resource identity
+      description: What makes two resources distinct in the provider (project, environment, branch, key…)? This becomes the resource key.
+  - type: dropdown
+    id: build
+    attributes:
+      label: Would you build it?
+      options:
+        - Yes, I'd like to open the PR
+        - Maybe, with guidance
+        - No, requesting only
+    validations:
+      required: true

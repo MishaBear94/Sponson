@@ -3,12 +3,8 @@ import type { Receipt } from "../types.js";
 /** Answers whether `older` is an ancestor of `newer`; null when it cannot tell (shallow clone, unknown commit). */
 export type AncestryCheck = (older: string, newer: string) => Promise<boolean | null>;
 
-export interface Staleness {
-  stale: boolean;
-  /** The last commit applied to this scope, when the run is stale. */
-  last?: string;
-  reason?: "superseded" | "ancestor";
-}
+/** Whether a run's commit is older than what the scope already has; `last` is the last commit applied to it. */
+export type Staleness = { stale: false } | { stale: true; last: string; reason: "superseded" | "ancestor" };
 
 /**
  * A run must not roll a scope back to an older commit (a late deployment event, a re-run job).

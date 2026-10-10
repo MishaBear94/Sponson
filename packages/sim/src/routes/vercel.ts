@@ -20,6 +20,7 @@
  */
 import { page, Reply, type CreatedBy, type ProviderSim, type SimCore } from "../provider.js";
 
+/** One simulated Vercel environment variable. */
 export interface VercelEnv {
   id: string;
   key: string;
@@ -32,8 +33,10 @@ export interface VercelEnv {
   createdBy: CreatedBy;
 }
 
+/** Vercel's deployment states, as its API reports them. */
 export type DeploymentState = "QUEUED" | "BUILDING" | "READY" | "ERROR" | "CANCELED";
 
+/** One simulated deployment. */
 export interface VercelDeployment {
   uid: string;
   url: string;
@@ -47,19 +50,23 @@ export interface VercelDeployment {
   createdBy: CreatedBy;
 }
 
+/** One simulated Vercel project: its variables and deployments. */
 export interface VercelProject {
   envs: VercelEnv[];
   deployments: VercelDeployment[];
 }
 
+/** Simulated Vercel: projects by id. */
 export interface VercelState {
   projects: Record<string, VercelProject>;
 }
 
+/** Initial Vercel state. */
 export interface VercelSeed {
   projects: Record<string, { envs: Array<{ key: string; value: string; target: string; gitBranch?: string }> }>;
 }
 
+/** Simulated Vercel (env vars, deployments); see the assumptions at the top of this file. */
 export const vercelSim: ProviderSim<VercelState, VercelSeed> = {
   env: { token: "VERCEL_TOKEN", url: "VERCEL_API_URL", testToken: "tok_vercel" },
   defaultSeed: { projects: { prj_demo: { envs: [] } } },
@@ -124,7 +131,7 @@ export const vercelSim: ProviderSim<VercelState, VercelSeed> = {
     if ((m = path.match(/^\/v10\/projects\/([^/]+)\/env$/)) && method === "POST") {
       const p = state.projects[m[1]!];
       if (!p) return new Reply(404, { error: "project not found" });
-      return upsertEnvs(core, p, (Array.isArray(body) ? body : [body]) as EnvInput[], url.searchParams.get("upsert") === "true");
+      return upsertEnvs(core, p, Array.isArray(body) ? body : [body], url.searchParams.get("upsert") === "true");
     }
     if ((m = path.match(/^\/v9\/projects\/([^/]+)\/env\/([^/]+)$/)) && (method === "PATCH" || method === "DELETE")) {
       const p = state.projects[m[1]!];
@@ -175,14 +182,22 @@ export const vercelSim: ProviderSim<VercelState, VercelSeed> = {
   },
 };
 
-type EnvInput = Partial<VercelEnv> & { target?: string[] };
+/** One item of an env create request, once validated. */
+type EnvInput = Pick<VercelEnv, "key" | "value" | "target"> & { type?: unknown; gitBranch?: string };
 
-function upsertEnvs(core: SimCore, p: VercelProject, items: EnvInput[], upsert: boolean): Reply {
-  const sameScope = (e: VercelEnv, it: { key?: string; gitBranch?: string }) => e.key === it.key && (e.gitBranch ?? null) === (it.gitBranch ?? null);
+function isEnvInput(v: unknown): v is EnvInput {
+  if (typeof v !== "object" || v === null) return false;
+  const it = v as Record<string, unknown>;
+  return typeof it.key === "string" && typeof it.value === "string" && Array.isArray(it.target) && (it.gitBranch === undefined || typeof it.gitBranch === "string");
+}
+
+function upsertEnvs(core: SimCore, p: VercelProject, body: unknown[], upsert: boolean): Reply {
+  const sameScope = (e: VercelEnv, it: EnvInput) => e.key === it.key && (e.gitBranch ?? null) === (it.gitBranch ?? null);
   // Validate the whole batch first: a rejected request writes nothing.
+  if (!body.every(isEnvInput)) return new Reply(400, { error: { code: "bad_request", message: "bad env" } });
+  const items = body;
   for (const it of items) {
-    if (typeof it?.key !== "string" || typeof it.value !== "string" || !Array.isArray(it.target)) return new Reply(400, { error: { code: "bad_request", message: "bad env" } });
-    const overlapping = p.envs.find((e) => sameScope(e, it) && !sameSet(e.target, it.target!) && e.target.some((t) => it.target!.includes(t)));
+    const overlapping = p.envs.find((e) => sameScope(e, it) && !sameSet(e.target, it.target) && e.target.some((t) => it.target.includes(t)));
     if (overlapping) {
       return new Reply(400, { error: { code: "ENV_CONFLICT", key: it.key, message: `A variable with the key ${it.key} already exists for the target ${overlapping.target.join(",")}` } });
     }
@@ -190,14 +205,14 @@ function upsertEnvs(core: SimCore, p: VercelProject, items: EnvInput[], upsert: 
   const created: VercelEnv[] = [];
   const failed: Array<{ error: { code: string; key: string; message: string } }> = [];
   for (const it of items) {
-    if (core.chaos.env_upsert_fail.includes(it.key!)) {
-      failed.push({ error: { code: "ENV_CONFLICT", key: it.key!, message: "rejected by chaos env_upsert_fail" } });
+    if (core.chaos.env_upsert_fail.includes(it.key)) {
+      failed.push({ error: { code: "ENV_CONFLICT", key: it.key, message: "rejected by chaos env_upsert_fail" } });
       continue;
     }
-    const existing = p.envs.find((e) => sameScope(e, it) && sameSet(e.target, it.target!));
+    const existing = p.envs.find((e) => sameScope(e, it) && sameSet(e.target, it.target));
     if (existing) {
       if (!upsert) return new Reply(400, { error: { code: "ENV_ALREADY_EXISTS", key: it.key, message: "already exists" } });
-      existing.value = it.value!;
+      existing.value = it.value;
       existing.updatedAt = Math.max(Date.now(), existing.createdAt + 1);
       created.push(existing);
       continue;
@@ -205,9 +220,9 @@ function upsertEnvs(core: SimCore, p: VercelProject, items: EnvInput[], upsert: 
     const now = Date.now();
     const env: VercelEnv = {
       id: core.nextId("env_"),
-      key: it.key!,
-      value: it.value!,
-      target: [...it.target!],
+      key: it.key,
+      value: it.value,
+      target: [...it.target],
       type: it.type === "plain" ? "plain" : "encrypted",
       ...(it.gitBranch ? { gitBranch: it.gitBranch } : {}),
       createdAt: now,

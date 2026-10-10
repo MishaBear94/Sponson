@@ -1,0 +1,37 @@
+# 13. Rollback undoes only what this run created
+
+Date: 2026-10-10
+
+## Status
+
+Accepted
+
+## Context
+
+When a line fails, earlier lines of the same apply have already written. The first description of Sponson said a
+failure tears down everything the plan created. But plans are applied in several runs: the database branch and the
+variables before the deploy, the callback after it. When the callback fails, the preview deployment is already using
+the database branch; deleting it would turn one failed line into a broken preview.
+
+## Decision
+
+On a failed line, `apply` stops, marks the remaining lines `skipped` (with `DEPENDENCY_BLOCKED` when they depend on
+the failed one), and rolls back what **this run** created, newest first. Resources created by earlier runs, updated
+values and adopted resources are not touched. Creates whose outcome is unknown are re-read first and rolled back if
+they exist. A rollback that fails is reported as `rollback_failed`, naming the resources left behind, never silently.
+
+Two related rules:
+
+- An external event that fails (a deploy ending in `ERROR`) is not Sponson's failure: the waiting lines are `skipped`
+  with `EXTERNAL_FAILED`, the run is `failed`, and nothing is rolled back.
+- The run stops at the first failure instead of continuing with independent lines, so the state after a failure is
+  predictable and the rollback set is clear.
+
+Removing everything a scope created is `apply --destroy`, which works from the ledger
+([ADR 0005](0005-receipts-are-a-ledger-with-write-ahead-intents.md)).
+
+## Consequences
+
+- Property invariant I2: when a line fails and rollback succeeds, the set of resources is what it was before the run.
+- Fixing the failed line and running `apply` again continues where the run stopped; idempotent lines are `unchanged`.
+- Updates are not reverted: an updated value stays updated after a later line fails.

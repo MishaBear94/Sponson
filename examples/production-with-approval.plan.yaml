@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/sponson/sponson/main/schema/release.plan.schema.json
+#
+# Preview and production in one file. Lines are filtered by `environments:`; `--env` picks
+# the environment (default preview; production is never inferred from a branch name).
+# Any run that writes to production is refused with ENV_NOT_APPROVED unless an approver
+# is named: `sponson apply --env production --approved-by alice`.
+version: 1
+environments: [preview, production]
+providers:
+  vercel: { project: prj_acme_web }
+  neon: { project: proj_acme_db }
+
+changes:
+  - id: db
+    adapter: neon
+    op: branch
+    environments: [preview]
+
+  - id: env-preview
+    adapter: vercel
+    op: env
+    target: preview
+    values:
+      DATABASE_URL: { from: db.connection_string }
+      STRIPE_SECRET_KEY: { secret: "env://STRIPE_TEST_SECRET_KEY" }
+    environments: [preview]
+
+  # Production values come from secrets, never from another line: there is no per-PR
+  # database in production. Without `environments: [production]`, this line would also run
+  # in preview, and every preview run would then need approval because it writes to production.
+  - id: env-production
+    adapter: vercel
+    op: env
+    target: production
+    values:
+      DATABASE_URL: { secret: "env://PRODUCTION_DATABASE_URL" }
+      STRIPE_SECRET_KEY: { secret: "env://STRIPE_LIVE_SECRET_KEY" }
+    environments: [production]

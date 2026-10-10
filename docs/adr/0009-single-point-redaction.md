@@ -1,0 +1,48 @@
+# 9. Single-point redaction
+
+Date: 2026-10-10
+
+## Status
+
+Accepted. The redactor was rebuilt in v0.2.
+
+## Context
+
+Sponson handles secrets on every run: `{ secret }` references, provider credentials, sensitive outputs such as a
+database connection string. Its output goes to terminals, CI logs, pull request comments, MCP results and receipts
+committed to a branch. A secret that leaks into any of them is effectively public.
+
+In v0.1, redaction was applied in several places and each was incomplete. It matched only the raw bytes of a value,
+while providers echo values JSON-escaped, URL-encoded or base64-encoded. It registered only values resolved inside
+the apply loop, so a provider error during `plan` could print one. It ran on serialized JSON by string replacement,
+which once turned `"ok": true` into `"ok": [REDACTED]` because a secret's value was `true`. And error text was
+truncated before it was redacted, so the tail of a secret survived.
+
+## Decision
+
+One `Redactor` instance (`packages/core/src/redact.ts`) lives for the whole command. It is created in
+`packages/cli/src/main.ts`, passed to the engine in `RunOptions`, and everything that leaves the process passes
+through it.
+
+- **Register first.** Before any output exists, the engine registers credential-looking environment variables, every
+  secret the active lines reference (every command resolves them, `plan` included, so they can be masked), and every
+  sensitive output, including the password inside a URL or DSN.
+- **Every encoding.** A registered value is masked raw, JSON-escaped, URL-encoded, base64/base64url at any alignment,
+  whitespace-flattened and line by line, and by its head or tail when a long value was cut off.
+- **Redact, then truncate.** Adapters call `actx.redact` on provider text before shortening it.
+- **Structured output is redacted field by field.** JSON is produced only by `serialize()`
+  (`packages/cli/src/output.ts`): `redactDeep` rewrites string leaves, skipping enum fields (`status`, `kind`, `state`,
+  `code`, ...), and only then serializes. Serialized JSON is never string-replaced.
+- **Diffs carry data, not text.** A diff side whose value matches a registered secret becomes `{ state: "sensitive" }`.
+- **Receipts never hold values**, only keyed hashes and non-sensitive outputs.
+- Values shorter than four characters cannot be masked without destroying ordinary text; they are not masked, and
+  the CLI warns, without echoing them.
+
+## Consequences
+
+- Property invariant I1 (no registered secret in any output, receipt or plan text) holds by construction, and the
+  scenario runner checks it after every step; the secrets journeys include the receipts branch history and PR
+  comments.
+- Code that resolves a secret must never format output itself (CONTRIBUTING.md, Style).
+- Adding an output channel means routing it through the redactor; there is no second mechanism to keep in sync.
+- Over-masking is possible: ordinary text equal to a registered value is masked too.

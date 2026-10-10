@@ -140,7 +140,7 @@ export function renderPlan(result: PlanResult, opts: RenderOptions): string {
 // ---------------------------------------------------------------------------
 
 function receiptRow(l: ReceiptLine): Row {
-  const row: Row = { symbol: LINE_SYMBOL[l.status] ?? " ", id: l.id, op: `${l.adapter}.${l.op}`, status: l.status, detail: "", sub: [] };
+  const row: Row = { symbol: LINE_SYMBOL[l.status], id: l.id, op: `${l.adapter}.${l.op}`, status: l.status, detail: "", sub: [] };
   if (l.orphan) row.detail = "(removed from the plan; left alone)";
   else if (l.status === "waiting") row.detail = `waiting on ${l.waitingFor ?? "external event"}`;
   else if (l.error || l.errorCode) row.detail = errorText(l.error, l.errorCode);

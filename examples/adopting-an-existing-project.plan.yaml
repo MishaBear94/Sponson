@@ -1,0 +1,42 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/sponson/sponson/main/schema/release.plan.schema.json
+#
+# A project that existed before Sponson. These lines are what `sponson init` appends when it
+# adopts unmanaged resources: values are never copied into the plan, only `{ keep: true }`
+# ("whatever is live"). Adopted resources are never destroyed by `apply --destroy`.
+version: 1
+environments: [preview, production]
+providers:
+  vercel: { project: prj_acme_web }
+  neon: { project: proj_acme_db }
+
+changes:
+  # Project-wide preview variables someone set in the dashboard. Sponson now tracks that they
+  # exist and reports drift; it does not manage their values. A `_KEY` name may be `{ keep: true }`:
+  # only literal strings and numbers are refused for secret-looking names.
+  - id: env-preview-shared
+    adapter: vercel
+    op: env
+    target: preview
+    branch: "*"
+    values:
+      SENTRY_DSN: { keep: true }
+      NEXT_PUBLIC_POSTHOG_KEY: { keep: true }
+    environments: [preview]
+
+  - id: env-production
+    adapter: vercel
+    op: env
+    target: production
+    values:
+      DATABASE_URL: { keep: true }
+    environments: [production]
+
+  # An existing Neon branch, identified by its name.
+  - id: db-staging
+    adapter: neon
+    op: branch
+    name: staging
+    environments: [preview]
+
+  # To let Sponson manage a value, replace `{ keep: true }` with a literal or a reference,
+  # for example `SENTRY_DSN: { secret: "env://SENTRY_DSN" }`.

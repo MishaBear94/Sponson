@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/sponson/sponson/main/schema/release.plan.schema.json
+#
+# A Next.js app on Vercel with a Neon Postgres database. Every pull request gets its own
+# database branch, and that pull request's preview deployments get its connection string.
+version: 1
+providers:
+  vercel: { project: prj_acme_web }   # .vercel/project.json → projectId
+  neon: { project: proj_acme_db }     # Neon console → project settings → project ID
+
+changes:
+  # One Neon branch per scope. `name` defaults to sponson/<env>/<scope>, so pull request 42
+  # gets `sponson/preview/pr-42`; `parent` defaults to `main`.
+  - id: db
+    adapter: neon
+    op: branch
+    parent: main
+    environments: [preview]
+
+  # Preview variables. With target preview and no `branch:`, they apply to the current git
+  # branch only, so two pull requests never see each other's database.
+  - id: env
+    adapter: vercel
+    op: env
+    target: preview
+    values:
+      DATABASE_URL: { from: db.connection_string }             # a sensitive output: never printed, never in a receipt
+      DATABASE_HOST: { from: db.host }                         # a plain output
+      STRIPE_SECRET_KEY: { secret: "env://STRIPE_SECRET_KEY" } # read from the environment when Sponson runs
+      NEXT_PUBLIC_STAGE: preview                               # a literal
+    environments: [preview]

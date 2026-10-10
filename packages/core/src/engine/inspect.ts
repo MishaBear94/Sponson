@@ -32,11 +32,11 @@ export async function inspectLine(rc: RunContext, change: Change, op: OpSpec, pa
   const live = await op.read(rc.adapterContext(change.adapter, provider), resolved.params);
   if (live) rc.guardOutputs(live.outputs, op.outputs);
   const diffs = op.diff(live, resolved.params).map((d) => scrubDiff(rc, d));
-  const insp: Inspection = { change, op, provider, resolved, live, diffs, drift: [], desired: new Set(diffs.map((d) => d.key)) };
+  const inspection: Inspection = { change, op, provider, resolved, live, diffs, drift: [], desired: new Set(diffs.map((d) => d.key)) };
 
   const missingSecret = resolved.secrets.find((s) => rc.secrets.failures.has(s.ref));
   if (missingSecret) {
-    insp.refusal = { code: "SECRET_UNRESOLVED", message: `${missingSecret.ref}: ${rc.secrets.failures.get(missingSecret.ref)}` };
+    inspection.refusal = { code: "SECRET_UNRESOLVED", message: `${missingSecret.ref}: ${rc.secrets.failures.get(missingSecret.ref)}` };
   }
 
   const byKey = new Map<string, ResourceRecord>((live?.resources ?? []).map((r) => [r.key, r]));
@@ -46,27 +46,27 @@ export async function inspectLine(rc: RunContext, change: Change, op: OpSpec, pa
     const foreign = rc.foreignScopeOf(where);
     // Another scope may rely on what it manages, but never have it changed or recreated under it.
     if (foreign && d.kind !== "unchanged") {
-      insp.refusal ??= { code: "OWNED_BY_OTHER_SCOPE", message: `${d.label} is managed by scope \`${foreign}\` in this environment; this scope may not ${r ? "change" : "create"} it.` };
+      inspection.refusal ??= { code: "OWNED_BY_OTHER_SCOPE", message: `${d.label} is managed by scope \`${foreign}\` in this environment; this scope may not ${r ? "change" : "create"} it.` };
       continue;
     }
     const e = rc.ledger.get(change.adapter, provider, d.key);
     if (!e || e.createdBy === "intent") continue;
     const label = e.label ?? d.label;
     if (!r) {
-      insp.drift.push({ kind: "missing", adapter: change.adapter, line: change.id, resource: { key: d.key, id: e.id, label }, message: `${label} was applied by Sponson but no longer exists. It will be recreated.` });
+      inspection.drift.push({ kind: "missing", adapter: change.adapter, line: change.id, resource: { key: d.key, id: e.id, label }, message: `${label} was applied by Sponson but no longer exists. It will be recreated.` });
       continue;
     }
     if (e.id && r.id !== e.id) {
-      insp.drift.push({ kind: "changed", replaced: true, adapter: change.adapter, line: change.id, resource: { key: d.key, id: r.id, label }, message: `${label} was deleted and re-created outside Sponson. The new one is not Sponson's; apply refuses this line unless the run reconciles, and then treats it as adopted.` });
-      if (!rc.opts.reconcile) insp.refusal ??= { code: "DRIFT_CHANGED", message: `${label} was replaced outside Sponson since the last apply. Apply with reconcile to take it over as adopted, or update the plan.` };
+      inspection.drift.push({ kind: "changed", replaced: true, adapter: change.adapter, line: change.id, resource: { key: d.key, id: r.id, label }, message: `${label} was deleted and re-created outside Sponson. The new one is not Sponson's; apply refuses this line unless the run reconciles, and then treats it as adopted.` });
+      if (!rc.opts.reconcile) inspection.refusal ??= { code: "DRIFT_CHANGED", message: `${label} was replaced outside Sponson since the last apply. Apply with reconcile to take it over as adopted, or update the plan.` };
     } else if (e.hash && rc.ledger.keyed(r.hash) !== e.hash) {
       // A console edit that already matches the plan is accepted silently; one that conflicts is refused.
       if (d.kind === "unchanged") continue;
-      insp.drift.push({ kind: "changed", adapter: change.adapter, line: change.id, resource: { key: d.key, id: r.id, label }, message: `${label} was changed outside Sponson since the last apply. Apply refuses this line unless the run reconciles.` });
-      if (!rc.opts.reconcile) insp.refusal ??= { code: "DRIFT_CHANGED", message: `${label} was changed outside Sponson since the last apply. Apply with reconcile to overwrite it, or update the plan to match.` };
+      inspection.drift.push({ kind: "changed", adapter: change.adapter, line: change.id, resource: { key: d.key, id: r.id, label }, message: `${label} was changed outside Sponson since the last apply. Apply refuses this line unless the run reconciles.` });
+      if (!rc.opts.reconcile) inspection.refusal ??= { code: "DRIFT_CHANGED", message: `${label} was changed outside Sponson since the last apply. Apply with reconcile to overwrite it, or update the plan to match.` };
     }
   }
-  return insp;
+  return inspection;
 }
 
 /**
@@ -83,8 +83,8 @@ function scrubDiff(rc: RunContext, d: ResourceDiff): ResourceDiff {
 }
 
 /** The first unresolved `from:` reference, with the external event it waits for when there is one. */
-export function waitingOn(insp: Inspection, ops: Map<string, OpSpec>): { line: string; event?: string } | undefined {
-  const p = insp.resolved.pending[0]; // output references only; secrets are never pending here
+export function waitingOn(inspection: Inspection, ops: Map<string, OpSpec>): { line: string; event?: string } | undefined {
+  const p = inspection.resolved.pending[0]; // output references only; secrets are never pending here
   if (!p) return undefined;
   const output = p.ref.split(".").slice(1).join(".");
   const spec = ops.get(p.line)?.outputs[output];

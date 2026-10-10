@@ -1,25 +1,30 @@
 import { SponsonError } from "../errors.js";
-import type { LedgerEntry, LockInfo, Receipt } from "../types.js";
+import type { LedgerEntry, LockInfo, Receipt, ReceiptLine } from "../types.js";
 
-/**
- * Both receipt stores share one directory layout:
- *
- *   <environment>/<scope>/latest.json
- *   <environment>/<scope>/<runId>.json
- *   <environment>/<scope>/lock.json
- */
+// Both receipt stores share one directory layout:
+//
+//   <environment>/<scope>/latest.json
+//   <environment>/<scope>/<runId>.json
+//   <environment>/<scope>/lock.json
+//
+// The path helpers below are exported so a custom `ReceiptStore` can use the same layout.
+
+/** `<environment>/<scope>`, each segment made filesystem-safe. */
 export function receiptDir(environment: string, scope: string): string {
   return `${safe(environment)}/${safe(scope)}`;
 }
 
+/** Path of a scope's latest receipt, relative to the store root. */
 export function latestPath(environment: string, scope: string): string {
   return `${receiptDir(environment, scope)}/latest.json`;
 }
 
+/** Path of one run's receipt, relative to the store root. */
 export function runPath(environment: string, scope: string, runId: string): string {
   return `${receiptDir(environment, scope)}/${safe(runId)}.json`;
 }
 
+/** Path of a scope's lock, relative to the store root. */
 export function lockPath(environment: string, scope: string): string {
   return `${receiptDir(environment, scope)}/lock.json`;
 }
@@ -28,6 +33,7 @@ function safe(s: string): string {
   return s.replace(/[^a-zA-Z0-9._-]+/g, "-");
 }
 
+/** The receipt format this Sponson writes. `parseReceipt` reads this and every older version. */
 export const RECEIPT_VERSION = 2;
 
 /**
@@ -41,32 +47,46 @@ export function parseReceipt(text: string, where: string): Receipt {
   } catch (e) {
     throw new SponsonError("RECEIPT_CORRUPT", `Receipt at ${where} is not valid JSON: ${(e as Error).message}`, { where });
   }
-  const r = parsed as Record<string, unknown>;
-  if (typeof r !== "object" || r === null || Array.isArray(r) || typeof r.version !== "number") {
+  if (!isRecord(parsed) || typeof parsed.version !== "number") {
     throw new SponsonError("RECEIPT_CORRUPT", `Receipt at ${where} has no version field`, { where });
   }
-  if (r.version > RECEIPT_VERSION) {
+  const r = parsed;
+  const version = parsed.version; // narrowed to number by the check above
+  if (version > RECEIPT_VERSION) {
     throw new SponsonError(
       "RECEIPT_VERSION",
-      `Receipt at ${where} is version ${r.version}; this Sponson understands versions 1-${RECEIPT_VERSION}. Upgrade Sponson.`,
-      { where, version: r.version },
+      `Receipt at ${where} is version ${version}; this Sponson understands versions 1-${RECEIPT_VERSION}. Upgrade Sponson.`,
+      { where, version },
     );
   }
-  if (r.version < 1 || !Number.isInteger(r.version)) {
-    throw new SponsonError("RECEIPT_CORRUPT", `Receipt at ${where} has an invalid version ${String(r.version)}`, { where });
+  if (version < 1 || !Number.isInteger(version)) {
+    throw new SponsonError("RECEIPT_CORRUPT", `Receipt at ${where} has an invalid version ${String(version)}`, { where });
   }
-  if (!r.lines || typeof r.lines !== "object" || Array.isArray(r.lines) || typeof r.scope !== "string" || !r.scope || typeof r.environment !== "string" || !r.environment) {
+  if (!isRecord(r.lines) || typeof r.scope !== "string" || !r.scope || typeof r.environment !== "string" || !r.environment) {
     throw new SponsonError("RECEIPT_CORRUPT", `Receipt at ${where} is missing required fields`, { where });
   }
-  if (r.version === 1) return migrateV1(r as unknown as ReceiptV1);
+  // The checks here are the whole validation; past them the file is trusted to have the shape its version says.
+  if (version === 1) return migrateV1(r as unknown as ReceiptV1);
   if (!Array.isArray(r.ledger) || !Array.isArray(r.history) || typeof r.hashKey !== "string") {
     throw new SponsonError("RECEIPT_CORRUPT", `Receipt at ${where} is missing required fields (ledger, history, hashKey)`, { where });
   }
   return r as unknown as Receipt;
 }
 
-/** The v1 shape: per-line resources only, no ledger. */
-type ReceiptV1 = Omit<Receipt, "version" | "ledger" | "history" | "hashKey"> & { version: 1 };
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * The v1 shape: per-line resources only, no ledger. Lines are read leniently (null lines, missing ids, resources
+ * or outputs are tolerated), since nothing but the top level was ever validated.
+ */
+type ReceiptV1 = Omit<Receipt, "version" | "ledger" | "history" | "hashKey" | "lines" | "ctx"> & {
+  version: 1;
+  ctx?: { git?: { sha?: string } };
+  lines: Record<string, ReceiptLineV1 | null>;
+};
+type ReceiptLineV1 = Pick<ReceiptLine, "adapter" | "op" | "status"> & Partial<Omit<ReceiptLine, "adapter" | "op" | "status">>;
 
 /**
  * v1 → v2: the ledger is rebuilt from each line's resources. The provider block was not recorded in v1,
@@ -76,7 +96,7 @@ type ReceiptV1 = Omit<Receipt, "version" | "ledger" | "history" | "hashKey"> & {
 export function migrateV1(r: ReceiptV1): Receipt {
   const ledger: LedgerEntry[] = [];
   const seen = new Set<string>();
-  for (const [lineId, line] of Object.entries(r.lines ?? {})) {
+  for (const [lineId, line] of Object.entries(r.lines)) {
     if (!line || line.status === "destroyed") continue;
     for (const res of line.resources ?? []) {
       const identity = `${line.adapter}\u0000${res.key}`;
@@ -100,9 +120,11 @@ export function migrateV1(r: ReceiptV1): Receipt {
   }
   const at = r.finishedAt || r.startedAt;
   const history = r.ctx?.git?.sha ? [{ sha: r.ctx.git.sha, at }] : [];
-  return { ...r, version: 2, ledger, history, hashKey: "" };
+  // Lines and ctx are carried over as they were: the next run writes complete ones.
+  return { ...r, version: 2, ledger, history, hashKey: "" } as Receipt;
 }
 
+/** Parse a stored lock; null when it is missing or unreadable (an unreadable lock counts as absent). */
 export function parseLock(text: string): LockInfo | null {
   try {
     const l = JSON.parse(text) as LockInfo;
@@ -113,10 +135,15 @@ export function parseLock(text: string): LockInfo | null {
   return null;
 }
 
+/** True when the lock's lease ran out, so another run may take it over. */
 export function lockExpired(lock: LockInfo, now = Date.now()): boolean {
   return Date.parse(lock.expiresAt) <= now;
 }
 
+/**
+ * The on-disk form of receipts and locks: pretty JSON with a trailing newline, so diffs on the receipts branch
+ * read well.
+ */
 export function serialize(value: unknown): string {
   return JSON.stringify(value, null, 2) + "\n";
 }

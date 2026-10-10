@@ -1,7 +1,7 @@
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["**/dist/**", "**/node_modules/**", "brainstorm/**"] },
+  { ignores: ["**/dist/**", "**/node_modules/**", "brainstorm/**", "coverage/**"] },
   ...tseslint.configs.recommended,
   {
     rules: {
@@ -12,7 +12,29 @@ export default tseslint.config(
     },
   },
   {
-    // Tests read untyped JSON output from the CLI; `any` there is a reading aid, not a design decision.
+    files: ["packages/**/*.ts"],
+    languageOptions: {
+      parserOptions: {
+        projectService: {
+          // Unit tests (and the adapters' sim harness) are outside the packages' build configs; they are
+          // checked with the root test config, exactly as `pnpm typecheck` does.
+          allowDefaultProject: ["packages/*/src/*.test.ts", "packages/*/src/*/*.test.ts", "packages/adapters/src/testing.ts"],
+          defaultProject: "tsconfig.test.json",
+          maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 32,
+        },
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    rules: {
+      "@typescript-eslint/no-floating-promises": "error",
+      "@typescript-eslint/no-misused-promises": "error",
+      "@typescript-eslint/await-thenable": "error",
+      "@typescript-eslint/switch-exhaustiveness-check": "error",
+      "@typescript-eslint/prefer-nullish-coalescing": "error",
+      "@typescript-eslint/no-unnecessary-condition": "error",
+    },
+  },
+  {
     files: ["**/*.test.ts", "scenarios/**/*.ts"],
     rules: { "@typescript-eslint/no-explicit-any": "off" },
   },

@@ -15,19 +15,30 @@ import { vercelSim } from "./routes/vercel.js";
 export const PROVIDERS = { vercel: vercelSim, neon: neonSim, clerk: clerkSim };
 
 type Providers = typeof PROVIDERS;
+/** A simulated provider's name: its URL prefix, seed key and state key. */
 export type ProviderName = keyof Providers;
 type StateOf<P> = P extends ProviderSim<infer S, infer _D> ? S : never;
 type SeedOf<P> = P extends ProviderSim<infer _S, infer D> ? D : never;
 
+/** The state object of every provider, by name (`state.vercel`, `state.neon`, ...). */
 export type ProviderStates = { [K in ProviderName]: StateOf<Providers[K]> };
 
+/**
+ * Initial state for a sim (or a reset): per-provider seeds and optional chaos. Providers it does not name keep
+ * their defaults.
+ */
 export type SimSeed = {
   /** Chaos applied right after the seed, e.g. `{ page_size: 2 }`. */
   chaos?: Partial<ChaosConfig>;
 } & { [K in ProviderName]?: SeedOf<Providers[K]> };
 
+/** The demo projects every provider starts with when a seed does not name it. */
 export const DEFAULT_SEED: SimSeed = Object.fromEntries(Object.entries(PROVIDERS).map(([name, p]) => [name, p.defaultSeed])) as SimSeed;
 
+/**
+ * One write the sim received, for assertions such as "the second apply wrote nothing". Bodies are hashed, never
+ * stored.
+ */
 export interface WriteLogEntry {
   at: string;
   method: string;
@@ -42,7 +53,10 @@ export function providerEntries(): Array<[ProviderName, ProviderSim<unknown, unk
   return Object.entries(PROVIDERS) as Array<[ProviderName, ProviderSim<unknown, unknown>]>;
 }
 
-// The per-provider fields (`vercel`, `neon`, …) are declared by this interface and assigned in `reset`.
+/**
+ * The whole fake cloud in memory: chaos, the write log, and each provider's state as `state.<provider>`. Tests
+ * seed and inspect it directly. The per-provider fields are declared by this interface and assigned in `reset`.
+ */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type, @typescript-eslint/no-unsafe-declaration-merging
 export interface SimState extends ProviderStates {}
 
@@ -85,10 +99,12 @@ export class SimState implements SimCore {
   /** Merge a chaos request; drift is applied to state right away and not kept. */
   applyChaos(req: ChaosRequest): ChaosConfig {
     const { drift, ...rest } = req;
-    for (const [k, v] of Object.entries(rest)) {
+    // The request arrives as JSON over HTTP: its keys are checked here, not by the type.
+    const entries: Array<[string, unknown]> = Object.entries(rest);
+    for (const [k, v] of entries) {
       // A misspelt key would silently leave the test running without its chaos.
       if (!CHAOS_KEYS.has(k)) throw new Error(`unknown chaos key: ${k} (known: ${[...CHAOS_KEYS].join(", ")}, drift)`);
-      if (v !== undefined) (this.chaos as unknown as Record<string, unknown>)[k] = v;
+      if (v !== undefined) Object.assign(this.chaos, { [k]: v });
     }
     if (drift) for (const [key, value] of Object.entries(drift)) this.applyDrift(key, value);
     return this.chaos;

@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 
+/**
+ * Hex sha256 of a string. Adapters hash live values with it so receipts can detect change without storing
+ * values.
+ */
 export function sha256(input: string): string {
   return createHash("sha256").update(input).digest("hex");
 }

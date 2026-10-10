@@ -20,7 +20,7 @@ export interface SecretState {
 /**
  * Per-command state shared by plan, apply and destroy: the redactor (registered up front with
  * every secret, credential and sensitive output it will ever see), the ledger, the ledgers of
- * other scopes, and the factory for adapter contexts.
+ * other scopes, and the factory for adapter contexts. Engine code names it `rc` throughout.
  */
 export class RunContext {
   readonly redactor: Redactor;
@@ -125,8 +125,10 @@ export class RunContext {
     };
   }
 
+  /** What was thrown, redacted, with its code when it is a SponsonError. Anything may be thrown, not only Errors. */
   errorText(e: unknown): { message: string; code?: ErrorCode } {
-    const message = this.redactor.redact(String((e as Error)?.message ?? e));
+    const thrown: unknown = typeof e === "object" && e !== null && "message" in e ? e.message : undefined;
+    const message = this.redactor.redact(String(thrown ?? e));
     return isSponsonError(e) ? { message, code: e.code } : { message };
   }
 }

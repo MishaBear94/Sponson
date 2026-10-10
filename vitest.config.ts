@@ -22,7 +22,10 @@ export default defineConfig({
     },
     projects: [
       { resolve: { alias }, test: { name: "unit", include: ["packages/*/src/**/*.test.ts"], testTimeout: 20000 } },
-      { resolve: { alias }, test: { name: "scenarios", include: ["scenarios/**/*.test.ts"], testTimeout: 60000 } },
+      // Scenarios exclude the tooling suites below, which are CPU-heavy (they run tsc and eslint)
+      // and would steal time from the timing-sensitive concurrency journeys if run alongside them.
+      { resolve: { alias }, test: { name: "scenarios", include: ["scenarios/**/*.test.ts"], exclude: ["scenarios/tooling/**", "scenarios/docs/**"], testTimeout: 60000 } },
+      { resolve: { alias }, test: { name: "tooling", include: ["scenarios/tooling/**/*.test.ts", "scenarios/docs/**/*.test.ts"], testTimeout: 180000 } },
       { resolve: { alias }, test: { name: "property", include: ["property/**/*.test.ts"], testTimeout: 300000 } },
     ],
   },

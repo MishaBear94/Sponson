@@ -1,7 +1,8 @@
 import { isPendingMarker, sha256, type AdapterContext, type OpSpec, type ResourceAdapter, type ResourceRecord } from "@sponson/core";
-import { assertNoPending, clientFor, deleteIgnoringNotFound, diffValue, requireEnv, stringParam } from "./common.js";
+import { assertNoPending, clientFor, deleteIgnoringNotFound, diffValue, optionalEnv, requireEnv, stringParam } from "./common.js";
 import { ShapeError, isObject, isProviderError, listAll, records, type ApiClient, type Page } from "./http.js";
 
+/** Clerk's API base URL; `CLERK_API_URL` overrides it (the sim and tests use that). */
 export const CLERK_DEFAULT_API_URL = "https://api.clerk.com/v1";
 /** Page size asked for when Clerk answers with the paginated envelope. */
 const CLERK_PAGE_LIMIT = 100;
@@ -13,7 +14,7 @@ interface RedirectUrl {
 
 function client(actx: AdapterContext): ApiClient {
   const token = requireEnv(actx.env, "CLERK_SECRET_KEY", "clerk");
-  return clientFor(actx, "clerk", { baseUrl: actx.env.CLERK_API_URL || CLERK_DEFAULT_API_URL, token });
+  return clientFor(actx, "clerk", { baseUrl: optionalEnv(actx.env, "CLERK_API_URL") ?? CLERK_DEFAULT_API_URL, token });
 }
 
 const REDIRECT_PREFIX = "redirect:";
@@ -102,4 +103,8 @@ const redirect_allow: OpSpec = {
   },
 };
 
+/**
+ * Clerk: op `redirect_allow` keeps a redirect URL (e.g. a preview URL) on the allow-list. Needs
+ * `CLERK_SECRET_KEY`.
+ */
 export const clerkAdapter: ResourceAdapter = { name: "clerk", ops: { redirect_allow } };

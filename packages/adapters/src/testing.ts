@@ -78,7 +78,7 @@ export async function recordingProxy(upstream: string, rewrite?: (req: Recorded,
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (c: Buffer) => chunks.push(c));
-    req.on("end", async () => {
+    const forward = async () => {
       const u = new URL(req.url ?? "/", "http://proxy.local");
       const rec = { method: req.method ?? "GET", path: u.pathname };
       log.push(rec);
@@ -90,7 +90,9 @@ export async function recordingProxy(upstream: string, rewrite?: (req: Recorded,
       if (rewrite && up.ok && text) text = JSON.stringify(rewrite(rec, JSON.parse(text)));
       res.writeHead(up.status, { "content-type": "application/json", "content-length": Buffer.byteLength(text) });
       res.end(text);
-    });
+    };
+    // A failed forward drops the connection, which the client under test sees as a transport error.
+    req.on("end", () => void forward().catch((e: unknown) => res.destroy(e instanceof Error ? e : new Error(String(e)))));
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const port = (server.address() as { port: number }).port;

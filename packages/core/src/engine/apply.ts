@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import { dependentsOf } from "../graph.js";
 import { dependenciesOf } from "../plan.js";
 import type { LineOutputs } from "../resolve.js";
-import type { ApplyResult, Change, LedgerEntry, LiveState, Literal, Receipt, ReceiptLine, ResourceRecord, RunStatus } from "../types.js";
+import type { ApplyResult, Change, LedgerEntry, LiveState, Literal, OpSpec, Receipt, ReceiptLine, ResourceRecord, RunStatus } from "../types.js";
 import { scopeDrift } from "./drift.js";
 import { staleness } from "./history.js";
 import { identity } from "./ledger.js";
@@ -14,6 +15,12 @@ import { receiptSkeleton, rereadLine, toRecord } from "./receipt.js";
 import { RunContext } from "./run-context.js";
 import type { ApplyResultSummary, RunOptions } from "./types.js";
 
+/**
+ * Apply the plan for `ctx.env` / `ctx.scope`: take the scope's lock, write each line in dependency order, roll
+ * back what this run created if a line fails, and write a receipt. Throws ENV_NOT_APPROVED before touching
+ * anything when a line writes to production without `approvedBy`. Applying twice in a row writes nothing the
+ * second time. See `planRun` for an example.
+ */
 export async function applyRun(opts: RunOptions): Promise<ApplyResultSummary> {
   const prepared = prepare(opts);
   const approvedBy = requireApproval(opts, prepared);
@@ -24,7 +31,7 @@ export async function applyRun(opts: RunOptions): Promise<ApplyResultSummary> {
     await rc.load();
     const run = new ApplyRun(rc, prepared, lease, approvedBy);
     const st = await staleness(rc.previous?.history ?? [], opts.ctx.git.sha, opts.isAncestor);
-    if (st.stale) return run.stale(st.last!, st.reason!);
+    if (st.stale) return run.stale(st.last, st.reason);
     await rc.resolveSecrets(prepared);
     return await run.execute();
   } finally {
@@ -123,8 +130,44 @@ class ApplyRun {
     }
   }
 
-  /** Returns false when the run must stop (a line failed). */
+  /**
+   * One line: wait for (or skip past) what it depends on, inspect it, then write it and record the result.
+   * Returns false when the run must stop (a line failed or was refused).
+   */
   private async processLine(c: Change): Promise<boolean> {
+    if (this.heldBackByDependency(c)) return true;
+    const op = this.prepared.ops.get(c.id)!;
+    try {
+      this.lease.assertHeld();
+      const inspection = await this.inspectWhenReady(c, op);
+      if (!inspection) return true;
+      this.inspections.set(c.id, inspection);
+      if (inspection.refusal) {
+        this.receipt.lines[c.id] = this.line(c, { status: "blocked", error: inspection.refusal.message, errorCode: inspection.refusal.code });
+        this.dead.add(c.id);
+        this.failed = true;
+        return false;
+      }
+      await this.writeAndRecord(c, op, inspection);
+      return true;
+    } catch (e) {
+      const err = this.rc.errorText(e);
+      if (err.code === "LOCK_LOST") {
+        // Record what this run did so far, if the store still lets us (fenced), then stop.
+        this.receipt.lines[c.id] = this.line(c, { status: "failed", error: err.message, errorCode: "LOCK_LOST" });
+        this.skipRemaining();
+        await this.lease.writeIfStillHeld({ ...this.receipt, status: "failed", finishedAt: this.now().toISOString(), ledger: this.rc.ledger.toJSON() });
+        throw e;
+      }
+      this.receipt.lines[c.id] = { ...(this.receipt.lines[c.id] ?? this.line(c, { status: "failed" })), status: "failed", error: err.message, ...(err.code ? { errorCode: err.code } : {}) };
+      this.dead.add(c.id);
+      this.failed = true;
+      return false;
+    }
+  }
+
+  /** A line whose dependency failed is skipped; one whose dependency is waiting waits for the same thing. */
+  private heldBackByDependency(c: Change): boolean {
     const deps = dependenciesOf(c);
     const deadDep = deps.find((d) => this.dead.has(d));
     if (deadDep) {
@@ -138,78 +181,66 @@ class ApplyRun {
       this.waiting.add(c.id);
       return true;
     }
+    return false;
+  }
 
-    const op = this.prepared.ops.get(c.id)!;
+  /**
+   * Inspect the line. When it reads an external output (a preview URL) that is not there yet, wait for it
+   * (only with --wait) and inspect again. Returns null when the line cannot proceed: it is then recorded as
+   * waiting, or as skipped when the event failed.
+   */
+  private async inspectWhenReady(c: Change, op: OpSpec): Promise<Inspection | null> {
     const params = this.prepared.params.get(c.id)!;
-    try {
-      this.lease.assertHeld();
-      let insp = await inspectLine(this.rc, c, op, params, this.outputs);
-      const wait = waitingOn(insp, this.prepared.ops);
-      if (wait) {
-        const ready = await this.awaitExternal(wait.line);
-        if (ready !== true) {
-          if (ready.failed) {
-            this.receipt.lines[c.id] = this.line(c, { status: "skipped", error: `skipped: \`${wait.line}\` ${ready.failed}`, errorCode: "EXTERNAL_FAILED" });
-            this.dead.add(c.id);
-            this.externalFailed = true;
-          } else {
-            this.receipt.lines[c.id] = this.line(c, {
-              status: "waiting",
-              waitingFor: wait.event ?? ready.event,
-              ...(ready.timedOut ? { error: `timed out waiting for ${ready.event} on \`${wait.line}\``, errorCode: "WAIT_TIMEOUT" } : {}),
-            });
-            this.waiting.add(c.id);
-            if (ready.timedOut) this.externalFailed = true;
-          }
-          return true;
-        }
-        insp = await inspectLine(this.rc, c, op, params, this.outputs);
-      }
-      this.inspections.set(c.id, insp);
-
-      if (insp.refusal) {
-        this.receipt.lines[c.id] = this.line(c, { status: "blocked", error: insp.refusal.message, errorCode: insp.refusal.code });
-        this.dead.add(c.id);
-        this.failed = true;
-        return false;
-      }
-
-      const line = this.line(c, { status: "applied" });
-      this.receipt.lines[c.id] = line;
-      const fingerprints = this.fingerprints(insp);
-      if (Object.keys(fingerprints).length) line.secretFingerprints = fingerprints;
-
-      let result: ApplyResult;
-      if (insp.diffs.every((d) => d.kind === "unchanged") && (insp.live || insp.diffs.length === 0)) {
-        line.status = "unchanged";
-        result = { resources: insp.live?.resources ?? [], outputs: insp.live?.outputs ?? {}, created: [] };
-      } else {
-        const actx = this.rc.adapterContext(c.adapter, insp.provider, (keys) => this.intend(c, insp.provider, keys));
-        actx.log(`apply ${c.id}`);
-        result = await op.apply(actx, insp.resolved.params, insp.live);
-        if (this.rc.opts.reconcile && insp.drift.some((d) => d.kind === "changed")) line.notes = { ...(line.notes ?? {}), reconciled: true };
-      }
-      if (result.notes) line.notes = { ...(line.notes ?? {}), ...result.notes };
-      this.rc.guardOutputs(result.outputs, op.outputs);
-      this.record(c, insp, result);
-
-      const values: Record<string, unknown> = { ...result.outputs };
-      if (op.awaitExternal && hasExternalOutputs(op.outputs)) {
-        // Record external outputs (preview_url) as soon as they exist, even when no line reads them.
-        const live: LiveState = { resources: result.resources, outputs: result.outputs as Record<string, Literal> };
-        const ext = await op.awaitExternal(this.rc.adapterContext(c.adapter, insp.provider), insp.resolved.params, live).catch(() => null);
-        if (ext) Object.assign(values, ext);
-      }
-      this.setOutputs(c, values);
-      return true;
-    } catch (e) {
-      const err = this.rc.errorText(e);
-      if (err.code === "LOCK_LOST") throw e;
-      this.receipt.lines[c.id] = { ...(this.receipt.lines[c.id] ?? this.line(c, { status: "failed" })), status: "failed", error: err.message, ...(err.code ? { errorCode: err.code } : {}) };
+    const inspection = await inspectLine(this.rc, c, op, params, this.outputs);
+    const wait = waitingOn(inspection, this.prepared.ops);
+    if (!wait) return inspection;
+    const ready = await this.awaitExternal(wait.line);
+    if (ready === true) return inspectLine(this.rc, c, op, params, this.outputs);
+    if (ready.failed) {
+      this.receipt.lines[c.id] = this.line(c, { status: "skipped", error: `skipped: \`${wait.line}\` ${ready.failed}`, errorCode: "EXTERNAL_FAILED" });
       this.dead.add(c.id);
-      this.failed = true;
-      return false;
+      this.externalFailed = true;
+    } else {
+      this.receipt.lines[c.id] = this.line(c, {
+        status: "waiting",
+        waitingFor: wait.event ?? ready.event,
+        ...(ready.timedOut ? { error: `timed out waiting for ${ready.event} on \`${wait.line}\``, errorCode: "WAIT_TIMEOUT" } : {}),
+      });
+      this.waiting.add(c.id);
+      if (ready.timedOut) this.externalFailed = true;
     }
+    return null;
+  }
+
+  /** Apply the line unless it is already as declared, then bring the ledger, the receipt line and the outputs up to date. */
+  private async writeAndRecord(c: Change, op: OpSpec, inspection: Inspection): Promise<void> {
+    const line = this.line(c, { status: "applied" });
+    this.receipt.lines[c.id] = line;
+    const fingerprints = this.fingerprints(inspection);
+    if (Object.keys(fingerprints).length) line.secretFingerprints = fingerprints;
+
+    let result: ApplyResult;
+    if (inspection.diffs.every((d) => d.kind === "unchanged") && (inspection.live || inspection.diffs.length === 0)) {
+      line.status = "unchanged";
+      result = { resources: inspection.live?.resources ?? [], outputs: inspection.live?.outputs ?? {}, created: [] };
+    } else {
+      const actx = this.rc.adapterContext(c.adapter, inspection.provider, (keys) => this.intend(c, inspection.provider, keys));
+      actx.log(`apply ${c.id}`);
+      result = await op.apply(actx, inspection.resolved.params, inspection.live);
+      if (this.rc.opts.reconcile && inspection.drift.some((d) => d.kind === "changed")) line.notes = { ...line.notes, reconciled: true };
+    }
+    if (result.notes) line.notes = { ...line.notes, ...result.notes };
+    this.rc.guardOutputs(result.outputs, op.outputs);
+    this.record(c, inspection, result);
+
+    const values: Record<string, unknown> = { ...result.outputs };
+    if (op.awaitExternal && hasExternalOutputs(op.outputs)) {
+      // Record external outputs (preview_url) as soon as they exist, even when no line reads them.
+      const live: LiveState = { resources: result.resources, outputs: result.outputs };
+      const ext = await op.awaitExternal(this.rc.adapterContext(c.adapter, inspection.provider), inspection.resolved.params, live).catch(() => null);
+      if (ext) Object.assign(values, ext);
+    }
+    this.setOutputs(c, values);
   }
 
   /** Persist the intent before the adapter sends the create, so nothing created can be forgotten. */
@@ -238,27 +269,23 @@ class ApplyRun {
   }
 
   /** Bring the ledger in line with what this line now manages. */
-  private record(c: Change, insp: Inspection, result: ApplyResult): void {
+  private record(c: Change, inspection: Inspection, result: ApplyResult): void {
     const keys = new Set<string>();
     const createdNow = new Set(result.created);
     for (const r of result.resources) {
       keys.add(r.key);
-      const prev = this.rc.ledger.get(c.adapter, insp.provider, r.key);
+      const prev = this.rc.ledger.get(c.adapter, inspection.provider, r.key);
       const replaced = prev && prev.createdBy !== "intent" && prev.id && prev.id !== r.id;
-      const foreign = this.rc.foreignScopeOf({ adapter: c.adapter, provider: insp.provider, key: r.key });
+      const foreign = this.rc.foreignScopeOf({ adapter: c.adapter, provider: inspection.provider, key: r.key });
       const createdBy: LedgerEntry["createdBy"] =
         createdNow.has(r.key) || prev?.createdBy === "intent" ? "sponson" : prev?.createdBy === "sponson" && !replaced && !foreign ? "sponson" : "adopted";
-      this.rc.ledger.put({ adapter: c.adapter, op: c.op, provider: insp.provider, key: r.key, id: r.id, hash: this.rc.ledger.keyed(r.hash), ...(r.label ? { label: r.label } : {}), createdBy, line: c.id });
-      if (createdNow.has(r.key) || prev?.createdBy === "intent") {
-        const entry = this.created.find((x) => x.line.id === c.id) ?? { line: c, keys: new Set<string>() };
-        if (!this.created.includes(entry)) this.created.push(entry);
-        entry.keys.add(r.key);
-      }
+      this.rc.ledger.put({ adapter: c.adapter, op: c.op, provider: inspection.provider, key: r.key, id: r.id, hash: this.rc.ledger.keyed(r.hash), ...(r.label ? { label: r.label } : {}), createdBy, line: c.id });
+      if (createdNow.has(r.key) || prev?.createdBy === "intent") this.markCreated(c, r.key);
     }
     // Intents this line announced but that did not materialise were never created.
     for (const k of this.intents.get(c.id) ?? []) {
       if (keys.has(k)) continue;
-      const e = this.rc.ledger.get(c.adapter, insp.provider, k);
+      const e = this.rc.ledger.get(c.adapter, inspection.provider, k);
       if (e?.createdBy === "intent") this.rc.ledger.delete(e);
     }
     this.claimed.set(c.id, keys);
@@ -277,14 +304,14 @@ class ApplyRun {
     for (const e of this.rc.ledger.all()) if (e.line === c.id && e.createdBy !== "intent") e.outputs = pub;
   }
 
-  private fingerprints(insp: Inspection): Record<string, string> {
+  private fingerprints(inspection: Inspection): Record<string, string> {
     const out: Record<string, string> = {};
-    const prev = this.rc.previous?.lines[insp.change.id]?.secretFingerprints ?? {};
-    for (const s of insp.resolved.secrets) {
+    const prev = this.rc.previous?.lines[inspection.change.id]?.secretFingerprints ?? {};
+    for (const s of inspection.resolved.secrets) {
       const fp = this.rc.secrets.fingerprints.get(s.ref);
       if (!fp) continue;
       out[s.ref] = fp;
-      if (prev[s.ref] && prev[s.ref] !== fp) this.rc.warnings.push(`\`${insp.change.id}\`: secret ${s.ref} changed since the last apply; using the new value.`);
+      if (prev[s.ref] && prev[s.ref] !== fp) this.rc.warnings.push(`\`${inspection.change.id}\`: secret ${s.ref} changed since the last apply; using the new value.`);
     }
     return out;
   }
@@ -293,9 +320,9 @@ class ApplyRun {
   private async awaitExternal(lineId: string): Promise<true | { event: string; failed?: string; timedOut?: boolean }> {
     const op = this.prepared.ops.get(lineId)!;
     const have = this.outputs.get(lineId);
-    const insp = this.inspections.get(lineId);
+    const inspection = this.inspections.get(lineId);
     const missing = Object.entries(op.outputs).filter(([k, o]) => o.available === "external" && !(k in (have?.values ?? {})));
-    if (!have || !insp) return { event: "apply" };
+    if (!have || !inspection) return { event: "apply" };
     if (missing.length === 0) return true;
     const event = missing[0]![1].event ?? "external event";
     if (!op.awaitExternal) return { event, failed: `has no way to observe ${event}` };
@@ -304,17 +331,17 @@ class ApplyRun {
     for (;;) {
       let ext: Record<string, Literal> | null;
       try {
-        ext = await op.awaitExternal(this.rc.adapterContext(insp.change.adapter, insp.provider), insp.resolved.params, live);
+        ext = await op.awaitExternal(this.rc.adapterContext(inspection.change.adapter, inspection.provider), inspection.resolved.params, live);
       } catch (e) {
         return { event, failed: this.rc.errorText(e).message };
       }
       if (ext) {
-        this.setOutputs(insp.change, { ...have.values, ...ext });
+        this.setOutputs(inspection.change, { ...have.values, ...ext });
         return true;
       }
       if (!this.rc.opts.wait) return { event };
       if (Date.now() > deadline) return { event, timedOut: true };
-      await new Promise((r) => setTimeout(r, this.rc.opts.pollIntervalMs ?? 2000));
+      await sleep(this.rc.opts.pollIntervalMs ?? 2000);
     }
   }
 
@@ -327,16 +354,47 @@ class ApplyRun {
     }
   }
 
-  /**
-   * Undo what this run created, newest first. Intents whose outcome is unknown (the create
-   * threw) are re-read: if the resource exists, it was ours and is destroyed too.
-   */
+  /** Add `key` to the rollback set of line `c`. */
+  private markCreated(c: Change, key: string): void {
+    let entry = this.created.find((x) => x.line.id === c.id);
+    if (!entry) {
+      entry = { line: c, keys: new Set<string>() };
+      this.created.push(entry);
+    }
+    entry.keys.add(key);
+  }
+
+  /** Undo what this run created, newest first, after settling the intents whose outcome is unknown. */
   private async rollback(): Promise<void> {
+    await this.resolveIntents();
+    for (const { line: c, keys } of [...this.created].reverse()) {
+      const provider = this.rc.provider(c.adapter);
+      const entries = [...keys].map((k) => this.rc.ledger.get(c.adapter, provider, k)).filter((e): e is LedgerEntry => !!e);
+      const receiptLine = this.receipt.lines[c.id]!;
+      try {
+        await this.prepared.ops.get(c.id)!.destroy(this.rc.adapterContext(c.adapter, provider), entries.map(toRecord));
+        for (const e of entries) this.rc.ledger.delete(e);
+        if (receiptLine.status !== "failed" && receiptLine.status !== "blocked") receiptLine.status = "rolled_back";
+      } catch (e) {
+        const err = this.rc.errorText(e);
+        receiptLine.status = "rollback_failed";
+        receiptLine.error = `rollback failed, resources left behind: ${entries.map((x) => x.label ?? x.key).join(", ")} (${err.message})`;
+        receiptLine.errorCode = err.code ?? "ROLLBACK_FAILED";
+      }
+      receiptLine.resources = this.resourcesOf(c.id);
+    }
+  }
+
+  /**
+   * An intent still in the ledger means the create threw, so whether it happened is unknown. Re-read the line:
+   * if the resource exists it was ours and joins the rollback set; if not, the intent is dropped.
+   */
+  private async resolveIntents(): Promise<void> {
     for (const [lineId, keys] of this.intents) {
-      const unresolved = [...keys].filter((k) => this.rc.ledger.get(this.lineAdapter(lineId), this.rc.provider(this.lineAdapter(lineId)), k)?.createdBy === "intent");
-      if (unresolved.length === 0) continue;
       const c = this.prepared.ordered.find((x) => x.id === lineId)!;
       const provider = this.rc.provider(c.adapter);
+      const unresolved = [...keys].filter((k) => this.rc.ledger.get(c.adapter, provider, k)?.createdBy === "intent");
+      if (unresolved.length === 0) continue;
       try {
         const live = await rereadLine(this.rc, this.prepared, c, provider, this.outputs);
         const found = new Map((live?.resources ?? []).map((r) => [r.key, r]));
@@ -348,29 +406,11 @@ class ApplyRun {
             continue;
           }
           this.rc.ledger.put({ ...e, id: r.id, hash: this.rc.ledger.keyed(r.hash), ...(r.label ? { label: r.label } : {}), createdBy: "sponson" });
-          const entry = this.created.find((x) => x.line.id === lineId) ?? { line: c, keys: new Set<string>() };
-          if (!this.created.includes(entry)) this.created.push(entry);
-          entry.keys.add(k);
+          this.markCreated(c, k);
         }
       } catch {
         /* outcome still unknown: the intent stays in the ledger and the next run resolves it */
       }
-    }
-
-    for (const { line: c, keys } of [...this.created].reverse()) {
-      const provider = this.rc.provider(c.adapter);
-      const entries = [...keys].map((k) => this.rc.ledger.get(c.adapter, provider, k)).filter((e): e is LedgerEntry => !!e);
-      const rl = this.receipt.lines[c.id]!;
-      try {
-        await this.prepared.ops.get(c.id)!.destroy(this.rc.adapterContext(c.adapter, provider), entries.map(toRecord));
-        for (const e of entries) this.rc.ledger.delete(e);
-        if (rl.status !== "failed" && rl.status !== "blocked") rl.status = "rolled_back";
-      } catch (e) {
-        rl.status = "rollback_failed";
-        rl.error = `rollback failed, resources left behind: ${entries.map((x) => x.label ?? x.key).join(", ")} (${this.rc.errorText(e).message})`;
-        rl.errorCode = this.rc.errorText(e).code ?? "ROLLBACK_FAILED";
-      }
-      rl.resources = this.resourcesOf(c.id);
     }
   }
 
@@ -379,8 +419,8 @@ class ApplyRun {
     const active = new Set(this.prepared.ordered.map((c) => c.id));
     const claimedBy = new Map<string, string>();
     for (const [lineId, keys] of this.claimed) {
-      const insp = this.inspections.get(lineId)!;
-      for (const k of keys) claimedBy.set(identity(insp.change.adapter, insp.provider, k), lineId);
+      const inspection = this.inspections.get(lineId)!;
+      for (const k of keys) claimedBy.set(identity(inspection.change.adapter, inspection.provider, k), lineId);
     }
     for (const e of this.rc.ledger.all()) {
       if (e.createdBy === "intent") continue;
@@ -401,10 +441,6 @@ class ApplyRun {
     if (this.failed || this.externalFailed || statuses.some((s) => s === "rollback_failed")) return "failed";
     if (statuses.includes("waiting")) return "partial";
     return "complete";
-  }
-
-  private lineAdapter(id: string): string {
-    return this.prepared.ordered.find((c) => c.id === id)?.adapter ?? "";
   }
 
   private resourcesOf(lineId: string): ResourceRecord[] {

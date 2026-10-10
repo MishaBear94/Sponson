@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/sponson/sponson/main/schema/release.plan.schema.json
+#
+# Sponson starts the deployment itself, after the variables are written, so nothing waits on
+# an external event and one `apply` runs to the end. Use this when automatic preview
+# deployments are turned off in Vercel; otherwise prefer clerk-preview-callbacks.plan.yaml.
+version: 1
+providers:
+  vercel: { project: prj_acme_web }
+
+changes:
+  - id: env
+    adapter: vercel
+    op: env
+    target: preview
+    values:
+      FEATURE_FLAGS: "checkout-v2,search-v3"
+    environments: [preview]
+
+  # No data flows from `env` to `deploy`, but the deploy must come after the variables:
+  # `depends_on` orders lines without a reference. The deploy's `preview_url` is an
+  # immediate output: `apply` waits for the build (SPONSON_DEPLOY_TIMEOUT_MS, default 120 s).
+  - id: deploy
+    adapter: vercel
+    op: deploy
+    depends_on: [env]
+    environments: [preview]
+
+  - id: callback
+    adapter: clerk
+    op: redirect_allow
+    url: { from: deploy.preview_url }
+    environments: [preview]

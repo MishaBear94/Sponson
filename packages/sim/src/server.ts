@@ -7,6 +7,7 @@
  */
 import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { setTimeout as sleep } from "node:timers/promises";
 import { Reply, type RouteRequest } from "./provider.js";
 import { providerEntries, type SimSeed, type SimState, type WriteLogEntry } from "./state.js";
 
@@ -20,10 +21,11 @@ const ROUTES: Record<string, Handler> = Object.fromEntries(
 
 const WRITE_METHODS = new Set(["POST", "PATCH", "DELETE", "PUT"]);
 
+/** The sim's HTTP server over `state`, not yet listening. Most callers want `startSim`. */
 export function createSimServer(state: SimState): Server {
   return createServer((req, res) => {
     handle(state, req, res).catch((e: unknown) => {
-      send(res, 500, { error: String((e as Error).message ?? e) });
+      send(res, 500, { error: e instanceof Error ? e.message : String(e) });
     });
   });
 }
@@ -123,6 +125,3 @@ function sha256(s: string): string {
   return createHash("sha256").update(s).digest("hex");
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}

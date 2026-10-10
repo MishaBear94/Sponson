@@ -15,6 +15,7 @@ export interface SimCore {
   nextId(prefix: string): string;
 }
 
+/** A route's answer: status, JSON body and extra headers. Routes return one instead of writing to the socket. */
 export class Reply {
   constructor(
     public status: number,
@@ -23,6 +24,7 @@ export class Reply {
   ) {}
 }
 
+/** One request as a provider's routes see it, after auth and chaos. */
 export interface RouteRequest {
   method: string;
   url: URL;
@@ -31,6 +33,7 @@ export interface RouteRequest {
   body: unknown;
 }
 
+/** One `<provider>.<rest>` drift key, as `ProviderSim.drift` receives it: a change "a human made in the console". */
 export interface DriftRequest {
   /** The whole drift key, for error messages. */
   key: string;
@@ -41,8 +44,13 @@ export interface DriftRequest {
   only?: string;
 }
 
-// Methods (not function-valued properties) so a ProviderSim<VercelState, …> is usable where the
-// registry only knows ProviderSim<unknown, unknown>.
+/**
+ * One simulated provider: its state, seed, drift keys and HTTP routes. Implement it in `routes/<name>.ts` and
+ * register it in `PROVIDERS` to simulate a new provider.
+ *
+ * Members are methods (not function-valued properties) so a `ProviderSim<VercelState, …>` is usable where the
+ * registry only knows `ProviderSim<unknown, unknown>`.
+ */
 export interface ProviderSim<S, Seed> {
   /** Env var names the adapter reads its credential and base URL from, and the token the sim hands out. */
   env: { token: string; url: string; testToken: string };

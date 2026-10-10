@@ -9,6 +9,7 @@
  */
 import { page, Reply, type CreatedBy, type ProviderSim, type SimCore } from "../provider.js";
 
+/** One allow-listed redirect URL. */
 export interface ClerkRedirect {
   id: string;
   url: string;
@@ -16,14 +17,17 @@ export interface ClerkRedirect {
   createdBy: CreatedBy;
 }
 
+/** Simulated Clerk: the instance's redirect allow-list. */
 export interface ClerkState {
   redirect_urls: ClerkRedirect[];
 }
 
+/** Initial Clerk state. */
 export interface ClerkSeed {
   redirect_urls: string[];
 }
 
+/** Simulated Clerk (redirect URL allow-list); see the assumptions at the top of this file. */
 export const clerkSim: ProviderSim<ClerkState, ClerkSeed> = {
   env: { token: "CLERK_SECRET_KEY", url: "CLERK_API_URL", testToken: "tok_clerk" },
   defaultSeed: { redirect_urls: [] },

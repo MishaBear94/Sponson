@@ -13,6 +13,7 @@
  */
 import { page, Reply, type CreatedBy, type ProviderSim, type SimCore } from "../provider.js";
 
+/** One simulated Neon branch. */
 export interface NeonBranch {
   id: string;
   name: string;
@@ -27,20 +28,24 @@ export interface NeonBranch {
   createdBy: CreatedBy;
 }
 
+/** One simulated Neon project and its branches. */
 export interface NeonProject {
   branches: NeonBranch[];
   /** A branch create's operations are running until this time: further creates answer 423. */
   opUntil: number;
 }
 
+/** Simulated Neon: projects by id. */
 export interface NeonState {
   projects: Record<string, NeonProject>;
 }
 
+/** Initial Neon state. */
 export interface NeonSeed {
   projects: Record<string, { branches: Array<{ name: string; parent?: string }> }>;
 }
 
+/** Simulated Neon (projects, branches, operations); see the assumptions at the top of this file. */
 export const neonSim: ProviderSim<NeonState, NeonSeed> = {
   env: { token: "NEON_API_KEY", url: "NEON_API_URL", testToken: "tok_neon" },
   defaultSeed: { projects: { proj_demo: { branches: [{ name: "main" }] } } },
@@ -125,6 +130,10 @@ export const neonSim: ProviderSim<NeonState, NeonSeed> = {
   },
 };
 
+/**
+ * Add a branch to a project as Neon would (ids, timestamps, default flag). Tests use it to seed "someone else's"
+ * branch.
+ */
 export function createBranch(core: SimCore, project: NeonProject, name: string, parentId: string | null, createdBy: CreatedBy): NeonBranch {
   const id = core.nextId("br-");
   const branch: NeonBranch = {
@@ -142,6 +151,7 @@ export function createBranch(core: SimCore, project: NeonProject, name: string, 
   return branch;
 }
 
+/** The connection string Neon would hand out for a branch. */
 export function connectionUri(branch: NeonBranch): string {
   return `postgres://neondb_owner:pw_${branch.id}@${branch.endpoint.host}/neondb`;
 }

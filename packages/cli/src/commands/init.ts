@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { GitBranchReceiptStore, isKeepRef, planRun, walkParams, type Ctx, type Drift, type Redactor, type Registry } from "@sponson/core";
 import { Document, isMap, isScalar, isSeq, parseDocument, visit } from "yaml";
-import { UsageError, buildInvocation, planPathFor, toRunOptions, type GlobalOpts, type IO } from "../context.js";
+import { UsageError, planPathFor, toRunOptions, withInvocation, type GlobalOpts, type Invocation, type IO } from "../context.js";
 import { withRedactorWarnings } from "../output.js";
 
 export interface InitOpts extends GlobalOpts {
@@ -37,35 +37,7 @@ export async function initCommand(opts: InitOpts, io: IO, redactor: Redactor): P
     result.created = true;
     text.push(`Wrote ${planPath}`);
   } else {
-    const inv = await buildInvocation(opts, io, redactor);
-    const plan = await planRun(toRunOptions(inv, io));
-    result.warnings.push(...inv.warnings, ...plan.warnings);
-    let unmanaged = plan.drift.filter((d) => d.kind === "unmanaged");
-    if (opts.adopt !== undefined) {
-      const wanted = opts.adopt;
-      const adoptable = unmanaged.map((d) => d.resource.key);
-      unmanaged = unmanaged.filter((d) => [d.resource.key, d.resource.id, d.resource.label].includes(wanted));
-      if (unmanaged.length === 0) {
-        throw new UsageError(
-          `Nothing to adopt: no unmanaged resource in ${inv.ctx.env}/${inv.ctx.scope} matches \`${wanted}\`. ` +
-            (adoptable.length ? `Adoptable keys: ${adoptable.join(", ")}` : "There are no unmanaged resources to adopt."),
-          { adopt: wanted, adoptable },
-        );
-      }
-    }
-    const { adoptions, warnings } = adoptChanges(unmanaged, inv.registry, inv.ctx, inv.plan.changes.map((c) => c.id));
-    result.warnings.push(...warnings);
-    if (adoptions.length > 0) {
-      await writeFile(planPath, appendChanges(existing, adoptions.map((a) => a.change)), "utf8");
-      result.added = adoptions.map((a) => ({ id: a.change.id, adapter: String(a.change.adapter), op: String(a.change.op), keys: a.keys }));
-    }
-    if (result.added.length === 0) text.push(`${planPath} already covers everything in ${inv.ctx.env}. Nothing to adopt.`);
-    else {
-      text.push(`Added ${result.added.length} line${result.added.length === 1 ? "" : "s"} to ${planPath}: ${result.added.map((a) => a.id).join(", ")}`);
-      if (adoptions.some((a) => keepsValues(a.change))) {
-        text.push("Adopted variables are written as `{ keep: true }`: Sponson keeps their live values and never destroys them. Replace `{ keep: true }` with a value or `{ secret: \"env://KEY\" }` to let Sponson manage the value.");
-      }
-    }
+    text.push(...(await withInvocation(opts, io, redactor, (inv) => adoptUnmanaged(inv, existing, opts, io, result))));
     result.warnings = withRedactorWarnings(result.warnings, redactor);
   }
 
@@ -85,6 +57,41 @@ export async function initCommand(opts: InitOpts, io: IO, redactor: Redactor): P
   }
   io.stdout.write(text.join("\n") + "\n");
   return 0;
+}
+
+/** Append a line for every unmanaged resource (or only `--adopt`'s) to the existing plan. Returns the text for humans. */
+async function adoptUnmanaged(inv: Invocation, existing: string, opts: InitOpts, io: IO, result: InitResult): Promise<string[]> {
+  const text: string[] = [];
+  const plan = await planRun(toRunOptions(inv, io));
+  result.warnings.push(...inv.warnings, ...plan.warnings);
+  let unmanaged = plan.drift.filter((d) => d.kind === "unmanaged");
+  if (opts.adopt !== undefined) {
+    const wanted = opts.adopt;
+    const adoptable = unmanaged.map((d) => d.resource.key);
+    unmanaged = unmanaged.filter((d) => [d.resource.key, d.resource.id, d.resource.label].includes(wanted));
+    if (unmanaged.length === 0) {
+      throw new UsageError(
+        `Nothing to adopt: no unmanaged resource in ${inv.ctx.env}/${inv.ctx.scope} matches \`${wanted}\`. ` +
+          (adoptable.length ? `Adoptable keys: ${adoptable.join(", ")}` : "There are no unmanaged resources to adopt."),
+        { adopt: wanted, adoptable },
+      );
+    }
+  }
+  const { adoptions, warnings } = adoptChanges(unmanaged, inv.registry, inv.ctx, inv.plan.changes.map((c) => c.id));
+  result.warnings.push(...warnings);
+  if (adoptions.length > 0) {
+    await writeFile(result.path, appendChanges(existing, adoptions.map((a) => a.change)), "utf8");
+    result.added = adoptions.map((a) => ({ id: a.change.id, adapter: String(a.change.adapter), op: String(a.change.op), keys: a.keys }));
+  }
+  if (result.added.length === 0) {
+    text.push(`${result.path} already covers everything in ${inv.ctx.env}. Nothing to adopt.`);
+    return text;
+  }
+  text.push(`Added ${result.added.length} line${result.added.length === 1 ? "" : "s"} to ${result.path}: ${result.added.map((a) => a.id).join(", ")}`);
+  if (adoptions.some((a) => keepsValues(a.change))) {
+    text.push("Adopted variables are written as `{ keep: true }`: Sponson keeps their live values and never destroys them. Replace `{ keep: true }` with a value or `{ secret: \"env://KEY\" }` to let Sponson manage the value.");
+  }
+  return text;
 }
 
 // ---------------------------------------------------------------------------

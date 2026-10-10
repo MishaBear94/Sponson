@@ -1,0 +1,49 @@
+# 11. Testing against a local fake cloud with chaos, scenarios, journeys and property invariants
+
+Date: 2026-10-10
+
+## Status
+
+Accepted
+
+## Context
+
+Sponson was built without access to real Vercel, Neon or Clerk accounts. Even with accounts, the failures that matter
+most (a response lost after a successful write, a 429 in the middle of a rollback, a deploy that never finishes, two
+runs racing on one scope, a crash between two writes) cannot be produced on demand against real APIs. Example-based
+tests only cover the cases someone thought of.
+
+## Decision
+
+Acceptance never depends on a real cloud. It has these layers:
+
+- **A local fake cloud**, `packages/sim`, serving the subsets of the three APIs the adapters use, with a control
+  surface: `POST /_chaos` (latency; failing, hanging, holding or dropping the response of the next N matching
+  requests; 429 with `Retry-After`; pagination; Neon's asynchronous operations; deployment modes such as `never`,
+  `fail`, `double`, `delay`), console-style drift (edit, delete, delete-and-recreate), `/_state` and a write log. Each
+  provider's routes file numbers the API assumptions it encodes.
+- **Scenarios**: one YAML file per failure mode under `scenarios/<category>/`, nine categories (mid-run failure,
+  concurrency, drift, references and environments, secrets, the deploy barrier, destroy, agent mistakes, human
+  mistakes), each run end to end through the in-process CLI. Scenario files are specifications people and agents can
+  read.
+- **Journeys**: long programmatic tests along six independent dimensions (`scenarios/journeys/`), using real git
+  receipts, child processes killed mid-apply, and MCP clients.
+- **Property invariants**: `property/engine.property.test.ts` generates random plans, failures (including lost
+  responses) and drift, and checks eight invariants, among them that `plan` writes nothing, that a second `apply`
+  writes nothing, that unmanaged resources are never touched, and that nothing Sponson created survives a successful
+  destroy. A counterexample becomes a scenario before the fix.
+- **A contract suite**, `scenarios/contract.test.ts`, pins the sim's critical assumptions. It runs against the sim by
+  default and against real accounts with `pnpm test:live`.
+
+Agent behaviour is tested by driving `sponson mcp` with the MCP SDK's client over stdio, which is deterministic,
+rather than by running a real agent.
+
+## Consequences
+
+- The whole suite runs locally and in CI with no credentials.
+- When a test fails, the fix targets the structural gap, not the symptom: v0.2 grouped about a hundred failures into
+  six gaps (ledger, scope boundaries, transport, leases, redaction, output contract) and fixed each once.
+- The fake can be wrong in the same way the adapters are. That risk is concentrated in the numbered assumptions and
+  the contract suite, which has not yet been run against real accounts. When it is, a failing assumption is fixed in
+  the sim first, then in the adapter.
+- Every new adapter brings a sim routes file and at least one scenario (CONTRIBUTING.md).

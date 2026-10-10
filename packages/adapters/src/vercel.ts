@@ -1,7 +1,9 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { SponsonError, sha256, type AdapterContext, type Ctx, type Literal, type OpSpec, type ResolvedParams, type ResourceAdapter, type ResourceDiff, type ResourceRecord } from "@sponson/core";
-import { ABSENT, assertNoPending, clientFor, deleteIgnoringNotFound, diffValue, optionalProvider, paramError, requireEnv, requireProvider, stringParam } from "./common.js";
+import { ABSENT, assertNoPending, clientFor, deleteIgnoringNotFound, diffValue, optionalEnv, optionalProvider, paramError, requireEnv, requireProvider, stringParam } from "./common.js";
 import { ShapeError, isTransient, listAll, obj, records, type ApiClient, type Page } from "./http.js";
 
+/** Vercel's API base URL; `VERCEL_API_URL` overrides it (the sim and tests use that). */
 export const VERCEL_DEFAULT_API_URL = "https://api.vercel.com";
 
 const TARGETS = ["preview", "production", "development"] as const;
@@ -35,7 +37,7 @@ interface Client {
 function client(actx: AdapterContext): Client {
   const token = requireEnv(actx.env, "VERCEL_TOKEN", "vercel");
   const project = requireProvider(actx, "project", "vercel");
-  return { api: clientFor(actx, "vercel", { baseUrl: actx.env.VERCEL_API_URL || VERCEL_DEFAULT_API_URL, token }), project, team: optionalProvider(actx, "team") };
+  return { api: clientFor(actx, "vercel", { baseUrl: optionalEnv(actx.env, "VERCEL_API_URL") ?? VERCEL_DEFAULT_API_URL, token }), project, team: optionalProvider(actx, "team") };
 }
 
 function query(c: Client, extra: Record<string, string | undefined> = {}): string {
@@ -367,10 +369,6 @@ function deployOutputs(d: Deployment): Record<string, Literal> {
   return { preview_url: `https://${d.url}`, deployment_id: d.uid };
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
 /** Watch one deployment until READY. Transient status errors are waited through; ERROR/CANCELED end it. */
 async function untilReady(c: Client, actx: AdapterContext, first: Deployment): Promise<Deployment> {
   const timeout = Number(actx.env.SPONSON_DEPLOY_TIMEOUT_MS ?? 120_000);
@@ -441,4 +439,8 @@ const deploy: OpSpec = {
   async destroy() {},
 };
 
+/**
+ * Vercel: op `env` manages environment variables per target and git branch; op `deploy` triggers or watches a
+ * deployment and outputs its `preview_url`. Needs `VERCEL_TOKEN` and `providers.vercel.project`.
+ */
 export const vercelAdapter: ResourceAdapter = { name: "vercel", ops: { env, deploy } };

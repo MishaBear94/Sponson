@@ -4,6 +4,7 @@ import { SponsonError, type SecretSource } from "@sponson/core";
 /** Runs a CLI and returns its stdout. Injected in tests so no real `doppler`/`op` is needed. */
 export type Exec = (file: string, args: string[], env: NodeJS.ProcessEnv) => Promise<string>;
 
+/** Runs the real binary from PATH; rejects with its stderr when it fails. */
 export const defaultExec: Exec = (file, args, env) =>
   new Promise((resolve, reject) => {
     execFile(file, args, { env, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {

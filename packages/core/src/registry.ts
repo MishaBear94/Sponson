@@ -1,16 +1,27 @@
 import { SponsonError } from "./errors.js";
 import type { OpSpec, ResourceAdapter, SecretSource } from "./types.js";
 
-/** Adapters and secret sources available to a run. The CLI builds one; tests build their own. */
+/**
+ * Adapters and secret sources available to a run. The CLI builds one from `createRegistry()` in
+ * `@sponson/adapters` plus `$SPONSON_PLUGINS`; embedders and tests build their own.
+ *
+ * @example
+ * ```ts
+ * const registry = new Registry().addAdapter(myAdapter).addSecretSource(envSecretSource);
+ * registry.op("my-adapter", "thing"); // the OpSpec, or ADAPTER_UNKNOWN / OP_UNKNOWN naming what exists
+ * ```
+ */
 export class Registry {
   private readonly adapters = new Map<string, ResourceAdapter>();
   private readonly secrets = new Map<string, SecretSource>();
 
+  /** Add (or replace, by name) an adapter. Chainable. */
   addAdapter(adapter: ResourceAdapter): this {
     this.adapters.set(adapter.name, adapter);
     return this;
   }
 
+  /** Add (or replace, by scheme) a secret source. Chainable. */
   addSecretSource(source: SecretSource): this {
     this.secrets.set(source.scheme, source);
     return this;

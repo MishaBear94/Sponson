@@ -1,0 +1,10 @@
+# Normalise line endings: LF in the repository and in every checkout, Windows included.
+# Receipts, plan hashes and snapshot-style assertions compare bytes.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+
+pnpm-lock.yaml linguist-generated=true

@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/sponson/sponson/main/schema/release.plan.schema.json
+#
+# Each preview deployment's URL is allowed as a Clerk redirect URL. The URL exists only
+# after Vercel has deployed, so the first `apply` stops with status `partial` and the
+# callback line `waiting` for the deploy. The next `apply` (for example from a
+# `deployment_status` workflow) finishes it. Same command, no flags.
+version: 1
+providers:
+  vercel: { project: prj_acme_web }
+  neon: { project: proj_acme_db }
+
+changes:
+  - id: db
+    adapter: neon
+    op: branch
+    environments: [preview]
+
+  # vercel.env declares `preview_url` and `deployment_id` as outputs that become available
+  # only after the deploy of this commit is READY.
+  - id: env
+    adapter: vercel
+    op: env
+    target: preview
+    values:
+      DATABASE_URL: { from: db.connection_string }
+      CLERK_SECRET_KEY: { secret: "env://CLERK_PREVIEW_SECRET_KEY" }
+    environments: [preview]
+
+  # Reads an external output, so it waits for the deploy. A `from:` reference is the
+  # whole value; it cannot be combined with other text.
+  - id: callback
+    adapter: clerk
+    op: redirect_allow
+    url: { from: env.preview_url }
+    environments: [preview]

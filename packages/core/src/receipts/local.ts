@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { link, mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { SponsonError } from "../errors.js";
 import { LockHeldError, LockLostError, type LockInfo, type Receipt, type ReceiptStore } from "../types.js";
 import { latestPath, lockExpired, lockPath, parseLock, parseReceipt, receiptDir, runPath, serialize } from "./layout.js";
@@ -275,6 +276,3 @@ async function atomicWrite(path: string, content: string): Promise<void> {
   await rename(tmp, path);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}

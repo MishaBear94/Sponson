@@ -8,7 +8,8 @@ import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import { onTestFinished } from "vitest";
 import { createRegistry } from "@sponson/adapters";
-import { detectCtx, loadPlan, Redactor, type ReceiptStore, type RunOptions } from "@sponson/core";
+import { loadPlan, Redactor, type ReceiptStore, type RunOptions } from "@sponson/core";
+import { detectCtx } from "sponson";
 import type { SimHandle } from "@sponson/sim";
 import { CLI_COMMAND, workspace } from "../../support.js";
 

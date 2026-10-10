@@ -9,6 +9,7 @@ import { cliHint, errorEnvelope, exitCodeFor, serialize, toSponsonError } from "
 import { defaultRegistry, loadPlugins } from "./registry.js";
 import { VERSION } from "./version.js";
 
+/** Where an in-process `run` reads and writes. Every field defaults to the real process. */
 export interface RunIO {
   stdout?: { write(chunk: string): unknown };
   stderr?: { write(chunk: string): unknown };
@@ -21,8 +22,16 @@ export interface RunIO {
 }
 
 /**
- * Run the CLI in-process. `argv` excludes node and the script name.
+ * Run the CLI in-process, exactly as `sponson <argv>` would: for tests, wrappers and tools that want the CLI's
+ * behaviour and output contract without spawning a process. `argv` excludes node and the script name.
  * Resolves to the exit code; never throws.
+ *
+ * @example
+ * ```ts
+ * let out = "";
+ * const code = await run(["plan", "--json"], { cwd: repoDir, stdout: { write: (s: string) => (out += s) } });
+ * const plan = JSON.parse(out); // the same envelope `sponson plan --json` prints
+ * ```
  */
 export async function run(argv: string[], init: RunIO = {}): Promise<number> {
   // One redactor for the whole command: the engine registers into it, every byte of output passes through it.

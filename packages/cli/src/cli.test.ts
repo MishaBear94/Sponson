@@ -1,6 +1,8 @@
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { Registry, sha256, type LiveState, type OpSpec, type ResourceAdapter, type ResourceRecord } from "@sponson/core";
 import { describe, expect, it } from "vitest";
 import { run } from "./main.js";
@@ -379,5 +381,22 @@ describe("stale commits through git ancestry", () => {
     const late = await apply(a); // a was never applied, but it is an ancestor of b
     expect(late.code).toBe(0);
     expect(late.json.receipt).toMatchObject({ stale: true });
+  });
+});
+
+describe("git-branch receipts", () => {
+  it("each command removes the working clone it created (a long-lived MCP server runs many)", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "sponson-cli-"));
+    await writeFile(join(cwd, "release.plan.yaml"), BASE_PLAN.replace("receipts: local\n", ""));
+    const remote = await mkdtemp(join(tmpdir(), "sponson-remote-"));
+    await promisify(execFile)("git", ["init", "--bare", "-q", remote]);
+    const clones = async () => (await readdir(join(tmpdir(), "sponson-receipts")).catch(() => [])).filter((d) => d.includes(`-${process.pid}-`));
+    const before = new Set(await clones());
+    const out = { write: () => true };
+    const code = await run(["apply", "--receipts-remote", remote, "--branch", "feat", "--sha", "abcdef1234567890", "--pr", "42"], {
+      stdout: out, stderr: out, env: { PATH: process.env.PATH }, cwd, createRegistry: () => registryWith(memAdapter("mem", "thing", memState())), color: false,
+    });
+    expect(code).toBe(0);
+    expect((await clones()).filter((d) => !before.has(d))).toEqual([]);
   });
 });

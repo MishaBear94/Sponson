@@ -1,0 +1,95 @@
+name: Bug report
+description: Sponson did something wrong, or did not do something it should have.
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Before pasting anything, remove every secret value.** Sponson redacts what it
+        knows to be secret, but a provider token you exported yourself, a connection string, or a value in a
+        plan you wrote as a literal can still be in your output. Replace them with `REDACTED`.
+
+        If a secret appeared somewhere Sponson should have redacted it, or production was written without
+        approval, **do not file a public issue** — report it privately as described in SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Sponson version
+      description: Output of `sponson --version` (or the `version` input of the GitHub Action).
+      placeholder: "0.2.0"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Node.js version and OS
+      placeholder: "node 24.3.0, Ubuntu 24.04 (GitHub Actions)"
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where did you run it?
+      multiple: true
+      options:
+        - CLI (`sponson plan` / `apply` / `init`)
+        - MCP server (`sponson mcp`)
+        - GitHub Action
+        - Programmatic (`run()` from the `sponson` package)
+        - A plugin (`SPONSON_PLUGINS`)
+    validations:
+      required: true
+  - type: dropdown
+    id: adapter
+    attributes:
+      label: Adapters involved
+      multiple: true
+      options:
+        - neon
+        - vercel
+        - clerk
+        - secret source (env / doppler / op)
+        - a third-party plugin
+        - none / not sure
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect?
+      description: Include the command line you ran (`sponson apply --env preview --json`, …).
+    validations:
+      required: true
+  - type: textarea
+    id: plan
+    attributes:
+      label: Plan snippet
+      description: 'The smallest part of `release.plan.yaml` that reproduces it. Keep `{ secret: … }` and `{ from: … }` references as they are; replace any literal values that are sensitive.'
+      render: yaml
+  - type: textarea
+    id: json
+    attributes:
+      label: "`--json` output (secrets removed)"
+      description: Re-run the failing command with `--json` and paste stdout. It carries the error `code`, per-line statuses and drift. Check it for secret values before pasting.
+      render: json
+  - type: textarea
+    id: receipt
+    attributes:
+      label: Receipt (optional)
+      description: The relevant `latest.json` from `.sponson/receipts/<env>/<scope>/` or the `sponson/receipts` branch, if the bug is about what Sponson remembered. Receipts never contain secret values, but check anyway.
+      render: json
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction against the sim (optional, very welcome)
+      description: |
+        `pnpm sim` runs a fake Vercel/Neon/Clerk on :4777 that needs no credentials. A YAML scenario in the format
+        documented at the top of `scenarios/runner.test.ts` is the fastest path to a fix.
+      render: yaml
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I removed secret values from everything above.
+          required: true
+        - label: I searched existing issues for this problem.
+          required: true

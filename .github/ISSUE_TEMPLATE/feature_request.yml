@@ -1,0 +1,47 @@
+name: Feature request
+description: A change to the plan format, the CLI, the GitHub Action, the MCP server or the engine.
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a new provider use the **Adapter request** form instead. Changes to the plan or receipt format, the
+        adapter contract, the JSON output, error codes or the CLI's command set need an ADR in `docs/adr/` before
+        they are merged (see MAINTAINERS.md); this issue is where that starts.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you (or your agent) trying to do, and where does Sponson get in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What would you change? If it adds a CLI command, say why a flag on `init`, `plan` or `apply` is worse.
+    validations:
+      required: true
+  - type: textarea
+    id: plan
+    attributes:
+      label: How it would look in release.plan.yaml or on the command line (optional)
+      render: yaml
+  - type: checkboxes
+    id: invariants
+    attributes:
+      label: Invariants this could affect
+      description: The eight invariants are listed in CONTRIBUTING.md. Tick any your proposal touches.
+      options:
+        - label: 1 — no output contains a secret
+        - label: 2 — rollback restores the resource set
+        - label: 3 — apply; apply performs zero writes the second time
+        - label: 4 — plan performs zero writes
+        - label: 5 — undeclared, uncreated resources are never changed
+        - label: 6 — every receipt parses at every moment
+        - label: 7 — nothing writes to production without approval
+        - label: 8 — after destroy nothing Sponson created survives
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

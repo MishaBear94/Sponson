@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { applyRun, destroyRun, planRun, type RunOptions } from "./index.js";
+import { Lease } from "./lease.js";
 import { SponsonError } from "../errors.js";
 import { parsePlan } from "../plan.js";
 import { Redactor } from "../redact.js";
@@ -341,22 +342,45 @@ describe("environments and approval", () => {
 });
 
 describe("locks", () => {
+  it("stops on its own before its lease could have been taken, when renewals stall", async () => {
+    // A store whose renewals never answer: the lease runs out by the holder's own clock.
+    const stalled = new Proxy(store, {
+      get: (t, k) => (k === "renewLock" ? () => new Promise<void>(() => {}) : typeof t[k as keyof typeof t] === "function" ? (t[k as keyof typeof t] as (...a: unknown[]) => unknown).bind(t) : t[k as keyof typeof t]),
+    });
+    await expect(applyRun(opts(PLAN, { store: stalled, lockTtlMs: 100, onLineDone: () => new Promise((r) => setTimeout(r, 120)) }))).rejects.toMatchObject({ code: "LOCK_LOST" });
+    // The deadline falls before line b (each line waits 120ms > the 100ms lease): at most alpha was written,
+    // however slow the machine is, and whatever was written is still owned by the ledger.
+    const written = cloud.writes.map((w) => w.name);
+    expect(written.filter((n) => n !== "alpha")).toEqual([]);
+    const r = await store.read("preview", "pr-42");
+    for (const name of written) expect(r?.ledger.find((e) => e.key === `item:${name}`)?.createdBy).toBe("sponson");
+    expect(Object.values(r?.lines ?? {}).some((l) => l.errorCode === "LOCK_LOST")).toBe(true);
+  });
+
   it("never has two renewals in flight, however slow the store is", async () => {
     let inFlight = 0;
     let maxInFlight = 0;
     let renewals = 0;
-    const slow = Object.create(store) as typeof store;
-    slow.renewLock = async (...args) => {
-      inFlight++;
-      renewals++;
-      maxInFlight = Math.max(maxInFlight, inFlight);
-      await new Promise((r) => setTimeout(r, 60)); // slower than the 10ms renewal period below
-      inFlight--;
-      return store.renewLock(...args);
-    };
-    cloud.external = "never";
-    await applyRun(opts(PLAN, { store: slow, lockTtlMs: 30, onLineDone: () => new Promise((r) => setTimeout(r, 120)) }));
-    expect(renewals).toBeGreaterThan(1);
+    const slow = new Proxy(store, {
+      get: (t, k) =>
+        k === "renewLock"
+          ? async (...args: Parameters<typeof store.renewLock>) => {
+              inFlight++;
+              renewals++;
+              maxInFlight = Math.max(maxInFlight, inFlight);
+              await new Promise((r) => setTimeout(r, 60)); // slower than the 40ms renewal period
+              inFlight--;
+              return store.renewLock(...args);
+            }
+          : typeof t[k as keyof typeof t] === "function"
+            ? (t[k as keyof typeof t] as (...a: unknown[]) => unknown).bind(t)
+            : t[k as keyof typeof t],
+    });
+    // The lease on its own, held for a while: a fixed interval would start a renewal every 40ms.
+    const lease = await Lease.acquire(opts(PLAN, { store: slow, lockTtlMs: 120 }), "holder");
+    // Count-driven, not time-driven: however slow the machine, observe three renewals.
+    while (renewals < 3) await new Promise((r) => setTimeout(r, 20));
+    await lease.release();
     expect(maxInFlight).toBe(1);
   });
 

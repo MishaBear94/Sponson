@@ -10,7 +10,7 @@ import type { ApplyResultSummary, RunOptions } from "./types.js";
 /**
  * Remove everything the ledger says Sponson created in this scope, newest first, using the
  * provider block recorded with each resource (not the current plan's). Adopted resources are
- * forgotten, never deleted.
+ * forgotten, never deleted. Use it when a pull request closes; takes the same options as `applyRun`.
  */
 export async function destroyRun(opts: RunOptions): Promise<ApplyResultSummary> {
   const prepared = prepare(opts);
@@ -32,46 +32,7 @@ export async function destroyRun(opts: RunOptions): Promise<ApplyResultSummary> 
     }
 
     await locateIntents(rc, prepared);
-    for (const group of groups(rc.ledger).reverse()) {
-      const head = group[0]!;
-      const rl: ReceiptLine = receipt.lines[head.line] ?? { id: head.line, adapter: head.adapter, op: head.op, status: "destroyed", createdBy: "sponson", resources: [], outputs: head.outputs ?? {} };
-      receipt.lines[head.line] = rl;
-      const ours = group.filter((e) => e.createdBy === "sponson");
-      const adopted = group.filter((e) => e.createdBy === "adopted");
-      const unknown = group.filter((e) => e.createdBy === "intent");
-      for (const e of adopted) rc.ledger.delete(e);
-      if (adopted.length) rl.notes = { ...(rl.notes ?? {}), adoptedKept: adopted.map((e) => e.key) };
-      if (unknown.length) {
-        rl.status = "destroy_failed";
-        rl.errorCode = "INTENT_UNRESOLVED";
-        rl.error = `Sponson may have created ${unknown.map((e) => e.key).join(", ")} in an interrupted run but cannot locate it (the line is gone from the plan or its read failed). Check the provider and remove it by hand if it exists.`;
-      }
-      if (ours.length === 0) {
-        if (!unknown.length && rl.status === "destroyed") {
-          rl.status = "skipped";
-          rl.error = adopted.length ? "skipped: adopted resources are never destroyed" : "skipped: nothing created by Sponson";
-        }
-        continue;
-      }
-      try {
-        const op = opts.registry.op(head.adapter, head.op);
-        const actx = rc.adapterContext(head.adapter, head.provider);
-        actx.log(`destroy ${head.line}`);
-        await op.destroy(actx, ours.map(toRecord));
-        for (const e of ours) rc.ledger.delete(e);
-        const survivors = await stillPresent(rc, prepared, head, ours);
-        if (survivors.length) {
-          rl.notes = { ...(rl.notes ?? {}), notSponsons: survivors };
-          rc.warnings.push(`\`${head.line}\`: ${survivors.join(", ")} still exist${survivors.length === 1 ? "s" : ""} after destroy: ${survivors.length === 1 ? "it was" : "they were"} replaced outside Sponson, so ${survivors.length === 1 ? "it is" : "they are"} not Sponson's and ${survivors.length === 1 ? "was" : "were"} left alone.`);
-        }
-      } catch (e) {
-        const err = rc.errorText(e);
-        rl.status = "destroy_failed";
-        rl.error = err.message;
-        rl.errorCode = err.code ?? "DESTROY_FAILED";
-      }
-      rl.resources = rc.ledger.all().filter((x) => x.line === head.line).map(toRecord);
-    }
+    for (const group of groups(rc.ledger).reverse()) await destroyGroup(rc, prepared, receipt, group);
 
     receipt.ledger = rc.ledger.toJSON();
     receipt.status = Object.values(receipt.lines).some((l) => l.status === "destroy_failed") ? "failed" : "complete";
@@ -81,6 +42,52 @@ export async function destroyRun(opts: RunOptions): Promise<ApplyResultSummary> 
   } finally {
     await lease.release();
   }
+}
+
+/**
+ * Destroy one line's resources: what Sponson created is deleted, adopted ones are forgotten, and an intent
+ * nobody could locate fails the line (it may exist, and only a human can tell).
+ */
+async function destroyGroup(rc: RunContext, prepared: Prepared, receipt: Receipt, group: LedgerEntry[]): Promise<void> {
+  const head = group[0]!;
+  const receiptLine: ReceiptLine = receipt.lines[head.line] ?? { id: head.line, adapter: head.adapter, op: head.op, status: "destroyed", createdBy: "sponson", resources: [], outputs: head.outputs ?? {} };
+  receipt.lines[head.line] = receiptLine;
+  const ours = group.filter((e) => e.createdBy === "sponson");
+  const adopted = group.filter((e) => e.createdBy === "adopted");
+  const unknown = group.filter((e) => e.createdBy === "intent");
+  for (const e of adopted) rc.ledger.delete(e);
+  if (adopted.length) receiptLine.notes = { ...receiptLine.notes, adoptedKept: adopted.map((e) => e.key) };
+  if (unknown.length) {
+    receiptLine.status = "destroy_failed";
+    receiptLine.errorCode = "INTENT_UNRESOLVED";
+    receiptLine.error = `Sponson may have created ${unknown.map((e) => e.key).join(", ")} in an interrupted run but cannot locate it (the line is gone from the plan or its read failed). Check the provider and remove it by hand if it exists.`;
+  }
+  if (ours.length === 0) {
+    if (!unknown.length && receiptLine.status === "destroyed") {
+      receiptLine.status = "skipped";
+      receiptLine.error = adopted.length ? "skipped: adopted resources are never destroyed" : "skipped: nothing created by Sponson";
+    }
+    return;
+  }
+  try {
+    const op = rc.opts.registry.op(head.adapter, head.op);
+    const actx = rc.adapterContext(head.adapter, head.provider);
+    actx.log(`destroy ${head.line}`);
+    await op.destroy(actx, ours.map(toRecord));
+    for (const e of ours) rc.ledger.delete(e);
+    const survivors = await stillPresent(rc, prepared, head, ours);
+    if (survivors.length) {
+      receiptLine.notes = { ...receiptLine.notes, notSponsons: survivors };
+      const one = survivors.length === 1;
+      rc.warnings.push(`\`${head.line}\`: ${survivors.join(", ")} still exist${one ? "s" : ""} after destroy: ${one ? "it was" : "they were"} replaced outside Sponson, so ${one ? "it is" : "they are"} not Sponson's and ${one ? "was" : "were"} left alone.`);
+    }
+  } catch (e) {
+    const err = rc.errorText(e);
+    receiptLine.status = "destroy_failed";
+    receiptLine.error = err.message;
+    receiptLine.errorCode = err.code ?? "DESTROY_FAILED";
+  }
+  receiptLine.resources = rc.ledger.all().filter((x) => x.line === head.line).map(toRecord);
 }
 
 /** Consecutive entries of the same line/adapter/op/provider, in ledger (creation) order. */

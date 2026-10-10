@@ -1,10 +1,11 @@
 import { readFile } from "node:fs/promises";
-import { parseDocument, visit, isAlias } from "yaml";
+import { isAlias, parseDocument, visit, type Document } from "yaml";
 import { z } from "zod";
 import { SponsonError } from "./errors.js";
 import { sha256 } from "./hash.js";
 import { isFromRef, isKeepRef, isSecretRef, type Change, type Plan } from "./types.js";
 
+/** The plan file name the CLI looks for in the working directory. */
 export const PLAN_FILENAME = "release.plan.yaml";
 
 const RESERVED_KEYS = new Set(["id", "adapter", "op", "environments", "depends_on"]);
@@ -35,16 +36,22 @@ const planSchema = z.object({
 /** Parameter names whose literal values are almost certainly secrets. */
 const SECRET_KEY_PATTERN = /(_KEY|_SECRET|_TOKEN|PASSWORD|_PASS|PASSWD|API_KEY|PRIVATE)$/i;
 
+/** Something allowed in a plan but worth telling the author about. */
 export interface ParseWarning {
   code: "YAML_ANCHOR";
   message: string;
 }
 
+/** A parsed plan and the warnings parsing produced. */
 export interface ParsedPlan {
   plan: Plan;
   warnings: ParseWarning[];
 }
 
+/**
+ * Read and parse a plan file. Throws PLAN_PARSE / PLAN_INVALID / REF_UNKNOWN / SECRET_LITERAL with a message
+ * naming the line at fault. Use it to get the `plan` every run takes.
+ */
 export async function loadPlan(path: string): Promise<ParsedPlan> {
   let source: string;
   try {
@@ -55,6 +62,7 @@ export async function loadPlan(path: string): Promise<ParsedPlan> {
   return parsePlan(source, path);
 }
 
+/** Parse plan text (for plans that do not live in a file). `path` is used in messages only. */
 export function parsePlan(source: string, path?: string): ParsedPlan {
   const doc = parseDocument(source, { prettyErrors: true, merge: true });
   if (doc.errors.length > 0) {
@@ -63,11 +71,7 @@ export function parsePlan(source: string, path?: string): ParsedPlan {
   }
 
   const warnings: ParseWarning[] = [];
-  let sawAlias = false;
-  visit(doc, (_key, node) => {
-    if (isAlias(node)) sawAlias = true;
-  });
-  if (sawAlias) {
+  if (usesAliases(doc)) {
     warnings.push({
       code: "YAML_ANCHOR",
       message: "Plan uses YAML anchors/aliases. They are allowed but hard to read; prefer repeating the lines.",
@@ -148,44 +152,47 @@ function validateSemantics(plan: Plan): void {
         throw new SponsonError("REF_UNKNOWN", `Line \`${c.id}\` depends_on unknown id \`${dep}\``, { id: c.id, ref: dep });
       }
     }
-    walkParams(c.params, [], (path, value) => {
-      const last = path[path.length - 1] ?? "";
-      // Numbers count too: `ADMIN_PASSWORD: 84736291` is a secret written in YAML's other scalar type.
-      if ((typeof value === "string" || typeof value === "number") && SECRET_KEY_PATTERN.test(last) && !isPendingPlaceholder(String(value))) {
-        throw new SponsonError(
-          "SECRET_LITERAL",
-          `Line \`${c.id}\`: \`${path.join(".")}\` looks like a secret but is a literal. Use \`{ secret: "env://${last}" }\` instead.`,
-          { id: c.id, path: path.join(".") },
-        );
-      }
-      if (typeof value === "string" && isPendingPlaceholder(value)) {
-        throw new SponsonError(
-          "PLAN_INVALID",
-          `Line \`${c.id}\`: \`${path.join(".")}\` contains display text \`${value}\`. Write a reference, e.g. \`{ from: "db.connection_string" }\`.`,
-          { id: c.id, path: path.join(".") },
-        );
-      }
-      if (isFromRef(value)) {
-        const [target] = value.from.split(".");
-        if (!target || !ids.has(target)) {
-          throw new SponsonError("REF_UNKNOWN", `Line \`${c.id}\` references unknown id \`${target ?? value.from}\` in \`${value.from}\``, {
-            id: c.id,
-            ref: value.from,
-          });
-        }
-        if (!value.from.includes(".")) {
-          throw new SponsonError("REF_UNKNOWN", `Line \`${c.id}\`: reference \`${value.from}\` must name an output, e.g. \`${value.from}.id\``, {
-            id: c.id,
-            ref: value.from,
-          });
-        }
-      }
-      if (isSecretRef(value) && !/^[a-z][a-z0-9+.-]*:\/\//i.test(value.secret)) {
-        throw new SponsonError("PLAN_INVALID", `Line \`${c.id}\`: secret reference \`${value.secret}\` must be a URL like \`env://NAME\``, {
-          id: c.id,
-          ref: value.secret,
-        });
-      }
+    walkParams(c.params, [], (path, value) => checkParamValue(c.id, ids, path, value));
+  }
+}
+
+/** One param leaf: no literal secrets, no pasted plan output, and references that point somewhere real. */
+function checkParamValue(id: string, ids: Set<string>, path: string[], value: unknown): void {
+  const last = path[path.length - 1] ?? "";
+  // Numbers count too: `ADMIN_PASSWORD: 84736291` is a secret written in YAML's other scalar type.
+  if ((typeof value === "string" || typeof value === "number") && SECRET_KEY_PATTERN.test(last) && !isPendingPlaceholder(String(value))) {
+    throw new SponsonError(
+      "SECRET_LITERAL",
+      `Line \`${id}\`: \`${path.join(".")}\` looks like a secret but is a literal. Use \`{ secret: "env://${last}" }\` instead.`,
+      { id, path: path.join(".") },
+    );
+  }
+  if (typeof value === "string" && isPendingPlaceholder(value)) {
+    throw new SponsonError(
+      "PLAN_INVALID",
+      `Line \`${id}\`: \`${path.join(".")}\` contains display text \`${value}\`. Write a reference, e.g. \`{ from: "db.connection_string" }\`.`,
+      { id, path: path.join(".") },
+    );
+  }
+  if (isFromRef(value)) {
+    const [target] = value.from.split(".");
+    if (!target || !ids.has(target)) {
+      throw new SponsonError("REF_UNKNOWN", `Line \`${id}\` references unknown id \`${target ?? value.from}\` in \`${value.from}\``, {
+        id,
+        ref: value.from,
+      });
+    }
+    if (!value.from.includes(".")) {
+      throw new SponsonError("REF_UNKNOWN", `Line \`${id}\`: reference \`${value.from}\` must name an output, e.g. \`${value.from}.id\``, {
+        id,
+        ref: value.from,
+      });
+    }
+  }
+  if (isSecretRef(value) && !/^[a-z][a-z0-9+.-]*:\/\//i.test(value.secret)) {
+    throw new SponsonError("PLAN_INVALID", `Line \`${id}\`: secret reference \`${value.secret}\` must be a URL like \`env://NAME\``, {
+      id,
+      ref: value.secret,
     });
   }
 }
@@ -230,4 +237,14 @@ export function dependenciesOf(change: Change): string[] {
     if (isFromRef(v)) deps.add(v.from.split(".")[0]!);
   });
   return [...deps];
+}
+
+function usesAliases(doc: Document): boolean {
+  let found = false;
+  visit(doc, (_key, node) => {
+    if (!isAlias(node)) return undefined;
+    found = true;
+    return visit.BREAK;
+  });
+  return found;
 }

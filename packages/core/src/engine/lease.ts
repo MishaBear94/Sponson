@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { SponsonError } from "../errors.js";
 import { LockHeldError, LockLostError, type LockInfo, type Receipt } from "../types.js";
 import type { RunOptions } from "./types.js";
@@ -5,26 +6,37 @@ import type { RunOptions } from "./types.js";
 /**
  * The scope lock held as a lease: renewed in the background while the run works, and
  * every receipt write is fenced on it. A run that lost its lease stops before writing.
+ *
+ * The holder also keeps its own view of when the lease runs out (measured from when each
+ * acquire/renew was *sent*). Once a slow store has let that get close, the holder stops on its
+ * own: another run may legitimately take an expired lock, and the store's verdict on a late
+ * renewal arrives too late to prevent two runs writing to the same scope.
  */
 export class Lease {
   private timer: NodeJS.Timeout | null = null;
   private lost: LockLostError | null = null;
   private released = false;
+  /** Local deadline after which another run may have taken the lock. */
+  private validUntil: number;
 
   private constructor(
     private readonly opts: RunOptions,
     readonly holder: string,
     readonly preempted: LockInfo | null,
     private readonly ttl: number,
-  ) {}
+    sentAt: number,
+  ) {
+    this.validUntil = sentAt + ttl;
+  }
 
   static async acquire(opts: RunOptions, holder: string): Promise<Lease> {
     const ttl = opts.lockTtlMs ?? 15 * 60 * 1000;
     const deadline = Date.now() + (opts.waitTimeoutMs ?? 10 * 60 * 1000);
     for (;;) {
       try {
+        const sentAt = Date.now();
         const preempted = await opts.store.acquireLock(opts.ctx.env, opts.ctx.scope, holder, ttl);
-        const lease = new Lease(opts, holder, preempted, ttl);
+        const lease = new Lease(opts, holder, preempted, ttl, sentAt);
         lease.startRenewing();
         return lease;
       } catch (e) {
@@ -32,7 +44,7 @@ export class Lease {
         if (!opts.wait || Date.now() > deadline) {
           throw new SponsonError("LOCK_HELD", `Another run (${e.lock.holder}) holds the lock for ${opts.ctx.env}/${opts.ctx.scope} until ${e.lock.expiresAt}. Wait for it, or run again with waiting enabled (wait).`, { lock: e.lock });
         }
-        await new Promise((r) => setTimeout(r, opts.pollIntervalMs ?? 2000));
+        await sleep(opts.pollIntervalMs ?? 2000);
       }
     }
   }
@@ -46,8 +58,12 @@ export class Lease {
     const every = Math.max(50, Math.floor(this.ttl / 3));
     const tick = () => {
       this.timer = setTimeout(() => {
+        const sentAt = Date.now();
         this.opts.store
           .renewLock(this.opts.ctx.env, this.opts.ctx.scope, this.holder, this.ttl)
+          .then(() => {
+            this.validUntil = sentAt + this.ttl;
+          })
           .catch((e) => {
             if (e instanceof LockLostError) this.lost = e;
           })
@@ -60,9 +76,13 @@ export class Lease {
     tick();
   }
 
-  /** Throw LOCK_LOST when another run took the scope; called before every write to a provider. */
+  /** Throw LOCK_LOST when another run took the scope, or soon may; called before every write to a provider. */
   assertHeld(): void {
     if (this.lost) throw lockLost(this.lost);
+    const margin = this.ttl / 5;
+    if (Date.now() >= this.validUntil - margin) {
+      throw lockLost(new LockLostError(this.holder, null), "the lease was about to expire because renewals were not getting through");
+    }
   }
 
   /** Write the receipt only if we still hold the lock at that instant. */
@@ -76,6 +96,19 @@ export class Lease {
     }
   }
 
+  /**
+   * Last-chance write after this run stopped itself: skips the local deadline but keeps the
+   * store's fencing, so it lands only if nobody has taken the lock in the meantime.
+   */
+  async writeIfStillHeld(receipt: Receipt): Promise<boolean> {
+    try {
+      await this.opts.store.write(receipt, { holder: this.holder });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async release(): Promise<void> {
     this.released = true;
     if (this.timer) clearTimeout(this.timer);
@@ -83,8 +116,9 @@ export class Lease {
   }
 }
 
-function lockLost(e: LockLostError): SponsonError {
-  return new SponsonError("LOCK_LOST", `${e.message}. This run stopped without writing further; the other run's receipt is authoritative. Re-run plan to see the current state.`, {
+function lockLost(e: LockLostError, why?: string): SponsonError {
+  const what = why ? `This run stopped: ${why}` : e.message;
+  return new SponsonError("LOCK_LOST", `${what}. This run stopped without writing further; the other run's receipt is authoritative. Re-run plan to see the current state.`, {
     holder: e.holder,
     current: e.current,
   });

@@ -1,0 +1,55 @@
+# 8. Scopes, pull request succession, and leases
+
+Date: 2026-10-10
+
+## Status
+
+Accepted. Leases and succession were introduced in v0.2.
+
+## Context
+
+Preview resources live and die with a pull request; production resources live forever. Several pull requests apply
+at once, and the same pull request can start a second run before the first finishes (two pushes in quick succession,
+a re-run job). An agent may also apply from a local branch before the pull request exists, and the pull request then
+has to take over what was created.
+
+In v0.1 the lock was a flag: taken once, never renewed, not checked when the receipt was written. A slow run could
+lose it without noticing and overwrite the receipt of the run that took over.
+
+## Decision
+
+**Scope.** The lifecycle unit is the scope (`scopeFor` in `packages/core/src/ctx.ts`): `pr-<n>` inside a pull
+request, `main` on `main`, `master` or the repository's default branch, `branch-<name>` otherwise. Receipts, ledgers
+and locks are per environment and scope; everything Sponson created in a scope is destroyed together.
+
+**Boundaries between scopes.** Resources another scope manages in the same environment are *foreign*: a line may rely
+on them unchanged, but may not create or change them (`OWNED_BY_OTHER_SCOPE`), and they are never reported as
+unmanaged. Intents count, because another run is creating that resource right now.
+
+**Succession.** A pull request scope inherits the ledger of its head branch's scope (`branch-<name>`) with a warning.
+After a successful apply it takes the predecessor's lock and rewrites the predecessor's receipt without the inherited
+entries and with `supersededBy`. Each resource then has exactly one owner, and destroying either scope cannot delete
+the other's resources.
+
+**Leases.** The scope lock (`lock.json`) is a lease (`packages/core/src/engine/lease.ts`): a TTL (default 15
+minutes), renewed every TTL/3 in the background, each renewal scheduled after the previous one finished. Every
+receipt write is fenced: the store checks that the writer still holds the lock in the same atomic step as the write.
+A run that lost its lease stops with `LOCK_LOST` before writing anything else; the other run's receipt is
+authoritative. An expired lock can be taken over, and the receipt records `lockPreempted`. `plan` reads the lock and
+warns when an apply is running.
+
+**Approval** is part of the boundary between environments: a run that writes to production, through `--env
+production` or through a line whose op targets production, needs a named approver
+([ADR 0012](0012-flat-plan-with-environment-filters.md)).
+
+## Consequences
+
+- Concurrent pull requests never interfere; two runs in one scope are serialized, and the loser exits 3
+  (`LOCK_HELD`), or waits with `--wait`.
+- A crashed run's lock expires; its checkpoint receipt and intents let the next run continue
+  ([ADR 0005](0005-receipts-are-a-ledger-with-write-ahead-intents.md)).
+- Renewal had to pace itself: a fixed interval queued renewals faster than a git push under load completed them, and
+  the run's own receipt writes waited behind the queue. A regression test pins this.
+- Resources shared by all preview deployments (project-wide variables) belong to the scope that created them. Apply
+  them from the default branch first, or they disappear when that pull request is destroyed.
+- Scopes whose pull request closed without the workflow running are not collected automatically.

@@ -3,16 +3,21 @@
  * pagination. Adapters never see a raw fetch error or a non-2xx status; they see a SponsonError with a PROVIDER_*
  * code, so "already exists" (→ re-read and claim), "gone" (→ fine on delete) and "try later" are decided here once.
  */
+import { setTimeout as sleep } from "node:timers/promises";
 import { SponsonError, isSponsonError, type ErrorCode } from "@sponson/core";
 
 /** Longest response excerpt an error carries. Error pages can be megabytes; receipts and PR comments must not. */
 export const HTTP_ERROR_BODY_LIMIT = 500;
+/** Per-request timeout unless SPONSON_HTTP_TIMEOUT_MS says otherwise. */
 export const DEFAULT_TIMEOUT_MS = 30_000;
+/** Retries of a retryable failure unless SPONSON_HTTP_RETRIES says otherwise. */
 export const DEFAULT_RETRIES = 4;
+/** First backoff step (doubling, jittered) unless SPONSON_HTTP_RETRY_BASE_MS says otherwise. */
 export const DEFAULT_RETRY_BASE_MS = 500;
 /** No single wait is longer than this, whatever Retry-After says. */
 export const MAX_RETRY_WAIT_MS = 30_000;
 
+/** The error codes the HTTP client classifies provider failures into; match on them with `isProviderError`. */
 export type ProviderErrorCode = Extract<ErrorCode, `PROVIDER_${string}`>;
 
 /** Details carried by every provider error. Never the request body. */
@@ -25,6 +30,10 @@ export interface ProviderErrorDetails {
   [k: string]: unknown;
 }
 
+/**
+ * True when `e` is a provider failure, optionally of the given code(s). Adapters use it to branch on "already
+ * exists" or "not found" instead of reading HTTP statuses.
+ */
 export function isProviderError(e: unknown, code?: ProviderErrorCode | ProviderErrorCode[]): e is SponsonError & { details: ProviderErrorDetails } {
   if (!isSponsonError(e) || !e.code.startsWith("PROVIDER_")) return false;
   if (code === undefined) return true;
@@ -36,6 +45,10 @@ export function isTransient(e: unknown): boolean {
   return isProviderError(e, ["PROVIDER_TRANSIENT", "PROVIDER_TIMEOUT"]);
 }
 
+/**
+ * Options for `apiClient`. Adapters get one through `clientFor`, which fills `redact` and `env` from the adapter
+ * context.
+ */
 export interface ApiClientOptions {
   /** Adapter name, for messages and error details. */
   adapter: string;
@@ -55,6 +68,10 @@ export interface ApiClientOptions {
  */
 export type Shape<T> = (body: unknown) => T;
 
+/**
+ * Thrown by a `Shape` when a response body is not what the adapter expects; the client reports it as
+ * PROVIDER_RESPONSE.
+ */
 export class ShapeError extends Error {
   constructor(message: string) {
     super(message);
@@ -62,6 +79,10 @@ export class ShapeError extends Error {
   }
 }
 
+/**
+ * A JSON client bound to one provider: retries, timeouts and error classification are built in. Get one from
+ * `clientFor`.
+ */
 export interface ApiClient {
   readonly adapter: string;
   get<T = unknown>(path: string, shape?: Shape<T>): Promise<T>;
@@ -121,6 +142,10 @@ export function backoffMs(attempt: number, baseMs: number, random = Math.random)
 /** "Already exists"-type answers. 409 always; 400/422 when the body says so (Clerk, Vercel use those statuses). */
 const CONFLICT_BODY = /already[ _-]?exists|duplicate|ENV_CONFLICT|_exists\b/i;
 
+/**
+ * The PROVIDER_* code for a non-2xx response (status and body). Exported for adapters that talk to a provider
+ * without `apiClient`.
+ */
 export function classifyStatus(status: number, body: string): ProviderErrorCode {
   if (status === 401 || status === 403) return "PROVIDER_AUTH";
   if (status === 404) return "PROVIDER_NOT_FOUND";
@@ -150,6 +175,10 @@ class Attempt {
   ) {}
 }
 
+/**
+ * Build an `ApiClient`. Adapters should call `clientFor(actx, ...)` instead, which wires redaction and the
+ * environment.
+ */
 export function apiClient(opts: ApiClientOptions): ApiClient {
   const base = opts.baseUrl.replace(/\/+$/, "");
   const auth = opts.authHeader ?? "bearer";
@@ -168,18 +197,12 @@ export function apiClient(opts: ApiClientOptions): ApiClient {
     });
 
   async function once(method: string, path: string, body: unknown): Promise<{ status: number; text: string } | Attempt> {
-    const init: RequestInit = { method, headers: { ...headers } };
-    if (body !== undefined) {
-      init.body = JSON.stringify(body);
-      (init.headers as Record<string, string>)["content-type"] = "application/json";
-    }
     const controller = new AbortController();
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, policy.timeoutMs);
-    init.signal = controller.signal;
+    const init: RequestInit =
+      body === undefined
+        ? { method, headers: { ...headers }, signal: controller.signal }
+        : { method, headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify(body), signal: controller.signal };
+    const timer = setTimeout(() => controller.abort(), policy.timeoutMs);
     try {
       const res = await fetch(base + path, init);
       const text = await res.text(); // the timer also bounds a body that never finishes
@@ -188,7 +211,7 @@ export function apiClient(opts: ApiClientOptions): ApiClient {
       const retryable = REFUSED_STATUSES.has(res.status) || (IDEMPOTENT.has(method) && UNAVAILABLE_STATUSES.has(res.status));
       return new Attempt(code, retryable, excerptOf(text, opts.redact), res.status, retryAfterMs(res.headers.get("retry-after")));
     } catch (e) {
-      if (timedOut) return new Attempt("PROVIDER_TIMEOUT", false, `no response within ${policy.timeoutMs}ms (SPONSON_HTTP_TIMEOUT_MS)`);
+      if (controller.signal.aborted) return new Attempt("PROVIDER_TIMEOUT", false, `no response within ${policy.timeoutMs}ms (SPONSON_HTTP_TIMEOUT_MS)`);
       // `fetch failed` alone says nothing; the cause (ECONNREFUSED, ECONNRESET, ENOTFOUND) does.
       const cause = (e as Error & { cause?: Error }).cause?.message ?? (e as Error).message;
       // A write whose connection dropped may have happened; only idempotent requests are repeated.
@@ -242,6 +265,7 @@ export function apiClient(opts: ApiClientOptions): ApiClient {
 // Shape helpers: small checks with messages that name the field, instead of a TypeError three frames later.
 // ---------------------------------------------------------------------------
 
+/** True for a plain JSON object (not null, not an array). For hand-written `Shape`s. */
 export function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
@@ -270,6 +294,7 @@ function kindOf(v: unknown): string {
 // Pagination
 // ---------------------------------------------------------------------------
 
+/** One page of a list, as the `page` callback of `listAll` describes it. */
 export interface Page<T> {
   items: T[];
   /** Query parameters for the next page, or null when this was the last one. */
@@ -286,8 +311,8 @@ export const MAX_PAGES = 1000;
 export async function listAll<T>(api: ApiClient, path: string, page: (body: unknown, pageNo: number) => Page<T>): Promise<T[]> {
   const out: T[] = [];
   const seen = new Set<string>();
-  let query: Record<string, string> | null = {};
-  for (let n = 0; query !== null; n++) {
+  let query: Record<string, string> = {};
+  for (let n = 0; ; n++) {
     if (n >= MAX_PAGES) throw new SponsonError("PROVIDER_RESPONSE", `${api.adapter}: GET ${path} returned more than ${MAX_PAGES} pages`, { adapter: api.adapter, method: "GET", path });
     const p: Page<T> = await api.get(withQuery(path, query), (b) => page(b, n));
     out.push(...p.items);
@@ -300,6 +325,7 @@ export async function listAll<T>(api: ApiClient, path: string, page: (body: unkn
   return out;
 }
 
+/** `path` with `extra` appended as query parameters (after any it already has). */
 export function withQuery(path: string, extra: Record<string, string>): string {
   const entries = Object.entries(extra);
   if (entries.length === 0) return path;
@@ -307,6 +333,3 @@ export function withQuery(path: string, extra: Record<string, string>): string {
   return path.includes("?") ? `${path}&${q}` : `${path}?${q}`;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}

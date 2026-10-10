@@ -1,0 +1,266 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/sponson/sponson/main/schema/release.plan.schema.json",
+  "title": "Sponson release plan (release.plan.yaml)",
+  "description": "One release, one plan. Specification: docs/plan-format.md. Rules a JSON Schema cannot express (unique ids, references to existing ids, declared environments) are enforced by `sponson plan`.",
+  "type": "object",
+  "required": ["version", "changes"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "description": "Plan format version. Always 1.",
+      "const": 1
+    },
+    "environments": {
+      "description": "Environments this plan knows. Default: preview, production, plus every environment a line names. `--env` must be one of them.",
+      "$ref": "#/$defs/nameList"
+    },
+    "providers": {
+      "description": "Static configuration per adapter, passed to it as `providers.<adapter>`.",
+      "type": "object",
+      "additionalProperties": { "type": "object" },
+      "properties": {
+        "vercel": {
+          "type": "object",
+          "description": "Vercel project (`prj_…`) and, for team projects, the team id (`team_…`).",
+          "required": ["project"],
+          "properties": {
+            "project": { "type": "string", "minLength": 1 },
+            "team": { "type": "string", "minLength": 1 }
+          }
+        },
+        "neon": {
+          "type": "object",
+          "description": "Neon project id.",
+          "required": ["project"],
+          "properties": {
+            "project": { "type": "string", "minLength": 1 }
+          }
+        },
+        "clerk": {
+          "type": "object",
+          "description": "Clerk needs no provider configuration; the instance is the one CLERK_SECRET_KEY belongs to."
+        }
+      }
+    },
+    "receipts": {
+      "description": "Receipt store. Default git-branch (an orphan branch `sponson/receipts` on the `origin` remote). `--receipts` overrides it.",
+      "enum": ["git-branch", "local"]
+    },
+    "changes": {
+      "description": "The plan lines. Order in the file does not matter: execution order follows `from:` references and `depends_on`.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/change" }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]*$",
+      "description": "Lowercase: letters, digits, `-` and `_`, starting with a letter."
+    },
+    "nameList": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "fromRef": {
+      "type": "object",
+      "description": "Another line's output: `{ from: <line id>.<output> }`.",
+      "required": ["from"],
+      "additionalProperties": false,
+      "properties": {
+        "from": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*\\..+$" }
+      }
+    },
+    "secretRef": {
+      "type": "object",
+      "description": "A secret, resolved only inside Sponson: `{ secret: \"env://NAME\" }`, `doppler://project/config/NAME`, `op://vault/item/field`.",
+      "required": ["secret"],
+      "additionalProperties": false,
+      "properties": {
+        "secret": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9+.-]*://" }
+      }
+    },
+    "keepRef": {
+      "type": "object",
+      "description": "Whatever value the resource has live. Written by `sponson init` when adopting.",
+      "required": ["keep"],
+      "additionalProperties": false,
+      "properties": {
+        "keep": { "const": true }
+      }
+    },
+    "literal": {
+      "type": ["string", "number", "boolean"]
+    },
+    "value": {
+      "description": "A literal, `{ from }`, `{ secret }` or `{ keep: true }`.",
+      "anyOf": [
+        { "$ref": "#/$defs/literal" },
+        { "$ref": "#/$defs/fromRef" },
+        { "$ref": "#/$defs/secretRef" },
+        { "$ref": "#/$defs/keepRef" }
+      ]
+    },
+    "stringOrRef": {
+      "anyOf": [
+        { "type": "string" },
+        { "$ref": "#/$defs/fromRef" }
+      ]
+    },
+    "noDisplayText": {
+      "description": "Text `sponson plan` prints for unresolved values must never be written back into the plan.",
+      "not": { "type": "string", "pattern": "^(\\((pending|secret)\\s*←|<(pending|secret)[:>])" }
+    },
+    "notSecretLiteral": {
+      "description": "Names ending in _KEY, _SECRET, _TOKEN, PASSWORD, _PASS, PASSWD or PRIVATE (any case) take a `{ secret }` reference, not a literal string or number.",
+      "not": { "type": ["string", "number"] }
+    },
+    "param": {
+      "description": "Any adapter parameter: a literal, a reference, a list, or a map. Applied recursively.",
+      "allOf": [
+        { "$ref": "#/$defs/noDisplayText" },
+        {
+          "if": { "type": "object", "required": ["from"], "properties": { "from": { "type": "string" } } },
+          "then": { "$ref": "#/$defs/fromRef" }
+        },
+        {
+          "if": { "type": "object", "required": ["secret"], "properties": { "secret": { "type": "string" } } },
+          "then": { "$ref": "#/$defs/secretRef" }
+        },
+        {
+          "if": { "type": "object", "required": ["keep"], "properties": { "keep": { "const": true } } },
+          "then": { "$ref": "#/$defs/keepRef" }
+        },
+        {
+          "if": { "type": "array" },
+          "then": { "items": { "$ref": "#/$defs/param" } }
+        },
+        {
+          "if": { "type": "object" },
+          "then": { "$ref": "#/$defs/paramMap" }
+        }
+      ]
+    },
+    "paramMap": {
+      "type": "object",
+      "patternProperties": {
+        "(_[Kk][Ee][Yy]|_[Ss][Ee][Cc][Rr][Ee][Tt]|_[Tt][Oo][Kk][Ee][Nn]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|_[Pp][Aa][Ss][Ss]|[Pp][Aa][Ss][Ss][Ww][Dd]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee])$": {
+          "$ref": "#/$defs/notSecretLiteral"
+        }
+      },
+      "additionalProperties": { "$ref": "#/$defs/param" }
+    },
+    "change": {
+      "type": "object",
+      "required": ["id", "adapter", "op"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk. Plugins (SPONSON_PLUGINS) add more." },
+        "op": { "type": "string", "minLength": 1 },
+        "environments": { "$ref": "#/$defs/nameList", "description": "Environments this line applies to. Absent: all." },
+        "depends_on": { "type": "array", "items": { "$ref": "#/$defs/id" }, "description": "Ordering without a data dependency. Prefer `from:` references." }
+      },
+      "allOf": [
+        { "$ref": "#/$defs/paramsOfChange" },
+        {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "neon" }, "op": { "const": "branch" } } },
+          "then": { "$ref": "#/$defs/op_neon_branch" }
+        },
+        {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "vercel" }, "op": { "const": "env" } } },
+          "then": { "$ref": "#/$defs/op_vercel_env" }
+        },
+        {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "vercel" }, "op": { "const": "deploy" } } },
+          "then": { "$ref": "#/$defs/op_vercel_deploy" }
+        },
+        {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "clerk" }, "op": { "const": "redirect_allow" } } },
+          "then": { "$ref": "#/$defs/op_clerk_redirect_allow" }
+        }
+      ]
+    },
+    "paramsOfChange": {
+      "description": "Every key other than id, adapter, op, environments and depends_on is a parameter of the op.",
+      "patternProperties": {
+        "(_[Kk][Ee][Yy]|_[Ss][Ee][Cc][Rr][Ee][Tt]|_[Tt][Oo][Kk][Ee][Nn]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|_[Pp][Aa][Ss][Ss]|[Pp][Aa][Ss][Ss][Ww][Dd]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee])$": {
+          "$ref": "#/$defs/notSecretLiteral"
+        }
+      },
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true
+      },
+      "additionalProperties": { "$ref": "#/$defs/param" }
+    },
+    "op_neon_branch": {
+      "description": "neon.branch: a Neon branch. Outputs: branch_id, connection_string (sensitive), host.",
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "parent": { "$ref": "#/$defs/stringOrRef", "description": "Parent branch name or id. Default: main." },
+        "name": { "$ref": "#/$defs/stringOrRef", "description": "Branch name. Default: sponson/${ctx.env}/${ctx.scope}. The branch is identified by its name." }
+      },
+      "additionalProperties": false
+    },
+    "op_vercel_env": {
+      "description": "vercel.env: environment variables in one Vercel target (and, for preview, one git branch). Outputs: preview_url and deployment_id, available after the deploy.",
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "target": {
+          "description": "preview, production or development. Default: production when --env production, else preview.",
+          "anyOf": [
+            { "enum": ["preview", "production", "development"] },
+            { "type": "string", "pattern": "\\$\\{ctx\\.[a-z_.]+\\}" }
+          ]
+        },
+        "branch": {
+          "type": "string",
+          "description": "Git branch the variables apply to (target preview only). Default: the current branch. `*` means project-wide (every branch)."
+        },
+        "values": {
+          "type": "object",
+          "description": "NAME: value. A value is a literal, `{ from }`, `{ secret }` or `{ keep: true }`.",
+          "additionalProperties": { "$ref": "#/$defs/value" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "op_vercel_deploy": {
+      "description": "vercel.deploy: a deployment of the current commit, made by Sponson. Outputs: preview_url, deployment_id (immediate). Takes no parameters.",
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true
+      },
+      "additionalProperties": false
+    },
+    "op_clerk_redirect_allow": {
+      "description": "clerk.redirect_allow: one allowed redirect URL. Output: id.",
+      "required": ["url"],
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "url": { "$ref": "#/$defs/stringOrRef", "description": "The URL to allow. Usually `{ from: <vercel.env line>.preview_url }`." }
+      },
+      "additionalProperties": false
+    }
+  }
+}

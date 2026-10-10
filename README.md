@@ -157,6 +157,21 @@ What the fake cannot prove is that the real APIs behave as assumed. The assumpti
 
 Format, engine, three adapters (Neon branches, Vercel env + deploy, Clerk redirect URLs), three secret sources, local and git-branch receipt stores, CLI, MCP server, GitHub Action. Not yet: feature-flag targeting, social-login callbacks beyond Clerk, a hosted approval inbox, garbage collection of scopes whose PR closed without the action running.
 
+## Documentation
+
+- [ARCHITECTURE.md](ARCHITECTURE.md): how a `plan` and an `apply` run through the code, the ledger, scopes, redaction.
+- [docs/plan-format.md](docs/plan-format.md): every key of `release.plan.yaml`, value forms, `${ctx.*}`, the built-in ops.
+- [docs/errors.md](docs/errors.md): every error code, its exit code and remedy (generated from the code).
+- [docs/adr/](docs/adr/README.md): the design decisions and why they were made.
+- [examples/](examples/README.md): complete, tested plans to start from.
+
+Editors with the YAML language server validate and complete the plan file from its JSON Schema. Add this as the first
+line of `release.plan.yaml`:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/sponson/sponson/main/schema/release.plan.schema.json
+```
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full adapter checklist: the adapter file, its registration (or a plugin loaded with `SPONSON_PLUGINS`), one sim routes file, and one scenario.

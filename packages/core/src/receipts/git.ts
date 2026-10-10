@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { rmSync } from "node:fs";
 import { mkdir, readFile, readdir, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
+import { setTimeout as sleep } from "node:timers/promises";
 import { SponsonError } from "../errors.js";
 import { LockHeldError, LockLostError, type LockInfo, type Receipt, type ReceiptStore } from "../types.js";
 import { latestPath, lockExpired, lockPath, parseLock, parseReceipt, receiptDir, runPath, serialize } from "./layout.js";
@@ -17,6 +17,7 @@ const MAX_REMOTE_REJECTIONS = 4;
 const BACKOFF_BASE_MS = 25;
 const BACKOFF_CAP_MS = 2_000;
 
+/** Options for `GitBranchReceiptStore`; only `remote` is required. */
 export interface GitBranchStoreOptions {
   /** Remote URL or path. Defaults to the `origin` of `cwd`. */
   remote: string;
@@ -24,7 +25,7 @@ export interface GitBranchStoreOptions {
   /**
    * Where the working clone lives. When given, it is used as-is (and kept).
    * Default: a fresh directory per store instance (remote hash + pid + random) under `<tmpdir>/sponson-receipts/`,
-   * created on first use and removed when the process exits. Processes never share a working clone.
+   * created on first use and removed by `close()`. Processes never share a working clone.
    */
   workdir?: string;
   /** Time budget for one store operation's retries on ref races. Default `SPONSON_STORE_BUDGET_MS`, else 60000. */
@@ -89,6 +90,7 @@ export class GitBranchReceiptStore implements ReceiptStore {
     return this.workdir;
   }
 
+  /** The `origin` remote URL of the repository at `cwd`, or null; the CLI's default receipts remote. */
   static async originOf(cwd: string): Promise<string | null> {
     try {
       const { stdout } = await exec("git", ["remote", "get-url", "origin"], { cwd });
@@ -224,6 +226,17 @@ export class GitBranchReceiptStore implements ReceiptStore {
     });
   }
 
+  /**
+   * Remove the working clone this instance created (a `workdir` you passed is kept). Call it when done with the
+   * store: an MCP server builds one per tool call. Using the store again afterwards starts a fresh clone.
+   */
+  async close(): Promise<void> {
+    return this.exclusive(async () => {
+      if (this.ownsWorkdir) await rm(this.workdir, { recursive: true, force: true });
+      this.initialized = false;
+    });
+  }
+
   // -------------------------------------------------------------------------
 
   private exclusive<T>(fn: () => Promise<T>): Promise<T> {
@@ -304,9 +317,8 @@ export class GitBranchReceiptStore implements ReceiptStore {
       return stdout;
     } catch (e) {
       const err = e as Error & { stderr?: string };
-      const clean = new Error(stripCredentials(err.message)) as Error & { stderr?: string };
-      clean.stderr = stripCredentials(String(err.stderr ?? ""));
-      clean.stack = stripCredentials(String(err.stack ?? ""));
+      const clean = new GitCommandError(stripCredentials(err.message), stripCredentials(err.stderr ?? ""));
+      clean.stack = stripCredentials(err.stack ?? "");
       throw clean;
     }
   }
@@ -321,7 +333,6 @@ export class GitBranchReceiptStore implements ReceiptStore {
   private async sync(): Promise<void> {
     if (!this.initialized) {
       await mkdir(this.workdir, { recursive: true });
-      if (this.ownsWorkdir) removeOnExit(this.workdir);
       const isRepo = await stat(join(this.workdir, ".git")).then(() => true, () => false);
       if (!isRepo) {
         await this.git(["init", "-q"]);
@@ -334,7 +345,7 @@ export class GitBranchReceiptStore implements ReceiptStore {
     try {
       await this.git(["fetch", "-q", "--depth=1", "origin", this.branch]);
     } catch (e) {
-      const msg = String((e as { stderr?: string }).stderr || (e as Error).message);
+      const msg = e instanceof GitCommandError ? e.stderr || e.message : String(e);
       if (/couldn't find remote ref/i.test(msg)) return this.startOrphan();
       throw this.classifyRemoteError(msg);
     }
@@ -379,8 +390,8 @@ export class GitBranchReceiptStore implements ReceiptStore {
       await this.git(["push", "-q", "origin", `${this.branch}:${this.branch}`]);
       return "ok";
     } catch (e) {
-      const err = e as { stderr?: string; message: string };
-      const msg = `${err.stderr ?? ""}\n${err.message}`;
+      if (!(e instanceof GitCommandError)) throw e;
+      const msg = `${e.stderr}\n${e.message}`;
       if (/\(fetch first\)|non-fast-forward|stale info|cannot lock ref|failed to update ref|incorrect old value|failed to lock|unable to update local ref/i.test(msg)) {
         return { kind: "race", detail: "non-fast-forward" };
       }
@@ -400,8 +411,18 @@ export class GitBranchReceiptStore implements ReceiptStore {
           .slice(0, 300);
         return { kind: "rejected", detail: stripCredentials(said || "rejected") };
       }
-      throw new Error(stripCredentials(err.message));
+      throw new Error(stripCredentials(e.message));
     }
+  }
+}
+
+/** A failed `git` invocation, with credentials already stripped from every field. */
+class GitCommandError extends Error {
+  constructor(
+    message: string,
+    readonly stderr: string,
+  ) {
+    super(message);
   }
 }
 
@@ -435,28 +456,6 @@ async function pruneEmpty(dir: string, stopAt: string): Promise<void> {
     }
     dir = dirname(dir);
   }
-}
-
-const ownedWorkdirs = new Set<string>();
-let exitHookInstalled = false;
-
-function removeOnExit(dir: string): void {
-  ownedWorkdirs.add(dir);
-  if (exitHookInstalled) return;
-  exitHookInstalled = true;
-  process.on("exit", () => {
-    for (const d of ownedWorkdirs) {
-      try {
-        rmSync(d, { recursive: true, force: true });
-      } catch {
-        /* best effort */
-      }
-    }
-  });
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
 }
 
 const RECEIPTS_README = `# Sponson receipts

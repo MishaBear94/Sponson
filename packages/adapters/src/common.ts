@@ -16,28 +16,55 @@ import { apiClient, isProviderError, type ApiClient } from "./http.js";
  * Anything else in this file is internal and may change.
  */
 
+/** A credential from the environment; PROVIDER_AUTH naming the variable when it is unset or blank. */
 export function requireEnv(env: NodeJS.ProcessEnv, name: string, adapter: string): string {
   const v = env[name];
   if (!v) throw new SponsonError("PROVIDER_AUTH", `${adapter}: environment variable ${name} is not set`, { adapter, variable: name });
   return v;
 }
 
+/** An optional setting from the environment (a base URL override); blank counts as unset. */
+export function optionalEnv(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  const v = env[name];
+  return v === undefined || v === "" ? undefined : v;
+}
+
+/**
+ * A `providers.<adapter>.<key>` string from the plan; PLAN_INVALID when missing. Use it for project and team
+ * ids.
+ */
 export function requireProvider(actx: AdapterContext, key: string, adapter: string): string {
   const v = actx.provider[key];
   if (typeof v !== "string" || v === "") throw new SponsonError("PLAN_INVALID", `${adapter}: providers.${adapter}.${key} is required in the plan`, { adapter, key });
   return v;
 }
 
+/** A `providers.<adapter>.<key>` string from the plan, or undefined. */
 export function optionalProvider(actx: AdapterContext, key: string): string | undefined {
   const v = actx.provider[key];
   return typeof v === "string" && v !== "" ? v : undefined;
 }
 
-/** The HTTP client for an adapter call: the context's environment sets the policy and its redactor masks error text. */
+/**
+ * The HTTP client for an adapter call: the context's environment sets the policy and its redactor masks error text.
+ *
+ * @example
+ * ```ts
+ * // inside an op's read():
+ * const token = requireEnv(actx.env, "ACME_TOKEN", "acme");
+ * const api = clientFor(actx, "acme", { baseUrl: "https://api.acme.dev", token });
+ * // Retries, timeouts and classification happen inside: a 404 throws PROVIDER_NOT_FOUND, and so on.
+ * const site = await api.get(`/sites/${stringParam(params, "name", "acme")}`);
+ * ```
+ */
 export function clientFor(actx: AdapterContext, adapter: string, opts: { baseUrl: string; token: string; authHeader?: "bearer" | `header:${string}` }): ApiClient {
   return apiClient({ adapter, ...opts, redact: actx.redact, env: actx.env });
 }
 
+/**
+ * The PARAM_INVALID error for a bad param, prefixed with the adapter name. Throw it from `diff`/`apply`
+ * validation.
+ */
 export function paramError(adapter: string, message: string, param: string): SponsonError {
   return new SponsonError("PARAM_INVALID", `${adapter}: ${message}`, { adapter, param });
 }
@@ -85,6 +112,10 @@ export function diffValue(opts: { key: string; label: string; live: ResourceReco
   return { key, kind: "update", label, before, after };
 }
 
+/**
+ * A string param, or `fallback` when absent or empty; PARAM_INVALID when missing without a fallback or not a
+ * string.
+ */
 export function stringParam(params: ResolvedParams, name: string, adapter: string, fallback?: string): string {
   const v = params[name];
   if (v === undefined || v === null || v === "") {

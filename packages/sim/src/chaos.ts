@@ -1,5 +1,7 @@
-/** Chaos configuration: what the fake cloud does wrong on purpose, and which requests it does it to. */
-
+/**
+ * Chaos configuration: what the fake cloud does wrong on purpose, and which requests it does it to. Set it with
+ * `POST /_chaos` or a seed's `chaos:`; counters (`*_next`) decrement per matching request.
+ */
 export interface ChaosConfig {
   latency_ms: number;
   /** Remaining requests (matching `fail_on`) that will fail with `status`. */
@@ -34,6 +36,7 @@ export interface ChaosConfig {
   env_upsert_fail: string[];
 }
 
+/** The body of `POST /_chaos`: any chaos settings to merge, plus drift to apply immediately. */
 export interface ChaosRequest extends Partial<ChaosConfig> {
   /** Applied immediately to state, not stored. */
   drift?: Record<string, string>;
@@ -42,6 +45,7 @@ export interface ChaosRequest extends Partial<ChaosConfig> {
 /** What chaos does to one request. */
 export type ChaosAction = { kind: "hold" } | { kind: "hang" } | { kind: "drop" } | { kind: "fail"; status: number; headers: Record<string, string> };
 
+/** No chaos: every request is answered normally and immediately. */
 export const DEFAULT_CHAOS: ChaosConfig = {
   latency_ms: 0,
   fail_next: 0,
@@ -56,6 +60,10 @@ export const DEFAULT_CHAOS: ChaosConfig = {
   env_upsert_fail: [],
 };
 
+/**
+ * Every key `POST /_chaos` accepts besides `drift`; anything else is rejected so a misspelt key cannot silently
+ * do nothing.
+ */
 export const CHAOS_KEYS = new Set<string>([...Object.keys(DEFAULT_CHAOS), "fail_on", "retry_after"]);
 
 /** A fresh default config (no shared arrays). */

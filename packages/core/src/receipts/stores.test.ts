@@ -246,7 +246,7 @@ describe("git-branch store", () => {
     const reader = await gitStore(remote);
     expect((await reader.list("preview")).map((s) => s.scope).sort()).toEqual(Array.from({ length: 8 }, (_, i) => `pr-${i}`));
     for (let i = 0; i < 8; i++) expect(await reader.readLock("preview", `pr-${i}`)).toBeNull();
-  });
+  }, 45_000); // longer than the 30s store budget it tests: only the product may give up first
 
   it("concurrent lockers on a fresh scope: one wins, the rest see the real holder", async () => {
     const remote = await bareRemote();
@@ -254,7 +254,7 @@ describe("git-branch store", () => {
     const results = await Promise.allSettled(lockers.map((l, i) => l.acquireLock("preview", "pr-1", `h${i}`, 60_000)));
     const won = results.flatMap((r, i) => (r.status === "fulfilled" ? [`h${i}`] : []));
     expect(won).toHaveLength(1);
-    for (const r of results) if (r.status === "rejected") expect((r.reason as LockHeldError).lock?.holder).toBe(won[0]);
+    for (const r of results) if (r.status === "rejected") expect((r.reason as LockHeldError).lock.holder).toBe(won[0]);
   });
 
   it("instances without a workdir get their own working clone (per process and per instance)", async () => {
@@ -267,6 +267,19 @@ describe("git-branch store", () => {
     await expect(stat(a.workingClone)).rejects.toThrow(); // created lazily
     await Promise.all([a.write(receipt("pr-1", "r1")), b.write(receipt("pr-2", "r2"))]);
     expect((await a.list("preview")).map((s) => s.scope).sort()).toEqual(["pr-1", "pr-2"]);
+    await Promise.all([a.close(), b.close()]);
+    await expect(stat(a.workingClone)).rejects.toThrow();
+    await expect(stat(b.workingClone)).rejects.toThrow();
+    // A closed store is still usable: it starts a fresh clone.
+    expect((await a.read("preview", "pr-1"))?.runId).toBe("r1");
+    await a.close();
+  });
+
+  it("close() keeps a working clone the caller passed in", async () => {
+    const store = await gitStore(await bareRemote());
+    await store.write(receipt("pr-1", "r1"));
+    await store.close();
+    expect((await stat(store.workingClone)).isDirectory()).toBe(true);
   });
 
   it("a receipt the remote keeps rejecting fails with STORE_REJECTED and is kept in the fallback file the error names", async () => {

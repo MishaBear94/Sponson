@@ -6,7 +6,6 @@ import {
   PLAN_FILENAME,
   type Redactor,
   SponsonError,
-  detectCtx,
   loadPlan,
   type Ctx,
   type Plan,
@@ -15,6 +14,7 @@ import {
   type Registry,
   type RunOptions,
 } from "@sponson/core";
+import { detectCtx, nonEmpty } from "./detect.js";
 
 /** Streams and environment for one in-process invocation. Tests and the MCP server supply their own. */
 export interface IO {
@@ -64,8 +64,21 @@ export function planPathFor(opts: GlobalOpts, io: IO): string {
   return resolve(io.cwd, opts.plan ?? PLAN_FILENAME);
 }
 
+/**
+ * Build the invocation, run `fn` with it, and close its receipt store whatever happens (a git-branch store
+ * owns a temporary working clone). Every command that needs an invocation goes through here.
+ */
+export async function withInvocation<T>(opts: GlobalOpts, io: IO, redactor: Redactor, fn: (inv: Invocation) => Promise<T>): Promise<T> {
+  const inv = await buildInvocation(opts, io, redactor);
+  try {
+    return await fn(inv);
+  } finally {
+    await inv.store.close?.();
+  }
+}
+
 /** Load the plan, detect the context, pick a receipt store and build the registry. */
-export async function buildInvocation(opts: GlobalOpts, io: IO, redactor: Redactor): Promise<Invocation> {
+async function buildInvocation(opts: GlobalOpts, io: IO, redactor: Redactor): Promise<Invocation> {
   const planPath = planPathFor(opts, io);
   const { plan, warnings: parseWarnings } = await loadPlan(planPath);
   const warnings = parseWarnings.map((w) => w.message);
@@ -114,9 +127,7 @@ export function resolveApprover(flag: unknown, env: NodeJS.ProcessEnv): string |
 }
 
 function cleanApprover(raw: unknown): string | undefined {
-  if (typeof raw !== "string") return undefined;
-  const t = raw.trim();
-  return t === "" ? undefined : t;
+  return typeof raw === "string" ? nonEmpty(raw) : undefined;
 }
 
 export function parsePr(raw: string | number | null | undefined): number | null | undefined {

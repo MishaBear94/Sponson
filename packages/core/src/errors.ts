@@ -8,6 +8,10 @@
  */
 export type ExitCode = 0 | 1 | 2 | 3;
 
+/**
+ * The entry `ERROR_CODES` keeps per code: its exit code, one line of documentation, and the CLI's remedy when
+ * there is one.
+ */
 export interface ErrorCodeSpec {
   exit: ExitCode;
   /** What the code means, for docs and agents. */
@@ -16,6 +20,10 @@ export interface ErrorCodeSpec {
   cliHint?: string;
 }
 
+/**
+ * Every error code Sponson can report, the single table that agents, the CLI and the docs read. Adding a code
+ * means adding it here.
+ */
 export const ERROR_CODES = {
   PLAN_PARSE: { exit: 2, doc: "The plan file cannot be read or is not valid YAML." },
   PLAN_INVALID: { exit: 2, doc: "The plan does not match the schema." },
@@ -67,6 +75,7 @@ export const ERROR_CODES = {
   STALE: { exit: 1, doc: "The commit is older than the last applied one; nothing was changed." },
 } as const satisfies Record<string, ErrorCodeSpec>;
 
+/** A stable machine-readable error code; branch on it rather than on messages. */
 export type ErrorCode = keyof typeof ERROR_CODES;
 
 /**
@@ -76,16 +85,23 @@ export const WARNING_CODES = {
   YAML_ANCHOR: { doc: "The plan uses YAML anchors/aliases; allowed, but hard to read." },
 } as const satisfies Record<string, { doc: string }>;
 
+/** A stable code for a parse warning. */
 export type WarningCode = keyof typeof WARNING_CODES;
 
+/** The process exit code for an error code (1 for one that is not in the table). */
 export function exitCodeFor(code: ErrorCode): ExitCode {
   return (ERROR_CODES[code] as ErrorCodeSpec | undefined)?.exit ?? 1;
 }
 
+/** The CLI remedy for an error code, if it has one. Library callers word their own remedies. */
 export function cliHintFor(code: ErrorCode): string | undefined {
   return (ERROR_CODES[code] as ErrorCodeSpec | undefined)?.cliHint;
 }
 
+/**
+ * The error every Sponson layer throws on purpose: a stable `code` from `ERROR_CODES`, a message that says what
+ * happened, and structured `details`. Adapters throw it too.
+ */
 export class SponsonError extends Error {
   constructor(
     public readonly code: ErrorCode,
@@ -101,6 +117,7 @@ export class SponsonError extends Error {
   }
 }
 
+/** Type guard for `SponsonError`; anything else that was thrown is unexpected. */
 export function isSponsonError(e: unknown): e is SponsonError {
   return e instanceof SponsonError;
 }

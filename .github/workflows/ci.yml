@@ -5,13 +5,28 @@ on:
     branches: [main]
   pull_request:
 
+# A new push to a PR supersedes the run for the previous push. Runs on main are never cancelled,
+# so every merged commit gets a complete result.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         node: [22, 24]
+        include:
+          # The CLI shells out to git and spawns node for MCP; catch path and process differences.
+          - os: macos-latest
+            node: 24
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -23,3 +38,80 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
+
+  coverage:
+    # Thresholds sit just under today's numbers (96.8% statements, 88.8% branches, 97.8% functions)
+    # so a PR that adds untested code fails here. Raise them when coverage rises; never lower them silently.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: vitest --coverage with thresholds
+        run: >-
+          pnpm exec vitest run --project unit --project scenarios --project property --coverage
+          --coverage.reporter=text-summary --coverage.reporter=text --coverage.reporter=json-summary
+          --coverage.thresholds.statements=95
+          --coverage.thresholds.branches=87
+          --coverage.thresholds.functions=95
+      - name: Coverage summary
+        if: always()
+        run: |
+          [ -f coverage/coverage-summary.json ] || exit 0
+          node -e '
+            const t = require("./coverage/coverage-summary.json").total;
+            const row = (k) => `| ${k} | ${t[k].pct}% | ${t[k].covered}/${t[k].total} |`;
+            console.log(["| metric | % | covered |", "|---|---|---|", ...["statements", "branches", "functions", "lines"].map(row)].join("\n"));
+          ' >> "$GITHUB_STEP_SUMMARY"
+
+  package:
+    # Builds from a clean checkout and packs every package exactly as `pnpm publish` would (publishConfig
+    # applied, workspace:* rewritten, prepack run), then installs the four tarballs into an empty project
+    # and runs the CLI. Catches missing files, broken exports and dist/src mix-ups before a release does.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build from clean
+        run: |
+          rm -rf packages/*/dist packages/*/*.tsbuildinfo
+          pnpm build
+      - name: Pack each package
+        run: pnpm -r --filter './packages/*' exec pnpm pack --pack-destination "$RUNNER_TEMP/packs"
+      - name: Check tarball contents
+        working-directory: ${{ runner.temp }}/packs
+        run: |
+          set -euo pipefail
+          for t in *.tgz; do
+            echo "::group::$t"
+            tar -tzf "$t" | sort
+            echo "::endgroup::"
+            for f in package/package.json package/README.md package/LICENSE package/dist/index.js package/dist/index.d.ts; do
+              tar -tzf "$t" | grep -qx "$f" || { echo "::error::$t is missing $f"; exit 1; }
+            done
+            if tar -tzf "$t" | grep -E '^package/(src/|.*\.test\.)'; then echo "::error::$t ships sources or tests"; exit 1; fi
+            tar -xOzf "$t" package/package.json | node -e '
+              const p = JSON.parse(require("fs").readFileSync(0, "utf8"));
+              const deps = JSON.stringify(p.dependencies ?? {});
+              if (p.main !== "./dist/index.js") throw new Error(`${p.name}: main is ${p.main}, publishConfig not applied`);
+              if (deps.includes("workspace:")) throw new Error(`${p.name}: workspace: protocol left in dependencies`);
+            '
+          done
+      - name: Install the tarballs and run the CLI
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/smoke" && cd "$RUNNER_TEMP/smoke"
+          npm init -y > /dev/null
+          npm install --no-audit --no-fund "$RUNNER_TEMP"/packs/*.tgz
+          test "$(npx --no-install sponson --version)" = "$(node -p 'require("'"$GITHUB_WORKSPACE"'/packages/cli/package.json").version')"
+          node --input-type=module -e 'const m = await import("sponson"); if (typeof m.run !== "function") throw new Error("sponson does not export run")'
+          node --input-type=module -e 'const m = await import("@sponson/adapters"); if (typeof m.createRegistry !== "function") throw new Error("no createRegistry")'

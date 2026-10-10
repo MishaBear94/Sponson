@@ -4,6 +4,7 @@ import type { AncestryCheck } from "./history.js";
 import type { Registry } from "../registry.js";
 import type { Ctx, Drift, LockInfo, Plan, Receipt, ReceiptStore, ResolvedValue, ResourceDiff } from "../types.js";
 
+/** Everything a `planRun`, `applyRun` or `destroyRun` needs. Only the first four are required. */
 export interface RunOptions {
   plan: Plan;
   ctx: Ctx;
@@ -28,8 +29,10 @@ export interface RunOptions {
   now?: () => Date;
 }
 
+/** What apply would do to a line: write it (`create`/`update`), nothing, wait for it, or refuse it. */
 export type PlanLineStatus = "create" | "update" | "unchanged" | "pending" | "blocked" | "error";
 
+/** One line of a plan result. */
 export interface PlanLine {
   id: string;
   adapter: string;
@@ -50,6 +53,7 @@ export interface PlanLine {
   errorCode?: ErrorCode;
 }
 
+/** What `planRun` returns: one entry per active line, scope-wide drift, and whether applying needs approval. */
 export interface PlanResult {
   environment: string;
   scope: string;
@@ -64,6 +68,7 @@ export interface PlanResult {
   requiresApproval: boolean;
 }
 
+/** What `applyRun` and `destroyRun` return: the receipt they wrote, drift seen on the way, and warnings for humans. */
 export interface ApplyResultSummary {
   receipt: Receipt;
   drift: Drift[];

@@ -57,6 +57,10 @@ export class Ledger {
   }
 }
 
+/**
+ * The ledger key of a resource: adapter, provider block and adapter key. Two entries with the same identity are
+ * the same resource.
+ */
 export function identity(adapter: string, provider: Record<string, unknown>, key: string): string {
   return `${adapter}|${canonicalJson(provider)}|${key}`;
 }

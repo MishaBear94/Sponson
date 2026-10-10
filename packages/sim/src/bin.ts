@@ -14,7 +14,7 @@ console.log(`sponson-sim listening on ${sim.url}`);
 console.log(`  ${Object.entries(simEnv(sim, { tokens: false })).map(([k, v]) => `${k}=${v}`).join("  ")}`);
 
 const stop = () => {
-  sim.close().finally(() => process.exit(0));
+  void sim.close().finally(() => process.exit(0));
 };
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);

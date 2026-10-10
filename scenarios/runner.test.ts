@@ -51,7 +51,8 @@ import { parse as parseYaml } from "yaml";
 import { describe, expect, it } from "vitest";
 import { startSim, type SimHandle, type SimSeed } from "@sponson/sim";
 import { createRegistry } from "@sponson/adapters";
-import { applyRun, detectCtx, loadPlan, LocalReceiptStore, parseReceipt, Redactor } from "@sponson/core";
+import { applyRun, loadPlan, LocalReceiptStore, parseReceipt, Redactor } from "@sponson/core";
+import { detectCtx } from "sponson";
 import { cliEnv, runCli, SHA, workspace, type Workspace } from "./support.js";
 
 interface Expect {

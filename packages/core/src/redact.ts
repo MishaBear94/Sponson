@@ -1,3 +1,23 @@
+/** What a masked value is replaced with. */
+export const MASK = "[REDACTED]";
+/** Values shorter than this are not masked (they would match ordinary words and JSON tokens). */
+export const MIN_REDACT_LENGTH = 4;
+/** Head/tail length used to catch a long value cut off by truncation. */
+const FRAGMENT_LENGTH = 16;
+/** A base64 run shorter than this is too likely to occur by chance in unrelated text. */
+const MIN_BASE64_LENGTH = 8;
+/** A line of a multi-line value is masked on its own (whitespace flattening) when at least this long. */
+const MIN_LINE_LENGTH = 8;
+
+/** Options for `Redactor.redactDeep`. */
+export interface RedactDeepOptions {
+  /**
+   * Object keys whose string values are structural (enums such as `status`, `kind`, `code`) and must
+   * not be rewritten: a secret that happens to equal "applied" must not turn a status into `[REDACTED]`.
+   */
+  skipKeys?: ReadonlySet<string>;
+}
+
 /**
  * The single redaction choke point. One instance lives for a whole command: the engine registers every
  * resolved secret, every sensitive output and every provider credential; every byte Sponson prints, logs
@@ -9,26 +29,18 @@
  * the password inside them. A long value is also masked when only its head or tail survives
  * truncation. Values shorter than 4 characters cannot be masked without destroying ordinary text;
  * they are counted so the CLI can warn (never echoing the value).
+ *
+ * Use one per command and pass it as `RunOptions.redactor`, so text you print yourself is masked with
+ * everything the engine registered.
+ *
+ * @example
+ * ```ts
+ * const redactor = new Redactor();
+ * const result = await planRun({ plan, ctx, registry, store, redactor });
+ * process.stdout.write(redactor.redact(myRendering(result)));      // text
+ * process.stdout.write(JSON.stringify(redactor.redactDeep(result))); // JSON: redact values, then serialize
+ * ```
  */
-
-export const MASK = "[REDACTED]";
-/** Values shorter than this are not masked (they would match ordinary words and JSON tokens). */
-export const MIN_REDACT_LENGTH = 4;
-/** Head/tail length used to catch a long value cut off by truncation. */
-const FRAGMENT_LENGTH = 16;
-/** A base64 run shorter than this is too likely to occur by chance in unrelated text. */
-const MIN_BASE64_LENGTH = 8;
-/** A line of a multi-line value is masked on its own (whitespace flattening) when at least this long. */
-const MIN_LINE_LENGTH = 8;
-
-export interface RedactDeepOptions {
-  /**
-   * Object keys whose string values are structural (enums such as `status`, `kind`, `code`) and must
-   * not be rewritten: a secret that happens to equal "applied" must not turn a status into `[REDACTED]`.
-   */
-  skipKeys?: ReadonlySet<string>;
-}
-
 export class Redactor {
   /** Every masked form → the raw value it came from (for `leaks`). */
   private readonly forms = new Map<string, string>();
@@ -38,6 +50,7 @@ export class Redactor {
   private readonly tooShort = new Set<string>();
   private sorted: string[] | null = null;
 
+  /** Mask `value` (in all its encodings) from now on. Null, undefined and empty values are ignored. */
   register(value: string | number | boolean | null | undefined): void {
     if (value === null || value === undefined) return;
     const v = String(value);

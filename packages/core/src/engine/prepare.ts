@@ -50,7 +50,7 @@ export function prepare(opts: RunOptions): Prepared {
         );
       }
     }
-    let p = interpolate(c.params, ctx, `line \`${c.id}\``) as Record<string, unknown>;
+    let p = interpolate(c.params, ctx, `line \`${c.id}\``);
     if (op.defaults) p = op.defaults(p, ctx);
     params.set(c.id, p);
     for (const r of secretRefs(p)) refs.add(r);

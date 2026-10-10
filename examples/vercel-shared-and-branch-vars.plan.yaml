@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/sponson/sponson/main/schema/release.plan.schema.json
+#
+# Vercel variables at three levels: project-wide preview variables, variables for one
+# preview branch, and production variables. No database; Vercel only.
+version: 1
+environments: [preview, production]
+providers:
+  vercel: { project: prj_acme_web, team: team_acme }   # `team` only for projects owned by a team
+
+changes:
+  # Project-wide preview variables (`branch: "*"`): every preview deployment sees them,
+  # whatever its git branch. They belong to the scope that first applies them; apply this
+  # plan from the default branch first so that scope is `main`, which is never destroyed.
+  - id: preview-shared
+    adapter: vercel
+    op: env
+    target: preview
+    branch: "*"
+    values:
+      NEXT_PUBLIC_API_BASE: https://api.staging.acme.dev
+      SENTRY_AUTH_TOKEN: { secret: "env://SENTRY_AUTH_TOKEN" }
+    environments: [preview]
+
+  # Variables for the current git branch only (the default for target preview).
+  # `${ctx.*}` is interpolated into strings before the adapter sees them.
+  - id: preview-branch
+    adapter: vercel
+    op: env
+    target: preview
+    values:
+      NEXT_PUBLIC_SCOPE: "${ctx.scope}"           # pr-42, branch-feat-x or main
+      NEXT_PUBLIC_COMMIT: "${ctx.git.short_sha}"
+    environments: [preview]
+
+  # Production. Applying it needs `--env production --approved-by <who>`.
+  - id: production
+    adapter: vercel
+    op: env
+    target: production
+    values:
+      NEXT_PUBLIC_API_BASE: https://api.acme.dev
+      SENTRY_AUTH_TOKEN: { secret: "env://SENTRY_AUTH_TOKEN" }
+    environments: [production]

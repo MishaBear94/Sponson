@@ -11,20 +11,26 @@
   "scripts": {
     "build": "pnpm -r --filter './packages/*' run build",
     "typecheck": "tsc -b && tsc -p tsconfig.test.json",
-    "test": "vitest run",
+    "test": "vitest run --project unit --project scenarios --project property && vitest run --project tooling",
     "test:watch": "vitest",
     "test:scenarios": "vitest run --project scenarios",
     "test:property": "vitest run --project property",
     "lint": "eslint .",
     "sim": "tsx packages/sim/src/bin.ts",
     "sponson": "tsx packages/cli/src/bin.ts",
+    "new:adapter": "tsx scripts/new-adapter.ts",
     "test:live": "SPONSON_LIVE=1 vitest run --project scenarios scenarios/contract.test.ts",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "docs:gen": "tsx scripts/gen-docs.ts",
+    "changeset": "changeset",
+    "test:tooling": "vitest run --project tooling"
   },
   "devDependencies": {
+    "@changesets/cli": "^3.0.3",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@types/node": "^24.3.0",
     "@vitest/coverage-v8": "^3.2.7",
+    "ajv": "^8.20.0",
     "eslint": "^9.34.0",
     "fast-check": "^4.3.0",
     "tsx": "^4.20.5",

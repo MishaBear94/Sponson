@@ -10,14 +10,20 @@ export interface LineOutputs {
 /** Marker placed into params for values that are not known yet. Adapters compare on shape when they see it. */
 const PENDING_PREFIX = "\u0000pending:";
 
+/**
+ * The marker that stands in a param for the output reference `ref` until it is known. Engine-internal; adapters
+ * classify markers with `markerKind`.
+ */
 export function pendingMarker(ref: string): string {
   return PENDING_PREFIX + ref;
 }
 
+/** True for a pending or secret marker. Adapters should prefer `markerKind`, which tells the two apart. */
 export function isPendingMarker(v: unknown): v is string {
   return typeof v === "string" && v.startsWith(PENDING_PREFIX);
 }
 
+/** The reference a pending marker stands for (`db.connection_string`, `env://KEY`), for display in diffs. */
 export function pendingRef(marker: string): string {
   return marker.slice(PENDING_PREFIX.length);
 }
@@ -29,6 +35,7 @@ export function isKeepMarker(v: unknown): v is string {
   return v === KEEP_MARKER;
 }
 
+/** The kinds of marker a resolved param leaf can be; see the marker contract on `OpSpec`. */
 export type MarkerKind = "pending" | "secret" | "keep";
 
 /**
@@ -41,6 +48,7 @@ export function markerKind(v: unknown): MarkerKind | null {
   return pendingRef(v).includes("://") ? "secret" : "pending";
 }
 
+/** Params with references replaced, plus what plan output needs to show about each reference. */
 export interface ResolveResult {
   /** Params with every reference replaced: literals, resolved values, pending markers, or secret values when provided. */
   params: ResolvedParams;

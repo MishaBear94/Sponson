@@ -13,5 +13,5 @@
       "sponson": ["packages/cli/src/index.ts"]
     }
   },
-  "include": ["packages/*/src/**/*.test.ts", "packages/adapters/src/testing.ts", "scenarios/**/*.ts", "property/**/*.ts", "vitest.config.ts"]
+  "include": ["packages/*/src/**/*.test.ts", "packages/adapters/src/testing.ts", "scenarios/**/*.ts", "property/**/*.ts", "scripts/**/*.ts", "vitest.config.ts"]
 }

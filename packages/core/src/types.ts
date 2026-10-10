@@ -33,22 +33,28 @@ export interface KeepRef {
   keep: true;
 }
 
+/** A concrete param or output value. Outputs are always literals; anything richer is serialised by the adapter. */
 export type Literal = string | number | boolean;
 
+/** What a plan param may hold: a literal, or a reference resolved by the engine (`from`, `secret`, `keep`). */
 export type ValueSpec = Literal | FromRef | SecretRef | KeepRef;
 
+/** True for `{ from: "line.output" }`. Use the `is*Ref` guards rather than inspecting objects by hand. */
 export function isFromRef(v: unknown): v is FromRef {
-  return typeof v === "object" && v !== null && "from" in v && typeof (v as FromRef).from === "string";
+  return typeof v === "object" && v !== null && "from" in v && typeof v.from === "string";
 }
 
+/** True for `{ keep: true }`. */
 export function isKeepRef(v: unknown): v is KeepRef {
-  return typeof v === "object" && v !== null && "keep" in v && (v as KeepRef).keep === true;
+  return typeof v === "object" && v !== null && "keep" in v && v.keep === true;
 }
 
+/** True for `{ secret: "scheme://..." }`. */
 export function isSecretRef(v: unknown): v is SecretRef {
-  return typeof v === "object" && v !== null && "secret" in v && typeof (v as SecretRef).secret === "string";
+  return typeof v === "object" && v !== null && "secret" in v && typeof v.secret === "string";
 }
 
+/** One line of the plan: which adapter op to run, where, and with what params. `parsePlan` produces them. */
 export interface Change {
   id: string;
   adapter: string;
@@ -61,6 +67,7 @@ export interface Change {
   params: Record<string, unknown>;
 }
 
+/** A parsed and validated `release.plan.yaml`. Get one from `loadPlan` or `parsePlan`; every run takes one. */
 export interface Plan {
   version: 1;
   /** Declared environments. Used to validate `--env`. */
@@ -80,6 +87,10 @@ export interface Plan {
 // Runtime context
 // ---------------------------------------------------------------------------
 
+/**
+ * Where a run happens: environment, commit and pull request, and the scope derived from them. Build it with
+ * `detectCtx` (package `sponson`) or by hand with `scopeFor`.
+ */
 export interface Ctx {
   env: string;
   git: { branch: string; sha: string; short_sha: string };
@@ -92,8 +103,10 @@ export interface Ctx {
 // Resolved values
 // ---------------------------------------------------------------------------
 
+/** How a param value stands at plan time; see `ResolvedValue`. */
 export type ValueState = "literal" | "resolved" | "pending" | "secret" | "kept";
 
+/** One param as plan output shows it: its state, and its value only when it may be displayed. */
 export interface ResolvedValue {
   state: ValueState;
   /** null when pending or secret (or resolved but sensitive). */
@@ -110,6 +123,7 @@ export interface ResolvedValue {
 // Adapters
 // ---------------------------------------------------------------------------
 
+/** Declares one output of an op: when it becomes known, and whether it must never be shown. */
 export interface OutputSpec {
   /** immediate: known once this line is applied. external: known only after an event the adapter can observe. */
   available: "immediate" | "external";
@@ -137,12 +151,14 @@ export interface ResourceRecord {
   createdBy?: "sponson" | "adopted";
 }
 
+/** What `OpSpec.read` found in the provider for one line: its resources and the outputs derivable from them. */
 export interface LiveState {
   resources: ResourceRecord[];
   /** Outputs derivable from live state right now. Sensitive ones are still returned here; the engine masks them. */
   outputs: Record<string, Literal>;
 }
 
+/** What apply would do to one resource. */
 export type DiffKind = "create" | "update" | "unchanged";
 
 /**
@@ -157,6 +173,10 @@ export interface DiffSide {
   ref?: string;
 }
 
+/**
+ * One resource's difference between live and desired, as `OpSpec.diff` returns it. Data only; renderers format
+ * it.
+ */
 export interface ResourceDiff {
   key: string;
   kind: DiffKind;
@@ -165,6 +185,7 @@ export interface ResourceDiff {
   after?: DiffSide;
 }
 
+/** What `OpSpec.apply` returns: everything the line now manages, its outputs, and which keys it created. */
 export interface ApplyResult {
   /** Every resource this change now manages (not only the ones written in this call). */
   resources: ResourceRecord[];
@@ -178,6 +199,10 @@ export interface ApplyResult {
 /** Parameters after every ValueSpec has been replaced with its concrete value. */
 export type ResolvedParams = Record<string, unknown>;
 
+/**
+ * What the engine hands every adapter call: the run context, the plan's provider block, the environment for
+ * credentials, logging and redaction, and `intend` for crash-safe creates. Adapters name it `actx` by convention.
+ */
 export interface AdapterContext {
   ctx: Ctx;
   /** The `providers.<adapter>` block of the plan. */
@@ -265,11 +290,52 @@ export interface OpSpec {
   adopt?(resources: Array<Pick<ResourceRecord, "key" | "label"> & { id?: string }>, ctx: Ctx): AdoptedLine[];
 }
 
+/**
+ * A provider integration: a name (the plan's `adapter:`) and its ops. Register it with `Registry.addAdapter`;
+ * see `OpSpec` for the contract and `@sponson/core/testing` for a complete in-memory adapter.
+ *
+ * @example
+ * ```ts
+ * // `- { id: hello, adapter: memo, op: note, name: hello, value: world }` in a plan
+ * const notes = new Map<string, { id: string; value: string }>();
+ * const key = (params: ResolvedParams) => `note:${String(params.name)}`;
+ *
+ * export const memo: ResourceAdapter = {
+ *   name: "memo",
+ *   ops: {
+ *     note: {
+ *       outputs: { id: { available: "immediate" } },
+ *       async read(_actx, params) {
+ *         const n = notes.get(key(params));
+ *         return n ? { resources: [{ key: key(params), id: n.id, hash: sha256(n.value) }], outputs: { id: n.id } } : null;
+ *       },
+ *       diff(live, params) {
+ *         return [diffValue({ key: key(params), label: key(params), live: live?.resources[0], desired: params.value, sensitive: false })];
+ *       },
+ *       async apply(actx, params, live) {
+ *         if (!live) await actx.intend([key(params)]); // always before a create
+ *         const note = { id: live?.resources[0]?.id ?? `n${notes.size + 1}`, value: String(params.value) };
+ *         notes.set(key(params), note);
+ *         const resources = [{ key: key(params), id: note.id, hash: sha256(note.value) }];
+ *         return { resources, outputs: { id: note.id }, created: live ? [] : [key(params)] };
+ *       },
+ *       async destroy(_actx, resources) {
+ *         for (const r of resources) notes.delete(r.key);
+ *       },
+ *     },
+ *   },
+ * };
+ * ```
+ */
 export interface ResourceAdapter {
   name: string;
   ops: Record<string, OpSpec>;
 }
 
+/**
+ * Resolves `{ secret: "<scheme>://..." }` references. Register one with `Registry.addSecretSource` to support a
+ * new secret manager.
+ */
 export interface SecretSource {
   /** URL scheme, e.g. `env`, `doppler`, `op`. */
   scheme: string;
@@ -281,6 +347,7 @@ export interface SecretSource {
 // Receipts
 // ---------------------------------------------------------------------------
 
+/** What a run did to one line, as recorded in its receipt. */
 export type LineStatus =
   | "applied"
   | "unchanged"
@@ -293,8 +360,10 @@ export type LineStatus =
   | "destroy_failed"
   | "blocked";
 
+/** Outcome of a whole run: `partial` means lines wait on an external event (a deploy), not that anything failed. */
 export type RunStatus = "complete" | "partial" | "failed";
 
+/** One line of a receipt: what the run did to it, the resources it manages and its public outputs. */
 export interface ReceiptLine {
   id: string;
   adapter: string;
@@ -344,6 +413,10 @@ export interface LedgerEntry {
   outputs?: Record<string, Literal>;
 }
 
+/**
+ * The record of one run for an environment and scope, and the ledger it leaves behind. Stores persist it; agents
+ * read it to learn what actually happened.
+ */
 export interface Receipt {
   version: 2;
   runId: string;
@@ -374,12 +447,17 @@ export interface Receipt {
   supersededBy?: string;
 }
 
+/** The scope lock as stored: who holds it and until when. */
 export interface LockInfo {
   holder: string;
   acquiredAt: string;
   expiresAt: string;
 }
 
+/**
+ * Where receipts and scope locks live. Implement it to keep receipts somewhere other than a git branch or a
+ * directory; `scenarios/` and `receipts/stores.test.ts` show the behaviour each method must have.
+ */
 export interface ReceiptStore {
   readonly kind: string;
   /** Latest receipt for this environment+scope, or null. */
@@ -397,8 +475,11 @@ export interface ReceiptStore {
   /** Current lock, or null. Never throws for a missing/unreadable lock. */
   readLock(environment: string, scope: string): Promise<LockInfo | null>;
   releaseLock(environment: string, scope: string, holder: string): Promise<void>;
+  /** Release what the store holds locally (a temporary working clone). Whoever constructed the store calls it once done. */
+  close?(): Promise<void>;
 }
 
+/** Thrown by a store when a fenced write or renewal finds the lock held by someone else (or gone). */
 export class LockLostError extends Error {
   constructor(public readonly holder: string, public readonly current: LockInfo | null) {
     super(`Lock for this scope is no longer held by ${holder}${current ? ` (now ${current.holder})` : ""}`);
@@ -406,6 +487,7 @@ export class LockLostError extends Error {
   }
 }
 
+/** Thrown by `acquireLock` when another holder's lock has not expired. */
 export class LockHeldError extends Error {
   constructor(public readonly lock: LockInfo) {
     super(`Scope is locked by ${lock.holder} until ${lock.expiresAt}`);
@@ -417,8 +499,13 @@ export class LockHeldError extends Error {
 // Drift
 // ---------------------------------------------------------------------------
 
+/**
+ * How live state departs from what Sponson recorded: an unknown resource, a changed or missing one, or one no
+ * line declares any more.
+ */
 export type DriftKind = "unmanaged" | "changed" | "missing" | "orphan";
 
+/** One finding of drift, reported by plan and apply. `unmanaged` findings are what `sponson init` can adopt. */
 export interface Drift {
   kind: DriftKind;
   adapter: string;
