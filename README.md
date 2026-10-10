@@ -3,6 +3,7 @@
 [![ci](https://github.com/MishaBear94/Sponson/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MishaBear94/Sponson/actions/workflows/ci.yml)
 [![license: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![node: >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
+[![docs](https://img.shields.io/badge/docs-sponson.mintlify.site-0D9373.svg)](https://sponson.mintlify.site)
 
 Sponson is the plan for everything that ships beside the code.
 

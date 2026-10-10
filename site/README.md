@@ -45,5 +45,5 @@ mint a11y                # colour contrast and alt text
 4. Turn on **docs.json is in a subdirectory** (the monorepo setting) and enter the path `/site` (no trailing
    slash). Save changes; this triggers the first deployment.
 
-From then on every push to `main` deploys the site. The site's address is shown in the dashboard; a custom domain
-can be added there later.
+From then on every push to `main` deploys the site, which lives at <https://sponson.mintlify.site>. A custom domain
+can be added in the dashboard later.
