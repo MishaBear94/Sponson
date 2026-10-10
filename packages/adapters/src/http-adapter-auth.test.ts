@@ -332,3 +332,50 @@ describe("auth: the provider block", () => {
     expect(() => parseAuth({ oauth2_client_credentials: { ...oauth, client_secret: "x" } }, w)).toThrow(/unknown key `client_secret`/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Header credentials: a scheme prefix (Flagsmith), several headers (Datadog)
+// ---------------------------------------------------------------------------
+
+describe("auth: header with a prefix, and several headers", () => {
+  const FLAG = { api: "x", find: { path: "/flags", list_path: "/data", match: { name: "checkout" } }, create: { path: "/flags" }, delete: { path: "/flags/{id}" }, item_path: "/data", fields: { enabled: true } };
+
+  it("a prefix is sent before the credential (`Authorization: Api-Key <key>`) and the server accepts exactly that", async () => {
+    await start({ rest: { collections: { "/flags": [] }, auth: { headers: [{ authorization: "Api-Key fs-server-key-0042" }] } } });
+    const block = { base_url: "https://api.flagsmith.com/api/v1", base_url_env: "REST_API_URL", auth: { header: "Authorization", value_env: "FLAGSMITH_API_KEY", prefix: "Api-Key " } };
+    const { actx } = run({ FLAGSMITH_API_KEY: "fs-server-key-0042" }, block);
+    expect((await applyOnce(resource, actx, FLAG)).created).toHaveLength(1);
+    // Without the prefix (or with another one) the same key is refused.
+    const bare = { ...block, auth: { header: "Authorization", value_env: "FLAGSMITH_API_KEY" } };
+    expect(await failure(resource.read(run({ FLAGSMITH_API_KEY: "fs-server-key-0042" }, bare).actx, FLAG))).toMatchObject({ code: "PROVIDER_AUTH" });
+    const token = { ...block, auth: { ...block.auth, prefix: "Token " } };
+    expect(await failure(resource.read(run({ FLAGSMITH_API_KEY: "fs-server-key-0042" }, token).actx, FLAG))).toMatchObject({ code: "PROVIDER_AUTH" });
+  });
+
+  it("several credential headers are all sent; the server needs every one", async () => {
+    await start({ rest: { collections: { "/flags": [] }, auth: { headers: [{ "dd-api-key": "dd-api-key-0042", "dd-application-key": "dd-app-key-0042" }] } } });
+    const block = { base_url: "https://api.datadoghq.com/api/v1", base_url_env: "REST_API_URL", auth: { headers: [{ header: "DD-API-KEY", value_env: "DATADOG_API_KEY" }, { header: "DD-APPLICATION-KEY", value_env: "DATADOG_APP_KEY" }] } };
+    const { actx } = run({ DATADOG_API_KEY: "dd-api-key-0042", DATADOG_APP_KEY: "dd-app-key-0042" }, block);
+    expect((await applyOnce(resource, actx, FLAG)).created).toHaveLength(1);
+    const unset = await failure(resource.read(run({ DATADOG_API_KEY: "dd-api-key-0042", DATADOG_APP_KEY: "" }, block).actx, FLAG));
+    expect(unset).toMatchObject({ code: "PROVIDER_AUTH", message: expect.stringContaining("DATADOG_APP_KEY is not set") });
+    const wrong = await failure(resource.read(run({ DATADOG_API_KEY: "dd-api-key-0042", DATADOG_APP_KEY: "wrong-app-key-9999" }, block).actx, FLAG));
+    expect(wrong.code).toBe("PROVIDER_AUTH");
+    expect(wrong.message).not.toContain("wrong-app-key-9999");
+  });
+
+  it("refuses a prefix that is not literal text, and a header list that is malformed", () => {
+    const w = "providers.http.x.auth";
+    const header = { header: "Authorization", value_env: "FLAGSMITH_API_KEY" };
+    expect(parseAuth({ ...header, prefix: "Token " }, w)).toEqual({ kind: "header", header: "Authorization", env: "FLAGSMITH_API_KEY", prefix: "Token " });
+    for (const prefix of [{ from: "x.y" }, "", "${ctx.scope} ", "$KEY ", "Api-Key\n", "x".repeat(65)]) expect(() => parseAuth({ ...header, prefix }, w), JSON.stringify(prefix)).toThrow(/prefix/);
+    expect(() => parseAuth({ ...header, value: "x" }, w)).toThrow(/unknown key `value`/);
+    expect(() => parseAuth({ bearer_env: "A_TOKEN", prefix: "x" }, w)).toThrow(/unknown key `prefix`/);
+    expect(() => parseAuth({ header: "Content-Type", value_env: "A_KEY" }, w)).toThrow(/set by Sponson/);
+    expect(() => parseAuth({ headers: [] }, w)).toThrow(/list of/);
+    expect(() => parseAuth({ headers: ["DD-API-KEY"] }, w)).toThrow(/header, value_env/);
+    expect(() => parseAuth({ headers: [{ header: "DD-API-KEY", value_env: "DD_KEY" }, { header: "dd-api-key", value_env: "OTHER_KEY" }] }, w)).toThrow(/twice/);
+    expect(() => parseAuth({ headers: [{ header: "DD-API-KEY", value_env: "DD_ID" }] }, w)).toThrow(/must end in TOKEN/);
+    expect(() => parseAuth({ headers: [{ header: "DD-API-KEY", value_env: "DD_KEY" }], bearer_env: "X_TOKEN" }, w)).toThrow(/unknown key/);
+  });
+});

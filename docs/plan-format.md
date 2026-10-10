@@ -69,7 +69,7 @@ Each change ("line") is one adapter op:
 | Key | Type | Meaning |
 |---|---|---|
 | `id` | string matching `^[a-z][a-z0-9_-]*$` | Unique within the plan. Other lines refer to it in `from:` and `depends_on`. Receipts key line results by it. |
-| `adapter` | non-empty string | `neon`, `vercel`, `clerk`, `http`, or one added by a plugin (`SPONSON_PLUGINS`). Unknown: `ADAPTER_UNKNOWN`. |
+| `adapter` | non-empty string | A [built-in adapter](#built-in-ops) (`neon`, `vercel`, `clerk`, `http`, `manual`, …), or one added by a plugin (`SPONSON_PLUGINS`). Unknown: `ADAPTER_UNKNOWN`. |
 | `op` | non-empty string | An op of that adapter. Unknown: `OP_UNKNOWN`. |
 | `environments` | non-empty list of declared environment names | The line applies only in these environments. Absent: every environment. |
 | `depends_on` | list of ids | Run after these lines although no value flows between them. Prefer `from:` references, which imply the order. |
@@ -201,9 +201,26 @@ A line may not reference a line that the filter removed: that is `REF_FILTERED`,
 change.
 
 **Approval.** A run needs an approver (`--approved-by <who>` or `SPONSON_APPROVED_BY`) when it can write to
-production: when `--env production`, or when any active line writes to production whatever the run's environment
-(`vercel.env` with `target: production`). Without one, `apply` is refused with `ENV_NOT_APPROVED` before any provider
-is called. `plan --json` reports `requiresApproval: true` in both cases. A blank name is no name.
+production: when `--env production`, or when any active line writes to production whatever the run's environment.
+An op decides that from the line or from the provider block it writes through, before any provider call:
+
+| Op | Writes production when |
+|---|---|
+| `vercel.env` | `target: production` (or no `target` under `--env production`) |
+| `vercel.deploy` | `--env production` |
+| `launchdarkly.flag_target` | `providers.launchdarkly.production: true`, or, without that key, an `environment` key containing `prod` in any case (`production`, `prod-eu`); `production: false` opts a key such as `preprod` out |
+| `netlify.env` | `context: production` (or no `context` under `--env production`) |
+| `cloudflare.pages_env` | `target: production` (or no `target` under `--env production`) |
+| `http.resource`, `http.list_item` | the line's API block says `production: true` (a recipe line's resolved block too) |
+
+Without an approver, `apply` is refused with `ENV_NOT_APPROVED` before any provider is called. `plan --json` reports
+`requiresApproval: true` in both cases. A blank name is no name.
+
+The other ops never decide by themselves: `neon.branch`, `supabase.branch` and `planetscale.branch` create preview
+branches, never the production one. Lines that write a production object through a credential or a name the plan
+cannot judge (a Clerk production instance's `sk_live_` key, a `planetscale.password` on the production branch, the
+parent project's `supabase.auth_redirect` allow-list) are gated only when they run under `--env production`: give
+such lines `environments: [production]`.
 
 YAML anchors and aliases are allowed but produce the warning `YAML_ANCHOR`: repeated lines are easier to review.
 
@@ -232,6 +249,8 @@ The base URL override replaces the provider's API base URL (the test suites poin
 | `http` | [`http.resource`](#httpresource), [`http.list_item`](#httplist_item) | `providers.http.<api>.auth` | `providers.http.<api>.base_url_env` |
 | `supabase` | [`supabase.branch`](#supabasebranch), [`supabase.auth_redirect`](#supabaseauth_redirect) | `SUPABASE_ACCESS_TOKEN` | `SUPABASE_API_URL` |
 | `netlify` | [`netlify.env`](#netlifyenv) | `NETLIFY_AUTH_TOKEN` | `NETLIFY_API_URL` |
+| `cloudflare` | [`cloudflare.pages_env`](#cloudflarepages_env) | `CLOUDFLARE_API_TOKEN` | `CLOUDFLARE_API_URL` |
+| `manual` | [`manual.step`](#manualstep) | `none (verify: providers.manual.<api>.auth, optional)` | `providers.manual.<api>.base_url_env` |
 <!-- generated:adapters:end -->
 
 A missing credential fails the line with `PROVIDER_AUTH`. Every resource has a key that identifies it within the
@@ -320,6 +339,13 @@ values again (except in `dev`), so such a value is written on every apply. A var
 deploy contexts fails the line with `PROVIDER_CONFLICT`: give it per-context values in the Netlify UI first.
 Destroy deletes the line's values one by one, then deletes a variable only when no value is left in it.
 
+A variable is shared by every scope that writes a value of it, so `netlify.env` lines lock the site's variables,
+parent object `netlify:<site>:env` ([ADR 0019](adr/0019-parent-object-locks.md)): lines of different pull requests
+on one site write, roll back and destroy one at a time. Two pull requests creating the same variable at once, or one
+destroying the variable's last value while another adds its own, therefore never lose a value. The lock is per site,
+not per variable, because a lock names one object per line and a line declares several variables; lines of other
+sites never wait for each other.
+
 `preview_url`, `deploy_id` and `deploy_preview_url` are external outputs: they become available when the newest
 deploy of the current commit that reads the line's context (production deploys for `production`, Deploy Previews
 for `deploy-preview`, branch deploys for `branch-deploy`, and both for `branch`) is `ready` **and started after the
@@ -402,6 +428,12 @@ environment: typically a flag turned on for a pull request's preview. Requires `
 project key) and `providers.launchdarkly.environment` (the environment key, usually a preview or test environment).
 The flag must already exist; Sponson never creates or deletes flags, and never turns a flag on or off.
 
+A block whose environment is production needs [approval](#environments) for every run, even under `--env preview`:
+`production: true` in the block says so; without the key, an environment key containing `prod` (any case) counts as
+production, and `production: false` says a key such as `preprod` is not. The provider block is part of each target's
+identity, so set `production` before the first apply (adding it later re-identifies the targets, as editing any
+provider key does).
+
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
 | `flag` | string | (required) | The flag key. An unknown flag, or an environment the project lacks, is `PROVIDER_NOT_FOUND`. |
@@ -451,9 +483,11 @@ comma-separated string, `uri_allow_list`.
 | `project` | string | `providers.supabase.project` | The ref of the project whose allow-list to edit. A preview branch is a project with its own Auth config, so a preview that talks to its branch sets `project: { from: db.project_ref }`. When set, it is part of the key (`redirect:<project>:<url>`). |
 
 `apply` reads the list, appends the URL and writes the whole field back (a `PATCH` carrying only `uri_allow_list`),
-then reads it again to confirm. The API offers no precondition, so a concurrent edit can overwrite the write; the
-re-read notices and the round is repeated (three times, then `PROVIDER_CONFLICT`). A URL already on the list is taken
-over, not duplicated. Destroy removes exactly that entry and leaves every other entry in place; when the project is
+then reads it again to confirm. The API offers no precondition, so every pull request and environment adding a URL
+to one project's list writes it holding a lock on that list, `supabase:<project ref>:auth-uri-allow-list`
+([ADR 0019](adr/0019-parent-object-locks.md)): Sponson's writers never lose each other's entries. An edit made in the
+dashboard at the same moment can still overwrite the write; the re-read notices and the round is repeated (three
+times, then `PROVIDER_CONFLICT`). A URL already on the list is taken over, not duplicated. Destroy removes exactly that entry and leaves every other entry in place; when the project is
 already gone (a branch deleted first), there is nothing to remove. For drift and adoption, every URL on the list of
 `providers.supabase.project` is in scope.
 
@@ -490,6 +524,7 @@ providers:
 | `headers` | map: header → string | Optional static headers (an API version pin, Google's `x-goog-user-project`). `Authorization`, `Accept` and `Content-Type` are Sponson's. |
 | `encoding` | `json` \| `form` \| `xml` | Request bodies as JSON (default), `application/x-www-form-urlencoded` (nested as `a[b]=c` and `a[0]=c`), or XML. Answers are read as JSON, except with `xml`; see [XML APIs](#xml-apis). |
 | `media_type` | media type | Optional, JSON only: a versioned media type sent as `Accept` and as the `Content-Type` of bodies (MongoDB Atlas: `application/vnd.atlas.2023-01-01+json`). |
+| `production` | boolean | Optional. `true` for a production system (a live Stripe account, a production tenant): every line through this API needs [approval](#environments), whatever the run's environment. |
 
 A malformed block, or a line naming an API that is not configured, is `PLAN_INVALID` before any request is sent;
 a malformed line is `PARAM_INVALID` naming the field. Paths take `{id}` (the object's id, once known) and
@@ -502,7 +537,8 @@ name (`url`) or a JSON pointer (`/config/url`); write a key that is literally `f
 | Form | Sends | For |
 |---|---|---|
 | `{ bearer_env: NAME }` | `Authorization: Bearer <value>` | most APIs |
-| `{ header: X-Api-Key, value_env: NAME }` | the value in that header, as it is | API-key headers; `Authorization` with a token that carries its own scheme (Fly.io's `FlyV1 …`) |
+| `{ header: X-Api-Key, value_env: NAME, prefix? }` | the value in that header, after `prefix` when given (literal text: `"Api-Key "`, `"Token "`) | API-key headers; `Authorization: Api-Key <key>` (Flagsmith); `Authorization` with a token that carries its own scheme (Fly.io's `FlyV1 …`) |
+| `{ headers: [{ header, value_env, prefix? }, …] }` | each of those headers | APIs that want two keys at once (Datadog's `DD-API-KEY` and `DD-APPLICATION-KEY`) |
 | `{ basic: { user_env, password_env } }` | HTTP Basic | |
 | `{ oauth2_client_credentials: { token_url, client_id_env, client_secret_env, audience?, scope?, extra?, auth_method?, token_url_env? } }` | `Authorization: Bearer <access token>` from the token endpoint | Auth0 Management API, Kinde, Okta custom authorization servers, MongoDB Atlas service accounts |
 | `{ command: [argv…] }` | `Authorization: Bearer <what the command prints>` | Google Cloud (`gcloud auth print-access-token`), Azure (`az account get-access-token --query accessToken -o tsv`) |
@@ -733,9 +769,138 @@ once the item is there as planned (written again, up to three times, if another 
 Key: `<parent.path>#<list_path>=<item>`. **Drift**: the item missing from the collection is `missing`; for map items
 and keyed entries, a declared field or value edited in the console is `changed`. Items no line declares are left
 exactly as they are, and are reported as `unmanaged`. Writes replace the whole collection (except keyed maps sent
-as `field`), so they are sent as idempotent and retried after a dropped connection. There is no precondition: two
-runs editing the same parent at the same moment can still lose one write, which the re-read reports as
-`PROVIDER_CONFLICT` when it happens to see it ([ADR 0017](adr/0017-generic-http-adapter.md)).
+as `field`), so they are sent as idempotent and retried after a dropped connection. There is no precondition, so
+every write holds a lock on the parent object ([ADR 0019](adr/0019-parent-object-locks.md)), named
+`http:<base_url><parent.path>` (the block's `base_url` without user info, query or fragment, and the filled path;
+never a credential): runs in other pull requests and environments that edit the same parent wait for each other
+and never lose an item. A writer outside Sponson editing the parent at the same moment can still drop one; the
+re-read puts it back, or reports `PROVIDER_CONFLICT` after three rounds.
+
+### `manual.step`
+
+A change a person makes by hand, because no API can: a Google OAuth web client's redirect URIs, a Clerk webhook
+endpoint, a Stripe sandbox. Sponson cannot do the step; it says exactly what to do for this environment, holds back
+the lines that depend on it, records who did it and when, notices when it must be done again, and asks for it to be
+undone when the scope is destroyed ([ADR 0021](adr/0021-manual-steps.md)).
+
+```yaml
+- id: google-redirect
+  adapter: manual
+  op: step
+  title: "Allow ${ctx.scope}'s OAuth callback on the Google OAuth client"
+  vars: { url: { from: web.preview_url } }
+  instructions: |
+    In Google Cloud console > APIs & Services > Credentials, open the OAuth client "acme-web" and add
+    {url}/api/auth/callback/google under "Authorized redirect URIs". Save.
+  undo: Remove {url}/api/auth/callback/google from the client's "Authorized redirect URIs".
+```
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `title` | string | (required) | One line naming the step; its identity (key `step:<title>`). |
+| `instructions` | Markdown | (required) | What to do, shown whole to the person. A `{ from }` reference works too. |
+| `undo` | Markdown | none | What to do when the scope is destroyed. Without it, destroy forgets the step. |
+| `vars` | map | `{}` | Values for `{name}` placeholders in `title`, `instructions`, `undo` and `verify.path`: literals or `{ from }` references. A placeholder not in `vars` is `PARAM_INVALID`. |
+| `verify` | `{ api, path, match?, absent_status? }` | none | A GET that tells whether the step is done: `path` on the API block `providers.manual.<api>`; done when it answers 2xx and every `match` (JSON pointer → value) holds; 404, or a status in `absent_status`, means not yet. |
+
+`${ctx.*}` works in every text. A `{ secret }` or `{ keep: true }` anywhere in the line is `PARAM_INVALID`: the text
+is shown to people and kept in receipts. The step has no outputs; other lines wait for it with `depends_on`.
+
+`providers.manual.<api>` blocks have the [`http` adapter's format](#the-generic-http-adapter) (`base_url`,
+`base_url_env`, `headers`, `encoding`), except that `auth` is optional, for public endpoints such as a DNS-over-HTTPS
+resolver. Steps without `verify` need no block.
+
+**How a step is done.** The step's hash covers its title and rendered instructions. It is done when its verify
+request sees it, or when a person confirmed these very instructions: `sponson apply --confirm <line>` (repeatable,
+or comma-separated; the MCP tool's `confirm`). The confirmation is recorded in the ledger with who confirmed it
+(`--approved-by`, or else the git user's `user.name` or `user.email`; with neither, `USAGE`) and when. Confirming a
+line that is not a manual step is `USAGE`. Instructions that change (a new preview URL) make it a step to do again.
+
+| Command | A step that is not done |
+|---|---|
+| `plan` | `todo`, with `manual: { line, title, action: do, instructions, observable }`; exit 0. While an input is pending, `pending` as usual. |
+| `apply` | without `--confirm`: the line is `waiting` (`waitingFor: confirmation`, `MANUAL_STEP_PENDING`), so are the lines that depend on it, every other line is applied, nothing is rolled back; the receipt is `partial`, and the command exits 2 with `error.code: MANUAL_STEP_PENDING` and `manual` (each step's instructions). With `--confirm <line>`: recorded, `applied`. |
+| `apply --destroy` | a recorded step with `undo` waits the same way (`action: undo`) until `apply --destroy --confirm <line>`; one without `undo` is forgotten. Nothing is deleted at any provider. |
+
+A verified step that its verify request no longer sees is `missing` drift, and a todo again; a person's confirmation
+counts even when the verify request does not (yet) agree. A failed run never rolls a manual step back, and
+`--recreate` refuses one. Agents show the instructions to a person and never confirm on their own (see
+[SKILL.md](../SKILL.md)).
+
+### Recipes
+
+A recipe is a verified `http.resource` or `http.list_item` spec for one provider operation, shipped with Sponson:
+the line names it and fills in typed params instead of writing requests. Every recipe, its params, an example line
+and what it was verified against: [docs/recipes.md](recipes.md).
+
+```yaml
+- id: preview_dns
+  adapter: http
+  op: resource                        # the recipe's kind
+  recipe: cloudflare.dns_cname        # <provider>.<op>
+  zone_id: 023e105f4ecef8ad9ca31a8372d0c353
+  name: "${ctx.scope}.preview.example.com"
+  target: preview-host.example.net
+```
+
+`api` defaults to the recipe's provider, and its block under `providers.http` to `{ recipe: <provider> }`: the
+recipe's base URL, credential variable, headers and encoding. Write the block to override any of them
+(`cloudflare: { recipe: cloudflare, auth: { bearer_env: MY_CLOUDFLARE_TOKEN } }`); a hand-written line may name such a
+block too. Every key of the line other than `api`, `recipe` and `destroy` is a recipe param; an unknown recipe, op or
+param, a missing required one or a wrong value is `PARAM_INVALID` naming it before any request. The ledger records
+the resolved block and the keys the expanded requests produce, never the recipe's text
+([ADR 0020](adr/0020-recipes.md)).
+
+### `cloudflare.pages_env`
+
+Variables of a Cloudflare Pages project's `preview` or `production` deployment configuration. Requires
+`providers.cloudflare.account` (the account id) and `providers.cloudflare.project` (the Pages project name), and an
+API token in `CLOUDFLARE_API_TOKEN` with the account permission "Cloudflare Pages Edit".
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `target` | `preview` \| `production` | `production` when `--env production`, else `preview` | The variable set. It must be the run's environment (`--env`); anything else is `PARAM_INVALID` (see below). `production` requires approval (see [Environments](#environments)). |
+| `vars` | map: NAME → value | `{}` | Plain-text variables (`plain_text`). Each value is a literal, `{ from }`, `{ secret }` or `{ keep: true }`. Diffs show the new value; the old one is shown as sensitive. |
+| `secrets` | map: NAME → value | `{}` | Secret variables (`secret_text`), shown as sensitive. A name may not be in both maps. |
+| `rewrite_secrets` | boolean | `false` | Send every secret on every apply (see "Secrets" below). |
+
+Each variable is a resource with key `env:<target>:<NAME>`. The variables are one map on the project, so `apply`
+reads the project, PATCHes only the keys this line writes (Cloudflare merges the map; a key set to `null` is deleted),
+then reads it again and fails with `PROVIDER_RESPONSE` if a key it sent is not there as sent or a key it did not send
+has disappeared. Keys this line does not declare are never written. Destroy sets this line's keys to `null`; a key or
+project that is already gone is success. For drift and adoption, every variable of the line's environment is in
+scope; `sponson init` adopts them as `{ keep: true }`, plain ones under `vars` and secret ones under `secrets`.
+
+**Preview variables are shared.** Pages has one set of preview variables for every preview deployment of the
+project, whatever the branch; there are no per-branch values. A key is therefore one resource in the `preview`
+environment, not one per pull request. The first scope that writes it owns it; another scope (a second pull request)
+that declares the same key with the same value relies on it unchanged, and one that declares a different value is
+refused with `OWNED_BY_OTHER_SCOPE` until the owner's scope is destroyed. So per-PR values (`${ctx.pr.number}`, a PR's
+database URL) do not belong in Pages preview variables: two open pull requests would conflict. The owner's destroy
+removes a key a second scope relied on. Because ownership is decided among the scopes of one Sponson environment, the
+line's `target` must equal the run's `--env`: a run of any other environment fails the line with `PARAM_INVALID`.
+
+**Locked map.** The variables of one environment are one map on one project object, written by read-modify-write, so
+the line names it as a shared parent object (`lockOn`, [ADR 0019](adr/0019-parent-object-locks.md)):
+`cloudflare:<account>:pages:<project>:<target>:env`. Runs of every scope that write that map (apply, rollback,
+`apply --destroy`) take turns, so one run's re-read never mistakes another's concurrent write or destroy for a lost
+key. Writers outside Sponson are not serialised: Cloudflare offers no precondition (ETag) on the PATCH.
+
+**Secrets.** Cloudflare never returns a `secret_text` value, so a secret is compared by presence and type only:
+
+- a secret that exists as `secret_text` is `unchanged`, whatever value the plan has. A new value in the plan (a
+  rotated `{ secret }`) is not written unless the line sets `rewrite_secrets: true`, which sends every secret of the
+  line on every apply (one PATCH; never reported as drift). Without it, rotate by setting `rewrite_secrets: true` for
+  one apply.
+- a secret's value changed in the dashboard is not detected; deleting it is `missing` drift (recreated), and turning it
+  into plain text, or a plain variable into a secret, is `changed` drift.
+
+Plain variables are compared by type and value: a dashboard edit is `changed` drift, refused until `--reconcile`.
+
+Variables apply to the next deployment; Sponson does not redeploy a Pages project, and this op has no outputs. The
+branch alias URL of a preview (`<alias>.<project>.pages.dev`) is not an output: Cloudflare documents that the alias is
+the branch name lowercased with other characters replaced by `-`, but not how long names are shortened or collisions
+resolved.
 
 ### Outputs
 
@@ -774,6 +939,8 @@ the named event. Sensitive outputs are never displayed, logged or written to rec
 | `netlify.env` | `preview_url` | external (`deploy`) | no |
 | `netlify.env` | `deploy_id` | external (`deploy`) | no |
 | `netlify.env` | `deploy_preview_url` | external (`deploy`) | no |
+| `cloudflare.pages_env` | (none) | | |
+| `manual.step` | (none) | | |
 <!-- generated:outputs:end -->
 
 ### Once-only outputs
@@ -801,7 +968,7 @@ working. The alternative is to keep the value in a secret manager and reference 
 |---|---|---|
 | Editing, with the schema | shape of every key; id format; value forms; secret-looking literals; display text; the built-in ops' parameter names and `target` values | (editor diagnostics) |
 | Parsing (every command) | everything above that the parser enforces, plus unique ids, declared environments, `depends_on` and `from:` ids exist | `PLAN_PARSE`, `PLAN_INVALID`, `SECRET_LITERAL`, `REF_UNKNOWN` |
-| Preparing a run (before any provider call) | `--env` declared; adapters and ops exist; references survive the environment filter; no cycles; referenced outputs exist; `${ctx.*}` resolves; approval | `ENV_UNKNOWN`, `ADAPTER_UNKNOWN`, `OP_UNKNOWN`, `REF_FILTERED`, `REF_CYCLE`, `REF_OUTPUT_UNKNOWN`, `CTX_NULL`, `ENV_NOT_APPROVED` (apply only) |
+| Preparing a run (before any provider call) | `--env` declared; adapters and ops exist; references survive the environment filter; no cycles; referenced outputs exist; `${ctx.*}` resolves; recipe lines' recipe, op and params; approval | `ENV_UNKNOWN`, `ADAPTER_UNKNOWN`, `OP_UNKNOWN`, `REF_FILTERED`, `REF_CYCLE`, `REF_OUTPUT_UNKNOWN`, `CTX_NULL`, `PARAM_INVALID`, `PLAN_INVALID`, `ENV_NOT_APPROVED` (apply only) |
 | Reading live state (per line) | parameter values; credentials; secrets resolve; drift; ownership by another scope; once-only outputs a line would need again | `PARAM_INVALID`, `PROVIDER_*`, `SECRET_UNRESOLVED`, `DRIFT_CHANGED`, `OWNED_BY_OTHER_SCOPE`, `OUTPUT_UNAVAILABLE` |
 
 Every code is listed in [errors.md](errors.md).

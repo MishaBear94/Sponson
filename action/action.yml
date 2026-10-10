@@ -189,7 +189,7 @@ runs:
           const marker = `<!-- sponson:${env} -->`;
           let r; try { r = JSON.parse(fs.readFileSync(process.env.RESULT_PATH, "utf8")); } catch { r = null; }
 
-          const PLAN = { create: "+", update: "~", unchanged: "=", pending: "?", blocked: "-", error: "!" };
+          const PLAN = { create: "+", update: "~", unchanged: "=", pending: "?", todo: "*", blocked: "-", error: "!" };
           const LINE = { applied: "+", unchanged: "=", waiting: "?", failed: "!", rolled_back: "-", rollback_failed: "!", skipped: "-", blocked: "-", destroyed: "-", destroy_failed: "!" };
           // Provider text can carry anything (HTML error pages, CRLF, pipes, backticks): neutralise every
           // character that could end a table row, open a code span, a tag or an HTML comment.
@@ -208,11 +208,17 @@ runs:
             return `(${esc(s.state)}${s.ref ? " ← " + esc(s.ref) : ""})`;
           };
           const failure = (l) => [l.errorCode ? code(l.errorCode) : "", esc(l.error)].filter(Boolean).join(" ");
+          // Manual steps (ADR 0021): a person does them from these instructions, so they are shown whole, as text.
+          const pre = (t) => "<pre>" + String(t ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\r\n|\r/g, "\n").trimEnd() + "</pre>";
+          const steps = (todos) => todos.map((t) => {
+            const flag = t.action === "undo" ? `sponson apply --destroy --confirm ${t.line}` : `sponson apply --confirm ${t.line}`;
+            return `- ${code(t.line)} ${t.action === "undo" ? "undo: " : ""}${esc(t.title)}\n\n${pre(t.instructions)}\n\n  Then a person confirms it: ${code(flag)}`;
+          }).join("\n\n");
           const rows = [];
           let title, tail = "";
           if (!r) {
             title = `${esc(command)} crashed (exit ${exit})`;
-          } else if (r.ok === false && r.error) {
+          } else if (r.ok === false && r.error && !r.receipt) {
             title = `${esc(command)} failed: ${code(r.error.code)}`;
             tail = `\n\n${esc(r.error.message)}`;
           } else if (r.command === "plan") {
@@ -222,6 +228,7 @@ runs:
             for (const l of r.lines) {
               let detail;
               if (l.status === "pending") detail = l.waitingOn ? `waiting on ${code(l.waitingOn)}${l.waitingFor ? ` (${esc(l.waitingFor)})` : ""}` : `waiting${l.waitingFor ? ` on ${esc(l.waitingFor)}` : ""}`;
+              else if (l.status === "todo") detail = `by hand: ${esc(l.manual?.title)}`;
               else if (l.status === "error" || l.status === "blocked") detail = failure(l);
               else detail = (l.diffs ?? []).map((d) => {
                 const after = side(d.after), before = side(d.before);
@@ -229,6 +236,8 @@ runs:
               }).join("<br>");
               rows.push(`| ${code(PLAN[l.status] ?? " ")} | ${code(l.id)} | ${esc(l.adapter)}.${esc(l.op)} | ${esc(l.status)} | ${detail} |`);
             }
+            const todos = r.lines.filter((l) => l.status === "todo" && l.manual).map((l) => l.manual);
+            if (todos.length) tail += "\n\n**Manual steps** (no API can do these; a person does them)\n\n" + steps(todos);
           } else {
             const rc = r.receipt;
             const status = rc.stale ? "stale (a newer commit was already applied)" : rc.status;
@@ -239,7 +248,8 @@ runs:
                 : [...l.resources.map((x) => esc(x.label ?? x.key)), ...Object.entries(l.outputs ?? {}).map(([k, v]) => `${esc(k)} = ${esc(v)}`)].join("<br>");
               rows.push(`| ${code(LINE[l.status] ?? " ")} | ${code(l.id)} | ${esc(l.adapter)}.${esc(l.op)} | ${esc(l.status)} | ${detail} |`);
             }
-            if (rc.status === "partial") tail += "\n\nSome lines are waiting on a deploy. The `deployment_status` run will finish them; nothing to retry.";
+            if (r.manual?.length) tail += "\n\n**Manual steps waiting for a person** (no API can do these)\n\n" + steps(r.manual);
+            else if (rc.status === "partial") tail += "\n\nSome lines are waiting on a deploy. The `deployment_status` run will finish them; nothing to retry.";
           }
           if (r?.drift?.length) tail += "\n\n**Drift**\n" + r.drift.map((d) => `- ${code(d.kind)} ${esc(d.adapter)}: ${esc(d.message)}`).join("\n");
           if (r?.warnings?.length) tail += "\n\n**Warnings**\n" + r.warnings.map((w) => `- ${esc(w)}`).join("\n");

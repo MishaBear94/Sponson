@@ -136,9 +136,10 @@ Adapters that do not define them behave exactly as before.
 
 ## What it deliberately does not do
 
-- **No preconditions** (ETag / `If-Match`, version fields) for list writes, and no per-parent lock across scopes.
-  The re-read narrows the window and reports what it sees; it cannot close it. Two scopes editing one parent at the
-  same moment can still lose a write (ROADMAP, the shared-parent item).
+- **No preconditions** (ETag / `If-Match`, version fields) for list writes. The re-read narrows the window and
+  reports what it sees; it cannot close it. *Amended:* `http.list_item` now declares its parent object with `lockOn`
+  ([ADR 0019](/contributing/adr/0019-parent-object-locks)), so two scopes editing one parent no longer lose a write; only a writer
+  outside Sponson still can.
 - **No polling**: an object that becomes ready asynchronously, or whose output appears later, needs a first-class
   adapter.
 - **Create-only outputs** (a Stripe webhook signing secret) are returned by the run that creates the object and
@@ -205,6 +206,11 @@ credential flow, or a plugin.
 | `command: [argv…]` | The CLI run without a shell through the same injectable `Exec` as the CLI-backed secret sources; its trimmed stdout is the bearer token. An argument that is (or holds) a reference is refused: nothing is expanded. |
 | `aws_sigv4: { region, service, access_key_id_env, secret_access_key_env, session_token_env? }` | Every request signed (header form, payload hash signed); S3 bodies also get `Content-MD5`. No AWS SDK: a signer of ~150 lines checked against AWS's published test vectors. |
 | `digest: { user_env, password_env }` | RFC 7616, MD5 or SHA-256 (and `-sess`), `qop=auth`; the 401's challenge is answered, then reused with the next nonce count. |
+
+Two static forms grew too: `{ header, value_env, prefix }` sends literal text before the value (`Authorization:
+Api-Key <key>`, `Token <key>`), and `{ headers: [{ header, value_env, prefix? }, …] }` sends several credential
+headers together (Datadog's API and application keys). The prefix and the header names are part of the block, so of
+the identity; the values never are.
 
 The HTTP client (`apiClient`, stable authoring API) gained an optional `RequestSigner`: asked for each request's
 headers (every attempt, so a signature or token is fresh), and told about a 401, after which the request is sent

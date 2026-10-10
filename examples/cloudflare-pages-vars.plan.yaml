@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/MishaBear94/Sponson/main/schema/release.plan.schema.json
+#
+# Cloudflare Pages variables for preview and production. Pages has ONE set of preview variables,
+# shared by every preview deployment of the project (there are no per-branch values), so the
+# preview line holds only values that are the same for every pull request: the first scope that
+# writes a key owns it, and a second pull request that sets another value is refused with
+# OWNED_BY_OTHER_SCOPE. Apply it from the default branch first; pull requests then rely on it.
+#
+# Credentials: CLOUDFLARE_API_TOKEN (account permission "Cloudflare Pages Edit").
+version: 1
+environments: [preview, production]
+providers:
+  cloudflare: { account: 0123456789abcdef0123456789abcdef, project: acme-web }
+
+changes:
+  # `target` defaults to the run's environment and must equal it.
+  - id: pages-preview
+    adapter: cloudflare
+    op: pages_env
+    vars:
+      PUBLIC_API_URL: https://api.staging.acme.dev
+      PUBLIC_STAGE: preview
+    secrets:
+      STRIPE_SECRET_KEY: { secret: "env://STRIPE_TEST_SECRET_KEY" }
+    environments: [preview]
+
+  # Secrets are compared by presence and type only: Cloudflare never returns their values. A
+  # rotated secret is written when the line sets `rewrite_secrets: true` (every apply sends them).
+  - id: pages-production
+    adapter: cloudflare
+    op: pages_env
+    target: production
+    vars:
+      PUBLIC_API_URL: https://api.acme.dev
+      PUBLIC_STAGE: production
+    secrets:
+      STRIPE_SECRET_KEY: { secret: "env://STRIPE_LIVE_SECRET_KEY" }
+    rewrite_secrets: true
+    environments: [production]

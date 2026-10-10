@@ -42,17 +42,18 @@ export function withDeps(op: OpSpec, deps: AuthDeps): OpSpec {
 /**
  * The client for the line's API. The credential (a static header, or a signer for the forms obtained or computed
  * per request) comes from http-adapter-auth.ts; everything it holds or obtains is masked in this client's error text
- * too, whatever the engine already masks.
+ * too, whatever the engine already masks. `opts`: where the block is, for messages; whether a block without `auth`
+ * sends no credential (a manual step's verify request); the adapter named in errors.
  */
-export function httpClient(actx: AdapterContext, req: RequestOptions = {}): ApiClient {
-  const cfg = parseApi(actx.provider, "providers.http.<api>");
+export function httpClient(actx: AdapterContext, req: RequestOptions = {}, opts: { where?: string; authOptional?: boolean; adapter?: string } = {}): ApiClient {
+  const cfg = parseApi(actx.provider, opts.where ?? "providers.http.<api>", opts);
   const baseUrl = (cfg.baseUrlEnv ? optionalEnv(actx.env, cfg.baseUrlEnv) : undefined) ?? cfg.baseUrl;
   let hidden: () => string[] = () => [];
   const redact = (t: string) => hidden().reduce((s, h) => (h.length >= 4 ? s.split(h).join("****") : s), actx.redact(t));
   const cred = credentialFor(actx, cfg.auth, DEPS.get(actx) ?? DEFAULT_AUTH_DEPS, redact);
   hidden = () => [cred.token, ...cred.masks()];
   const contentType = req.contentType ?? cfg.mediaType;
-  return clientFor({ ...actx, redact }, ADAPTER, {
+  return clientFor({ ...actx, redact }, opts.adapter ?? ADAPTER, {
     baseUrl,
     token: cred.token,
     authHeader: cred.authHeader,

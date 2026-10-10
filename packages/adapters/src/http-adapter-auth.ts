@@ -2,7 +2,8 @@
  * How the generic `http` adapter authenticates to an API: the `auth` forms of a `providers.http.<api>` block,
  * parsed (pure), and the credential each one sends at run time (ADR 0017 and its amendment).
  *
- *   { bearer_env }, { header, value_env }, { basic }   a static header from environment variables
+ *   { bearer_env }, { header, value_env, prefix? }, { basic }   a static header from environment variables
+ *   { headers: [{ header, value_env, prefix? }, …] }   several such headers at once (Datadog's API and application keys)
  *   { oauth2_client_credentials: { … } }              a bearer token from an OAuth2 token endpoint (RFC 6749 §4.4)
  *   { command: [argv…] }                               a bearer token printed by a CLI (`gcloud auth print-access-token`)
  *   { aws_sigv4: { … } }                               every request signed with AWS Signature Version 4
@@ -30,12 +31,15 @@ export type ClientAuthMethod = "client_secret_post" | "client_secret_basic";
 /** How the credential is sent. */
 export type Auth =
   | { kind: "bearer"; env: string }
-  | { kind: "header"; header: string; env: string }
+  | { kind: "header"; header: string; env: string; prefix?: string }
+  | { kind: "headers"; headers: Array<{ header: string; env: string; prefix?: string }> }
   | { kind: "basic"; userEnv: string; passwordEnv: string }
   | { kind: "oauth2"; tokenUrl: string; tokenUrlEnv?: string; clientIdEnv: string; clientSecretEnv: string; audience?: string; scope?: string; extra: Record<string, string>; method: ClientAuthMethod }
   | { kind: "command"; argv: string[] }
   | { kind: "sigv4"; region: string; service: string; accessKeyIdEnv: string; secretAccessKeyEnv: string; sessionTokenEnv?: string }
-  | { kind: "digest"; userEnv: string; passwordEnv: string };
+  | { kind: "digest"; userEnv: string; passwordEnv: string }
+  /** No credential: only for a public endpoint a manual step's verify request reads (`parseApi(…, { authOptional })`). */
+  | { kind: "none" };
 
 // ---------------------------------------------------------------------------
 // Parsing (pure)
@@ -63,7 +67,7 @@ export function envName(v: unknown, where: string, credential: boolean): string 
 }
 
 const AUTH_FORMS =
-  "`{ bearer_env: NAME }`, `{ header: X-Api-Key, value_env: NAME }`, `{ basic: { user_env, password_env } }`, `{ oauth2_client_credentials: { token_url, client_id_env, client_secret_env } }`, `{ command: [argv…] }`, `{ aws_sigv4: { region, service, access_key_id_env, secret_access_key_env } }` or `{ digest: { user_env, password_env } }`";
+  "`{ bearer_env: NAME }`, `{ header: X-Api-Key, value_env: NAME, prefix?: \"Api-Key \" }`, `{ headers: [{ header, value_env }, …] }`, `{ basic: { user_env, password_env } }`, `{ oauth2_client_credentials: { token_url, client_id_env, client_secret_env } }`, `{ command: [argv…] }`, `{ aws_sigv4: { region, service, access_key_id_env, secret_access_key_env } }` or `{ digest: { user_env, password_env } }`";
 
 function subBlock(v: unknown, where: string, known: string[]): Record<string, unknown> {
   if (!isObject(v)) throw planError(`must be a map (${known.join(", ")})`, where);
@@ -168,9 +172,53 @@ export function parseAuth(v: unknown, where: string): Auth {
     if (extra) throw planError(`unknown key \`${extra}\` next to \`${key}\``, where);
     return PARSERS[key]!(v[key], `${where}.${key}`);
   }
-  if (v.bearer_env !== undefined) return { kind: "bearer", env: envName(v.bearer_env, `${where}.bearer_env`, true) };
+  if (v.bearer_env !== undefined) {
+    onlyKeys(v, ["bearer_env"], where);
+    return { kind: "bearer", env: envName(v.bearer_env, `${where}.bearer_env`, true) };
+  }
+  if (v.headers !== undefined) return parseHeaderList(v, where);
+  const one = headerCredential(v, where);
+  return { kind: "header", ...one };
+}
+
+/** One `{ header, value_env, prefix? }`. */
+function headerCredential(v: Record<string, unknown>, where: string): { header: string; env: string; prefix?: string } {
   if (typeof v.header !== "string" || !HEADER_NAME.test(v.header)) throw planError(`must be one of ${AUTH_FORMS}`, where);
-  return { kind: "header", header: v.header, env: envName(v.value_env, `${where}.value_env`, true) };
+  if (/^(accept|content-type)$/i.test(v.header)) throw planError(`\`${v.header}\` is set by Sponson`, `${where}.header`);
+  onlyKeys(v, ["header", "value_env", "prefix"], where);
+  const prefix = v.prefix === undefined ? undefined : prefixParam(v.prefix, `${where}.prefix`);
+  return { header: v.header, env: envName(v.value_env, `${where}.value_env`, true), ...(prefix !== undefined ? { prefix } : {}) };
+}
+
+/** `{ headers: [{ header, value_env, prefix? }, …] }`: every credential header an API needs, each named once. */
+function parseHeaderList(v: Record<string, unknown>, where: string): Auth {
+  onlyKeys(v, ["headers"], where);
+  const list = v.headers;
+  if (!Array.isArray(list) || list.length === 0) throw planError("must be a list of `{ header, value_env }`, one per credential header", `${where}.headers`);
+  const headers = list.map((h, i) => {
+    if (!isObject(h)) throw planError("must be `{ header, value_env, prefix? }`", `${where}.headers[${i}]`);
+    return headerCredential(h, `${where}.headers[${i}]`);
+  });
+  const names = headers.map((h) => h.header.toLowerCase());
+  const twice = names.find((n, i) => names.indexOf(n) !== i);
+  if (twice) throw planError(`names the header \`${twice}\` twice`, `${where}.headers`);
+  return { kind: "headers", headers };
+}
+
+function onlyKeys(v: Record<string, unknown>, known: string[], where: string): void {
+  const extra = Object.keys(v).find((k) => !known.includes(k));
+  if (extra) throw planError(`unknown key \`${extra}\` (known: ${known.join(", ")})`, where);
+}
+
+/**
+ * The literal text sent before the credential in its header (`Api-Key `, `Token `, `SSWS `). It is part of the
+ * block, so of the ledger identity, and never a credential: a reference, an interpolation or a control character is
+ * refused.
+ */
+function prefixParam(v: unknown, where: string): string {
+  if (typeof v !== "string" || v === "" || v.length > 64) throw planError("must be the literal text sent before the credential, such as \"Api-Key \" or \"Token \" (1 to 64 characters)", where);
+  if (!/^[\x20-\x7e]+$/.test(v) || v.includes("${") || v.startsWith("$")) throw planError("must be plain printable text: no reference, interpolation or control character", where);
+  return v;
 }
 
 // ---------------------------------------------------------------------------
@@ -189,7 +237,7 @@ export const DEFAULT_AUTH_DEPS: AuthDeps = { exec: defaultExec, now: () => Date.
 /** How a client authenticates: a static header (`token`, `authHeader`) or a signer, and the values to mask. */
 export interface Credential {
   token: string;
-  authHeader: "bearer" | `header:${string}`;
+  authHeader: "bearer" | "none" | `header:${string}`;
   signer?: RequestSigner;
   /** Values this adapter masks in its own error text, besides what the engine masks. */
   masks: () => string[];
@@ -376,7 +424,13 @@ export function credentialFor(actx: AdapterContext, auth: Auth, deps: AuthDeps, 
     case "bearer":
       return { token: requireEnv(env, auth.env, ADAPTER), authHeader: "bearer", masks: () => [] };
     case "header":
-      return { token: requireEnv(env, auth.env, ADAPTER), authHeader: `header:${auth.header}`, masks: () => [] };
+      return { token: `${auth.prefix ?? ""}${requireEnv(env, auth.env, ADAPTER)}`, authHeader: `header:${auth.header}`, masks: () => [] };
+    case "headers": {
+      const values = Object.fromEntries(auth.headers.map((h) => [h.header.toLowerCase(), `${h.prefix ?? ""}${requireEnv(env, h.env, ADAPTER)}`]));
+      return { token: "", authHeader: "none", signer: { sign: async () => ({ ...values }) }, masks: () => Object.values(values) };
+    }
+    case "none":
+      return { token: "", authHeader: "none", masks: () => [] };
     case "basic": {
       const encoded = basicOf(requireEnv(env, auth.userEnv, ADAPTER), requireEnv(env, auth.passwordEnv, ADAPTER));
       return { token: `Basic ${encoded}`, authHeader: "header:authorization", masks: () => [encoded] };

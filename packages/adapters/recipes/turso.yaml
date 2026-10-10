@@ -1,0 +1,88 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Turso Platform API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: turso
+title: Turso
+category: databases
+verified_on: "2026-10-11"
+docs:
+  - title: Create database
+    url: https://docs.turso.tech/api-reference/databases/create
+  - title: Retrieve database
+    url: https://docs.turso.tech/api-reference/databases/retrieve
+  - title: Delete database
+    url: https://docs.turso.tech/api-reference/databases/delete
+  - title: Branching
+    url: https://docs.turso.tech/features/branching
+api:
+  base_url: https://api.turso.tech/v1
+  base_url_env: TURSO_API_URL
+  auth: { bearer_env: TURSO_API_TOKEN }
+assumptions:
+  - id: TU1
+    verified: true
+    text: "`POST /v1/organizations/{organizationSlug}/databases` with `name`, `group` and `seed: { type: database, name: <parent> }` creates a database copied from the parent, authenticated with a Platform API token as `Authorization: Bearer`."
+    source: https://docs.turso.tech/api-reference/databases/create
+  - id: TU2
+    verified: true
+    text: "The create answers `{ database: { DbId, Hostname, Name } }` (capitalised), and 409 when a database with that name exists already."
+    source: https://docs.turso.tech/api-reference/databases/create
+  - id: TU3
+    verified: true
+    text: "`GET /v1/organizations/{organizationSlug}/databases/{databaseName}` answers `{ database: { Name, DbId, Hostname, group, … } }`, and 404 when there is none."
+    source: https://docs.turso.tech/api-reference/databases/retrieve
+  - id: TU4
+    verified: true
+    text: "`DELETE` on the same path removes the database; 404 when it is gone."
+    source: https://docs.turso.tech/api-reference/databases/delete
+  - id: TU5
+    verified: true
+    text: Database names are lower-case letters, numbers and dashes, at most 64 characters, unique in the organization; the group must exist already.
+    source: https://docs.turso.tech/api-reference/databases/create
+  - id: TU6
+    verified: false
+    text: The database is usable as soon as the create answers (no readiness to poll for a branch of a database in the same group).
+ops:
+  database_branch:
+    kind: resource
+    title: Database branch
+    summary: "A database copied from a parent database (a branch), named for the scope, such as `app-pr-42` from `app`. Its hostname is an output for the app's connection URL. Only its existence is compared for drift: changing `group` or `parent` later does not move or re-copy a database that exists."
+    covers: [turso-database]
+    params:
+      organization:
+        type: string
+        required: true
+        description: The organization (or user account) slug.
+        example: acme
+      name:
+        type: string
+        required: true
+        pattern: "^[a-z0-9-]{1,64}$"
+        description: The new database's name.
+        example: "app-${ctx.scope}"
+      parent:
+        type: string
+        required: true
+        description: The parent database to copy.
+        example: app
+      group:
+        type: string
+        default: default
+        description: The group the database is placed in; it must exist.
+      timestamp:
+        type: string
+        description: Copy the parent as it was at this ISO 8601 time (point-in-time recovery window only).
+    http:
+      read: { path: "/organizations/{organization}/databases/{name}" }
+      create:
+        path: "/organizations/{organization}/databases"
+        body:
+          name: { param: name }
+          group: { param: group }
+          seed: { type: database, name: { param: parent }, timestamp: { param: timestamp } }
+      item_path: /database
+      id_path: /Name
+      outputs: { hostname: /Hostname, db_id: /DbId }
+    sim:
+      id_from: name
+    live:
+      params: { organization: SPONSON_LIVE_TURSO_ORGANIZATION, parent: SPONSON_LIVE_TURSO_DATABASE }

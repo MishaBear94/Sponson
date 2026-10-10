@@ -58,8 +58,11 @@ export interface ApiClientOptions {
   adapter: string;
   baseUrl: string;
   token: string;
-  /** `bearer` sends `Authorization: Bearer <token>`; `header:<name>` sends the token in a custom header. */
-  authHeader?: "bearer" | `header:${string}`;
+  /**
+   * `bearer` sends `Authorization: Bearer <token>`; `header:<name>` sends the token in a custom header; `none` sends
+   * no credential (a public endpoint; `token` is ignored).
+   */
+  authHeader?: "bearer" | "none" | `header:${string}`;
   /**
    * Authenticates each request instead of `token` (which is then not sent): a request signature (SigV4), a token
    * obtained at run time and refreshed after a 401, a Digest challenge answered.
@@ -281,7 +284,7 @@ export function apiClient(opts: ApiClientOptions): ApiClient {
   const headers: Record<string, string> = { ...extraHeaders(opts.headers ?? {}), accept: opts.accept ?? (xml ? "application/xml" : "application/json") };
   // With a signer, the signer authenticates each request itself and the static token is not sent.
   if (!opts.signer && auth === "bearer") headers.authorization = `Bearer ${opts.token}`;
-  else if (!opts.signer && auth !== "bearer") headers[auth.slice("header:".length).toLowerCase()] = opts.token;
+  else if (!opts.signer && auth !== "bearer" && auth !== "none") headers[auth.slice("header:".length).toLowerCase()] = opts.token;
   const defaultContentType = opts.contentType ?? CONTENT_TYPES[opts.encoding ?? "json"];
   const encodeBody = (body: unknown): string => (opts.encoding === "form" ? formEncode(body) : xml ? xmlEncode(body) : JSON.stringify(body));
 

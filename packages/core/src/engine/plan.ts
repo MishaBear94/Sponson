@@ -4,6 +4,7 @@ import type { Change } from "../types.js";
 import { scopeDrift } from "./drift.js";
 import { staleness } from "./history.js";
 import { inspectLine, waitingOn, type Inspection } from "./inspect.js";
+import { todoOf } from "./manual.js";
 import { hasExternalOutputs, planOutputs } from "./outputs.js";
 import { prepare, type Prepared } from "./prepare.js";
 import { RunContext } from "./run-context.js";
@@ -107,9 +108,18 @@ async function planLine(rc: RunContext, prepared: Prepared, walk: PlanWalk, c: C
     line.status = "pending";
     line.waitingOn = wait.line;
     if (wait.event) line.waitingFor = wait.event;
-  } else if (inspection.diffs.some((d) => d.kind === "create") || recreating(rc, inspection)) line.status = "create";
-  else if (inspection.diffs.some((d) => d.kind === "update")) line.status = "update";
+  } else if (inspection.manual && !inspection.manual.done) {
+    line.status = "todo";
+    line.manual = todoOf(rc, c.id, inspection.manual.step, "do");
+  } else line.status = writeStatus(rc, inspection);
   return line;
+}
+
+/** What apply would write for an inspected line that is neither refused, waiting nor a manual step to do. */
+function writeStatus(rc: RunContext, inspection: Inspection): PlanLine["status"] {
+  if (inspection.diffs.some((d) => d.kind === "create") || recreating(rc, inspection)) return "create";
+  if (inspection.diffs.some((d) => d.kind === "update")) return "update";
+  return "unchanged";
 }
 
 /** The run recreates this existing line (`recreate`), so its `once` outputs will flow again. */

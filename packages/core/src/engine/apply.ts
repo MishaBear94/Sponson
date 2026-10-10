@@ -11,12 +11,13 @@ import { staleness } from "./history.js";
 import { identity } from "./ledger.js";
 import { inspectLine, waitingOn, type Inspection } from "./inspect.js";
 import { isParentLockLoss, Lease, withParentLock } from "./lease.js";
+import { checkConfirm, manualEntry, pendingLine, todoOf, unusedConfirmations } from "./manual.js";
 import { consumedFingerprints, producedFingerprints } from "./once.js";
 import { hasExternalOutputs, publicOutputs } from "./outputs.js";
 import { prepare, requireApproval, type Prepared } from "./prepare.js";
 import { receiptSkeleton, rereadLine, toRecord } from "./receipt.js";
 import { RunContext } from "./run-context.js";
-import type { ApplyResultSummary, RunOptions } from "./types.js";
+import type { ApplyResultSummary, ManualTodo, RunOptions } from "./types.js";
 
 /**
  * Apply the plan for `ctx.env` / `ctx.scope`: take the scope's lock, write each line in dependency order, roll
@@ -27,6 +28,7 @@ import type { ApplyResultSummary, RunOptions } from "./types.js";
 export async function applyRun(opts: RunOptions): Promise<ApplyResultSummary> {
   const prepared = prepare(opts);
   const approvedBy = requireApproval(opts, prepared);
+  checkConfirm(opts, prepared.ordered.map((c) => ({ id: c.id, op: prepared.ops.get(c.id)! })));
   const rc = new RunContext(opts);
   const lease = await Lease.acquire(opts, `run-${randomUUID().slice(0, 8)}`);
   try {
@@ -64,6 +66,10 @@ class ApplyRun {
   private readonly recreated = new Set<string>();
   /** A deploy failed or never came within --wait: nothing to roll back, but the plan was not realised. */
   private externalFailed = false;
+  /** Manual steps left for a person to do, in plan order (ADR 0021). */
+  private readonly todos: ManualTodo[] = [];
+  /** Manual steps this run recorded as confirmed by a person. */
+  private readonly confirmed = new Set<string>();
 
   constructor(
     private readonly rc: RunContext,
@@ -102,6 +108,8 @@ class ApplyRun {
     const uninspected = new Set(this.prepared.ordered.map((c) => c.id).filter((id) => !this.inspections.has(id)));
     const drift = [...inspected.flatMap((i) => i.drift), ...(await scopeDrift(this.rc, inspected, uninspected).catch(() => []))];
 
+    const unused = unusedConfirmations(this.rc.opts, this.confirmed);
+    if (unused) this.rc.warnings.push(unused);
     this.receipt.status = this.status();
     this.receipt.finishedAt = this.now().toISOString();
     this.receipt.ledger = this.rc.ledger.toJSON();
@@ -111,7 +119,7 @@ class ApplyRun {
     }
     await this.lease.write(this.receipt);
     await this.handOver();
-    return { receipt: this.receipt, drift, warnings: this.rc.warnings };
+    return { receipt: this.receipt, drift, warnings: this.rc.warnings, ...(this.todos.length ? { manual: this.todos } : {}) };
   }
 
   /**
@@ -194,7 +202,8 @@ class ApplyRun {
       this.failed = true;
       return false;
     }
-    await this.writeAndRecord(c, op, inspection);
+    if (inspection.manual) this.writeManual(c, inspection);
+    else await this.writeAndRecord(c, op, inspection);
     return true;
   }
 
@@ -319,6 +328,36 @@ class ApplyRun {
       if (ext) Object.assign(values, ext);
     }
     this.setOutputs(c, values);
+  }
+
+  /**
+   * A manual step (ADR 0021): nothing is sent anywhere. A step that is done (verified, or confirmed before) is
+   * recorded; a todo is recorded only when this run confirms it, and otherwise waits for a person, holding back the
+   * lines that depend on it. Never rollback material: a person did it.
+   */
+  private writeManual(c: Change, inspection: Inspection): void {
+    const line = this.line(c, { status: "applied" });
+    this.receipt.lines[c.id] = line;
+    const state = inspection.manual!;
+    const confirmNow = !state.done && (this.rc.opts.confirm ?? []).includes(c.id);
+    if (!state.done && !confirmNow) {
+      pendingLine(line, state.step.title, "do");
+      this.waiting.add(c.id);
+      this.todos.push(todoOf(this.rc, c.id, state.step, "do"));
+      return;
+    }
+    const at = this.now().toISOString();
+    const { entry, changed } = manualEntry(this.rc, c, inspection.provider, state, confirmNow, at);
+    if (changed) this.rc.ledger.put(entry);
+    else line.status = "unchanged";
+    if (confirmNow) {
+      this.confirmed.add(c.id);
+      line.notes = { ...line.notes, manual: { confirmedBy: entry.manual!.by, confirmedAt: at } };
+    } else if (changed && state.verified) line.notes = { ...line.notes, manual: { verifiedAt: at } };
+    this.claimed.set(c.id, new Set([entry.key]));
+    line.resources = this.resourcesOf(c.id);
+    line.createdBy = "sponson";
+    this.setOutputs(c, {});
   }
 
   /** Persist the intent before the adapter sends the create, so nothing created can be forgotten. */

@@ -9,6 +9,7 @@ import { paramError } from "./common.js";
 import { isObject } from "./http.js";
 import { HEADER_NAME, envName, parseAuth, planError, type Auth } from "./http-adapter-auth.js";
 import { parseGraphql, usesId, type GraphqlSpec } from "./http-adapter-graphql.js";
+import { expandRecipe, lineApi, resolveRecipeApi } from "./recipes.js";
 
 export type { Auth } from "./http-adapter-auth.js";
 
@@ -169,9 +170,11 @@ export interface ApiConfig {
   encoding: "json" | "form" | "xml";
   /** A versioned media type sent as `Accept` and as the `Content-Type` of JSON bodies (Atlas `application/vnd.atlas.2023-01-01+json`). */
   mediaType?: string;
+  /** The API is a production system: lines through it need Sponson's approval (`writesEnvironment`). */
+  production: boolean;
 }
 
-const API_KEYS = ["base_url", "base_url_env", "auth", "headers", "encoding", "media_type"];
+const API_KEYS = ["base_url", "base_url_env", "auth", "headers", "encoding", "media_type", "production"];
 
 function parseEncoding(v: unknown, where: string): "json" | "form" | "xml" {
   if (v === undefined || v === "json" || v === "form" || v === "xml") return v ?? "json";
@@ -195,8 +198,26 @@ function parseMediaType(v: unknown, where: string, encoding: string): string | u
   return v;
 }
 
-/** One API block, checked. `where` names it in messages (`providers.http.statsig`). */
-export function parseApi(block: Record<string, unknown>, where: string): ApiConfig {
+function parseProduction(v: unknown, where: string): boolean {
+  if (v === undefined || typeof v === "boolean") return v ?? false;
+  throw planError("must be true (lines through this API write production and need approval) or false", where);
+}
+
+/**
+ * `OpSpec.writesEnvironment` for both ops: `production` when the line's API block says `production: true` (a live
+ * Stripe account, a production tenant), so the run needs approval whatever its environment; otherwise not
+ * environment-specific. `provider` is the block `apiBlock` narrowed to, already checked.
+ */
+export function apiEnvironment(_params: Record<string, unknown>, _ctx: unknown, provider?: Record<string, unknown>): "production" | null {
+  return provider?.production === true ? "production" : null;
+}
+
+/**
+ * One API block, checked. `where` names it in messages (`providers.http.statsig`). `authOptional`: a block without
+ * `auth` sends no credential (the `manual` adapter's verify requests to public endpoints); the `http` adapter's
+ * blocks always need one.
+ */
+export function parseApi(block: Record<string, unknown>, where: string, opts: { authOptional?: boolean } = {}): ApiConfig {
   const base = block.base_url;
   if (typeof base !== "string" || !/^https?:\/\/[^\s]+$/.test(base)) throw planError("`base_url` must be an http(s) URL", where);
   const unknown = Object.keys(block).filter((k) => !API_KEYS.includes(k));
@@ -205,10 +226,11 @@ export function parseApi(block: Record<string, unknown>, where: string): ApiConf
   const mediaType = parseMediaType(block.media_type, `${where}.media_type`, encoding);
   const cfg: ApiConfig = {
     baseUrl: base,
-    auth: parseAuth(block.auth, `${where}.auth`),
+    auth: block.auth === undefined && opts.authOptional ? { kind: "none" } : parseAuth(block.auth, `${where}.auth`),
     headers: parseHeaders(block.headers, `${where}.headers`),
     encoding,
     ...(mediaType ? { mediaType } : {}),
+    production: parseProduction(block.production, `${where}.production`),
   };
   if (block.base_url_env !== undefined) cfg.baseUrlEnv = envName(block.base_url_env, `${where}.base_url_env`, false);
   return cfg;
@@ -219,14 +241,20 @@ export function parseApi(block: Record<string, unknown>, where: string): ApiConf
  * different APIs therefore have independent ledger identities.
  */
 export function apiBlock(block: Record<string, unknown>, params: Record<string, unknown>): Record<string, unknown> {
-  const api = params.api;
+  const api = lineApi(params);
   if (typeof api !== "string" || api === "") throw fail("`api` is required: the name of an API configured under `providers.http`", "api");
-  const cfg = block[api];
-  if (!isObject(cfg)) {
+  const where = `providers.http.${api}`;
+  const recipe = typeof params.recipe === "string" ? params.recipe.split(".")[0] : undefined;
+  // A recipe line needs no block of its own: `api` defaults to the recipe's provider, and so does its block.
+  const raw = block[api] ?? (recipe === api ? { recipe } : undefined);
+  if (!isObject(raw)) {
     const known = Object.keys(block);
-    throw planError(`no API \`${api}\` is configured (known: ${known.length ? known.join(", ") : "none"})`, `providers.http.${api}`);
+    throw planError(`no API \`${api}\` is configured (known: ${known.length ? known.join(", ") : "none"})`, where);
   }
-  parseApi(cfg, `providers.http.${api}`);
+  const cfg = resolveRecipeApi(raw, where);
+  if (raw.recipe !== undefined && recipe !== undefined && recipe !== raw.recipe) throw planError(`uses recipe \`${String(raw.recipe)}\`, but the line's recipe is \`${String(params.recipe)}\``, where);
+  if (raw.recipe !== undefined && cfg.base_url === undefined) throw planError(`recipe \`${String(raw.recipe)}\` has no default \`base_url\` (each account has its own): set \`base_url\` in this block`, where);
+  parseApi(cfg, where);
   return cfg;
 }
 
@@ -419,7 +447,8 @@ function parseFields(v: unknown, param: string): Record<string, unknown> {
 }
 
 /** `http.resource` params, checked; PARAM_INVALID naming the field otherwise. */
-export function parseResource(params: Record<string, unknown>): ResourceSpec {
+export function parseResource(line: Record<string, unknown>): ResourceSpec {
+  const params = expandRecipe(line, "resource");
   noUnknownParams(params, RESOURCE_PARAMS, "resource");
   const api = apiParam(params);
   const vars = optionalObject(params.vars, "vars") ?? {};
@@ -462,7 +491,8 @@ function firstSecret(v: unknown): boolean {
 }
 
 /** The outputs one `http.resource` line declares: always `id`, plus its `outputs`. */
-export function resourceOutputs(params: Record<string, unknown>): Record<string, { available: "immediate"; sensitive?: boolean }> {
+export function resourceOutputs(line: Record<string, unknown>): Record<string, { available: "immediate"; sensitive?: boolean }> {
+  const params = expandRecipe(line, "resource");
   const out: Record<string, { available: "immediate"; sensitive?: boolean }> = { id: { available: "immediate" } };
   for (const [name, d] of Object.entries(parseOutputs(params.outputs))) out[name] = d.sensitive ? { available: "immediate", sensitive: true } : { available: "immediate" };
   return out;
@@ -560,7 +590,8 @@ function parseShaped(params: Record<string, unknown>, shape: ListShape): Pick<Li
 }
 
 /** `http.list_item` params, checked; PARAM_INVALID naming the field otherwise. */
-export function parseListItem(params: Record<string, unknown>): ListItemSpec {
+export function parseListItem(line: Record<string, unknown>): ListItemSpec {
+  const params = expandRecipe(line, "list_item");
   noUnknownParams(params, LIST_PARAMS, "list_item");
   const api = apiParam(params);
   const vars = optionalObject(params.vars, "vars") ?? {};

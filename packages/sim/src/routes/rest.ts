@@ -1,22 +1,28 @@
 /**
- * Simulated generic REST API: the provider the `http` adapter (packages/adapters/src/http-adapter*.ts) is tested
- * against. It models no particular SaaS. Any path can hold one of two things, so a plan written for a real API
- * (`/gates`, `/clients/abc123`) can be planned and applied against it once its collections and objects are seeded:
+ * Simulated generic REST API: the provider the `http` adapter (packages/adapters/src/http-adapter*.ts) and its
+ * recipes (packages/adapters/recipes/) are tested against. It models no particular SaaS. Any path can hold one of
+ * two things, so a plan written for a real API (`/gates`, `/clients/abc123`) can be planned and applied against it
+ * once its collections and objects are seeded:
  *
  *   - a collection of objects with ids: `<path>` lists and creates, `<path>/<id>` reads, updates, deletes;
  *   - an object (a parent holding lists, maps or delimited strings, such as an application with its allowed
  *     origins, or a map of config vars): `<path>` reads, updates (PATCH, PUT, POST), deletes.
  *
  * Assumptions it encodes (about "a conventional JSON REST API", not about one provider; every real API the adapter
- * is pointed at is described by its plan line instead, see docs/api-verification.md):
- *   R1. Credentials arrive as `Authorization: Bearer <token>`, `Authorization: Basic <base64>` or a `*-Api-Key`
- *       header (`X-Api-Key`, `Statsig-Api-Key`); anything else is 401.
+ * is pointed at is described by its plan line or recipe instead, see docs/api-verification.md):
+ *   R1. Credentials arrive as `Authorization: Bearer <token>`, `Authorization: Basic <base64>` or a header whose
+ *       name ends in `-api-key`, `-key` or `-token` (`X-Api-Key`, `Statsig-Api-Key`, `X-Auth-Token`); anything
+ *       else is 401.
  *   R2. Collection objects are answered in a `{ data: <object> }` envelope, lists as `{ data: [...], next_cursor }`,
  *       paged with `?cursor=` under chaos `page_size` (`next_cursor` is null on the last page). Objects that are
- *       not in a collection are answered bare.
+ *       not in a collection are answered bare. A collection's style (seed `styles`, by collection path) changes the
+ *       envelopes, the cursor's place, and the id's field and type, so that a recipe is tested in its provider's
+ *       own response shapes.
  *   R3. A path is known once seeded or created: a POST to an unknown path creates the collection; a GET of an
- *       unknown path is 404. A create may choose the id (`"id"` in the body, like a flag key); otherwise the sim
- *       assigns `it_<n>`. A create whose `name` (or chosen id) already exists in the collection answers 409.
+ *       unknown path is 404. A create may choose the id (the id field, or the style's `id_from` field, in the
+ *       body, like a flag key or a database name); otherwise the sim assigns `it_<n>` (the next integer with
+ *       `numeric_ids`). A create whose `name` (or chosen id) already exists in the collection answers 409. Query
+ *       parameters other than `cursor` are ignored: a filtered list answers the whole collection.
  *   R4. PATCH (and POST to an object) is a JSON merge patch (RFC 7396: maps merge recursively, `null` deletes a
  *       field, lists are replaced whole); PUT replaces everything but a collection object's id. Bodies may be JSON
  *       or form-encoded (`a[b]=c`, every value a string). No write has a precondition (no ETag): the last write
@@ -25,7 +31,8 @@
  *   R6. With an `auth` seed, credentials are checked for real instead of R1, one scheme or several: bearer tokens
  *       issued by the OAuth2 client-credentials endpoint `POST /rest/oauth/token` (RFC 6749 §4.4; Basic or form
  *       client authentication; tokens expire after `token_ttl` seconds and the drift key `auth.revoke_tokens`
- *       revokes them), fixed bearer tokens (`tokens`, what a CLI prints), HTTP Digest (RFC 7616, qop=auth; a
+ *       revokes them), fixed bearer tokens (`tokens`, what a CLI prints), exact header values (`headers`, a key
+ *       behind a scheme prefix such as `Authorization: Api-Key <key>`), HTTP Digest (RFC 7616, qop=auth; a
  *       request without valid credentials gets a 401 with a fresh challenge), and AWS SigV4 (the signature
  *       recomputed and compared; see ../auth.ts). Anything else is 401.
  */
@@ -33,13 +40,33 @@ import type { IncomingHttpHeaders } from "node:http";
 import { digestChallenge, digestProblem, issueToken, sigV4Problem, tokenValid, type DigestConfig, type IssuedToken, type SigV4Config } from "../auth.js";
 import { page, Reply, route, router, type AuthRequest, type ProviderSim, type SimCore } from "../provider.js";
 
-/** One object of a collection, as stored and answered: its id and every field a client wrote. */
-export type RestItem = { id: string } & Record<string, unknown>;
+/** One object of a collection, as stored and answered: its id (under the style's id field) and every field a client wrote. */
+export type RestItem = Record<string, unknown>;
 
-/** Simulated REST API state, by path: collections of objects, and objects that are not in a collection. */
+/**
+ * How one collection answers (assumption R2). Every member is optional; the defaults are the conventional shape:
+ * `{ data: <object> }`, `{ data: [...], next_cursor }`, string ids under `id`.
+ */
+export interface RestStyle {
+  /** JSON pointer where a list answer holds the array. Default `/data`; `""` answers the bare array. */
+  list_path?: string;
+  /** JSON pointer where a single-object answer holds the object. Default `/data`; `""` answers it bare. */
+  item_path?: string;
+  /** JSON pointer of the next page's cursor in a list answer. Default `/next_cursor`; null: no cursor and no paging. */
+  next_path?: string | null;
+  /** The field holding the id. Default `id`. */
+  id_field?: string;
+  /** The body field a create may choose the id with. Default: the id field. */
+  id_from?: string;
+  /** Assign integer ids instead of `it_<n>`. */
+  numeric_ids?: boolean;
+}
+
+/** Simulated REST API state, by path: collections of objects, objects that are not in a collection, and styles. */
 export interface RestState {
   collections: Record<string, RestItem[]>;
   objects: Record<string, Record<string, unknown>>;
+  styles: Record<string, RestStyle>;
   /** Present when the seed configures real credentials (R6). */
   auth?: RestAuthState;
 }
@@ -55,6 +82,11 @@ export interface RestAuthSeed {
   token_ttl?: number;
   /** Bearer tokens accepted as they are (the token a CLI such as `gcloud auth print-access-token` prints). */
   tokens?: string[];
+  /**
+   * Accepted sets of header values (lower-case name → exact value), each complete on its own: a key behind a scheme
+   * prefix (`Api-Key <key>`), or an API key together with an application key.
+   */
+  headers?: Array<Record<string, string>>;
   /** Digest users (name → password), the algorithm (`MD5` by default) and the realm. */
   digest?: DigestConfig;
   /** SigV4 access keys (id → secret) and the region and service requests must be signed for. */
@@ -69,10 +101,12 @@ export interface RestAuthState extends RestAuthSeed {
   refused: number;
 }
 
-/** Initial REST state, by path: objects per collection (ids assigned when absent), and stand-alone objects. */
+/** Initial REST state, by path: objects per collection (ids assigned when absent), stand-alone objects, styles. */
 export interface RestSeed {
   collections?: Record<string, Array<Record<string, unknown>>>;
   objects?: Record<string, Record<string, unknown>>;
+  /** How each collection answers, by collection path (assumption R2). */
+  styles?: Record<string, RestStyle>;
   /** Real credentials (R6). */
   auth?: RestAuthSeed;
 }
@@ -86,11 +120,11 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
   },
 
   reset(core, seed) {
-    const collections: Record<string, RestItem[]> = {};
+    const state: RestState = { collections: {}, objects: structuredClone(seed?.objects ?? {}), styles: structuredClone(seed?.styles ?? {}) };
     for (const [path, items] of Object.entries(seed?.collections ?? {})) {
-      collections[path] = items.map((i) => ({ ...structuredClone(i), id: typeof i.id === "string" ? i.id : core.nextId("it_") }));
+      const field = styleOf(state, path).id_field;
+      state.collections[path] = items.map((i) => ({ ...structuredClone(i), [field]: isId(i[field]) ? i[field] : newId(core, state, path) }));
     }
-    const state: RestState = { collections, objects: structuredClone(seed?.objects ?? {}) };
     if (seed?.auth) state.auth = { ...structuredClone(seed.auth), issued: [], nonces: [], refused: 0 };
     return state;
   },
@@ -134,6 +168,8 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
 
 /** R6: the request carries one of the credentials the seed configures, valid. */
 function strictlyAuthorized(headers: IncomingHttpHeaders, req: AuthRequest, auth: RestAuthState): boolean {
+  const sets = (auth.headers ?? []).map((set) => Object.entries(set));
+  if (sets.some((set) => set.length > 0 && set.every(([name, v]) => headers[name] === v))) return true;
   const value = headers.authorization ?? "";
   const bearer = /^Bearer\s+(\S+)$/.exec(value)?.[1];
   if (bearer !== undefined) return (auth.tokens ?? []).includes(bearer) || tokenValid({ clients: auth.clients ?? {}, ttlSeconds: 0, issued: auth.issued }, bearer);
@@ -144,12 +180,59 @@ function strictlyAuthorized(headers: IncomingHttpHeaders, req: AuthRequest, auth
 
 function authorized(headers: IncomingHttpHeaders): boolean {
   if (/^(Bearer|Basic)\s+\S+$/.test(headers.authorization ?? "")) return true;
-  return Object.entries(headers).some(([name, v]) => /(^|-)api-key$/.test(name) && typeof v === "string" && v.trim() !== "");
+  return Object.entries(headers).some(([name, v]) => /(^|-)(api-key|key|token)$/.test(name) && typeof v === "string" && v.trim() !== "");
+}
+
+type FullStyle = Required<Omit<RestStyle, "next_path">> & { next_path: string | null };
+
+/** The style of the collection at `path`, every default filled in. */
+function styleOf(state: RestState, path: string): FullStyle {
+  const s = state.styles[path] ?? {};
+  const id = s.id_field ?? "id";
+  return {
+    list_path: s.list_path ?? "/data",
+    item_path: s.item_path ?? "/data",
+    next_path: s.next_path === undefined ? "/next_cursor" : s.next_path,
+    id_field: id,
+    id_from: s.id_from ?? id,
+    numeric_ids: s.numeric_ids ?? false,
+  };
+}
+
+function isId(v: unknown): v is string | number {
+  return (typeof v === "string" && v !== "") || typeof v === "number";
+}
+
+/** A fresh id for the collection at `path`: `it_<n>`, or an integer with `numeric_ids`. */
+function newId(core: SimCore, state: RestState, path: string): string | number {
+  const id = core.nextId("it_");
+  return styleOf(state, path).numeric_ids ? Number(id.slice(3)) : id;
+}
+
+/** `value` placed at the JSON pointer `pointer` of an otherwise empty object (`""`: the value itself). */
+function envelope(pointer: string, value: unknown): unknown {
+  if (pointer === "") return value;
+  const tokens = pointer.slice(1).split("/").map((t) => t.replace(/~1/g, "/").replace(/~0/g, "~"));
+  return tokens.reduceRight<unknown>((v, token) => ({ [token]: v }), value);
+}
+
+/** A list answer, with its cursor when the style has one. */
+function listBody(style: FullStyle, items: RestItem[], next: number | null): unknown {
+  const list = envelope(style.list_path, items);
+  if (style.next_path === null || !isRecord(list)) return list;
+  return mergeInto(list, envelope(style.next_path, next === null ? null : String(next)));
+}
+
+function mergeInto(a: Record<string, unknown>, b: unknown): Record<string, unknown> {
+  if (!isRecord(b)) return a;
+  for (const [k, v] of Object.entries(b)) a[k] = isRecord(v) && isRecord(a[k]) ? mergeInto(a[k], v) : v;
+  return a;
 }
 
 function driftItem(core: SimCore, state: RestState, coll: string, which: string, field: string, value: string, key: string): boolean {
   const list = state.collections[coll] ?? [];
-  const item = list.find((i) => i.id === which || i.name === which);
+  const idf = styleOf(state, coll).id_field;
+  const item = list.find((i) => String(i[idf]) === which || i.name === which);
   if (!item) throw new Error(`drift ${key}: no item ${which} in ${coll}`);
   if (field) {
     item[field] = parseValue(value);
@@ -157,7 +240,7 @@ function driftItem(core: SimCore, state: RestState, coll: string, which: string,
   }
   if (value !== "delete" && value !== "recreate") throw new Error(`drift ${key}: only "delete" and "recreate" are supported without a field`);
   const rest = list.filter((i) => i !== item);
-  if (value === "recreate") rest.push({ ...item, id: core.nextId("it_") });
+  if (value === "recreate") rest.push({ ...item, [idf]: newId(core, state, coll) });
   state.collections[coll] = rest;
   return true;
 }
@@ -199,7 +282,8 @@ function resolve(state: RestState, raw: string): Target {
   const cut = path.lastIndexOf("/");
   const collection = path.slice(0, cut);
   const id = decodeURIComponent(path.slice(cut + 1));
-  const index = (state.collections[collection] ?? []).findIndex((i) => i.id === id);
+  const idf = styleOf(state, collection).id_field;
+  const index = (state.collections[collection] ?? []).findIndex((i) => String(i[idf]) === id);
   return index >= 0 ? { kind: "item", collection, index, item: state.collections[collection]![index]! } : { kind: "none" };
 }
 
@@ -208,12 +292,13 @@ const notFound = (): Reply => error(404, "not found");
 function create(core: SimCore, state: RestState, path: string, body: unknown): Reply {
   if (!isRecord(body)) return error(400, "body must be a JSON object");
   const list = (state.collections[path] ??= []);
-  const chosen = typeof body.id === "string" && body.id !== "" ? body.id : undefined;
-  const clash = list.find((i) => (chosen !== undefined && i.id === chosen) || (body.name !== undefined && i.name === body.name));
-  if (clash) return error(409, `already exists: ${clash.id}`);
-  const item: RestItem = { ...structuredClone(body), id: chosen ?? core.nextId("it_") };
+  const style = styleOf(state, path);
+  const chosen = isId(body[style.id_from]) ? body[style.id_from] : undefined;
+  const clash = list.find((i) => (chosen !== undefined && i[style.id_field] === chosen) || (body.name !== undefined && i.name === body.name));
+  if (clash) return error(409, `already exists: ${String(clash[style.id_field])}`);
+  const item: RestItem = { ...structuredClone(body), [style.id_field]: chosen ?? newId(core, state, path) };
   list.push(item);
-  return new Reply(201, { data: item });
+  return new Reply(201, envelope(style.item_path, item));
 }
 
 function patch(state: RestState, t: Target, body: unknown): Reply {
@@ -223,9 +308,11 @@ function patch(state: RestState, t: Target, body: unknown): Reply {
     return new Reply(200, t.object);
   }
   if (t.kind !== "item") return notFound();
+  const style = styleOf(state, t.collection);
+  const id = t.item[style.id_field];
   mergePatch(t.item, body);
-  t.item.id = state.collections[t.collection]![t.index]!.id;
-  return new Reply(200, { data: t.item });
+  t.item[style.id_field] = id;
+  return new Reply(200, envelope(style.item_path, t.item));
 }
 
 function put(state: RestState, t: Target, body: unknown): Reply {
@@ -235,9 +322,16 @@ function put(state: RestState, t: Target, body: unknown): Reply {
     return new Reply(200, state.objects[t.path]);
   }
   if (t.kind !== "item") return notFound();
-  const next: RestItem = { ...structuredClone(body), id: t.item.id };
+  const style = styleOf(state, t.collection);
+  const next: RestItem = { ...structuredClone(body), [style.id_field]: t.item[style.id_field] };
   state.collections[t.collection]![t.index] = next;
-  return new Reply(200, { data: next });
+  return new Reply(200, envelope(style.item_path, next));
+}
+
+function list(core: SimCore, state: RestState, t: Extract<Target, { kind: "collection" }>, cursor: string | null): Reply {
+  const style = styleOf(state, t.path);
+  const pg = style.next_path === null ? { items: t.items, next: null } : page(core, t.items, cursor);
+  return new Reply(200, listBody(style, pg.items, pg.next));
 }
 
 const routes = router<RestState>(
@@ -251,10 +345,9 @@ const routes = router<RestState>(
     route("GET", "/*path", ({ core, state, params, url }) => {
       const t = resolve(state, `/${params.path}`);
       if (t.kind === "object") return new Reply(200, t.object);
-      if (t.kind === "item") return new Reply(200, { data: t.item });
+      if (t.kind === "item") return new Reply(200, envelope(styleOf(state, t.collection).item_path, t.item));
       if (t.kind === "none") return notFound();
-      const pg = page(core, t.items, url.searchParams.get("cursor"));
-      return new Reply(200, { data: pg.items, next_cursor: pg.next === null ? null : String(pg.next) });
+      return list(core, state, t, url.searchParams.get("cursor"));
     }),
 
     route("POST", "/*path", ({ core, state, params, body }) => {
@@ -272,7 +365,7 @@ const routes = router<RestState>(
       const t = resolve(state, `/${params.path}`);
       if (t.kind === "item") {
         state.collections[t.collection]!.splice(t.index, 1);
-        return new Reply(200, { id: t.item.id, deleted: true });
+        return new Reply(200, { id: t.item[styleOf(state, t.collection).id_field], deleted: true });
       }
       if (t.kind !== "object") return notFound();
       delete state.objects[t.path];

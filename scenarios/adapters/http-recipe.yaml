@@ -1,0 +1,72 @@
+name: "http recipes: a block overriding the recipe's defaults, plan-time param checks naming the param, unknown recipes and ops listing the known ones"
+plan: |
+  version: 1
+  providers:
+    http:
+      cloudflare: { recipe: cloudflare, base_url_env: REST_API_URL, auth: { bearer_env: REST_API_TOKEN } }
+  changes:
+    - id: dns
+      adapter: http
+      op: resource
+      recipe: cloudflare.dns_cname
+      zone_id: 023e105f4ecef8ad9ca31a8372d0c353
+      name: "${ctx.scope}.preview.example.com"
+      target: preview-host.example.net
+seed:
+  rest:
+    collections:
+      /zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records: [{ type: A, name: example.com, content: 192.0.2.1 }]
+    styles:
+      /zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records: { list_path: /result, item_path: /result, next_path: null }
+steps:
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { dns: create } }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { dns: applied }, outputs: { dns: { hostname: pr-42.preview.example.com } } }
+  - sim:
+      state:
+        rest.collections./zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records: { includes: { type: CNAME, name: pr-42.preview.example.com, content: preview-host.example.net, proxied: false, ttl: 1 } }
+      write_order: ["POST /rest/zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records"]
+  - run: apply --json
+    expect: { exit: 0, writes: 0, lines: { dns: unchanged } }
+  # A mistyped param is refused before any request, naming the param.
+  - plan: |
+      version: 1
+      providers:
+        http:
+          cloudflare: { recipe: cloudflare, base_url_env: REST_API_URL, auth: { bearer_env: REST_API_TOKEN } }
+      changes:
+        - { id: dns, adapter: http, op: resource, recipe: cloudflare.dns_cname, zone_id: 023e105f4ecef8ad9ca31a8372d0c353, name: x.example.com, target: y.example.net, proxied: "yes" }
+  - run: plan --json
+    expect: { exit: 2, error: PARAM_INVALID, stdout: ["`proxied` must be a boolean"] }
+  - plan: |
+      version: 1
+      changes:
+        - { id: dns, adapter: http, op: resource, recipe: cloudflare.dns_record, zone_id: 023e105f4ecef8ad9ca31a8372d0c353, name: x.example.com, target: y.example.net }
+  - run: plan --json
+    expect: { exit: 2, error: PARAM_INVALID, stdout: ["has no op `dns_record` (known: dns_cname)"] }
+  - plan: |
+      version: 1
+      changes:
+        - { id: dns, adapter: http, op: list_item, recipe: cloudflare.dns_cname, zone_id: 023e105f4ecef8ad9ca31a8372d0c353, name: x.example.com, target: y.example.net }
+  - run: plan --json
+    expect: { exit: 2, error: PARAM_INVALID, stdout: ["write `op: resource`"] }
+  # Back to the applied plan: destroy removes the one record and nothing else.
+  - plan: |
+      version: 1
+      providers:
+        http:
+          cloudflare: { recipe: cloudflare, base_url_env: REST_API_URL, auth: { bearer_env: REST_API_TOKEN } }
+      changes:
+        - id: dns
+          adapter: http
+          op: resource
+          recipe: cloudflare.dns_cname
+          zone_id: 023e105f4ecef8ad9ca31a8372d0c353
+          name: "${ctx.scope}.preview.example.com"
+          target: preview-host.example.net
+  - run: apply --destroy --json
+    expect: { exit: 0, status: complete, lines: { dns: destroyed } }
+  - sim:
+      state:
+        rest.collections./zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records: { length: 1 }

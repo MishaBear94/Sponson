@@ -1,0 +1,24 @@
+{
+  "cloudflare.dns_cname": {
+    "provider": {
+      "base_url": "https://api.cloudflare.com/client/v4",
+      "base_url_env": "CLOUDFLARE_API_URL",
+      "auth": {
+        "bearer_env": "CLOUDFLARE_API_TOKEN"
+      }
+    },
+    "key": "/zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records?type=CNAME&name.exact=pr-42.preview.example.com[name=pr-42.preview.example.com,type=CNAME]",
+    "id": "DELETE /zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records/ID"
+  },
+  "turso.database_branch": {
+    "provider": {
+      "base_url": "https://api.turso.tech/v1",
+      "base_url_env": "TURSO_API_URL",
+      "auth": {
+        "bearer_env": "TURSO_API_TOKEN"
+      }
+    },
+    "key": "/organizations/acme/databases/app-pr-42",
+    "id": "DELETE /organizations/acme/databases/app-pr-42"
+  }
+}

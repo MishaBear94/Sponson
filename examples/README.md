@@ -20,6 +20,8 @@ The format is specified in [docs/plan-format.md](../docs/plan-format.md).
 | [adopting-an-existing-project.plan.yaml](adopting-an-existing-project.plan.yaml) | what `sponson init` writes when it adopts; `{ keep: true }` |
 | [netlify-neon-preview.plan.yaml](netlify-neon-preview.plan.yaml) | Netlify values per deploy context; the Deploy Preview URL |
 | [http-flags-webhooks-allowlists.plan.yaml](http-flags-webhooks-allowlists.plan.yaml) | APIs with no adapter of their own, through the generic `http` adapter (illustrative) |
+| [cloudflare-pages-vars.plan.yaml](cloudflare-pages-vars.plan.yaml) | Cloudflare Pages preview and production variables; shared preview keys; write-only secrets |
+| [google-oauth-manual-step.plan.yaml](google-oauth-manual-step.plan.yaml) | a step no API can do (a Google OAuth redirect URI for the preview URL): a manual step, `--confirm` |
 
 ## nextjs-neon-preview.plan.yaml
 
@@ -104,6 +106,34 @@ Exit code 0. Run `sponson apply` again after the deploy (the README's workflow d
 callback is registered. With `--wait`, one `apply` polls until the deploy finishes instead. If the deploy fails, the
 callback is `skipped` with `EXTERNAL_FAILED` and the branch and variables stay.
 
+## google-oauth-manual-step.plan.yaml
+
+Google has no API for a web OAuth client's redirect URIs, so `google-redirect` is a [manual step](../docs/plan-format.md#manualstep):
+the plan says what a person must do, with the preview URL filled in. It waits for the deploy like any `from:`
+reference; then `plan` shows it as `todo` with its instructions, and `apply` writes everything else, leaves the step
+and `google-login` (which `depends_on` it) waiting, and exits 2:
+
+```text
+$ sponson apply
+...
+? google-redirect  manual.step  waiting  waiting on confirmation
+? google-login     vercel.env   waiting  waiting on confirmation
+
+manual steps (a person does these; agents never confirm them)
+  google-redirect: Allow pr-42's OAuth callback on the Google OAuth client acme-web
+    | Google offers no API for a web client's redirect URIs, so this is done by hand.
+    ...
+    Then confirm it: sponson apply --confirm google-redirect
+
+apply partial: waiting on confirmation for lines google-redirect, google-login
+```
+
+After adding the URI, the person runs `sponson apply --confirm google-redirect` (as the git user, or with
+`--approved-by <who>`): the receipt records who confirmed it and when, and `google-login` is applied. A later
+deployment with a new preview URL makes the step a todo again. `apply --destroy` removes the variables and shows the
+undo, waiting for `apply --destroy --confirm google-redirect`. In `--json`, the steps are in `manual` and the error is
+`MANUAL_STEP_PENDING`; an agent shows them to a person and never confirms on its own.
+
 ## launchdarkly-preview-flags.plan.yaml
 
 Two individual targets on flags that already exist in the LaunchDarkly project `acme-web`, environment `preview`.
@@ -163,3 +193,15 @@ references as we understand them; plan against the real API (`sponson plan` only
 `apply --destroy` removes the gate, the endpoint and the two list items, and leaves every other origin and
 redirect as it was. Reference: [`http.resource`](../docs/plan-format.md#httpresource),
 [`http.list_item`](../docs/plan-format.md#httplist_item).
+
+## cloudflare-pages-vars.plan.yaml
+
+A Cloudflare Pages project's variables: plain text under `vars:`, secrets under `secrets:`. Pages has one set of
+preview variables for every preview deployment, so `pages-preview` holds only values that are the same for every pull
+request; apply it from the default branch first (scope `main`), and pull requests then rely on it without owning it.
+A pull request that sets another value for one of these keys is refused with `OWNED_BY_OTHER_SCOPE`. Each line's
+`target` must equal the run's `--env`; the production line requires approval like any other.
+
+Cloudflare never returns a secret's value, so Sponson compares secrets by presence and type: `pages-production` sets
+`rewrite_secrets: true` so that a rotated `STRIPE_LIVE_SECRET_KEY` is written on the next apply. Variables reach the
+next deployment; Sponson does not redeploy a Pages project.

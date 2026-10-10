@@ -223,6 +223,23 @@ describe("launchdarkly flag_target", () => {
   });
 });
 
+describe("launchdarkly flag_target: production environments need approval", () => {
+  const ctx = { env: "preview", git: { branch: "feat/x", sha: "abc", short_sha: "abc" }, pr: { number: 42 }, scope: "pr-42" };
+  const writes = (block: Record<string, unknown>) => op.writesEnvironment!({ flag: FLAG }, ctx, block);
+
+  it("judges the provider block: an explicit `production`, else an environment key that looks like production", () => {
+    expect(writes(provider)).toBeNull();
+    for (const environment of ["production", "prod", "Prod-EU", "eu-production"]) expect(writes({ project: "demo", environment })).toBe("production");
+    expect(writes({ project: "demo", environment: "preprod", production: false })).toBeNull();
+    expect(writes({ project: "demo", environment: "live", production: true })).toBe("production");
+    expect(op.writesEnvironment!({ flag: FLAG }, ctx)).toBeNull();
+  });
+
+  it("a `production` that is not a boolean is PLAN_INVALID", () => {
+    expect(() => writes({ ...provider, production: "yes" })).toThrow(expect.objectContaining({ code: "PLAN_INVALID" }));
+  });
+});
+
 describe("simulated LaunchDarkly (assumptions LD1, LD4, LD5)", () => {
   let h: Harness;
   beforeEach(async () => {

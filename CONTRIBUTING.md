@@ -64,7 +64,7 @@ pnpm test                 # unit + scenarios + journeys + property, then the too
 pnpm test:tooling         # just the tooling suites: scaffold and docs-as-code checks (they run tsc/eslint)
 pnpm test:coverage        # unit + scenarios + journeys + property with a coverage table (not tooling); fails below CI's thresholds
 pnpm test:scenarios       # the acceptance catalogue only
-pnpm test:live            # contract suite against the real APIs (needs credentials, see scenarios/contract.test.ts)
+pnpm test:live            # contract suite and recipes against the real APIs (needs credentials, see scenarios/contract.test.ts, scenarios/recipes.test.ts)
 pnpm sim                  # start the fake cloud on :4777 for manual poking
 pnpm sponson plan         # run the CLI from source
 pnpm new:adapter <name>   # scaffold an adapter (add --dry-run to see what it would do)
@@ -86,13 +86,39 @@ uncovered. CodeQL (`.github/workflows/codeql.yml`) scans the TypeScript and the 
 third-party action is pinned to a commit SHA with its version in a comment (`uses: owner/action@<sha> # vX.Y.Z`);
 pin new ones the same way — Dependabot keeps the pins current, including in `action/action.yml`.
 
+## Adding a recipe
+
+A provider operation that is plain CRUD on one object, or one entry in a list on a parent, is a recipe: a YAML file
+the generic `http` adapter expands ([ADR 0020](docs/adr/0020-recipes.md), [docs/recipes.md](docs/recipes.md)). Copy an
+existing file in `packages/adapters/recipes/` and:
+
+1. **Verify against the provider's official API reference**, and cite every page you used under `docs`. Write each
+   fact the recipe relies on as a numbered assumption: `verified: true` with its `source`, or `verified: false`.
+2. **Write `packages/adapters/recipes/<provider>.yaml`** (`schema/recipe.schema.json` describes every key; the
+   `# yaml-language-server` line gives editor checks): `api` with the provider's conventional credential variable
+   and `<PROVIDER>_API_URL`; per op its `kind`, typed `params` with an `example` for each required one, and `http`
+   using `{ param: <name> }` and `{<name>}` path placeholders. Add `sim` hints when the sim needs them (a parent
+   object to seed for a list item, the body field a client-chosen id comes from).
+3. **Mark the row covered** in `docs/coverage.yaml` (`covered_by: recipe:<provider>.<op>`) and list its id in the
+   op's `covers`.
+4. **Run `SPONSON_UPDATE_RECIPE_LOCK=1 pnpm vitest run packages/adapters/src/recipes.test.ts`** to pin the new op's
+   identity, then `pnpm docs:gen` (docs/recipes.md, the coverage tables and numbers, the site).
+5. **`pnpm test`**: the schema, metadata, expansion and param checks (`recipes.test.ts`) and the sim lifecycle
+   (`scenarios/recipes.test.ts`) pick the file up by themselves. If you have an account, run `pnpm test:live` with the
+   credential and the `SPONSON_LIVE_*` variables your `live.params` name.
+6. **A changeset** (`@sponson/adapters`, minor).
+
+Changing a shipped recipe so that the identity lock fails (a base URL, a credential variable, a path, a match field)
+re-identifies every resource made with it: only with a **Breaking:** changeset that says what to do.
+
 ## Adding an adapter
 
 First check whether the provider needs one: the generic `http` adapter
 ([docs/plan-format.md](docs/plan-format.md#the-generic-http-adapter)) already manages plain CRUD objects and list
 entries of any JSON, form or XML REST API, or GraphQL API, from the plan, authenticated by a bearer token, a header,
-Basic, an OAuth2 client-credentials token, a token a CLI prints, AWS SigV4 or HTTP Digest. Write a first-class
-adapter when the lifecycle needs more than a request template can say ([ADR 0017](docs/adr/0017-generic-http-adapter.md)).
+Basic, an OAuth2 client-credentials token, a token a CLI prints, AWS SigV4 or HTTP Digest, and a
+[recipe](#adding-a-recipe) makes one such operation a one-line building block. Write a first-class adapter when the
+lifecycle needs more than a request template can say ([ADR 0017](docs/adr/0017-generic-http-adapter.md)).
 
 A new credential form for it belongs in `packages/adapters/src/http-adapter-auth.ts` (parsing and run time
 together): environment variable NAMES only, every value obtained at run time passed to `actx.secret` before it is
@@ -124,7 +150,7 @@ time and keep the tests green while you replace the TODOs with the real API.
 
 The checklist, in full:
 
-1. **The adapter file**, `packages/adapters/src/<name>.ts`, built only with the stable authoring API of `@sponson/adapters` (below). Implement `adopt()` on each op that `sponson init` should be able to adopt, and `writesEnvironment()` when the op targets a deployment environment. Every export carries a doc comment and is listed in `PUBLIC_API` (`packages/core/src/public-api.test.ts`); the scaffold does this for the names the template exports, so only renamed or new exports need adding by hand.
+1. **The adapter file**, `packages/adapters/src/<name>.ts`, built only with the stable authoring API of `@sponson/adapters` (below). Implement `adopt()` on each op that `sponson init` should be able to adopt, and `writesEnvironment(params, ctx, provider)` when the op targets a deployment environment, from its params or from its provider block (a block naming a production environment must make the line need approval). Every export carries a doc comment and is listed in `PUBLIC_API` (`packages/core/src/public-api.test.ts`); the scaffold does this for the names the template exports, so only renamed or new exports need adding by hand.
 2. **Register it**: in-tree, add it to `createRegistry()` in `packages/adapters/src/index.ts`; out of tree, publish a module exporting `register(registry)` and load it with `SPONSON_PLUGINS=<module>`.
 3. **Sim routes**: `packages/sim/src/routes/<name>.ts` implementing `ProviderSim` (seed, reset, drift, routes, and its `env` token/URL variable names), plus one entry in `PROVIDERS` in `packages/sim/src/state.ts`. Routes are a table: one `route(method, path, handler)` per endpoint, with `:name` path segments arriving in `params`, served by `router(…)`. Write the API assumptions your routes encode at the top of that file, numbered, each marked verified (cite the provider's docs or OpenAPI spec) or unverified; add a section for them to `docs/api-verification.md`. Pin the ones a wrong guess would break in `scenarios/contract.test.ts` (`assumption <id>: …`) so `pnpm test:live` can check them.
 4. **One scenario** under `scenarios/`, and an adapter unit test against the sim (`packages/adapters/src/testing.ts`).

@@ -77,8 +77,9 @@ One release, one plan. Three commands.
 - **Drift is reported, never silently overwritten.** Something changed in a console since the last apply? `plan` says so; `apply` refuses that line until you pass `--reconcile`. Something exists that the plan does not mention? It is listed and left alone.
 - **Receipts are the agent's memory.** Each run writes what actually happened to an orphan branch of your repo, one per environment and scope (`sponson-receipts/<env>/<scope>`, so unrelated pull requests never wait on each other): a ledger of every resource the scope owns (kept across failed, refused and crashed runs), what each line did, and which commits were applied. Creates are recorded before they are sent, so even a write whose response was lost is never forgotten. The agent reads the receipt, not its own last tool call.
 - **Adopting is not copying.** `sponson init` adopts existing resources as `{ keep: true }`: Sponson takes over that they exist, keeps their live values, and never destroys them.
-- **Production needs a human.** `--env production` without `--approved-by` is refused before any adapter is touched. The default environment is always `preview`; nothing is inferred from a branch name.
+- **Production needs a human.** `--env production` without `--approved-by` is refused before any adapter is touched, and so is any run with a line that writes to production (a Vercel `target: production`, a LaunchDarkly environment that is production). The default environment is always `preview`; nothing is inferred from a branch name.
 - **Destroy is symmetric.** `sponson apply --destroy` removes what Sponson created, in reverse order, and never touches resources it merely adopted.
+- **What no API can do is a step for a person.** A [`manual.step`](docs/plan-format.md#manualstep) line (a Google OAuth redirect URI for the preview URL) shows its instructions as a todo, holds back the lines that depend on it until someone runs `apply --confirm <line>`, records who confirmed it and when, and asks for its undo on destroy. Agents show the step to a person; they never confirm it.
 
 ## Quick start
 
@@ -149,7 +150,9 @@ password, or a Supabase preview branch, in that order of preference when several
 variable that references it under the name your code reads; a Clerk redirect or a Supabase Auth redirect for the
 preview URL), fills in the project ids it can find, and marks each one it cannot with a `TODO` comment saying where to
 look (`vercel link`, `netlify link`, `neonctl projects list`, `supabase link`). LaunchDarkly gets a commented example line to fill in with a
-flag key and uncomment. Services Sponson does not manage yet (Auth0, Cloudflare, PostHog, Stripe,
+flag key and uncomment. A Wrangler configuration (`wrangler.toml`, `wrangler.json`) gives a Cloudflare Pages
+variables line with the project's `name`; Pages preview variables are shared by every preview, so no per-PR value
+is wired into them. Services Sponson does not manage yet (Auth0, PostHog, Stripe,
 Sentry, …) are listed as "not supported yet" with a link to the
 [roadmap](ROADMAP.md), never silently dropped. With nothing detected it writes the Vercel + Neon template.
 
@@ -166,6 +169,11 @@ Next: set VERCEL_TOKEN, NEON_API_KEY, CLERK_SECRET_KEY in your environment, then
 `todo` (each placeholder's `path` and `hint`) and `assumed` (true when it wrote the template).
 
 Which providers are covered today, and what is planned, is measured in [docs/coverage.md](docs/coverage.md).
+
+Beyond the built-in adapters, any JSON REST API is reachable with the generic `http` adapter, and the providers it
+has been verified against ship as [recipes](docs/recipes.md): one plan line names a provider operation and fills in
+its params, for example `recipe: cloudflare.dns_cname` with a `zone_id`, a `name` and a `target`. Each recipe cites the
+API docs it was checked against and runs through create, re-apply, drift and destroy in the test suite.
 
 Third-party adapters and secret sources load as plugins: `SPONSON_PLUGINS=sponson-adapter-x,./local-adapter.mjs`, each module exporting `register(registry)`.
 
@@ -263,6 +271,7 @@ Format, engine, the [built-in adapters](docs/plan-format.md#built-in-ops) and [s
 - [ARCHITECTURE.md](ARCHITECTURE.md): how a `plan` and an `apply` run through the code, the ledger, scopes, redaction.
 - [docs/plan-format.md](docs/plan-format.md): every key of `release.plan.yaml`, value forms, `${ctx.*}`, the built-in ops.
 - [docs/errors.md](docs/errors.md): every error code, its exit code and remedy (generated from the code).
+- [docs/recipes.md](docs/recipes.md): the shipped recipes, their params and sources (generated from the recipe files).
 - [docs/adr/](docs/adr/README.md): the design decisions and why they were made.
 - [examples/](examples/README.md): complete, tested plans to start from.
 
@@ -275,7 +284,7 @@ line of `release.plan.yaml`:
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full adapter checklist: the adapter file, its registration (or a plugin loaded with `SPONSON_PLUGINS`), one sim routes file, and one scenario.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full adapter checklist: the adapter file, its registration (or a plugin loaded with `SPONSON_PLUGINS`), one sim routes file, and one scenario. Adding a recipe is one YAML file; its checklist is there too.
 
 ## License
 

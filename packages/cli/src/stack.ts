@@ -7,8 +7,9 @@
  * names are kept. The one exception is a database URL, whose host is classified against known provider domains
  * (`*.neon.tech`, `*.supabase.co`, …) inside `dbHostProvider`; the URL itself, its credentials and the host are
  * dropped there and only the provider's id comes out. Ids that are not secrets (`.vercel/project.json`, `.neon`,
- * `supabase/.temp/project-ref`, `.netlify/state.json`, `VERCEL_PROJECT_ID` / `VERCEL_ORG_ID` / `NEON_PROJECT_ID` /
- * `NETLIFY_SITE_ID` in the process environment) are read as values.
+ * `supabase/.temp/project-ref`, `.netlify/state.json`, the `name` and `account_id` of a Wrangler configuration,
+ * `VERCEL_PROJECT_ID` / `VERCEL_ORG_ID` / `NEON_PROJECT_ID` / `NETLIFY_SITE_ID` / `CLOUDFLARE_ACCOUNT_ID` in the
+ * process environment) are read as values.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -43,7 +44,27 @@ export interface StackDetection {
   found: Finding[];
   /** Detected but not managed by any built-in adapter. Never silently dropped. */
   unsupported: UnsupportedFinding[];
-  ids: { vercelProject?: string; vercelTeam?: string; vercelProjectFrom?: string; neonProject?: string; neonProjectFrom?: string; supabaseProject?: string; supabaseProjectFrom?: string; netlifySite?: string; netlifySiteFrom?: string };
+  ids: {
+    vercelProject?: string;
+    vercelTeam?: string;
+    vercelProjectFrom?: string;
+    neonProject?: string;
+    neonProjectFrom?: string;
+    supabaseProject?: string;
+    supabaseProjectFrom?: string;
+    netlifySite?: string;
+    netlifySiteFrom?: string;
+    /** The Pages project name: the Wrangler configuration's `name`. */
+    cloudflareProject?: string;
+    cloudflareProjectFrom?: string;
+    cloudflareAccount?: string;
+    cloudflareAccountFrom?: string;
+  };
+  /**
+   * A Wrangler configuration was found and it has no `pages_build_output_dir`: it may describe a Worker rather than
+   * a Pages project. Undefined when there is no Wrangler configuration.
+   */
+  cloudflareNotPages?: boolean;
   /** The variable the app reads its database URL from (DATABASE_URL unless the code says otherwise). */
   databaseVar: string;
   /** Where `databaseVar` came from, for the comment in the plan; undefined for the default. */
@@ -166,6 +187,9 @@ interface Rule {
   pointer?: string;
 }
 
+/** Wrangler's configuration files, in the order Wrangler prefers them. */
+const WRANGLER_FILES = ["wrangler.json", "wrangler.jsonc", "wrangler.toml"];
+
 /** What Sponson manages (or uses to name variables). Order is the order of the summary. */
 const SUPPORTED: Rule[] = [
   { id: "vercel", name: "Vercel", kind: "provider", deps: ["vercel", "@vercel/"], env: /^VERCEL_/, files: ["vercel.json", ".vercel/project.json"] },
@@ -175,6 +199,7 @@ const SUPPORTED: Rule[] = [
   { id: "launchdarkly", name: "LaunchDarkly", kind: "provider", deps: ["@launchdarkly/", "launchdarkly-node-server-sdk", "launchdarkly-js-client-sdk", "launchdarkly-react-client-sdk"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_)?LAUNCHDARKLY_/ },
   { id: "supabase", name: "Supabase", kind: "provider", deps: ["@supabase/"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_|NUXT_PUBLIC_)?SUPABASE_/, files: ["supabase/config.toml", "supabase/.temp/project-ref"] },
   { id: "netlify", name: "Netlify", kind: "provider", deps: ["@netlify/", "netlify-cli"], env: /^NETLIFY_/, files: ["netlify.toml", ".netlify/state.json"] },
+  { id: "cloudflare", name: "Cloudflare Pages", kind: "provider", deps: ["wrangler", "@cloudflare/next-on-pages"], env: /^CLOUDFLARE_/, files: WRANGLER_FILES },
   { id: "next", name: "Next.js", kind: "framework", deps: ["next"] },
   { id: "remix", name: "Remix", kind: "framework", deps: ["@remix-run/"] },
   { id: "sveltekit", name: "SvelteKit", kind: "framework", deps: ["@sveltejs/kit"] },
@@ -188,7 +213,6 @@ const SUPPORTED: Rule[] = [
 const UNSUPPORTED: Rule[] = [
   { id: "turso", name: "Turso", kind: "service", deps: ["@libsql/client"], env: /^TURSO_/, pointer: NEW_ISSUE },
   { id: "auth0", name: "Auth0", kind: "service", deps: ["auth0", "@auth0/"], env: /^AUTH0_/, pointer: "allowed callback URLs: issue #16 (https://github.com/MishaBear94/Sponson/issues/16)" },
-  { id: "cloudflare", name: "Cloudflare", kind: "service", deps: ["wrangler", "@cloudflare/"], env: /^(CLOUDFLARE_|CF_)/, files: ["wrangler.toml", "wrangler.json", "wrangler.jsonc"], pointer: NEW_ISSUE },
   { id: "railway", name: "Railway", kind: "service", env: /^RAILWAY_/, files: ["railway.json", "railway.toml"], pointer: `deploy-target env vars: ${ROADMAP_ADAPTERS}` },
   { id: "fly", name: "Fly.io", kind: "service", files: ["fly.toml"], env: /^FLY_/, pointer: `deploy-target env vars: ${ROADMAP_ADAPTERS}` },
   { id: "firebase", name: "Firebase", kind: "service", deps: ["firebase", "firebase-admin"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_)?FIREBASE_/, files: ["firebase.json"], pointer: NEW_ISSUE },
@@ -216,7 +240,7 @@ function unique<T>(xs: T[]): T[] {
 // ---------------------------------------------------------------------------
 
 /** The variables that may carry provider ids into `init` (ids, not secrets). */
-export type IdEnv = Partial<Record<"VERCEL_PROJECT_ID" | "VERCEL_ORG_ID" | "NEON_PROJECT_ID" | "NETLIFY_SITE_ID", string>>;
+export type IdEnv = Partial<Record<"VERCEL_PROJECT_ID" | "VERCEL_ORG_ID" | "NEON_PROJECT_ID" | "NETLIFY_SITE_ID" | "CLOUDFLARE_ACCOUNT_ID", string>>;
 
 /**
  * Detect the stack of the repository `reader` reads. `env` is the process environment, from which only the
@@ -224,13 +248,11 @@ export type IdEnv = Partial<Record<"VERCEL_PROJECT_ID" | "VERCEL_ORG_ID" | "NEON
  */
 export async function detectStack(reader: RepoReader, env: IdEnv = {}): Promise<StackDetection> {
   const s = await gatherSignals(reader);
-  const ids = providerIds(s, env);
+  const wrangler = wranglerConfig(s);
+  const ids = { ...providerIds(s, env), ...cloudflareIds(wrangler, env) };
   const found: Finding[] = [];
   for (const rule of SUPPORTED) {
-    const evidence = evidenceFor(rule, s);
-    if (rule.id === "vercel" && env.VERCEL_PROJECT_ID) evidence.push("VERCEL_PROJECT_ID in the environment");
-    if (rule.id === "neon" && env.NEON_PROJECT_ID) evidence.push("NEON_PROJECT_ID in the environment");
-    if (rule.id === "netlify" && env.NETLIFY_SITE_ID) evidence.push("NETLIFY_SITE_ID in the environment");
+    const evidence = [...evidenceFor(rule, s), ...idEnvEvidence(rule.id, env)];
     if (evidence.length > 0) found.push({ id: rule.id, name: rule.name, kind: rule.kind, evidence });
   }
   const unsupported: UnsupportedFinding[] = [];
@@ -246,7 +268,67 @@ export async function detectStack(reader: RepoReader, env: IdEnv = {}): Promise<
     ...databaseVar(s),
     publicPrefix: PUBLIC_PREFIX[framework ?? ""] ?? "",
     vercelAutoDeployOff: autoDeployOff(s.files.get("vercel.json")),
+    ...(wrangler ? { cloudflareNotPages: wrangler.pagesOutputDir === undefined } : {}),
   };
+}
+
+/** The provider id variable in the environment that is evidence for a rule (it names a project or site). */
+const ID_ENV_EVIDENCE: Record<string, keyof IdEnv> = { vercel: "VERCEL_PROJECT_ID", neon: "NEON_PROJECT_ID", netlify: "NETLIFY_SITE_ID" };
+
+function idEnvEvidence(ruleId: string, env: IdEnv): string[] {
+  const name = ID_ENV_EVIDENCE[ruleId];
+  return name && env[name] ? [`${name} in the environment`] : [];
+}
+
+/** The top-level keys of a Wrangler configuration that `init` uses: ids and the Pages marker, never secrets. */
+interface WranglerConfig {
+  file: string;
+  name?: string;
+  accountId?: string;
+  pagesOutputDir?: string;
+}
+
+/** The first Wrangler configuration file present, read for `name`, `account_id` and `pages_build_output_dir`. */
+function wranglerConfig(s: Signals): WranglerConfig | undefined {
+  const file = WRANGLER_FILES.find((f) => s.files.has(f));
+  if (file === undefined) return undefined;
+  const text = s.files.get(file)!;
+  const top = file.endsWith(".toml") ? tomlTopLevel(text) : jsonFile(stripJsonComments(text));
+  const name = str(top.name);
+  const accountId = str(top.account_id);
+  const pagesOutputDir = str(top.pages_build_output_dir);
+  return { file, ...(name ? { name } : {}), ...(accountId ? { accountId } : {}), ...(pagesOutputDir ? { pagesOutputDir } : {}) };
+}
+
+/** `key = "string"` pairs before the first `[table]` of a TOML file: enough for Wrangler's top-level ids. */
+function tomlTopLevel(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s*\[/.test(line)) break;
+    const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(line);
+    if (m) out[m[1]!] = m[2] ?? m[3]!;
+  }
+  return out;
+}
+
+/** JSONC to JSON: line and block comments outside strings, and trailing commas, removed. */
+function stripJsonComments(text: string): string {
+  const noComments = text.replace(/("(?:\\.|[^"\\])*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (_m, str: string | undefined) => str ?? "");
+  return noComments.replace(/,(\s*[}\]])/g, "$1");
+}
+
+function cloudflareIds(w: WranglerConfig | undefined, env: IdEnv): Partial<StackDetection["ids"]> {
+  const ids: Partial<StackDetection["ids"]> = {};
+  if (w?.name) {
+    ids.cloudflareProject = w.name;
+    ids.cloudflareProjectFrom = w.file;
+  }
+  const account = str(env.CLOUDFLARE_ACCOUNT_ID) ?? w?.accountId;
+  if (account) {
+    ids.cloudflareAccount = account;
+    ids.cloudflareAccountFrom = str(env.CLOUDFLARE_ACCOUNT_ID) ? "CLOUDFLARE_ACCOUNT_ID" : w!.file;
+  }
+  return ids;
 }
 
 const PUBLIC_PREFIX: Record<string, string> = { next: "NEXT_PUBLIC_", sveltekit: "PUBLIC_", astro: "PUBLIC_", nuxt: "NUXT_PUBLIC_", remix: "" };

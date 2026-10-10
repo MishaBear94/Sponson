@@ -17,7 +17,7 @@ import { SponsonError, canonicalJson, sha256, type AdapterContext, type ApplyRes
 import { ABSENT, SENSITIVE, assertNoPending, desiredSide, paramError } from "./common.js";
 import { isObject, listAll, type ApiClient } from "./http.js";
 import { failedWith, httpClient, idOf, itemOf, literalOf, write } from "./http-adapter-client.js";
-import { ADAPTER, apiBlock, at, bodyOf, deepMerge, fieldTokens, fillPath, firstMarker, isKeep, parseResource, pointerTokens, projection, resourceOutputs, stateHash, type FindSpec, type ResourceSpec } from "./http-adapter-spec.js";
+import { ADAPTER, apiBlock, apiEnvironment, at, bodyOf, deepMerge, fieldTokens, fillPath, firstMarker, isKeep, parseResource, pointerTokens, projection, resourceOutputs, stateHash, type FindSpec, type ResourceSpec } from "./http-adapter-spec.js";
 import { fillVariables, graphqlRequest, requestName, usesId, variablesPending, type GraphqlSpec } from "./http-adapter-graphql.js";
 
 /** An object as found: its provider id and its body. */
@@ -67,6 +67,14 @@ function locator(spec: ResourceSpec, id: string): string {
   const method = spec.destroy === "keep" ? "KEEP" : spec.delete.method;
   const gone = spec.goneStatus.length ? ` gone=${spec.goneStatus.join(",")}` : "";
   return `${method} ${fillPath(spec.delete.path, spec.vars, id)}${gone}`;
+}
+
+/**
+ * What the ledger knows a line's object by: its key, and its record id with `id` standing for the provider's id.
+ * The recipe identity lock (recipes.test.ts) pins it per recipe op.
+ */
+export function resourceIdentity(spec: ResourceSpec, id: string): { key: string | undefined; id: string } {
+  return { key: resourceKey(spec), id: locator(spec, id) };
 }
 
 /** The request a record id names. */
@@ -345,6 +353,7 @@ export const resource: OpSpec = {
   outputs: { id: { available: "immediate" } },
   outputsFor: resourceOutputs,
   providerFor: apiBlock,
+  writesEnvironment: apiEnvironment,
 
   async read(actx, params) {
     const spec = parseResource(params);

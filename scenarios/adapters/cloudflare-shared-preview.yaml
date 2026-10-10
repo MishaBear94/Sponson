@@ -1,0 +1,57 @@
+# Pages preview variables are one set shared by every preview deployment: a key is one resource in the preview
+# environment, whichever pull request wrote it. A second scope may rely on it unchanged but never change it.
+name: "cloudflare: a second pull request may not change a Pages preview variable another one manages"
+plan: |
+  version: 1
+  providers:
+    cloudflare: { account: acc_demo, project: demo }
+  changes:
+    - id: pages
+      adapter: cloudflare
+      op: pages_env
+      vars:
+        FEATURE_PR: "${ctx.pr.number}"
+      environments: [preview]
+steps:
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { pages: applied } }
+  - ctx: { pr: 43, branch: feat/y }
+  - run: plan --json
+    expect:
+      exit: 1
+      plan_lines: { pages: blocked }
+      errors: { pages: "managed by scope `pr-42`" }
+  - run: apply --json
+    expect:
+      exit: 1
+      writes: 0
+      lines: { pages: blocked }
+      errors: { pages: "managed by scope `pr-42`" }
+  - sim:
+      state:
+        "cloudflare.accounts.acc_demo.projects.demo.deployment_configs.preview.env_vars.FEATURE_PR.value": "42"
+  # The same value is fine: pr-43 relies on pr-42's variable, and its destroy leaves it alone.
+  - plan: |
+      version: 1
+      providers:
+        cloudflare: { account: acc_demo, project: demo }
+      changes:
+        - id: pages
+          adapter: cloudflare
+          op: pages_env
+          vars:
+            FEATURE_PR: "42"
+          environments: [preview]
+  - run: apply --json
+    expect: { exit: 0, writes: 0, lines: { pages: unchanged } }
+  - run: apply --destroy --json
+    expect: { exit: 0, writes: 0 }
+  - sim:
+      state:
+        "cloudflare.accounts.acc_demo.projects.demo.deployment_configs.preview.env_vars.FEATURE_PR.value": "42"
+  - ctx: { pr: 42, branch: feat/x }
+  - run: apply --destroy --json
+    expect: { exit: 0, lines: { pages: destroyed } }
+  - sim:
+      state:
+        "cloudflare.accounts.acc_demo.projects.demo.deployment_configs.preview.env_vars.FEATURE_PR": absent

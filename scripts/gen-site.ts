@@ -10,7 +10,7 @@
  *                                                  stands
  *   site/reference/*.mdx                           docs/plan-format.md, docs/errors.md, examples/ (README and every
  *                                                  plan, embedded), docs/api-verification.md when it exists,
- *                                                  docs/coverage.md, and
+ *                                                  docs/recipes.md, docs/coverage.md, and
  *                                                  the CLI reference from the CLI's own `--help`
  *   site/contributing/**                           CONTRIBUTING.md, ARCHITECTURE.md, docs/adr/, SECURITY.md,
  *                                                  ROADMAP.md, CHANGELOG.md
@@ -90,6 +90,7 @@ const FILE_PAGES: Record<string, string> = {
   "docs/errors.md": "reference/errors",
   "docs/api-verification.md": "reference/api-verification",
   "docs/coverage.md": "reference/coverage",
+  "docs/recipes.md": "reference/recipes",
   "examples/README.md": "reference/examples",
   examples: "reference/examples",
   "CONTRIBUTING.md": "contributing/contributing",
@@ -119,6 +120,7 @@ const META: Record<string, PageMeta> = {
   "reference/examples": { title: "Examples", description: "Complete, tested plans to start from." },
   "reference/api-verification": { title: "API verification", description: "How the fake cloud's assumptions are checked against the real provider APIs." },
   "reference/coverage": { title: "Provider coverage", description: "Which per-environment SaaS state Sponson covers today, and the plan to cover the rest." },
+  "reference/recipes": { title: "Recipes", description: "Verified, tested building blocks for the generic http adapter: one line per provider operation." },
   "contributing/contributing": { title: "Contributing", description: "Set up, run the tests, add an adapter, a secret source or a scenario." },
   "contributing/architecture": { title: "Architecture", description: "How plan and apply run through the code: the ledger, scopes, references and redaction." },
   "contributing/decisions": { title: "Decision records", sidebarTitle: "Overview", description: "The design decisions behind Sponson and why they were made." },
@@ -521,6 +523,7 @@ async function navigation(): Promise<unknown> {
   const adrs = (await adrFiles()).map((f) => `contributing/adr/${f.slice(0, -3)}`);
   const reference = ["reference/plan-format", "reference/errors", "reference/cli", "reference/examples"];
   if (existsSync(join(REPO, "docs/api-verification.md"))) reference.push("reference/api-verification");
+  if (existsSync(join(REPO, "docs/recipes.md"))) reference.push("reference/recipes");
   if (existsSync(join(REPO, "docs/coverage.md"))) reference.push("reference/coverage");
   return {
     tabs: [
@@ -581,6 +584,7 @@ export async function generate(): Promise<GeneratedFile[]> {
     ["docs/errors.md", "reference/errors"],
     ["docs/api-verification.md", "reference/api-verification"],
     ["docs/coverage.md", "reference/coverage"],
+    ["docs/recipes.md", "reference/recipes"],
     ["CONTRIBUTING.md", "contributing/contributing"],
     ["ARCHITECTURE.md", "contributing/architecture"],
     ["docs/adr/README.md", "contributing/decisions"],

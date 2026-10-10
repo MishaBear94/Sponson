@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
+import { SponsonError } from "../errors.js";
 import type { LedgerEntry, Receipt, ReceiptLine } from "../types.js";
 import { Lease, withParentLock } from "./lease.js";
 import type { Ledger } from "./ledger.js";
+import { destroyManual } from "./manual.js";
 import { prepare, requireApproval, type Prepared } from "./prepare.js";
 import { receiptSkeleton, rereadLine, toRecord } from "./receipt.js";
 import { RunContext } from "./run-context.js";
-import type { ApplyResultSummary, RunOptions } from "./types.js";
+import type { ApplyResultSummary, ManualTodo, RunOptions } from "./types.js";
 
 /**
  * Remove everything the ledger says Sponson created in this scope, newest first, using the
@@ -31,14 +33,17 @@ export async function destroyRun(opts: RunOptions): Promise<ApplyResultSummary> 
       return { receipt, drift: [], warnings: rc.warnings };
     }
 
+    checkUndoConfirm(rc, prepared);
     await locateIntents(rc, prepared);
-    for (const group of groups(rc.ledger).reverse()) await destroyGroup(rc, prepared, receipt, group, lease.holder);
+    const todos: ManualTodo[] = [];
+    for (const group of groups(rc.ledger).reverse()) todos.push(...(await destroyGroup(rc, prepared, receipt, group, lease.holder, now().toISOString())));
 
     receipt.ledger = rc.ledger.toJSON();
-    receipt.status = Object.values(receipt.lines).some((l) => l.status === "destroy_failed") ? "failed" : "complete";
+    const statuses = Object.values(receipt.lines).map((l) => l.status);
+    receipt.status = statuses.includes("destroy_failed") ? "failed" : statuses.includes("waiting") ? "partial" : "complete";
     receipt.finishedAt = now().toISOString();
     await lease.write(receipt);
-    return { receipt, drift: [], warnings: rc.warnings };
+    return { receipt, drift: [], warnings: rc.warnings, ...(todos.length ? { manual: todos.reverse() } : {}) };
   } finally {
     const warning = await lease.release();
     if (warning) rc.warnings.push(warning);
@@ -49,10 +54,17 @@ export async function destroyRun(opts: RunOptions): Promise<ApplyResultSummary> 
  * Destroy one line's resources: what Sponson created is deleted, adopted ones are forgotten, and an intent
  * nobody could locate fails the line (it may exist, and only a human can tell).
  */
-async function destroyGroup(rc: RunContext, prepared: Prepared, receipt: Receipt, group: LedgerEntry[], holder: string): Promise<void> {
+async function destroyGroup(rc: RunContext, prepared: Prepared, receipt: Receipt, group: LedgerEntry[], holder: string, at: string): Promise<ManualTodo[]> {
   const head = group[0]!;
   const line: ReceiptLine = receipt.lines[head.line] ?? { id: head.line, adapter: head.adapter, op: head.op, status: "destroyed", createdBy: "sponson", resources: [], outputs: head.outputs ?? {} };
   receipt.lines[head.line] = line;
+  // Manual steps (ADR 0021): a person undoes them; there is nothing to delete at a provider.
+  const manual = group.filter((e) => e.createdBy === "sponson" && e.manual);
+  if (manual.length) {
+    const todos = destroyManual(rc, line, manual, at);
+    line.resources = rc.ledger.all().filter((x) => x.line === head.line).map(toRecord);
+    return todos;
+  }
   const ours = group.filter((e) => e.createdBy === "sponson");
   const adopted = group.filter((e) => e.createdBy === "adopted");
   const unknown = group.filter((e) => e.createdBy === "intent");
@@ -69,10 +81,24 @@ async function destroyGroup(rc: RunContext, prepared: Prepared, receipt: Receipt
       line.status = "skipped";
       line.error = adopted.length ? "skipped: adopted resources are never destroyed" : "skipped: nothing created by Sponson";
     }
-    return;
+    return [];
   }
   await deleteOurs(rc, prepared, line, head, ours, holder);
   line.resources = rc.ledger.all().filter((x) => x.line === head.line).map(toRecord);
+  return [];
+}
+
+/**
+ * `confirm` on destroy names manual steps whose undo a person did: lines of manual steps in the ledger (a line the
+ * plan no longer has included). It needs the person's name.
+ */
+function checkUndoConfirm(rc: RunContext, prepared: Prepared): void {
+  const confirm = rc.opts.confirm ?? [];
+  if (confirm.length === 0) return;
+  if (!(rc.opts.confirmedBy ?? "").trim()) throw new SponsonError("USAGE", `Confirming the undo of ${confirm.map((l) => `\`${l}\``).join(", ")} needs the name of the person who did it (confirmedBy).`, { confirm });
+  const manual = new Set([...rc.ledger.all().filter((e) => e.manual).map((e) => e.line), ...prepared.ordered.filter((c) => prepared.ops.get(c.id)!.manual).map((c) => c.id)]);
+  const wrong = confirm.filter((id) => !manual.has(id));
+  if (wrong.length) throw new SponsonError("USAGE", `Cannot confirm ${wrong.map((id) => `\`${id}\``).join(", ")}: only manual steps can be confirmed. Manual steps here: ${[...manual].join(", ") || "(none)"}`, { confirm: wrong });
 }
 
 /**

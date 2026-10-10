@@ -16,6 +16,7 @@ export * from "./routes/supabase.js";
 export * from "./routes/aws.js";
 export * from "./routes/railway.js";
 export * from "./routes/fly.js";
+export * from "./routes/cloudflare.js";
 export { createSimServer } from "./server.js";
 
 /**

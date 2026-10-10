@@ -30,8 +30,9 @@ export function prepare(opts: RunOptions): Prepared {
     });
   }
   const ordered = orderChanges(changesFor(plan, ctx.env), plan.changes);
-  checkRecreate(opts.recreate ?? [], ordered, ctx.env);
+  checkRecreate(opts.recreate ?? [], ordered, ctx.env, registry);
   const ops = new Map<string, OpSpec>();
+  const providers = new Map<string, Record<string, unknown>>();
   const params = new Map<string, Record<string, unknown>>();
   const refs = new Set<string>();
   const productionLines: string[] = [];
@@ -39,7 +40,7 @@ export function prepare(opts: RunOptions): Prepared {
   for (const c of ordered) {
     const op = specialize(registry.op(c.adapter, c.op), c);
     // A provider block the op cannot use (an unknown API name) must fail here, before any provider call.
-    providerOf(plan.providers[c.adapter] ?? {}, op, c);
+    providers.set(c.id, providerOf(plan.providers[c.adapter] ?? {}, op, c));
     ops.set(c.id, op);
   }
 
@@ -61,7 +62,8 @@ export function prepare(opts: RunOptions): Prepared {
     if (op.defaults) p = op.defaults(p, ctx);
     params.set(c.id, p);
     for (const r of secretRefs(p)) refs.add(r);
-    if (ctx.env !== "production" && op.writesEnvironment?.(p, ctx) === "production") productionLines.push(c.id);
+    // The provider block counts too: a LaunchDarkly block naming a production environment writes production.
+    if (ctx.env !== "production" && op.writesEnvironment?.(p, ctx, providers.get(c.id)!) === "production") productionLines.push(c.id);
   }
 
   return {
@@ -105,12 +107,16 @@ export function requireApproval(opts: RunOptions, prepared: Prepared): string | 
   return approvedBy;
 }
 
-/** `recreate` may name only lines active in this environment. */
-function checkRecreate(recreate: string[], ordered: Change[], env: string): void {
+/** `recreate` may name only lines active in this environment, and never a manual step (a person did it). */
+function checkRecreate(recreate: string[], ordered: Change[], env: string, registry: RunOptions["registry"]): void {
   const unknown = recreate.filter((id) => !ordered.some((c) => c.id === id));
   if (unknown.length) {
     throw new SponsonError("USAGE", `Cannot recreate ${unknown.map((id) => `\`${id}\``).join(", ")}: no such line in environment ${env}. Lines: ${ordered.map((c) => c.id).join(", ")}`, {
       recreate: unknown,
     });
+  }
+  const manual = ordered.filter((c) => recreate.includes(c.id) && registry.op(c.adapter, c.op).manual);
+  if (manual.length) {
+    throw new SponsonError("USAGE", `Cannot recreate ${manual.map((c) => `\`${c.id}\``).join(", ")}: a manual step is done by a person; change its instructions to make it a step to do again.`, { recreate: manual.map((c) => c.id) });
   }
 }
