@@ -14,15 +14,21 @@
  * unique git branch name, and a Clerk redirect URL, and destroys them in `afterAll`
  * even when an assertion fails. It never touches the production target.
  *
+ * Supabase is optional in a live run, because branching needs a paid plan: with SUPABASE_ACCESS_TOKEN and
+ * SPONSON_LIVE_SUPABASE_PROJECT (the parent project's ref, branching enabled) also set, the Supabase block runs
+ * live; without them it is skipped under SPONSON_LIVE=1. It creates one preview branch (billed while it exists;
+ * it may take minutes to come up) and one Auth redirect URL, and removes both in its `afterAll`.
+ *
  * Each `assumption <id>:` test pins the API assumption with that id, listed at the top of the sim's provider
- * file (packages/sim/src/routes/{vercel,neon,clerk}.ts). If one fails live, fix the sim first, then the adapter.
+ * file (packages/sim/src/routes/{vercel,neon,clerk,supabase}.ts). If one fails live, fix the sim first, then the
+ * adapter.
  */
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CLERK_DEFAULT_API_URL, clerkAdapter, neonAdapter, vercelAdapter } from "@sponson/adapters";
+import { CLERK_DEFAULT_API_URL, SUPABASE_DEFAULT_API_URL, clerkAdapter, neonAdapter, supabaseAdapter, vercelAdapter } from "@sponson/adapters";
 import type { AdapterContext, Ctx } from "@sponson/core";
-import { startSim, type SimHandle } from "@sponson/sim";
+import { SUPABASE_DEMO_PROJECT, simEnv, startSim, type SimHandle } from "@sponson/sim";
 import { cliEnv, runCli, workspace, type CliRun, type Workspace } from "./support.js";
 
 const LIVE = process.env.SPONSON_LIVE === "1";
@@ -160,5 +166,92 @@ describe(`contract (${LIVE ? "@live" : "sim"})`, () => {
     expect(await neon.read(actx("neon"), neon.defaults!({}, actx("neon").ctx))).toBeNull();
     const clerk = clerkAdapter.ops.redirect_allow!;
     expect(await clerk.read(actx("clerk"), { url: callbackUrl })).toBeNull();
+  }, 120_000);
+});
+
+const SUPABASE_LIVE = LIVE && Boolean(process.env.SUPABASE_ACCESS_TOKEN && process.env.SPONSON_LIVE_SUPABASE_PROJECT);
+
+describe.skipIf(LIVE && !SUPABASE_LIVE)(`contract supabase (${SUPABASE_LIVE ? "@live" : "sim"})`, () => {
+  const branchOp = supabaseAdapter.ops.branch!;
+  const redirectOp = supabaseAdapter.ops.auth_redirect!;
+  const ctx: Ctx = { env: "preview", git: { branch, sha, short_sha: sha.slice(0, 7) }, pr: { number: pr }, scope: `pr-${pr}` };
+  const params = branchOp.defaults!({}, ctx);
+  const redirect = { key: `redirect:${callbackUrl}`, id: callbackUrl, hash: "" };
+  let ssim: SimHandle | null = null;
+  let senv: NodeJS.ProcessEnv;
+  let project: string;
+  let listBefore: string[] = [];
+  let siteUrlBefore: unknown;
+
+  const sactx = (): AdapterContext => ({ ctx, provider: { project }, env: senv, log: () => {}, intend: async () => {}, redact: (t) => t });
+  const api = (path: string, init: RequestInit = {}) =>
+    fetch(`${senv.SUPABASE_API_URL ?? SUPABASE_DEFAULT_API_URL}${path}`, { ...init, headers: { authorization: `Bearer ${senv.SUPABASE_ACCESS_TOKEN}`, "content-type": "application/json" } });
+  const authConfig = async () => (await (await api(`/projects/${project}/config/auth`)).json()) as { uri_allow_list: string | null; site_url?: unknown };
+  const entries = (s: string | null) =>
+    (s ?? "")
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
+
+  beforeAll(async () => {
+    if (SUPABASE_LIVE) {
+      senv = { ...process.env };
+      project = process.env.SPONSON_LIVE_SUPABASE_PROJECT!;
+    } else {
+      ssim = await startSim();
+      senv = { ...simEnv(ssim), SPONSON_HTTP_RETRY_BASE_MS: "5" };
+      project = SUPABASE_DEMO_PROJECT;
+    }
+    const before = await authConfig();
+    listBefore = entries(before.uri_allow_list);
+    siteUrlBefore = before.site_url;
+  }, 60_000);
+
+  afterAll(async () => {
+    // Always clean up, even when assertions failed half-way.
+    const live = await branchOp.read(sactx(), params).catch(() => null);
+    if (live) await branchOp.destroy(sactx(), live.resources).catch(() => {});
+    await redirectOp.destroy(sactx(), [redirect]).catch(() => {});
+    await ssim?.close();
+  }, 120_000);
+
+  it("assumption S1, S3, S4: a created branch comes up ACTIVE_HEALTHY with its own ref and database credentials", async () => {
+    const r = await branchOp.apply(sactx(), params, null);
+    expect(r.created).toEqual([`branch:${String(params.name)}`]);
+    expect(String(r.outputs.project_ref)).toMatch(/^[a-z]{20}$/);
+    expect(r.outputs.api_url).toBe(`https://${String(r.outputs.project_ref)}.supabase.co`);
+    expect(String(r.outputs.connection_string)).toMatch(/^postgresql:\/\/[^:]+:[^@]+@[^:/]+:\d+\/postgres$/);
+  }, 900_000);
+
+  it("assumption S2: the branch list names the new branch with its own project_ref; the project's own branch is the default", async () => {
+    const res = await api(`/projects/${project}/branches`);
+    expect(res.status).toBe(200);
+    const list = (await res.json()) as Array<{ name: string; project_ref: string; is_default: boolean }>;
+    const mine = list.find((b) => b.name === params.name);
+    expect(mine?.is_default).toBe(false);
+    expect(mine?.project_ref).not.toBe(project);
+    for (const b of list.filter((x) => x.is_default)) expect(b.project_ref).toBe(project);
+  });
+
+  it("assumption S5: creating a branch whose name exists is refused (400, 409 or 422), and apply claims the existing one", async () => {
+    const res = await api(`/projects/${project}/branches`, { method: "POST", body: JSON.stringify({ branch_name: params.name }) });
+    expect([400, 409, 422]).toContain(res.status);
+    expect((await branchOp.apply(sactx(), params, null)).created).toEqual([]);
+  }, 900_000);
+
+  it("assumption S7, S8: PATCH with uri_allow_list alone appends one comma-separated entry and leaves the rest", async () => {
+    const r = await redirectOp.apply(sactx(), { url: callbackUrl }, null);
+    expect(r.created).toEqual([redirect.key]);
+    const after = await authConfig();
+    expect(entries(after.uri_allow_list)).toEqual([...listBefore, callbackUrl]);
+    expect(after.site_url).toEqual(siteUrlBefore);
+  });
+
+  it("assumption S6: DELETE /branches/{ref} removes the branch from the list at once; the allow-list is restored", async () => {
+    const live = await branchOp.read(sactx(), params);
+    await branchOp.destroy(sactx(), live!.resources);
+    expect(await branchOp.read(sactx(), params)).toBeNull();
+    await redirectOp.destroy(sactx(), [redirect]);
+    expect(entries((await authConfig()).uri_allow_list)).toEqual(listBefore);
   }, 120_000);
 });
