@@ -37,7 +37,7 @@
  *       `/v7/deployments` parameters and item schema. The git integration builds previews; production builds
  *       of a commit exist separately.
  */
-import { page, Reply, type CreatedBy, type ProviderSim, type SimCore } from "../provider.js";
+import { page, Reply, route, router, type CreatedBy, type ProviderSim, type SimCore } from "../provider.js";
 
 /** One simulated Vercel environment variable. */
 export interface VercelEnv {
@@ -150,92 +150,113 @@ export const vercelSim: ProviderSim<VercelState, VercelSeed> = {
     return true;
   },
 
-  routes(core, state, { method, url, path, body }) {
-    let m: RegExpMatchArray | null;
+  routes(core, state, req) {
+    return routes(core, state, req);
+  },
+};
 
-    if ((m = path.match(/^\/v9\/projects\/([^/]+)$/)) && method === "GET") {
-      const p = state.projects[m[1]!];
+const routes = router<VercelState>(
+  [
+    route("GET", "/v9/projects/:project", ({ state, params }) => {
+      const p = state.projects[params.project];
       if (!p) return notFound("project");
-      return new Reply(200, { id: m[1], name: m[1], ...(p.link ? { link: p.link } : {}) });
-    }
-    if ((m = path.match(/^\/v10\/projects\/([^/]+)\/env$/)) && method === "GET") {
-      const p = state.projects[m[1]!];
+      return new Reply(200, { id: params.project, name: params.project, ...(p.link ? { link: p.link } : {}) });
+    }),
+
+    route("GET", "/v10/projects/:project/env", ({ core, state, params, url }) => {
+      const p = state.projects[params.project];
       if (!p) return notFound("project");
       const decrypt = url.searchParams.get("decrypt") === "true";
       const pg = page(core, p.envs, url.searchParams.get("until"));
       return new Reply(200, { envs: pg.items.map((e) => listedEnv(e, decrypt)), pagination: { count: pg.items.length, next: pg.next, prev: null } });
-    }
-    if ((m = path.match(/^\/v10\/projects\/([^/]+)\/env$/)) && method === "POST") {
-      const p = state.projects[m[1]!];
+    }),
+
+    route("POST", "/v10/projects/:project/env", ({ core, state, params, url, body }) => {
+      const p = state.projects[params.project];
       if (!p) return notFound("project");
       return upsertEnvs(core, p, Array.isArray(body) ? body : [body], url.searchParams.get("upsert") === "true");
-    }
-    if ((m = path.match(/^\/v1\/projects\/([^/]+)\/env\/([^/]+)$/)) && method === "GET") {
-      const p = state.projects[m[1]!];
-      const env = p?.envs.find((e) => e.id === m![2]);
-      if (!p || !env) return notFound("env");
-      return new Reply(200, listedEnv(env, true));
-    }
-    if ((m = path.match(/^\/v9\/projects\/([^/]+)\/env\/([^/]+)$/)) && (method === "PATCH" || method === "DELETE")) {
-      const p = state.projects[m[1]!];
+    }),
+
+    route("GET", "/v1/projects/:project/env/:id", ({ state, params }) => {
+      const env = state.projects[params.project]?.envs.find((e) => e.id === params.id);
+      return env ? new Reply(200, listedEnv(env, true)) : notFound("env");
+    }),
+
+    route("PATCH", "/v9/projects/:project/env/:id", ({ state, params, body }) => {
+      const p = state.projects[params.project];
       if (!p) return notFound("project");
-      const env = p.envs.find((e) => e.id === m![2]);
+      const env = p.envs.find((e) => e.id === params.id);
       if (!env) return notFound("env");
-      if (method === "DELETE") {
-        p.envs = p.envs.filter((e) => e !== env);
-        return new Reply(200, publicEnv(env));
-      }
       const b = (body ?? {}) as Partial<VercelEnv>;
       if (typeof b.value === "string") env.value = b.value;
       env.updatedAt = Date.now();
       return new Reply(200, publicEnv(env));
-    }
-    if (path === "/v7/deployments" && method === "GET") {
-      const projectId = url.searchParams.get("projectId") ?? "";
-      const sha = url.searchParams.get("sha") ?? "";
-      // `target`: production → production deployments; preview → deployments whose target is null (previews).
-      const target = url.searchParams.get("target");
-      const inTarget = (d: VercelDeployment) => target === null || (target === "production" ? d.target === "production" : target === "preview" ? d.target === null : false);
-      const p = state.projects[projectId];
+    }),
+
+    route("DELETE", "/v9/projects/:project/env/:id", ({ state, params }) => {
+      const p = state.projects[params.project];
       if (!p) return notFound("project");
-      if (sha && !p.deployments.some((d) => d.meta.githubCommitSha === sha && inTarget(d))) autoDeploy(core, projectId, p, sha, target === "production" ? "production" : undefined);
-      refreshDeployments(p.deployments);
-      const list = p.deployments.filter((d) => (!sha || d.meta.githubCommitSha === sha) && inTarget(d)).sort((a, b) => b.createdAt - a.createdAt);
-      const limit = Number(url.searchParams.get("limit") ?? 20);
-      const items = list.slice(0, limit);
-      return new Reply(200, { deployments: items.map((d) => publicDeployment(projectId, d)), pagination: { count: items.length, next: list.length > limit ? (items.at(-1)?.createdAt ?? null) : null, prev: null } });
-    }
-    if (path === "/v13/deployments" && method === "POST") {
-      const b = (body ?? {}) as { name?: string; project?: string; target?: string; gitSource?: { type?: string; repoId?: unknown; org?: string; repo?: string; sha?: string; ref?: string } };
-      if (typeof b.name !== "string" || b.name === "") return badRequest("missing_name", "`name` is required");
-      // `project`, when given, overrides `name`.
-      const projectId = b.project ?? b.name;
-      const p = state.projects[projectId];
-      if (!p) return notFound("project");
-      const g = b.gitSource;
-      if (!g || g.type !== "github" || typeof g.ref !== "string" || (g.repoId === undefined && (typeof g.org !== "string" || typeof g.repo !== "string"))) {
-        return badRequest("bad_request", "Invalid request: `gitSource` needs `type`, `ref` and `repoId` (or `org` and `repo`)");
-      }
-      if (!p.link || (g.repoId !== undefined && String(g.repoId) !== String(p.link.repoId))) return badRequest("incorrect_git_source_info", "The repository is not connected to this project");
-      const sha = g.sha ?? "unknown";
-      const d = createDeployment(core, projectId, p, sha, core.chaos.deploy === "fail" ? "ERROR" : "READY", Date.now(), {
-        ref: g.ref,
-        buildMs: core.chaos.deploy_ms,
-        ...(b.target === "production" ? { target: "production" as const } : {}),
-      });
-      return new Reply(200, deploymentDetail(d));
-    }
-    if ((m = path.match(/^\/v13\/deployments\/([^/]+)$/)) && method === "GET") {
+      const env = p.envs.find((e) => e.id === params.id);
+      if (!env) return notFound("env");
+      p.envs = p.envs.filter((e) => e !== env);
+      return new Reply(200, publicEnv(env));
+    }),
+
+    route("GET", "/v7/deployments", ({ core, state, url }) => listDeployments(core, state, url)),
+    route("POST", "/v13/deployments", ({ core, state, body }) => postDeployment(core, state, body)),
+
+    route("GET", "/v13/deployments/:id", ({ state, params }) => {
       for (const p of Object.values(state.projects)) {
         refreshDeployments(p.deployments);
-        const d = p.deployments.find((x) => x.uid === m![1]);
+        const d = p.deployments.find((x) => x.uid === params.id);
         if (d) return new Reply(200, deploymentDetail(d));
       }
       return notFound("deployment");
-    }
-    return notFound("route");
-  },
-};
+    }),
+  ],
+  () => notFound("route"),
+);
+
+/**
+ * `GET /v7/deployments?projectId&sha&target&limit`. `target`: production → production deployments; preview →
+ * deployments whose target is null (previews). Asking for a sha the project has not deployed yet triggers the
+ * git integration's automatic deployment, as a push would have.
+ */
+function listDeployments(core: SimCore, state: VercelState, url: URL): Reply {
+  const projectId = url.searchParams.get("projectId") ?? "";
+  const sha = url.searchParams.get("sha") ?? "";
+  const target = url.searchParams.get("target");
+  const inTarget = (d: VercelDeployment) => target === null || (target === "production" ? d.target === "production" : target === "preview" ? d.target === null : false);
+  const p = state.projects[projectId];
+  if (!p) return notFound("project");
+  if (sha && !p.deployments.some((d) => d.meta.githubCommitSha === sha && inTarget(d))) autoDeploy(core, projectId, p, sha, target === "production" ? "production" : undefined);
+  refreshDeployments(p.deployments);
+  const list = p.deployments.filter((d) => (!sha || d.meta.githubCommitSha === sha) && inTarget(d)).sort((a, b) => b.createdAt - a.createdAt);
+  const limit = Number(url.searchParams.get("limit") ?? 20);
+  const items = list.slice(0, limit);
+  return new Reply(200, { deployments: items.map((d) => publicDeployment(projectId, d)), pagination: { count: items.length, next: list.length > limit ? (items.at(-1)?.createdAt ?? null) : null, prev: null } });
+}
+
+/** `POST /v13/deployments`: a (re)deployment from a git source of the project's connected repository. */
+function postDeployment(core: SimCore, state: VercelState, body: unknown): Reply {
+  const b = (body ?? {}) as { name?: string; project?: string; target?: string; gitSource?: { type?: string; repoId?: unknown; org?: string; repo?: string; sha?: string; ref?: string } };
+  if (typeof b.name !== "string" || b.name === "") return badRequest("missing_name", "`name` is required");
+  // `project`, when given, overrides `name`.
+  const projectId = b.project ?? b.name;
+  const p = state.projects[projectId];
+  if (!p) return notFound("project");
+  const g = b.gitSource;
+  if (!g || g.type !== "github" || typeof g.ref !== "string" || (g.repoId === undefined && (typeof g.org !== "string" || typeof g.repo !== "string"))) {
+    return badRequest("bad_request", "Invalid request: `gitSource` needs `type`, `ref` and `repoId` (or `org` and `repo`)");
+  }
+  if (!p.link || (g.repoId !== undefined && String(g.repoId) !== String(p.link.repoId))) return badRequest("incorrect_git_source_info", "The repository is not connected to this project");
+  const d = createDeployment(core, projectId, p, g.sha ?? "unknown", core.chaos.deploy === "fail" ? "ERROR" : "READY", Date.now(), {
+    ref: g.ref,
+    buildMs: core.chaos.deploy_ms,
+    ...(b.target === "production" ? { target: "production" as const } : {}),
+  });
+  return new Reply(200, deploymentDetail(d));
+}
 
 /** One item of an env create request, once validated. */
 type EnvInput = Pick<VercelEnv, "key" | "value" | "target"> & { type?: unknown; gitBranch?: string };

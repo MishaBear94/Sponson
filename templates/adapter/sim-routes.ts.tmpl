@@ -10,7 +10,7 @@
  *   X3. Deletion is synchronous: the item is gone from the list when DELETE returns.
  *   X4. PATCH changes the value in place and keeps the id.
  */
-import { page, Reply, type CreatedBy, type ProviderSim, type SimCore } from "../provider.js";
+import { page, Reply, route, router, type CreatedBy, type ProviderSim, type SimCore } from "../provider.js";
 
 /** An item as the simulated __Name__ stores it, with the bookkeeping the sim adds (`createdBy`). */
 export interface __Name__Item {
@@ -67,47 +67,59 @@ export const __name__Sim: ProviderSim<__Name__State, __Name__Seed> = {
     return true;
   },
 
-  routes(core, state, { method, url, path, body }) {
-    let m: RegExpMatchArray | null;
-
-    if ((m = path.match(/^\/projects\/([^/]+)\/items$/))) {
-      const p = state.projects[decodeURIComponent(m[1]!)];
-      if (!p) return new Reply(404, { error: "project not found" });
-      if (method === "GET") {
-        const pg = page(core, p.items, url.searchParams.get("cursor"));
-        return new Reply(200, { items: pg.items.map(publicItem), ...(pg.next === null ? {} : { next: String(pg.next) }) });
-      }
-      if (method === "POST") {
-        const b = (body ?? {}) as { name?: unknown; value?: unknown };
-        if (typeof b.name !== "string" || b.name === "" || typeof b.value !== "string") return new Reply(400, { error: "name and value are required strings" });
-        if (p.items.some((i) => i.name === b.name)) return new Reply(409, { error: "item already exists" });
-        const i = item(core, b.name, b.value, "api");
-        p.items.push(i);
-        return new Reply(201, publicItem(i));
-      }
-    }
-
-    if ((m = path.match(/^\/projects\/([^/]+)\/items\/([^/]+)$/))) {
-      const p = state.projects[decodeURIComponent(m[1]!)];
-      if (!p) return new Reply(404, { error: "project not found" });
-      const i = p.items.find((x) => x.id === decodeURIComponent(m![2]!));
-      if (!i) return new Reply(404, { error: "item not found" });
-      if (method === "GET") return new Reply(200, publicItem(i));
-      if (method === "PATCH") {
-        const b = (body ?? {}) as { value?: unknown };
-        if (typeof b.value !== "string") return new Reply(400, { error: "value is a required string" });
-        i.value = b.value;
-        return new Reply(200, publicItem(i));
-      }
-      if (method === "DELETE") {
-        p.items = p.items.filter((x) => x !== i);
-        return new Reply(200, { id: i.id, deleted: true });
-      }
-    }
-
-    return new Reply(404, { error: "not found" });
+  routes(core, state, req) {
+    return routes(core, state, req);
   },
 };
+
+/**
+ * The API, one route per method and path. `:name` segments arrive URI-decoded in `params`, typed from the path.
+ * A request no route matches gets the fallback.
+ */
+const routes = router<__Name__State>(
+  [
+    route("GET", "/projects/:project/items", ({ core, state, params, url }) => {
+      const p = state.projects[params.project];
+      if (!p) return new Reply(404, { error: "project not found" });
+      const pg = page(core, p.items, url.searchParams.get("cursor"));
+      return new Reply(200, { items: pg.items.map(publicItem), ...(pg.next === null ? {} : { next: String(pg.next) }) });
+    }),
+
+    route("POST", "/projects/:project/items", ({ core, state, params, body }) => {
+      const p = state.projects[params.project];
+      if (!p) return new Reply(404, { error: "project not found" });
+      const b = (body ?? {}) as { name?: unknown; value?: unknown };
+      if (typeof b.name !== "string" || b.name === "" || typeof b.value !== "string") return new Reply(400, { error: "name and value are required strings" });
+      if (p.items.some((i) => i.name === b.name)) return new Reply(409, { error: "item already exists" });
+      const i = item(core, b.name, b.value, "api");
+      p.items.push(i);
+      return new Reply(201, publicItem(i));
+    }),
+
+    route("GET", "/projects/:project/items/:id", ({ state, params }) => {
+      const i = state.projects[params.project]?.items.find((x) => x.id === params.id);
+      return i ? new Reply(200, publicItem(i)) : new Reply(404, { error: "item not found" });
+    }),
+
+    route("PATCH", "/projects/:project/items/:id", ({ state, params, body }) => {
+      const i = state.projects[params.project]?.items.find((x) => x.id === params.id);
+      if (!i) return new Reply(404, { error: "item not found" });
+      const b = (body ?? {}) as { value?: unknown };
+      if (typeof b.value !== "string") return new Reply(400, { error: "value is a required string" });
+      i.value = b.value;
+      return new Reply(200, publicItem(i));
+    }),
+
+    route("DELETE", "/projects/:project/items/:id", ({ state, params }) => {
+      const p = state.projects[params.project];
+      const i = p?.items.find((x) => x.id === params.id);
+      if (!p || !i) return new Reply(404, { error: "item not found" });
+      p.items = p.items.filter((x) => x !== i);
+      return new Reply(200, { id: i.id, deleted: true });
+    }),
+  ],
+  () => new Reply(404, { error: "not found" }),
+);
 
 function item(core: SimCore, name: string, value: string, createdBy: CreatedBy): __Name__Item {
   return { id: core.nextId("__name___"), name, value, createdAt: Date.now(), createdBy };

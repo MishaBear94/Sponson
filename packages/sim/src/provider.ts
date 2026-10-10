@@ -73,3 +73,64 @@ export function page<T>(core: SimCore, list: T[], cursor: string | null, limit?:
   const items = list.slice(start, start + size);
   return { items, next: start + size < list.length ? start + size : null };
 }
+
+/** The `:name` segments of a route path, e.g. `"project" | "id"` for `/v9/projects/:project/env/:id`. */
+type ParamNames<P extends string> = P extends `${string}:${infer N}/${infer Rest}` ? N | ParamNames<`/${Rest}`> : P extends `${string}:${infer N}` ? N : never;
+
+/** The decoded `:name` segments of a matched path, typed from the route's path literal. */
+export type PathParams<P extends string> = { [K in ParamNames<P>]: string };
+
+/** What a route's handler receives. */
+export interface RouteContext<S, Params = Record<string, string>> {
+  core: SimCore;
+  state: S;
+  params: Params;
+  url: URL;
+  body: unknown;
+}
+
+/** One route of a simulated provider. Build it with `route`; serve a list of them with `router`. */
+export interface Route<S> {
+  method: string;
+  path: string;
+  handle(ctx: RouteContext<S>): Reply;
+}
+
+/**
+ * A route: an HTTP method, a path whose `:name` segments match one non-empty path segment each, and the handler
+ * that answers it. `params` is typed from the path: `route("GET", "/projects/:project", ({ params }) => …)` gets
+ * `params.project: string`.
+ */
+export function route<S, P extends string>(method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", path: P, handle: (ctx: RouteContext<S, PathParams<P>>) => Reply): Route<S> {
+  // `router` only calls a handler with the params its own path declares.
+  return { method, path, handle: handle as Route<S>["handle"] };
+}
+
+/**
+ * A provider's `routes`: the first route whose method and path match answers; when none does, `fallback` (the
+ * provider's own "not found" body). Path patterns are compiled once, here.
+ */
+export function router<S>(routes: Array<Route<S>>, fallback: () => Reply): (core: SimCore, state: S, req: RouteRequest) => Reply {
+  const compiled = routes.map((r) => {
+    const names: string[] = [];
+    const source = r.path
+      .split("/")
+      .map((seg) => {
+        if (!seg.startsWith(":")) return seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        names.push(seg.slice(1));
+        return "([^/]+)";
+      })
+      .join("/");
+    return { route: r, pattern: new RegExp(`^${source}$`), names };
+  });
+  return (core, state, req) => {
+    for (const { route: r, pattern, names } of compiled) {
+      if (r.method !== req.method) continue;
+      const m = pattern.exec(req.path);
+      if (!m) continue;
+      const params = Object.fromEntries(names.map((n, i) => [n, decodeURIComponent(m[i + 1]!)]));
+      return r.handle({ core, state, params, url: req.url, body: req.body });
+    }
+    return fallback();
+  };
+}

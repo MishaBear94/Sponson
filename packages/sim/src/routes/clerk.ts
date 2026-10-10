@@ -13,7 +13,7 @@
  *   C3. A redirect URL is `{ object: "redirect_url", id, url, created_at, updated_at }` and DELETE answers a
  *       DeletedObject `{ object, id, deleted }` (verified).
  */
-import { page, Reply, type CreatedBy, type ProviderSim, type SimCore } from "../provider.js";
+import { page, Reply, route, router, type CreatedBy, type ProviderSim, type SimCore } from "../provider.js";
 
 /** One allow-listed redirect URL. */
 export interface ClerkRedirect {
@@ -54,10 +54,14 @@ export const clerkSim: ProviderSim<ClerkState, ClerkSeed> = {
     return true;
   },
 
-  routes(core, state, { method, url, path, body }) {
-    let m: RegExpMatchArray | null;
+  routes(core, state, req) {
+    return routes(core, state, req);
+  },
+};
 
-    if (path === "/redirect_urls" && method === "GET") {
+const routes = router<ClerkState>(
+  [
+    route("GET", "/redirect_urls", ({ core, state, url }) => {
       const all = state.redirect_urls.map(publicRedirect);
       if (url.searchParams.get("paginated") !== "true") return new Reply(200, all);
       const limit = url.searchParams.get("limit");
@@ -67,24 +71,26 @@ export const clerkSim: ProviderSim<ClerkState, ClerkSeed> = {
       }
       const pg = page(core, all, offset, Number(limit ?? 10));
       return new Reply(200, { data: pg.items, total_count: all.length });
-    }
-    if (path === "/redirect_urls" && method === "POST") {
+    }),
+
+    route("POST", "/redirect_urls", ({ core, state, body }) => {
       const b = (body ?? {}) as { url?: string };
       if (!b.url) return clerkError(422, "form_param_missing", "url is required");
       if (state.redirect_urls.some((r) => r.url === b.url)) return clerkError(422, "duplicate_record", "redirect url already exists");
       const r = redirect(core, b.url, Date.now(), "api");
       state.redirect_urls.push(r);
       return new Reply(200, publicRedirect(r));
-    }
-    if ((m = path.match(/^\/redirect_urls\/([^/]+)$/)) && method === "DELETE") {
-      const r = state.redirect_urls.find((x) => x.id === m![1]);
+    }),
+
+    route("DELETE", "/redirect_urls/:id", ({ state, params }) => {
+      const r = state.redirect_urls.find((x) => x.id === params.id);
       if (!r) return clerkError(404, "resource_not_found", "not found");
       state.redirect_urls = state.redirect_urls.filter((x) => x !== r);
       return new Reply(200, { id: r.id, object: "redirect_url", deleted: true });
-    }
-    return clerkError(404, "resource_not_found", "not found");
-  },
-};
+    }),
+  ],
+  () => clerkError(404, "resource_not_found", "not found"),
+);
 
 /** The spec's RedirectURL: `object`, `id`, `url`, `created_at`, `updated_at` (all required). */
 function publicRedirect(r: ClerkRedirect) {

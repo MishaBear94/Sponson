@@ -43,11 +43,12 @@ const PUBLIC_API: Record<string, string[]> = {
   "@sponson/sim": [
     "CHAOS_KEYS", "ChaosAction", "ChaosConfig", "ChaosRequest", "ClerkRedirect", "ClerkSeed", "ClerkState",
     "CreatedBy", "DEFAULT_CHAOS", "DEFAULT_SEED", "DeploymentState", "DriftRequest", "NeonBranch", "NeonProject",
-    "NeonSeed", "NeonState", "PROVIDERS", "ProviderName", "ProviderSim", "ProviderStates", "Reply", "RouteRequest",
+    "NeonSeed", "NeonState", "PROVIDERS", "PathParams", "ProviderName", "ProviderSim", "ProviderStates", "Reply", "Route",
+    "RouteContext", "RouteRequest",
     "SIM_TOKENS", "SimCore", "SimHandle", "SimSeed", "SimState", "VercelDeployment", "VercelEnv", "VercelLink", "VercelProject",
     "VercelSeed", "VercelState", "WriteLogEntry", "chaosFor", "clerkSim", "connectionUri", "createBranch",
     "createDeployment", "createSimServer", "defaultChaos", "matchesRule", "neonSim", "page", "providerEntries",
-    "refreshDeployments", "simEnv", "startSim", "vercelSim",
+    "refreshDeployments", "route", "router", "simEnv", "startSim", "vercelSim",
   ],
   "sponson": [
     "CtxFacts", "CtxOverrides", "CtxSource", "DEFAULT_CTX_SOURCES", "RunIO", "SponsonPlugin", "detectCtx",
