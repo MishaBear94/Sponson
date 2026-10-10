@@ -4,14 +4,30 @@
     "noEmit": true,
     "composite": false,
     "declaration": false,
-    "types": ["node"],
-    "baseUrl": ".",
+    "types": [
+      "node"
+    ],
     "paths": {
-      "@sponson/core": ["packages/core/src/index.ts"],
-      "@sponson/adapters": ["packages/adapters/src/index.ts"],
-      "@sponson/sim": ["packages/sim/src/index.ts"],
-      "sponson": ["packages/cli/src/index.ts"]
+      "@sponson/core": [
+        "./packages/core/src/index.ts"
+      ],
+      "@sponson/adapters": [
+        "./packages/adapters/src/index.ts"
+      ],
+      "@sponson/sim": [
+        "./packages/sim/src/index.ts"
+      ],
+      "sponson": [
+        "./packages/cli/src/index.ts"
+      ]
     }
   },
-  "include": ["packages/*/src/**/*.test.ts", "packages/adapters/src/testing.ts", "scenarios/**/*.ts", "property/**/*.ts", "scripts/**/*.ts", "vitest.config.ts"]
+  "include": [
+    "packages/*/src/**/*.test.ts",
+    "packages/adapters/src/testing.ts",
+    "scenarios/**/*.ts",
+    "property/**/*.ts",
+    "scripts/**/*.ts",
+    "vitest.config.ts"
+  ]
 }

@@ -23,12 +23,12 @@ const changeSchema = z
     environments: z.array(z.string().min(1)).min(1).optional(),
     depends_on: z.array(idSchema).optional(),
   })
-  .passthrough();
+  .loose();
 
 const planSchema = z.object({
   version: z.literal(1),
   environments: z.array(z.string().min(1)).min(1).optional(),
-  providers: z.record(z.record(z.unknown())).optional(),
+  providers: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
   receipts: z.enum(["git-branch", "local"]).optional(),
   changes: z.array(changeSchema),
 });
@@ -83,7 +83,7 @@ export function parsePlan(source: string, path?: string): ParsedPlan {
   if (!parsed.success) {
     const issue = parsed.error.issues[0]!;
     const where = issue.path.join(".");
-    throw new SponsonError("PLAN_INVALID", `${path ?? "plan"}: ${where ? where + ": " : ""}${describeIssue(issue)}`, {
+    throw new SponsonError("PLAN_INVALID", `${path ?? "plan"}: ${where ? where + ": " : ""}${describeIssue(issue, raw)}`, {
       path,
       issues: parsed.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
     });
@@ -114,12 +114,26 @@ export function parsePlan(source: string, path?: string): ParsedPlan {
   return { plan, warnings };
 }
 
-function describeIssue(issue: z.ZodIssue): string {
+function describeIssue(issue: z.core.$ZodIssue, raw: unknown): string {
   // Friendlier messages for the mistakes agents make most.
   if (issue.path[issue.path.length - 1] === "environments" && issue.code === "invalid_type") {
-    return `environments must be a list, e.g. \`environments: [preview]\` (got ${issue.received})`;
+    return `environments must be a list, e.g. \`environments: [preview]\` (got ${typeName(valueAt(raw, issue.path))})`;
   }
   return issue.message;
+}
+
+/** The value at a schema issue's path in the raw document (zod 4 issues no longer carry it). */
+function valueAt(raw: unknown, path: readonly PropertyKey[]): unknown {
+  let cur = raw;
+  for (const key of path) {
+    if (cur === null || typeof cur !== "object") return undefined;
+    cur = (cur as Record<PropertyKey, unknown>)[key];
+  }
+  return cur;
+}
+
+function typeName(v: unknown): string {
+  return v === null ? "null" : Array.isArray(v) ? "array" : typeof v;
 }
 
 function inferEnvironments(changes: Change[]): string[] {
