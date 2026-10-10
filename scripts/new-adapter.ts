@@ -225,15 +225,20 @@ export async function scaffold(name: string, opts: { root: string; templates?: s
 
   for (const f of FILES(name)) {
     const target = join(opts.root, f.target);
-    if (existsSync(target)) {
-      result.skipped.push(f.target);
+    if (opts.dryRun) {
+      (existsSync(target) ? result.skipped : result.created).push(f.target);
       continue;
     }
-    result.created.push(f.target);
-    if (opts.dryRun) continue;
     await mkdir(dirname(target), { recursive: true });
-    // `wx`: fail instead of overwriting if the file appeared since the existence check above.
-    await writeFile(target, rendered.get(f.target)!, { flag: "wx" });
+    // Create-only (`wx`): an existing file is kept and reported, never overwritten — no check-then-write window.
+    const written = await writeFile(target, rendered.get(f.target)!, { flag: "wx" }).then(
+      () => true,
+      (e: NodeJS.ErrnoException) => {
+        if (e.code === "EEXIST") return false;
+        throw e;
+      },
+    );
+    (written ? result.created : result.skipped).push(f.target);
   }
   if (!opts.dryRun) {
     for (const [path, text] of texts) {

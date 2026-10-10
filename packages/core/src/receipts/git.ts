@@ -395,7 +395,10 @@ export class GitBranchReceiptStore implements ReceiptStore {
     await mkdir(this.workdir, { recursive: true });
     const isRepo = await stat(join(this.workdir, ".git")).then(() => true, () => false);
     if (!isRepo) {
-      await this.git(["init", "-q"]);
+      // reftable stores refs in its own files, so refs that differ only by case (scopes `branch-Feature` and
+      // `branch-feature`) coexist even on a case-insensitive filesystem, where recent git otherwise refuses to fetch
+      // them at all. Older git (before 2.45) has no reftable — and no such refusal; position-named list refs suffice.
+      await this.git(["init", "-q", "--ref-format=reftable"]).catch(() => this.git(["init", "-q"]));
       await this.git(["remote", "add", "origin", this.options.remote]);
     } else {
       await this.git(["remote", "set-url", "origin", this.options.remote]);
