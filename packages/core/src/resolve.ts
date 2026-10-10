@@ -61,18 +61,24 @@ export interface ResolveResult {
   inputs: Record<string, ResolvedValue>;
   pending: Array<{ path: string; ref: string; line: string }>;
   secrets: Array<{ path: string; ref: string }>;
-  /** References to `once` outputs revealed in an earlier run, resolved to `{ keep: true }` (see `OutputSpec.once`). */
-  spent: Array<{ path: string; ref: string; line: string }>;
+  /**
+   * References to `once` outputs revealed in an earlier run (see `OutputSpec.once`). `kept`: resolved to
+   * `{ keep: true }`; otherwise (the caller could not vouch that the line holds the value) left as a pending marker,
+   * and the line must be refused rather than applied.
+   */
+  spent: Array<{ path: string; ref: string; line: string; kept: boolean }>;
 }
 
 /**
  * Replace `{from}` and `{secret}` leaves.
- * `secretValues` is only passed by apply; plan never resolves secrets.
+ * `secretValues` is only passed by apply; plan never resolves secrets. `keepSpent` decides, per reference to a spent
+ * `once` output, whether it may stand as `{ keep: true }` (by default it may); the engine asks the ledger.
  */
 export function resolveParams(
   params: Record<string, unknown>,
   outputs: Map<string, LineOutputs>,
   secretValues?: Map<string, string>,
+  keepSpent: (ref: string, line: string, output: string) => boolean = () => true,
 ): ResolveResult {
   const inputs: Record<string, ResolvedValue> = {};
   const pending: ResolveResult["pending"] = [];
@@ -91,9 +97,10 @@ export function resolveParams(
     }
     if (lo?.spent && lo.specs[output]?.once) {
       // Shown once, in the run that created it: whoever received it then keeps it.
-      inputs[key] = { state: "kept", value: null, ref, sensitive, dependsOn: line };
-      spent.push({ path: key, ref, line });
-      return KEEP_MARKER;
+      const kept = keepSpent(ref, line, output);
+      inputs[key] = { state: kept ? "kept" : "pending", value: null, ref, sensitive, dependsOn: line };
+      spent.push({ path: key, ref, line, kept });
+      return kept ? KEEP_MARKER : pendingMarker(ref);
     }
     inputs[key] = { state: "pending", value: null, ref, dependsOn: line, sensitive };
     pending.push({ path: key, ref, line });

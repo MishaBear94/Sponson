@@ -1,7 +1,7 @@
 # A PlanetScale password's connection string into a Vercel preview variable, by reference. PlanetScale shows the
 # plaintext only when the password is created (PS8), so the output is `once` (docs/adr/0018-once-only-outputs.md):
 # it reaches `env` in the run that creates the password; later runs keep what `env` holds, write nothing, and never
-# re-create the password to get the value back. Format: see the top of scenarios/runner.test.ts.
+# re-create the password to get the value back unless asked to (`--recreate`). Format: see the top of scenarios/runner.test.ts.
 name: "planetscale → vercel: DATABASE_URL by reference; re-apply writes nothing; a lost variable is refused, never rotated"
 plan: |
   version: 1
@@ -76,15 +76,17 @@ steps:
       status: failed
       writes: 0
       lines: { dbpw: unchanged, env: blocked }
-      errors: { env: "Nothing was written.*delete it in the provider" }
-  # The remedy the message gives: delete the password; the next apply creates a new one and writes it to Vercel.
-  - chaos:
-      drift: { "planetscale.password.sponson-preview-pr-42.sponson-preview-pr-42": "delete" }
-  - run: apply --json
+      errors: { env: "Nothing was written.*recreate it.*delete it in the provider" }
+  # The remedy the message names first: --recreate dbpw deletes the password Sponson created and creates a new one
+  # in the same run, so its plaintext reaches `env` (ADR 0018).
+  - run: apply --recreate dbpw --json
     expect:
       exit: 0
       status: complete
       lines: { dbpw: applied, env: applied }
+      notes: { dbpw: { recreated: true } }
+  - run: apply --json
+    expect: { exit: 0, writes: 0, lines: { dbpw: unchanged, env: unchanged } }
   - sim:
       vercel_env: { preview: { DATABASE_URL: exists } }
   - run: apply --destroy --json

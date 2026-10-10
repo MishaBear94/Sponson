@@ -60,7 +60,8 @@ export const ERROR_CODES = {
   OWNED_BY_OTHER_SCOPE: { exit: 1, doc: "Another scope in this environment manages the resource." },
   OUTPUT_UNAVAILABLE: {
     exit: 1,
-    doc: "A line needs an output its provider reveals only when the resource is created (a password), and that resource was created in an earlier run; nothing is re-created to get it back.",
+    doc: "A line needs an output its provider reveals only when the resource is created (a password), that resource was created in an earlier run, and the line cannot be shown to hold the value; nothing is re-created to get it back unless asked.",
+    cliHint: "Pass --recreate <line> to create the producing line's resource again (its new value reaches every dependent in that run), or keep the value in a secret manager and reference it with `{ secret: … }`.",
   },
   INTERNAL: { exit: 1, doc: "An unexpected error." },
   PROVIDER_TRANSIENT: { exit: 1, doc: "The provider failed transiently (after retries)." },

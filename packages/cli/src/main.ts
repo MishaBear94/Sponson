@@ -126,6 +126,7 @@ function buildProgram(io: IO, redactor: Redactor, setCode: (c: number) => void):
     .option("--destroy", "destroy everything this scope created, in reverse order")
     .option("--approved-by <who>", "who approved this run; required when a line writes to production (or $SPONSON_APPROVED_BY)")
     .option("--reconcile", "overwrite values changed outside Sponson since the last apply")
+    .option("--recreate <line>", "delete and create again what this line created, so a value its provider shows only on create reaches its dependents (repeatable, or comma-separated)", collect, [])
     .option("--wait", "poll for deploys and locks instead of stopping with status partial")
     .option("--wait-timeout <seconds>", "give up waiting after this long (default: 600)")
     .action(async (_opts, cmd: Command) => setCode(await applyCommand(cmd.optsWithGlobals(), io, redactor)));
@@ -142,4 +143,9 @@ function buildProgram(io: IO, redactor: Redactor, setCode: (c: number) => void):
     .action(async (_opts, cmd: Command) => setCode(await mcpCommand(globals(cmd), io)));
 
   return program;
+}
+
+/** Collects a repeatable, comma-separable option such as `--recreate a --recreate b,c`. */
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, ...value.split(",").map((v) => v.trim()).filter(Boolean)];
 }

@@ -46,7 +46,7 @@ changes: []                               # required
 | `version` | `1` | (required) | Format version. Anything else is `PLAN_INVALID`. |
 | `environments` | non-empty list of names | `preview`, `production`, plus every name a line's `environments:` uses | The environments `--env` may name. An unknown `--env` is `ENV_UNKNOWN`; a line naming an undeclared environment is `PLAN_INVALID`. |
 | `providers` | map: adapter name → map | `{}` | Static configuration per adapter, handed to the adapter as `providers.<adapter>`. Built-in: `vercel.project` (required by the Vercel ops), `vercel.team` (optional), `neon.project` (required by the Neon op). Clerk needs none. `http.<api>` holds one block per API (see [the generic `http` adapter](#the-generic-http-adapter)). A missing required key fails the line with `PLAN_INVALID` when the adapter runs. |
-| `receipts` | `git-branch` \| `local` | `git-branch` | Where receipts are stored. `git-branch`: orphan branches `sponson-receipts/<env>/<scope>` (one per environment and scope) on the `origin` remote (override with `--receipts-remote` or `SPONSON_RECEIPTS_REMOTE`); with no remote, Sponson warns and uses `local`. `local`: `.sponson/receipts/` (override with `--receipts-dir` or `SPONSON_RECEIPTS_DIR`). The `--receipts` flag overrides this key. |
+| `receipts` | `git-branch` \| `local` | `git-branch` | Where receipts are stored. `git-branch`: orphan branches `sponson-receipts/<env>/<scope>` (one per environment and scope, plus a lock-only `sponson-receipts/_locks/<hash>` per shared provider object a line writes, [ADR 0019](adr/0019-parent-object-locks.md)) on the `origin` remote (override with `--receipts-remote` or `SPONSON_RECEIPTS_REMOTE`); with no remote, Sponson warns and uses `local`. `local`: `.sponson/receipts/` (override with `--receipts-dir` or `SPONSON_RECEIPTS_DIR`). The `--receipts` flag overrides this key. |
 | `changes` | list of changes | (required) | The plan lines. Order in the file does not matter. |
 
 The parser ignores top-level keys it does not know; the schema reports them, because they are almost always typos.
@@ -553,10 +553,19 @@ the named event. Sensitive outputs are never displayed, logged or written to rec
 
 Some providers reveal a value only in the answer that creates a resource (a database password's plaintext). An op
 declares such an output `once` (always together with `sensitive`). It reaches the lines that reference it in the
-run that creates the resource. In a later run, when the resource already exists, a reference to it resolves to
-`{ keep: true }`: a dependent that holds the value keeps it, and a dependent that would have to write it is refused
-with `OUTPUT_UNAVAILABLE` before anything is written. A plan run shows such a dependent as unchanged (or blocked), never
-pending forever. Nothing is re-created to get the value back; see
+run that creates the resource; the value itself is never stored, only a keyed fingerprint of it in the ledger, on
+the producer and on each dependent written with it. In a later run, when the resource already exists, a reference to
+it resolves to `{ keep: true }` only when those fingerprints show the dependent holds the current value: it is then
+unchanged (or updated in its other fields only). Otherwise the dependent is refused with `OUTPUT_UNAVAILABLE` before
+anything is written: a line added after the producer was created, a producer Sponson adopted, a dependent edited
+outside Sponson since (even with `--reconcile`), or one whose resource has to be created again. A plan run shows such
+a dependent as unchanged or blocked, never pending forever.
+
+Nothing is re-created to get the value back unless you ask: `apply --recreate <line>` (repeatable, or
+comma-separated) deletes what that line created and creates it again in the same run, so its new value reaches every
+dependent. It never deletes a resource Sponson did not create in this scope (`USAGE`), and a later failure in the run
+does not roll the new resource back. Recreating rotates the credential, so deployments still using the old one stop
+working. The alternative is to keep the value in a secret manager and reference it with `{ secret: … }`. See
 [ADR 0018](adr/0018-once-only-outputs.md).
 
 ## What is checked when

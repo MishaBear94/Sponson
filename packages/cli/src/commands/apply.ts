@@ -7,6 +7,8 @@ export interface ApplyOpts extends GlobalOpts {
   destroy?: boolean;
   approvedBy?: string;
   reconcile?: boolean;
+  /** Line ids, or a comma-separated string of them (MCP). */
+  recreate?: string[] | string;
   wait?: boolean;
   /** Seconds. */
   waitTimeout?: string | number;
@@ -25,6 +27,7 @@ export async function executeApply(opts: ApplyOpts, io: IO, redactor: Redactor):
     const run = toRunOptions(inv, io, {
       approvedBy: resolveApprover(opts.approvedBy, io.env),
       reconcile: opts.reconcile,
+      recreate: recreateList(opts.recreate),
       wait: opts.wait,
       waitTimeoutMs,
     });
@@ -47,4 +50,9 @@ function parseTimeout(raw: string | number | undefined): number | undefined {
   if (typeof raw === "string" && raw.trim() === "") throw new UsageError("--wait-timeout must be a positive number of seconds (got \"\")");
   if (!Number.isFinite(n) || n <= 0) throw new UsageError(`--wait-timeout must be a positive number of seconds (got ${JSON.stringify(raw)})`);
   return n * 1000;
+}
+
+function recreateList(raw: string[] | string | undefined): string[] | undefined {
+  const ids = (typeof raw === "string" ? raw.split(",") : (raw ?? [])).map((v) => v.trim()).filter(Boolean);
+  return ids.length ? ids : undefined;
 }
