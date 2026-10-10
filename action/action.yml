@@ -69,7 +69,7 @@ runs:
     # applying would re-create a preview that `destroy` already removed or that nothing will ever destroy.
     # A production deployment never drives a preview apply. push: no flags; the CLI reads the GitHub context.
     - id: scope
-      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         SPONSON_ENV: ${{ inputs.env }}
       with:
@@ -151,7 +151,7 @@ runs:
 
     - id: comment
       if: steps.scope.outputs.skip != 'true' && (github.event_name == 'pull_request' || steps.scope.outputs.pr != '')
-      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         RESULT_PATH: ${{ runner.temp }}/sponson-result.json
         SPONSON_ENV: ${{ inputs.env }}
