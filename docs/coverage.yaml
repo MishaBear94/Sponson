@@ -49,7 +49,8 @@ categories:
         api_shape: REST `PUT /v1/services/{id}/env-vars/{key}`, bearer; object per key; previews created by Render from `render.yaml`
         generic: Y
         priority: P1
-        covered_by: null
+        covered_by: recipe:render.env_var
+        note: "per variable on a service whose id the plan gives (Render creates previews itself; no lookup of PR N's service); writing does not deploy"
       - id: railway-variables
         provider: Railway
         side_effect: Variables in a PR environment (Railway creates PR environments natively)
@@ -70,7 +71,8 @@ categories:
         api_shape: REST `POST /review-apps`, `PATCH /apps/{app}/config-vars`, bearer; **map** merge, `null` deletes; review-app creation async
         generic: Y (config vars); P (review app)
         priority: P2
-        covered_by: null
+        covered_by: recipe:heroku.config_var
+        note: "config vars on an existing app (a review app by name); creating the review app (async, by Heroku's automatic review apps) is not managed"
       - id: amplify-branch
         provider: AWS Amplify
         side_effect: Branch (per-PR previews built in); env vars per branch
@@ -160,7 +162,8 @@ categories:
         api_shape: Management API `POST /v1/projects/{id}/databases`, `POST /v1/databases/{id}/connections`; service token; object; connection string returned on create
         generic: Y
         priority: P2
-        covered_by: null
+        covered_by: ["recipe:prisma.database", "recipe:prisma.database_copy"]
+        note: "connection strings are once-only outputs (in the create answer only); Sponson does not wait for status ready"
   - id: auth
     title: Auth callback and redirect allow-lists
     rows:
@@ -384,7 +387,7 @@ categories:
         api_shape: "`POST /v10/projects/{id}/domains` `{name, gitBranch}`, `DELETE`; bearer; object"
         generic: Y (or a `vercel` op)
         priority: P1
-        covered_by: null
+        covered_by: recipe:vercel.project_domain
   - id: cors
     title: CORS and allowed origins
     rows:
@@ -419,7 +422,7 @@ categories:
         api_shape: Developer API `POST /v2/redis/database`, `DELETE /v2/redis/database/{id}`; Basic (email:key); object
         generic: Y
         priority: P2
-        covered_by: null
+        covered_by: recipe:upstash.redis_database
       - id: qstash-schedule
         provider: Upstash QStash
         side_effect: Schedule that calls the preview URL

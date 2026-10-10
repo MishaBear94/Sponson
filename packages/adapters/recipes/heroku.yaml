@@ -1,0 +1,87 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Heroku Platform API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: heroku
+title: Heroku
+category: deploy
+verified_on: "2026-10-11"
+docs:
+  - title: Platform API reference (clients, Config Vars, Review App)
+    url: https://devcenter.heroku.com/articles/platform-api-reference
+  - title: Platform API JSON schema (config-var)
+    url: https://api.heroku.com/schema
+  - title: Configuration and config vars
+    url: https://devcenter.heroku.com/articles/config-vars
+  - title: CLI authentication (HEROKU_API_KEY)
+    url: https://devcenter.heroku.com/articles/authentication
+api:
+  base_url: https://api.heroku.com
+  base_url_env: HEROKU_API_URL
+  auth: { bearer_env: HEROKU_API_KEY }
+  headers: { Accept: "application/vnd.heroku+json; version=3" }
+assumptions:
+  - id: HK1
+    verified: true
+    text: "Requests authenticate as `Authorization: Bearer <token>`; the Heroku CLI reads the token from `HEROKU_API_KEY`."
+    source: https://devcenter.heroku.com/articles/authentication
+  - id: HK2
+    verified: true
+    text: "Every request must send `Accept: application/vnd.heroku+json; version=3`; without it the API refuses the request (documented as 406 `not_acceptable`; a request without it was answered 400 `missing_version` when checked)."
+    source: https://devcenter.heroku.com/articles/platform-api-reference
+  - id: HK3
+    verified: true
+    text: "`GET /apps/{app_id_or_name}/config-vars` answers the app's config vars as one flat map of name to string value."
+    source: https://devcenter.heroku.com/articles/platform-api-reference
+  - id: HK4
+    verified: true
+    text: "`PATCH /apps/{app_id_or_name}/config-vars` with a map sets the named vars and removes those set to `null`, leaving every other var as it is: one var is written without reading or rewriting the others, so concurrent writers of other vars cannot lose them (no lock needed)."
+    source: https://devcenter.heroku.com/articles/platform-api-reference
+  - id: HK5
+    verified: true
+    text: "Config var names match `^\\w+$` and values are strings (`null` only as a delete in a PATCH)."
+    source: https://api.heroku.com/schema
+  - id: HK6
+    verified: true
+    text: "Every change to config vars creates a new release and restarts the app, so a write takes effect without a separate deploy."
+    source: https://devcenter.heroku.com/articles/config-vars
+  - id: HK7
+    verified: true
+    text: "Review apps are created asynchronously (`POST /review-apps` answers `pending` with a nullable `app`), by Heroku itself when the pipeline has automatic review apps; this recipe does not create them, it writes vars on an app that exists (the review app's name or id)."
+    source: https://devcenter.heroku.com/articles/platform-api-reference
+  - id: HK8
+    verified: false
+    text: "A missing app answers 404 `not_found` on GET and PATCH, which destroy treats as the var being gone."
+    source: https://devcenter.heroku.com/articles/platform-api-reference
+ops:
+  config_var:
+    kind: list_item
+    title: App config var
+    summary: "One config var on a Heroku app, such as a review app's `API_URL`. Written as a merge patch of that one var (`null` deletes it), so other vars, including other scopes', are never rewritten. A console edit of its value is drift; destroy removes only this var. Heroku restarts the app on every change (HK6)."
+    covers: [heroku-config-vars]
+    params:
+      app:
+        type: string
+        required: true
+        description: The app's name or id (a review app's, such as `myapp-pr-42`).
+        example: "myapp-${ctx.scope}"
+      key:
+        type: string
+        required: true
+        pattern: "^\\w+$"
+        description: The config var's name.
+        example: API_URL
+      value:
+        type: string
+        required: true
+        description: "The value: a literal, `{ from }` or `{ secret }`."
+        example: "https://api-${ctx.scope}.example.com"
+    http:
+      parent: { path: "/apps/{app}/config-vars" }
+      list_path: ""
+      shape: map
+      item: { param: key }
+      value: { param: value }
+    sim:
+      objects:
+        "/apps/{app}/config-vars": { DATABASE_URL: "postgres://seeded", LOG_LEVEL: info }
+    live:
+      params: { app: SPONSON_LIVE_HEROKU_APP }

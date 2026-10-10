@@ -1,0 +1,142 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Prisma Postgres Management API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: prisma
+title: Prisma Postgres
+category: databases
+verified_on: "2026-10-11"
+docs:
+  - title: Management API OpenAPI document
+    url: https://api.prisma.io/v1/doc
+  - title: Management API guide (base URL, service tokens)
+    url: https://www.prisma.io/docs/guides/management-api-basic
+  - title: Connecting to your database (connection strings)
+    url: https://www.prisma.io/docs/postgres/database/connecting-to-your-database
+api:
+  base_url: https://api.prisma.io/v1
+  base_url_env: PRISMA_API_URL
+  auth: { bearer_env: PRISMA_SERVICE_TOKEN }
+assumptions:
+  - id: PP1
+    verified: true
+    text: "The Management API at `https://api.prisma.io/v1` authenticates with a workspace service token as `Authorization: Bearer`; Prisma's guide keeps it in `PRISMA_SERVICE_TOKEN`."
+    source: https://www.prisma.io/docs/guides/management-api-basic
+  - id: PP2
+    verified: true
+    text: "Answers are enveloped: one object as `{ data: {…} }`, a list as `{ data: [...], pagination: { nextCursor, hasMore } }`, paged with `?cursor=`."
+    source: https://api.prisma.io/v1/doc
+  - id: PP3
+    verified: true
+    text: "`POST /v1/projects/{projectId}/databases` with `{ name, region, source? }` creates a database (201); `source: { type: database, databaseId }` copies an existing one. It answers the database with `id`, `name`, `status` (`provisioning` or `ready`) and `connections[]`."
+    source: https://api.prisma.io/v1/doc
+  - id: PP4
+    verified: true
+    text: "`GET /v1/projects/{projectId}/databases` lists the project's databases with `id` and `name`; it has no name filter, so the list is searched page by page."
+    source: https://api.prisma.io/v1/doc
+  - id: PP5
+    verified: false
+    text: "Database names are not unique (the project-scoped create documents no 409), so two databases with one name make `find.match` ambiguous, which is refused with PARAM_INVALID rather than guessed. Sponson never creates a second one: it looks the name up before every create."
+    source: https://api.prisma.io/v1/doc
+  - id: PP6
+    verified: true
+    text: "`GET /v1/databases/{databaseId}` answers the database (404 when it does not exist); `DELETE` on the same path deletes it (204; 404 when gone; 403 for a project's default database)."
+    source: https://api.prisma.io/v1/doc
+  - id: PP7
+    verified: false
+    text: "The connection strings (`connections[0].endpoints.direct.connectionString`, and `.pooled` when there is a pooled endpoint) are in the create answer only: list and get answer the endpoints' host and port without them. So they are once-only outputs (ADR 0018), and a create whose answer was lost leaves dependents to be refused until the database is recreated. Inferred from the schemas; not stated in the docs."
+    source: https://api.prisma.io/v1/doc
+  - id: PP8
+    verified: false
+    text: "`connections[0]` is the database's default connection, present in every create answer."
+    source: https://api.prisma.io/v1/doc
+  - id: PP9
+    verified: false
+    text: "A database answered with `status: provisioning` accepts connections within seconds; nothing waits for `ready` (the API has no readiness the http adapter can poll), so a dependent deployment that starts at once may see connection errors for that long."
+    source: https://api.prisma.io/v1/doc
+  - id: PP10
+    verified: true
+    text: "Connection strings have the form `postgres://USER:PASSWORD@db.prisma.io:5432/?sslmode=require` (direct) and `postgres://USER:PASSWORD@pooled.db.prisma.io:5432/?sslmode=require` (pooled)."
+    source: https://www.prisma.io/docs/postgres/database/connecting-to-your-database
+ops:
+  database:
+    kind: resource
+    title: Database
+    summary: "An empty Postgres database per scope in a Prisma Postgres project, such as `app-pr-42`. Its connection strings exist only in the create answer, so they are once-only outputs: reference them from the line that needs them (an env var) in the same plan. Located by name; only its existence is compared for drift; destroy deletes it and its data."
+    covers: [prisma-postgres-database]
+    params:
+      project_id:
+        type: string
+        required: true
+        description: The project's id.
+        example: proj_cm1a2b3c4d5e6f7g8h9
+      name:
+        type: string
+        required: true
+        description: The database's name.
+        example: "app-${ctx.scope}"
+      region:
+        type: string
+        default: us-east-1
+        enum: [us-east-1, us-west-1, eu-west-3, eu-central-1, ap-northeast-1, ap-southeast-1]
+        description: Where it runs.
+    http:
+      find:
+        path: "/projects/{project_id}/databases"
+        list_path: /data
+        next: /pagination/nextCursor
+        match: { name: { param: name } }
+      read: { path: "/databases/{id}" }
+      create:
+        path: "/projects/{project_id}/databases"
+        body: { region: { param: region } }
+      item_path: /data
+      outputs:
+        status: /status
+        direct_url: { path: /connections/0/endpoints/direct/connectionString, sensitive: true, once: true }
+        pooled_url: { path: /connections/0/endpoints/pooled/connectionString, sensitive: true, once: true }
+    live:
+      params: { project_id: SPONSON_LIVE_PRISMA_PROJECT_ID }
+  database_copy:
+    kind: resource
+    title: Database copied from another
+    summary: "A Postgres database per scope copied from an existing one (`source: { type: database }`), such as `app-pr-42` with the data of `app`. Otherwise like `prisma.database`: once-only connection strings, existence-only drift, destroy deletes the copy (never the source)."
+    covers: [prisma-postgres-database]
+    params:
+      project_id:
+        type: string
+        required: true
+        description: The project's id.
+        example: proj_cm1a2b3c4d5e6f7g8h9
+      name:
+        type: string
+        required: true
+        description: The new database's name.
+        example: "app-${ctx.scope}"
+      source_database_id:
+        type: string
+        required: true
+        description: The id of the database to copy.
+        example: db_cm9z8y7x6w5v4u3t2s1
+      region:
+        type: string
+        default: us-east-1
+        enum: [us-east-1, us-west-1, eu-west-3, eu-central-1, ap-northeast-1, ap-southeast-1]
+        description: Where it runs.
+    http:
+      find:
+        path: "/projects/{project_id}/databases"
+        list_path: /data
+        next: /pagination/nextCursor
+        match: { name: { param: name } }
+      read: { path: "/databases/{id}" }
+      create:
+        path: "/projects/{project_id}/databases"
+        body:
+          region: { param: region }
+          source: { type: database, databaseId: { param: source_database_id } }
+      item_path: /data
+      outputs:
+        status: /status
+        direct_url: { path: /connections/0/endpoints/direct/connectionString, sensitive: true, once: true }
+        pooled_url: { path: /connections/0/endpoints/pooled/connectionString, sensitive: true, once: true }
+    live:
+      params: { project_id: SPONSON_LIVE_PRISMA_PROJECT_ID, source_database_id: SPONSON_LIVE_PRISMA_DATABASE_ID }

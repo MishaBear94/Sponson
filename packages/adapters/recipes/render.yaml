@@ -1,0 +1,94 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Render API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: render
+title: Render
+category: deploy
+verified_on: "2026-10-11"
+docs:
+  - title: Authentication
+    url: https://api-docs.render.com/reference/authentication
+  - title: Retrieve environment variable
+    url: https://api-docs.render.com/reference/retrieve-env-var
+  - title: Add or update environment variable
+    url: https://api-docs.render.com/reference/update-env-var
+  - title: Delete environment variable
+    url: https://api-docs.render.com/reference/delete-env-var
+  - title: Update environment variables (replace all; deploy behaviour)
+    url: https://api-docs.render.com/reference/update-env-vars-for-service
+  - title: Service previews
+    url: https://render.com/docs/service-previews
+  - title: Render CLI (RENDER_API_KEY)
+    url: https://render.com/docs/cli
+api:
+  base_url: https://api.render.com/v1
+  base_url_env: RENDER_API_URL
+  auth: { bearer_env: RENDER_API_KEY }
+assumptions:
+  - id: RE1
+    verified: true
+    text: "Requests authenticate with an API key as `Authorization: Bearer`; the Render CLI reads it from `RENDER_API_KEY`."
+    source: https://api-docs.render.com/reference/authentication
+  - id: RE2
+    verified: true
+    text: "`GET /services/{serviceId}/env-vars/{envVarKey}` answers the variable bare, `{ key, value }`, and 404 when it does not exist."
+    source: https://api-docs.render.com/reference/retrieve-env-var
+  - id: RE3
+    verified: true
+    text: "`PUT /services/{serviceId}/env-vars/{envVarKey}` with `{ value }` adds the variable or replaces its value (200, `{ key, value }`): a create whose answer was lost is the same request again, and the variable's name is its identity."
+    source: https://api-docs.render.com/reference/update-env-var
+  - id: RE4
+    verified: true
+    text: "`DELETE /services/{serviceId}/env-vars/{envVarKey}` removes the variable (204)."
+    source: https://api-docs.render.com/reference/delete-env-var
+  - id: RE5
+    verified: false
+    text: "Deleting a variable that is already gone answers 404 (documented only as \"Unable to find the requested resource\"), which destroy treats as done."
+    source: https://api-docs.render.com/reference/delete-env-var
+  - id: RE6
+    verified: true
+    text: "Changing environment variables through the API does not deploy the service, whatever its autoDeploy setting (stated for the replace-all endpoint); a running preview sees a new value only after its next deploy."
+    source: https://api-docs.render.com/reference/update-env-vars-for-service
+  - id: RE7
+    verified: false
+    text: "The single-variable PUT does not deploy either (its page is silent; assumed like the replace-all endpoint)."
+  - id: RE8
+    verified: true
+    text: "Render creates service previews and preview environments itself (per pull request, from the service's Previews setting or `render.yaml`); a preview copies the base service's variables once, when it is created. No API looks up the preview of pull request N, so the line takes the service's id."
+    source: https://render.com/docs/service-previews
+  - id: RE9
+    verified: false
+    text: "`GET` returns the value in plain text for every variable, including ones generated with `generateValue`, so the value can be compared for drift."
+    source: https://api-docs.render.com/reference/retrieve-env-var
+ops:
+  env_var:
+    kind: resource
+    title: Service environment variable
+    summary: "One environment variable on a Render service, such as a preview service's `API_URL`, written by name (`PUT` adds or replaces it). A console edit of its value is drift; destroy deletes it. The service's id is a param: Render creates preview services itself, and writing a variable does not deploy (RE6)."
+    covers: [render-env]
+    params:
+      service_id:
+        type: string
+        required: true
+        pattern: "^[a-z]{3}-[a-z0-9]+$"
+        description: The service's id (`srv-…`, in the service's dashboard URL and settings).
+        example: srv-d0a1b2c3d4e5f6g7h8i9
+      key:
+        type: string
+        required: true
+        pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+        description: The variable's name.
+        example: API_URL
+      value:
+        type: string
+        required: true
+        description: "The variable's value: a literal, `{ from }` or `{ secret }`."
+        example: "https://api-${ctx.scope}.example.com"
+    http:
+      read: { path: "/services/{service_id}/env-vars/{key}" }
+      create: { method: PUT, path: "/services/{service_id}/env-vars/{key}" }
+      update: { method: PUT }
+      id_path: /key
+      fields:
+        value: { param: value }
+    live:
+      params: { service_id: SPONSON_LIVE_RENDER_SERVICE_ID }
