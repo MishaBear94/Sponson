@@ -124,11 +124,12 @@ Install the CLI from npm (Node.js 22 or later):
 npm install -g sponson    # or run it without installing: npx sponson <command>
 ```
 
-To run an unreleased commit instead, build it from source:
+To run an unreleased commit instead, run it from source (the workspace packages resolve to their TypeScript
+sources, so it runs through the `tsx` loader rather than a build):
 
 ```bash
-git clone https://github.com/MishaBear94/Sponson ~/sponson && (cd ~/sponson && pnpm install && pnpm build)
-alias sponson="node ~/sponson/packages/cli/dist/bin.js"
+git clone https://github.com/MishaBear94/Sponson ~/sponson && (cd ~/sponson && pnpm install)
+alias sponson="node --import ~/sponson/node_modules/tsx/dist/loader.mjs ~/sponson/packages/cli/src/bin.ts"
 ```
 
 Then, in your app's repository:
