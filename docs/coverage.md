@@ -36,9 +36,9 @@ Columns:
 
 - **Side effect**: what one environment adds, changes or removes.
 - **API shape**: endpoint or CLI, auth, and the write model: **object** (one API object per item, created and deleted
-  on its own) or **list** (one array or map on a parent object, read-modify-write). For list shapes, a concurrent writer
-  can lose an update unless the provider offers a precondition; see the shared-parent item in
-  [ROADMAP.md](../ROADMAP.md#4-lifecycle-and-operations).
+  on its own) or **list** (one array or map on a parent object, read-modify-write). For list shapes, concurrent
+  writers would lose updates; the op declares the parent object (`lockOn`) and the engine serialises Sponson's writers
+  with a lock per object ([ADR 0019](adr/0019-parent-object-locks.md)), on top of any precondition the provider offers.
 - **Generic?**: could the declarative HTTP adapter described under [Strategy](#strategy) express it? **Y** yes,
   **P** partly (the lifecycle needs more than request templates, noted), **N** no.
 - **Pri**: how often it appears in preview-environment workflows. **P0** most preview setups on that stack hit it;
@@ -225,9 +225,9 @@ and the lifecycle is plain CRUD. Rows marked **Y**: 34 rows not covered today, w
    `Idempotency-Key` from the ledger key where the provider honours it (Stripe), client-chosen ids where it takes them
    (Svix `uid`, QStash `Upstash-Schedule-Id`).
 6. **Preconditions and serialization for list mode**: send the read version back when the provider has one (ETag /
-   `If-Match`, GCS `ifMetagenerationMatch`), re-read after write to confirm the item landed, and a per-parent-object
-   lock otherwise (the shared-parent item in [ROADMAP.md](../ROADMAP.md#4-lifecycle-and-operations)). Without this,
-   two PRs editing one Auth0 application lose writes.
+   `If-Match`, GCS `ifMetagenerationMatch`), re-read after write to confirm the item landed, and declare the parent
+   object (`lockOn`) so the engine's per-object lock serialises Sponson's writers
+   ([ADR 0019](adr/0019-parent-object-locks.md)). Without this, two PRs editing one Auth0 application lose writes.
 7. **Status classification overrides**: which statuses mean "already exists" (re-read and claim), "gone" (success on
    delete), "busy" (retry), on top of `packages/adapters/src/http.ts`'s defaults; plus pagination styles (cursor,
    `next` link, page number).

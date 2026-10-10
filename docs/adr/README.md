@@ -22,6 +22,7 @@ Nygard's format). They explain *why* the code is the way it is; [ARCHITECTURE.md
 | [0014](0014-secrets-are-references.md) | Secrets are references, never values | Accepted |
 | [0015](0015-adapters-describe-themselves.md) | Adapters and secret sources describe themselves | Accepted |
 | [0016](0016-one-receipts-ref-per-scope.md) | One receipts branch per environment and scope | Accepted |
+| [0019](0019-parent-object-locks.md) | Locks on shared parent objects | Accepted |
 
 ## Writing a new record
 
