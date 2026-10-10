@@ -4,6 +4,7 @@ import { orderChanges, outputRefs } from "../graph.js";
 import { changesFor } from "../plan.js";
 import { secretRefs } from "../resolve.js";
 import type { Change, OpSpec } from "../types.js";
+import { providerOf } from "./run-context.js";
 import type { RunOptions } from "./types.js";
 
 /** Everything about a run that follows from the plan and context alone, before touching any provider. */
@@ -29,12 +30,18 @@ export function prepare(opts: RunOptions): Prepared {
     });
   }
   const ordered = orderChanges(changesFor(plan, ctx.env), plan.changes);
+  checkRecreate(opts.recreate ?? [], ordered, ctx.env);
   const ops = new Map<string, OpSpec>();
   const params = new Map<string, Record<string, unknown>>();
   const refs = new Set<string>();
   const productionLines: string[] = [];
 
-  for (const c of ordered) ops.set(c.id, registry.op(c.adapter, c.op));
+  for (const c of ordered) {
+    const op = specialize(registry.op(c.adapter, c.op), c);
+    // A provider block the op cannot use (an unknown API name) must fail here, before any provider call.
+    providerOf(plan.providers[c.adapter] ?? {}, op, c);
+    ops.set(c.id, op);
+  }
 
   for (const c of ordered) {
     const op = ops.get(c.id)!;
@@ -68,6 +75,16 @@ export function prepare(opts: RunOptions): Prepared {
 }
 
 /**
+ * The op as this line uses it: with the outputs the line declares when the op derives them from its params
+ * (`OpSpec.outputsFor`), so references to them are checked here like any other output. The prototype keeps every
+ * other member of the op.
+ */
+function specialize(op: OpSpec, c: Change): OpSpec {
+  if (!op.outputsFor) return op;
+  return Object.assign(Object.create(op) as OpSpec, { outputs: op.outputsFor(c.params) });
+}
+
+/**
  * Approval is a non-empty name; whitespace is not a person. Only `opts.approvedBy` counts: where it comes from
  * (a flag, an environment variable, an approval workflow) is the caller's business.
  */
@@ -86,4 +103,14 @@ export function requireApproval(opts: RunOptions, prepared: Prepared): string | 
     });
   }
   return approvedBy;
+}
+
+/** `recreate` may name only lines active in this environment. */
+function checkRecreate(recreate: string[], ordered: Change[], env: string): void {
+  const unknown = recreate.filter((id) => !ordered.some((c) => c.id === id));
+  if (unknown.length) {
+    throw new SponsonError("USAGE", `Cannot recreate ${unknown.map((id) => `\`${id}\``).join(", ")}: no such line in environment ${env}. Lines: ${ordered.map((c) => c.id).join(", ")}`, {
+      recreate: unknown,
+    });
+  }
 }

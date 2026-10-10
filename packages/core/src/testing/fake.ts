@@ -1,3 +1,4 @@
+import { SponsonError } from "../errors.js";
 import { setTimeout as sleep } from "node:timers/promises";
 import { sha256 } from "../hash.js";
 import { isPendingMarker, markerKind, pendingRef } from "../resolve.js";
@@ -7,7 +8,9 @@ import type { ApplyResult, DiffSide, LiveState, OpSpec, ResourceAdapter, Resourc
  * An in-memory provider for engine tests and property tests.
  *
  * `item`, with params `{ name, value }`:
- *   outputs: id (immediate), secret (immediate, sensitive), url (external: "deploy")
+ *   outputs: id (immediate), secret (immediate, sensitive), url (external: "deploy"),
+ *            token (sensitive, once: only in the apply that creates the item)
+ *   A `{ keep: true }` value is unchanged when the item exists and PARAM_INVALID when it does not.
  * `member`, with params `{ list, value }`: one entry of a list stored on a shared parent object, written by
  *   read-modify-write with a pause in between (`listLatencyMs`), like an Auth0 application's callback URLs.
  *   `lockOn` names the list (ADR 0019) unless `lockLists` is false, which reproduces the lost update.
@@ -91,6 +94,7 @@ export class FakeCloud {
             id: { available: "immediate" },
             secret: { available: "immediate", sensitive: true },
             url: { available: "external", event: "deploy" },
+            token: { available: "immediate", sensitive: true, once: true },
           },
           defaults: (p, ctx) => ({ ...p, name: p.name ?? `item-${ctx.scope}` }),
           writesEnvironment: (p) => (typeof p.target === "string" ? p.target : null),
@@ -106,6 +110,10 @@ export class FakeCloud {
             const want = p.value;
             const current = live?.resources.find((r) => r.key === key(n));
             const marker = markerKind(want);
+            if (marker === "keep") {
+              if (current) return [{ key: key(n), label: n, kind: "unchanged" }];
+              throw new SponsonError("PARAM_INVALID", `${n} is declared \`{ keep: true }\` but does not exist`, { key: key(n) });
+            }
             const after: DiffSide = marker === "pending" || marker === "secret" ? { state: marker, ref: pendingRef(want as string) } : { state: "literal", value: String(want) };
             if (!current) return [{ key: key(n), label: n, kind: "create", after }];
             if (!isPendingMarker(want) && current.hash === sha256(String(want))) return [{ key: key(n), label: n, kind: "unchanged" }];
@@ -117,7 +125,7 @@ export class FakeCloud {
             cloud.maybeFail("apply", n);
             const existing = cloud.items.get(n);
             if (existing) {
-              if (existing.value !== String(p.value)) {
+              if (markerKind(p.value) !== "keep" && existing.value !== String(p.value)) {
                 existing.value = String(p.value);
                 cloud.writes.push({ op: "update", name: n });
               }
@@ -130,7 +138,7 @@ export class FakeCloud {
             cloud.writes.push({ op: "create", name: n });
             cloud.maybeFail("lost", n); // the write happened; the response did not arrive
             void live;
-            return { resources: [record(it)], outputs: outputsOf(it), created: [key(n)] };
+            return { resources: [record(it)], outputs: { ...outputsOf(it), token: `t-${it.id}-${it.name}` }, created: [key(n)] };
           },
           async destroy(_actx, resources) {
             for (const r of resources) {

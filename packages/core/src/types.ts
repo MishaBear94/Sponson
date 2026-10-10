@@ -131,6 +131,16 @@ export interface OutputSpec {
   event?: string;
   /** Sensitive outputs are never displayed, logged, or written to receipts. */
   sensitive?: boolean;
+  /**
+   * The provider reveals this value only in the response that creates the resource (a database password's
+   * plaintext): `read` never returns it and Sponson never stores it, so declare it `sensitive` too. It reaches
+   * dependent lines in the run that creates the resource. In any later run, a `from:` reference to it resolves to
+   * `{ keep: true }` when the ledger's fingerprints show the dependent already holds the current value; a dependent
+   * that would have to write it (or cannot be shown to hold it) is refused with OUTPUT_UNAVAILABLE instead of
+   * receiving an empty value. Nothing is re-created to get the value back unless the run asks for it (`recreate`).
+   * See docs/adr/0018-once-only-outputs.md.
+   */
+  once?: boolean;
 }
 
 /** One concrete thing in the provider. */
@@ -260,6 +270,21 @@ export interface AdoptedLine {
  */
 export interface OpSpec {
   outputs: Record<string, OutputSpec>;
+  /**
+   * For ops whose outputs a line declares in its own params (the generic `http` ops): the outputs of one line,
+   * given its params as written (not interpolated, references unresolved). The engine uses them instead of
+   * `outputs` for that line, so a `from:` naming an undeclared output still fails before any provider call. Throw
+   * PARAM_INVALID for a malformed declaration.
+   */
+  outputsFor?(params: Record<string, unknown>): Record<string, OutputSpec>;
+  /**
+   * For ops whose `providers.<adapter>` block holds several independent configurations (the generic `http`
+   * adapter: one per API): the part a line uses, given the whole block and the line's params as written. It
+   * becomes `actx.provider` and part of the ledger identity of the line's resources, so editing one API's
+   * configuration does not re-identify resources of another. Pure; throw PLAN_INVALID when the line names a
+   * configuration the block does not have. Without it the whole block is used.
+   */
+  providerFor?(block: Record<string, unknown>, params: Record<string, unknown>): Record<string, unknown>;
   /** Fill in defaults (e.g. a branch name) given the context. Returns a new params object. */
   defaults?(params: ResolvedParams, ctx: Ctx): ResolvedParams;
   /**
@@ -370,10 +395,15 @@ export interface ResourceAdapter {
 
 /** The environment an adapter reads: its credential, and the variable that overrides its API base URL. */
 export interface AdapterAbout {
-  /** Environment variable holding the credential, e.g. `NEON_API_KEY`. */
+  /**
+   * Environment variable holding the credential, e.g. `NEON_API_KEY`; for an adapter whose plan names the
+   * variable per provider block (the generic `http` adapter), where in the plan it is named.
+   */
   credentialEnv: string;
-  /** Environment variable that overrides the API base URL (the sim and tests use it), when there is one. */
+  /** Environment variable that overrides the API base URL (the sim and tests use it), when there is one; or where the plan names it. */
   baseUrlEnv?: string;
+  /** Further variables the credential needs, when one is not enough (PlanetScale: the service token's id). */
+  extraCredentialEnv?: readonly string[];
 }
 
 /**
@@ -465,6 +495,16 @@ export interface LedgerEntry {
   outputs?: Record<string, Literal>;
   /** The shared parent object the resource lives in (`OpSpec.lockOn`); rollback and destroy lock it (ADR 0019). */
   parent?: string;
+  /**
+   * Keyed fingerprints of the `once` outputs (ADR 0018) the line's create returned, by output name: which value is
+   * current, never the value.
+   */
+  onceFingerprints?: Record<string, string>;
+  /**
+   * Keyed fingerprints of the `once` values this resource was last written with, by reference (`line.output`). Equal
+   * to the producer's `onceFingerprints` entry means it still holds the current value (ADR 0018).
+   */
+  onceInputs?: Record<string, string>;
 }
 
 /**

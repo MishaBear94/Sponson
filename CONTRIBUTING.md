@@ -88,6 +88,11 @@ pin new ones the same way — Dependabot keeps the pins current, including in `a
 
 ## Adding an adapter
 
+First check whether the provider needs one: the generic `http` adapter
+([docs/plan-format.md](docs/plan-format.md#the-generic-http-adapter)) already manages plain CRUD objects and list
+entries of any JSON REST API from the plan. Write a first-class adapter when the lifecycle needs more than a
+request template can say ([ADR 0017](docs/adr/0017-generic-http-adapter.md)).
+
 An adapter is an object implementing `ResourceAdapter` from `@sponson/core`: a name and a map of ops. Read `packages/core/src/types.ts` (the contract, with the marker rules next to `OpSpec.diff`) and the fake adapter in `packages/core/src/testing/fake.ts` (`@sponson/core/testing`), the smallest complete example.
 
 The quickest start is the scaffold:
@@ -160,6 +165,9 @@ Rules the engine relies on:
 - The ledger identifies a resource by adapter, provider block and key, so the key need not repeat what the provider block already says (the project, the application).
 - `missing` drift (Sponson created it, it is gone) never blocks: the next apply recreates it. `changed` drift (the hash differs) is refused until `--reconcile`.
 - `destroy` treats "already gone" as success.
+- An output the provider shows only in the create response (a password's plaintext, a webhook signing secret) is
+  declared `once: true` and `sensitive: true`, and `apply` returns it only from the call that created the resource.
+  The engine fingerprints it and decides what later runs may keep (ADR 0018); never fake it from `read`.
 - An op whose items live in a list on a shared provider object declares that object with `lockOn`; it is pure, and
   its identity names the object (it is written to receipts), never a secret.
 - Outputs marked `sensitive` may be returned, but never logged by the adapter; the engine redacts them.

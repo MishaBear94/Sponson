@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { dependentsOf } from "../graph.js";
 import { SponsonError } from "../errors.js";
+import { sha256 } from "../hash.js";
 import { dependenciesOf } from "../plan.js";
 import type { LineOutputs } from "../resolve.js";
 import type { ApplyResult, Change, LedgerEntry, LiveState, Literal, OpSpec, Receipt, ReceiptLine, ResourceRecord, RunStatus } from "../types.js";
@@ -10,6 +11,7 @@ import { staleness } from "./history.js";
 import { identity } from "./ledger.js";
 import { inspectLine, waitingOn, type Inspection } from "./inspect.js";
 import { isParentLockLoss, Lease, withParentLock } from "./lease.js";
+import { consumedFingerprints, producedFingerprints } from "./once.js";
 import { hasExternalOutputs, publicOutputs } from "./outputs.js";
 import { prepare, requireApproval, type Prepared } from "./prepare.js";
 import { receiptSkeleton, rereadLine, toRecord } from "./receipt.js";
@@ -58,6 +60,8 @@ class ApplyRun {
   private failed = false;
   /** The lease on the shared parent object the current line writes (ADR 0019), while it is held. */
   private parentLease: Lease | null = null;
+  /** `line\0key` of resources this run deleted to create again (`recreate`): replacements, not rollback material. */
+  private readonly recreated = new Set<string>();
   /** A deploy failed or never came within --wait: nothing to roll back, but the plan was not realised. */
   private externalFailed = false;
 
@@ -169,7 +173,7 @@ class ApplyRun {
    * straight on.
    */
   private async underParentLock(c: Change, op: OpSpec, inspection: Inspection): Promise<boolean> {
-    const parent = inspection.refusal || isUnchanged(inspection) ? undefined : this.parentOf(c, op, inspection);
+    const parent = inspection.refusal || !this.writes(c, inspection) ? undefined : this.parentOf(c, op, inspection);
     return withParentLock(this.rc.opts, this.lease.holder, parent, this.rc.warnings, async (lease) => {
       if (!lease) return this.refuseOrWrite(c, op, inspection);
       this.parentLease = lease;
@@ -201,6 +205,41 @@ class ApplyRun {
       throw new SponsonError("INTERNAL", `${c.adapter}.${c.op}: lockOn returned an identity containing a secret value; an identity is written to receipts, so it must name the object, not carry a credential.`);
     }
     return parent;
+  }
+
+  /** Whether applying this line writes anything: a diff that is not `unchanged`, or a requested recreate. */
+  private writes(c: Change, inspection: Inspection): boolean {
+    return !isUnchanged(inspection) || this.recreating(c, inspection);
+  }
+
+  private recreating(c: Change, inspection: Inspection): boolean {
+    return (this.rc.opts.recreate ?? []).includes(c.id) && (inspection.live?.resources.length ?? 0) > 0;
+  }
+
+  /**
+   * Delete the line's resources so that applying creates them again and returns their `once` outputs (ADR 0018).
+   * Only what Sponson created in this scope is ever deleted.
+   */
+  private async recreate(c: Change, op: OpSpec, inspection: Inspection, line: ReceiptLine): Promise<Inspection> {
+    const records = inspection.live!.resources;
+    for (const r of records) {
+      const e = this.rc.ledger.get(c.adapter, inspection.provider, r.key);
+      if (e?.createdBy !== "sponson" || this.rc.foreignScopeOf({ adapter: c.adapter, provider: inspection.provider, key: r.key })) {
+        throw new SponsonError("USAGE", `Cannot recreate \`${c.id}\`: ${r.label ?? r.key} was not created by Sponson in this scope, and Sponson never deletes what it did not create.`, { line: c.id, key: r.key });
+      }
+    }
+    this.lease.assertHeld();
+    this.parentLease?.assertHeld();
+    const actx = this.rc.adapterContext(c.adapter, inspection.provider);
+    actx.log(`recreate ${c.id}`);
+    await op.destroy(actx, records);
+    for (const r of records) this.recreated.add(`${c.id}\u0000${r.key}`);
+    line.notes = { ...line.notes, recreated: true };
+    const fresh = await inspectLine(this.rc, c, op, this.prepared.params.get(c.id)!, this.outputs);
+    // Gone because this run deleted them: not drift.
+    fresh.drift = fresh.drift.filter((d) => d.kind !== "missing");
+    this.inspections.set(c.id, fresh);
+    return fresh;
   }
 
   /** A line whose dependency failed is skipped; one whose dependency is waiting waits for the same thing. */
@@ -250,9 +289,10 @@ class ApplyRun {
   }
 
   /** Apply the line unless it is already as declared, then bring the ledger, the receipt line and the outputs up to date. */
-  private async writeAndRecord(c: Change, op: OpSpec, inspection: Inspection): Promise<void> {
+  private async writeAndRecord(c: Change, op: OpSpec, inspected: Inspection): Promise<void> {
     const line = this.line(c, { status: "applied" });
     this.receipt.lines[c.id] = line;
+    const inspection = this.recreating(c, inspected) ? await this.recreate(c, op, inspected, line) : inspected;
     const fingerprints = this.fingerprints(inspection);
     if (Object.keys(fingerprints).length) line.secretFingerprints = fingerprints;
 
@@ -269,7 +309,7 @@ class ApplyRun {
     }
     if (result.notes) line.notes = { ...line.notes, ...result.notes };
     this.rc.guardOutputs(result.outputs, op.outputs);
-    this.record(c, inspection, result, this.parentOf(c, op, inspection));
+    this.record(c, inspection, result, this.ledgerExtras(c, op, inspection, result));
 
     const values: Record<string, unknown> = { ...result.outputs };
     if (op.awaitExternal && hasExternalOutputs(op.outputs)) {
@@ -309,8 +349,26 @@ class ApplyRun {
     await this.lease.write(snapshot);
   }
 
+  /**
+   * What the ledger keeps for the line besides identity and hash: the parent object it lives in (ADR 0019), and the
+   * fingerprints of `once` values it returned or was written with (ADR 0018), so later runs can tell whether a
+   * dependent still holds the current value without anyone storing it.
+   */
+  private ledgerExtras(c: Change, op: OpSpec, inspection: Inspection, result: ApplyResult): LedgerExtras {
+    const before = this.rc.ledger.all().filter((e) => e.line === c.id && e.createdBy !== "intent");
+    const fp = (v: Literal) => this.rc.ledger.keyed(sha256(String(v)));
+    const once = producedFingerprints(op, result, before, fp);
+    const inputs = consumedFingerprints(inspection.resolved, before, this.outputs, fp);
+    const parent = this.parentOf(c, op, inspection);
+    return {
+      ...(parent ? { parent } : {}),
+      ...(Object.keys(once).length ? { onceFingerprints: once } : {}),
+      ...(Object.keys(inputs).length ? { onceInputs: inputs } : {}),
+    };
+  }
+
   /** Bring the ledger in line with what this line now manages. */
-  private record(c: Change, inspection: Inspection, result: ApplyResult, parent?: string): void {
+  private record(c: Change, inspection: Inspection, result: ApplyResult, extras: LedgerExtras = {}): void {
     const { provider } = inspection;
     const keys = new Set<string>();
     const createdNow = new Set(result.created);
@@ -322,7 +380,7 @@ class ApplyRun {
       // Sponson keeps what it already owned, unless it was replaced outside Sponson or another scope manages it.
       const stillOurs = prev?.createdBy === "sponson" && (!prev.id || prev.id === r.id) && !this.rc.foreignScopeOf({ adapter: c.adapter, provider, key: r.key });
       const createdBy: LedgerEntry["createdBy"] = created || stillOurs ? "sponson" : "adopted";
-      this.rc.ledger.put({ adapter: c.adapter, op: c.op, provider, key: r.key, id: r.id, hash: this.rc.ledger.keyed(r.hash), ...(r.label ? { label: r.label } : {}), createdBy, line: c.id, ...(parent ? { parent } : {}) });
+      this.rc.ledger.put({ adapter: c.adapter, op: c.op, provider, key: r.key, id: r.id, hash: this.rc.ledger.keyed(r.hash), ...(r.label ? { label: r.label } : {}), createdBy, line: c.id, ...extras });
       if (created) this.markCreated(c, r.key);
     }
     this.dropUnmaterialisedIntents(c, provider, keys);
@@ -344,7 +402,8 @@ class ApplyRun {
   private setOutputs(c: Change, values: Record<string, unknown>): void {
     const op = this.prepared.ops.get(c.id)!;
     this.rc.guardOutputs(values, op.outputs);
-    this.outputs.set(c.id, { values: values as LineOutputs["values"], specs: op.outputs });
+    // The line's resource exists now: a `once` output it did not return in this run was shown in an earlier one.
+    this.outputs.set(c.id, { values: values as LineOutputs["values"], specs: op.outputs, spent: true });
     const pub = publicOutputs(values, op.outputs);
     const line = this.receipt.lines[c.id];
     if (line) line.outputs = pub;
@@ -403,6 +462,8 @@ class ApplyRun {
 
   /** Add `key` to the rollback set of line `c`. */
   private markCreated(c: Change, key: string): void {
+    // A recreated resource replaces one that existed before the run: rollback does not remove it.
+    if (this.recreated.has(`${c.id}\u0000${key}`)) return;
     let entry = this.created.find((x) => x.line.id === c.id);
     if (!entry) {
       entry = { line: c, keys: new Set<string>() };
@@ -415,7 +476,7 @@ class ApplyRun {
   private async rollback(): Promise<void> {
     await this.resolveIntents();
     for (const { line: c, keys } of [...this.created].reverse()) {
-      const provider = this.rc.provider(c.adapter);
+      const provider = this.rc.provider(c);
       const entries = [...keys].map((k) => this.rc.ledger.get(c.adapter, provider, k)).filter((e): e is LedgerEntry => !!e);
       const receiptLine = this.receipt.lines[c.id]!;
       // A rollback that gives up on a busy parent object leaves resources behind: it always waits (ADR 0019).
@@ -441,7 +502,7 @@ class ApplyRun {
   private async resolveIntents(): Promise<void> {
     for (const [lineId, keys] of this.intents) {
       const c = this.prepared.ordered.find((x) => x.id === lineId)!;
-      const provider = this.rc.provider(c.adapter);
+      const provider = this.rc.provider(c);
       const unresolved = [...keys].filter((k) => this.rc.ledger.get(c.adapter, provider, k)?.createdBy === "intent");
       if (unresolved.length === 0) continue;
       try {
@@ -517,3 +578,6 @@ class ApplyRun {
 function isUnchanged(inspection: Inspection): boolean {
   return inspection.diffs.every((d) => d.kind === "unchanged") && (inspection.live !== null || inspection.diffs.length === 0);
 }
+
+/** Ledger fields a line's write carries besides identity and hash. */
+type LedgerExtras = Pick<LedgerEntry, "parent" | "onceFingerprints" | "onceInputs">;

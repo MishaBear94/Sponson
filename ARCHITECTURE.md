@@ -145,7 +145,9 @@ says what Sponson *manages* in this environment and scope after the run, indepen
 - **Identity** is `adapter + provider block + key` (`identity()` in `engine/ledger.ts`). The key comes from the
   adapter and includes every dimension that distinguishes two resources at the provider: `env:preview:feat/x:NAME`
   for Vercel (target, git branch, name), `branch:<name>` for Neon, `redirect:<url>` for Clerk. The provider block is
-  part of identity so the same key in two projects is two resources.
+  part of identity so the same key in two projects is two resources. An op whose block holds several independent
+  configurations narrows it per line with `OpSpec.providerFor` (the generic `http` adapter: one block per API,
+  [ADR 0017](docs/adr/0017-generic-http-adapter.md)); `RunContext.provider(change)` applies it.
 - **`createdBy`** is `sponson` (destroyed with the scope), `adopted` (existed before; never destroyed) or `intent`
   (about to be created; claimed as `sponson` if found live, dropped if not).
 - **`id`** is the provider's id. Same key with a different id means the resource was deleted and re-created outside
@@ -155,7 +157,9 @@ says what Sponson *manages* in this environment and scope after the run, indepen
 - **`line`** is the line that declares it; **`orphan`** marks entries no line declares any more; **`outputs`** keeps
   the line's non-sensitive outputs, including external ones such as `preview_url`; **`parent`** names the shared
   provider object it lives in, when its op declares one (`lockOn`), so rollback and destroy lock that object even
-  for a line the plan no longer has.
+  for a line the plan no longer has; **`onceFingerprints`** and **`onceInputs`** are keyed fingerprints of values a
+  provider shows only on create (`OutputSpec.once`), on the producer and on each dependent written with them, which
+  decide whether a later run may keep the dependent as it is ([ADR 0018](docs/adr/0018-once-only-outputs.md)).
 - Every run starts from the previous ledger and changes only entries it observed or wrote, so failed, skipped,
   waiting and refused lines never make Sponson forget what it owns.
 

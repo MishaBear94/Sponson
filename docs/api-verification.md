@@ -11,7 +11,7 @@ silent; needs a live account.
 
 ## Sources
 
-All fetched on 2026-10-10 and treated as data; none is vendored into the repository.
+All fetched on 2026-10-10 (LaunchDarkly: 2026-10-11) and treated as data; none is vendored into the repository.
 
 | Provider | Source | Version |
 |---|---|---|
@@ -19,8 +19,13 @@ All fetched on 2026-10-10 and treated as data; none is vendored into the reposit
 | Neon | OpenAPI document, https://neon.tech/api_spec/release/v2.json | `v2` |
 | Clerk | Backend API OpenAPI, https://github.com/clerk/openapi-specs `bapi/2026-05-12.yml` (commit `3b078e5`); the `/redirect_urls` section is identical in `bapi/2021-02-05.yml` | `2026-05-12` |
 | Clerk | Official SDK sources, for the list envelope the spec does not describe: RedirectUrlApi.ts (backend package) in clerk/javascript, redirecturl/client.go in clerk/clerk-sdk-go (v2) | `main` / `v2` on that date |
+| LaunchDarkly | REST API reference: overview (authentication, errors, rate limits, semantic patch) https://launchdarkly.com/docs/api, "Get feature flag" https://launchdarkly.com/docs/api/feature-flags/get-feature-flag, "Update feature flag" https://launchdarkly.com/docs/api/feature-flags/patch-feature-flag | as served on that date (API `v2`) |
+| PlanetScale | OpenAPI document, https://planetscale.com/docs/openapi.yaml (fetched 2026-10-11); service tokens, https://planetscale.com/docs/api/reference/service-tokens; CLI references https://planetscale.com/docs/cli/service-tokens.md, https://planetscale.com/docs/cli/branch.md, https://planetscale.com/docs/cli/password.md; Node.js connection string, https://planetscale.com/docs/vitess/tutorials/connect-nodejs-app | `v1` |
 
-All three use bearer authentication (`securitySchemes`), which is what the shared HTTP client sends: ✅.
+Vercel, Neon and Clerk use bearer authentication (`securitySchemes`), which is what the shared HTTP client sends
+by default: ✅. LaunchDarkly takes the access token as the whole `Authorization` value, without `Bearer`; the adapter
+sends it that way (`authHeader: "header:authorization"`): ✅. PlanetScale service tokens are not bearer tokens
+either; see below.
 
 ## Vercel
 
@@ -102,6 +107,93 @@ methods, which is more cautious than needed but not wrong.
 | C2 | bare array; with `paginated=true`, `{ data, total_count }` by `offset`/`limit` | array and parameters verified; envelope from the SDK sources (pinned by the contract suite) |
 | C3 | `RedirectURL` and `DeletedObject` shapes | verified |
 
+## LaunchDarkly
+
+### Calls the adapter makes
+
+| Call | What the adapter sends and reads | Spec | Notes |
+|---|---|---|---|
+| `GET /api/v2/flags/{projectKey}/{featureFlagKey}` | `env=<environment key>`; reads `variations[]._id`, `value`, `name`, and `environments.<key>.targets[]` / `contextTargets[]` (`contextKind`, `values`, `variation` index) | ✅ | `env` restricts the answer to one environment, as the reference recommends. `targets` holds kind `user`, `contextTargets` the other kinds; the adapter reads both and defaults a missing `contextKind` to `user`. `404` (unknown project or flag) fails the line; destroy treats it as already gone. |
+| same, unknown environment | an environment the answer lacks is `PROVIDER_NOT_FOUND` naming it | ❓ | Whether LaunchDarkly answers `404` or omits the environment is not stated; the adapter reports either as not found. |
+| `PATCH /api/v2/flags/{projectKey}/{featureFlagKey}` | `Content-Type: application/json; domain-model=launchdarkly.semanticpatch`; body `{ environmentKey, comment, instructions }` with `addTargets` and/or `removeTargets` `{ contextKind, values: [key], variationId }` | ✅ | Without the `domain-model` parameter the body is read as a JSON patch and refused with `400`. Moving a target sends `removeTargets` (old variation) and `addTargets` (new) in one patch: instructions are all or nothing, and `addTargets` is an error when the key would be targeted by two variations. The shared client gained `WriteOptions.contentType` for this. |
+| same, answer | `200` with the whole flag; the adapter re-reads the target from it | ✅ | A target not served the wanted variation afterwards is `PROVIDER_RESPONSE`. |
+| same, refusals | `405` (environment requires approvals) → `PROVIDER_INVALID` saying so; `409` (concurrent change) → re-read and retry, up to 3 times; `429` retried by the client | ✅ | Sponson does not open approval requests; use a preview or test environment without required approvals. `400` for a conflict with a pending scheduled change or approval is reported, not bypassed with `ignoreConflicts`. |
+
+The PATCH is sent as idempotent (a 502/503/504 or dropped connection is retried): adding and removing an individual
+target are set operations, so repeating one changes nothing more.
+
+### Sim assumptions (`packages/sim/src/routes/launchdarkly.ts`)
+
+| Id | Assumption | Status |
+|---|---|---|
+| LD1 | the access token is the whole `Authorization` value; base URL `https://app.launchdarkly.com/api/v2` | verified (the base URL from the OpenAPI document's location) |
+| LD2 | `GET /flags/{p}/{f}?env=` answers `variations` and `environments` restricted to that environment; unknown project or flag `404` | verified, except how an unknown environment is answered ❓ |
+| LD3 | `targets` (kind `user`) and `contextTargets` (other kinds), items `{ contextKind, values, variation }`; `contextTargets` also carries empty `user` placeholders | lists and items verified; the placeholders ❓ (the adapter ignores empty entries either way) |
+| LD4 | semantic patch media type; `{ environmentKey, instructions, comment }`; `200` with the flag; all or nothing | verified |
+| LD5 | `addTargets` refused when the key would be in two variations; re-adding a key to the variation that already serves it succeeds and changes nothing; `removeTargets` of an absent key does nothing | refusal verified (its status ❓); re-adding ❓ (pinned by the contract suite); removal verified |
+| LD6 | `405` when approvals are required; `409` for a concurrent change; error body `{ code, message }` | verified |
+| LD7 | a patch is visible to the next GET | ❓ (pinned by the contract suite) |
+
+## PlanetScale
+
+Paths are relative to `https://api.planetscale.com/v1` (the spec's `servers`) and, below the first row, to
+`/organizations/{organization}/databases/{database}`.
+
+### Calls the adapter makes
+
+| Call | What the adapter sends and reads | Spec | Notes |
+|---|---|---|---|
+| every request | `Authorization: <PLANETSCALE_SERVICE_TOKEN_ID>:<PLANETSCALE_SERVICE_TOKEN>` | ✅ | Service tokens page; the spec's `securitySchemes` lists only OAuth. Variable names as in the CLI docs. Accesses needed: `create_branch`, `read_branch`, `delete_branch`, `connect_branch`, `delete_branch_password` (each endpoint's "Service Token Accesses"). |
+| `GET /branches` (`list_branches`) | `page` from `next_page`; reads `data[].id`, `name`, `parent_branch`, `production`, `ready` | ✅ | Default `per_page` 25. Used by `listScope` only. |
+| `GET /branches/{branch}` (`get_branch`) | by **name**; `404` → absent; reads `id`, `name`, `parent_branch`, `production`, `ready` | ✅ | `state` (`pending` … `ready`) is also returned; the adapter relies on the boolean `ready`. |
+| `POST /branches` (`create_branch`) | `{ name, parent_branch }`; `201` | ✅ | `parent_branch` is optional in the spec (defaults to the database's default branch); the adapter always sends it, after checking it exists with `get_branch`. |
+| same, duplicate name | any `409` or `422` → `get_branch` by name, claim it if found | ❓ | The spec lists `422` and no `409`; the wording is undocumented (PS5). |
+| `DELETE /branches/{branch}` (`delete_branch`) | by name, after `get_branch` confirmed the id the ledger recorded; `404` is success | ✅ path and `204`; ❓ timing | Whether deletion is synchronous needs a live run (PS7). |
+| `GET /branches/{branch}/passwords` (`list_passwords`) | `page` from `next_page`; reads `data[].id`, `name`, `role`, `username`, `access_host_url` | ✅ | `plain_text` is "Null except in the response from the create endpoint". The `q` search is not used (its matching rules are undocumented); the adapter filters names itself. |
+| `POST /branches/{branch}/passwords` (`create_password`) | `{ name, role }`; reads `id`, `role`, `username`, `access_host_url`, `plain_text` | ✅ | Roles `reader`, `writer`, `admin`, `readwriter`. `name` is "optional"; uniqueness is not documented (PS9). |
+| `DELETE /branches/{branch}/passwords/{id}` (`delete_password`) | `404` is success | ✅ | `204`. |
+| connection string | `mysql://<username>:<plain_text>@<access_host_url>/<database>?ssl={"rejectUnauthorized":true}` | ✅ | The Node.js tutorial's form; Prisma's `sslaccept=strict` via `connection_params`. |
+
+Not used: `PATCH …/passwords/{id}` takes only `name` and `cidrs` (✅), so a role cannot change in place (PS10), and
+the adapter never calls `…/passwords/{id}/renew`, which would rotate the plaintext.
+
+### Sim assumptions (`packages/sim/src/routes/planetscale.ts`)
+
+| Id | Assumption | Status |
+|---|---|---|
+| PS1 | `Authorization: <id>:<token>`; the sim refuses `Bearer` | verified (pinned by the contract suite) |
+| PS2 | paths under organization and database; branches addressed by name | verified |
+| PS3 | `{ data, next_page }`, `?page=`, 25 per page | verified |
+| PS4 | a created branch is `ready: false` at first and becomes ready later | fields verified; initial state through the CLI's `--wait` only; duration ❓ (pinned) |
+| PS5 | a duplicate branch name answers `422` | ❓ (the adapter accepts `409` or `422`) |
+| PS6 | an unknown parent answers `404` | ❓ (the adapter checks the parent first) |
+| PS7 | branch deletion is synchronous and takes the passwords with it | `204` verified; timing ❓ |
+| PS8 | `plain_text` only in the create answer | verified (pinned) |
+| PS9 | password names are not unique | ❓ (the adapter refuses two of one name) |
+| PS10 | a password's role cannot change in place | verified |
+| PS11 | password delete `204`; `404` when gone | `204` verified; `404` ❓ |
+| PS12 | a password on a branch that is not ready is refused | ❓ (the adapter waits for `ready` first, so either answer is fine) |
+| PS13 | error bodies are `{ code, message }` | ❓ (never read by the adapter) |
+| PS14 | branch name characters | ❓ (the default name uses only `a-z`, `0-9`, `-`) |
+
+## The generic `http` adapter
+
+The `http` adapter makes the calls a plan line declares, so there is no provider to verify it against: a line is
+checked by running `sponson plan` (it only reads) against the real API before the first `apply`. The plans in
+[examples/](../examples/README.md) that use it are illustrative and say so.
+
+### Sim assumptions (`packages/sim/src/routes/rest.ts`)
+
+They describe a conventional JSON REST API, not one provider; the adapter's tests and scenarios run against them.
+
+| Id | Assumption | Status |
+|---|---|---|
+| R1 | credentials as `Authorization: Bearer`, `Authorization: Basic` or a `*-Api-Key` header | convention |
+| R2 | `{ data }` envelopes for collection objects and lists, cursor in `next_cursor`; other objects bare | convention (the plan line names its own envelope with `item_path`, `list_path`, `find.next`) |
+| R3 | unknown paths are 404 until seeded or created; client-chosen ids; duplicate `name` → 409 | convention (`exists_status` covers providers that answer otherwise) |
+| R4 | PATCH is a JSON merge patch (RFC 7396); PUT replaces; JSON or form bodies; no preconditions | RFC 7396 for PATCH; the rest convention |
+| R5 | DELETE answers `{ id, deleted }`; unknown is 404 | convention (`gone_status` covers providers that answer otherwise) |
+
 ## What still needs a live account
 
 - Vercel: V1 (propagation of env writes), the deployment list's order, whether `decrypt=true` still decrypts,
@@ -110,5 +202,10 @@ methods, which is more cautious than needed but not wrong.
 - Neon: N1 (list visibility during an asynchronous delete), N2 (which requests answer `423`, endpoint readiness),
   N5 (status of a duplicate branch name).
 - Clerk: C1 (status and wording of a duplicate), C2 (the envelope, confirmed only through the SDKs).
+- LaunchDarkly: LD5 (re-adding a target the variation already serves; the status of a two-variation refusal), LD7
+  (read-after-write), LD2 (an unknown environment), LD3 (the `user` placeholders in `contextTargets`).
+- PlanetScale: PS4 (a new branch is not ready at first; how long provisioning takes), PS5 (status of a duplicate
+  branch name), PS7 (deletion timing), PS9 (duplicate password names), PS12 (a password on a branch still
+  provisioning), and PS1 and PS8 end to end.
 
 Run them with `pnpm test:live`; see the header of `scenarios/contract.test.ts`.

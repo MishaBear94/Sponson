@@ -37,6 +37,7 @@ const APPLY_ARGS: Record<string, ArgSpec> = {
   destroy: { type: "boolean", description: "Destroy every resource this scope created (reverse order). Adopted resources are never touched." },
   approvedBy: { type: "string", description: "Who approved a production apply. Required when a line writes to production. Must come from a human; blank counts as absent." },
   reconcile: { type: "boolean", description: "Overwrite values that were changed outside Sponson since the last apply." },
+  recreate: { type: "string", description: "Comma-separated line ids whose resources to delete and create again, so a value the provider shows only on create (a password) reaches dependents (OUTPUT_UNAVAILABLE). Only on a human's request." },
   wait: { type: "boolean", description: "Poll for external events (deploys) instead of returning `partial`." },
   waitTimeout: { type: "positive number", description: "Seconds to wait when `wait` is true. Default 120." },
 };

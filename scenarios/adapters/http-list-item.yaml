@@ -1,0 +1,76 @@
+name: "http.list_item: array, delimited and keyed-map items on a shared parent; idempotent, missing drift, destroy removes only Sponson's items"
+plan: |
+  version: 1
+  providers:
+    http:
+      app:
+        base_url: https://api.example.test/v1
+        base_url_env: REST_API_URL
+        auth: { bearer_env: REST_API_TOKEN }
+  changes:
+    - id: origin
+      adapter: http
+      op: list_item
+      api: app
+      parent: { path: /apps/demo }
+      list_path: /allowed_origins
+      item: "https://${ctx.scope}.preview.example.app"
+    - id: redirect
+      adapter: http
+      op: list_item
+      api: app
+      parent: { path: /apps/demo }
+      list_path: /uri_allow_list
+      shape: delimited
+      item: "https://${ctx.scope}.preview.example.app/**"
+    - id: env
+      adapter: http
+      op: list_item
+      api: app
+      parent: { path: /apps/demo }
+      list_path: /env_vars
+      shape: map
+      item: SESSION_SECRET
+      value: { type: secret_text, value: { secret: "env://PREVIEW_SESSION_SECRET" } }
+seed:
+  rest:
+    objects:
+      /apps/demo: { name: demo app, allowed_origins: [https://prod.example.app], uri_allow_list: "https://prod.example.app/**", env_vars: { LOG_LEVEL: { type: plain_text, value: info } } }
+env:
+  PREVIEW_SESSION_SECRET: preview_session_secret_0042
+secrets: [preview_session_secret_0042]
+steps:
+  - run: plan --json
+    expect:
+      exit: 0
+      plan_lines: { origin: create, redirect: create, env: create }
+      drift: [{ kind: unmanaged, key: "/apps/demo#/allowed_origins=https://prod.example.app" }]
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { origin: applied, redirect: applied, env: applied } }
+  - sim:
+      state:
+        rest.objects./apps/demo.allowed_origins: [https://prod.example.app, https://pr-42.preview.example.app]
+        rest.objects./apps/demo.uri_allow_list: "https://prod.example.app/**,https://pr-42.preview.example.app/**"
+        rest.objects./apps/demo.env_vars.LOG_LEVEL: { type: plain_text, value: info }
+        rest.objects./apps/demo.env_vars.SESSION_SECRET: { type: secret_text, value: preview_session_secret_0042 }
+  - run: apply --json
+    expect: { exit: 0, writes: 0, lines: { origin: unchanged, redirect: unchanged, env: unchanged } }
+  # Removed by hand: missing drift, put back by the next apply.
+  - chaos: { drift: { "rest.objects./apps/demo.allowed_origins": "remove:https://pr-42.preview.example.app" } }
+  - run: plan --json
+    expect: { exit: 0, drift: [{ kind: missing, line: origin }], plan_lines: { origin: create, redirect: unchanged } }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { origin: applied, redirect: unchanged, env: unchanged } }
+  # The secret value is rotated in the console: changed drift, refused until --reconcile.
+  - chaos: { drift: { "rest.objects./apps/demo.env_vars": '{"LOG_LEVEL":{"type":"plain_text","value":"info"},"SESSION_SECRET":{"type":"secret_text","value":"edited"}}' } }
+  - run: plan --json
+    expect: { exit: 1, drift: [{ kind: changed, line: env }], plan_lines: { env: blocked } }
+  - run: apply --reconcile --json
+    expect: { exit: 0, status: complete, lines: { env: applied } }
+  - run: apply --destroy --json
+    expect: { exit: 0, status: complete, lines: { origin: destroyed, redirect: destroyed, env: destroyed } }
+  - sim:
+      state:
+        rest.objects./apps/demo.allowed_origins: [https://prod.example.app]
+        rest.objects./apps/demo.uri_allow_list: "https://prod.example.app/**"
+        rest.objects./apps/demo.env_vars: { LOG_LEVEL: { type: plain_text, value: info } }

@@ -30,8 +30,9 @@ export async function harness(seed?: Partial<SimSeed>): Promise<Harness> {
     // Keep retries fast in unit tests.
     SPONSON_HTTP_RETRY_BASE_MS: "5",
     SPONSON_HTTP_TIMEOUT_MS: "2000",
+    SPONSON_PLANETSCALE_POLL_MS: "5",
   };
-  const providers: Record<string, Record<string, unknown>> = { vercel: { project: "prj_demo" }, neon: { project: "proj_demo" }, clerk: {} };
+  const providers: Record<string, Record<string, unknown>> = { vercel: { project: "prj_demo" }, neon: { project: "proj_demo" }, clerk: {}, planetscale: { organization: "acme", database: "app" } };
   const intents: IntentEvent[] = [];
   return {
     sim,
