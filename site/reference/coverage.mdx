@@ -161,7 +161,7 @@ the tables below are generated from it: edit the data, then run `pnpm docs:gen`.
 
 | Provider | Side effect | API shape | Generic? | Pri | Now |
 |---|---|---|---|---|---|
-| Algolia | Index per environment, copied from a template index | `POST /1/indexes/{src}/operation` `{operation: copy, destination}`, `DELETE /1/indexes/{name}`; `X-Algolia-Application-Id` + `X-Algolia-API-Key`; async task to poll | P (async task) | P2 | no |
+| Algolia | Index per environment, copied from a template index | `POST /1/indexes/{src}/operation` `{operation: copy, destination}`, `DELETE /1/indexes/{name}`; `X-Algolia-Application-Id` + `X-Algolia-API-Key`; async task to poll | P (async task) | P2 | **yes** (`algolia.index`: copies records, settings, synonyms and rules (or a scope of them) and waits for the copy task; only the index's existence is compared for drift) |
 | Stripe test-mode objects | Products / prices / coupons the preview's code expects | `POST /v1/products`, `/v1/prices` (form-encoded, `lookup_key` as identity, `Idempotency-Key`); prices cannot be deleted, only `active=false` | Y (destroy = archive) | P2 | no |
 | Stripe sandboxes | A sandbox per PR | No public API for account sandboxes; anonymous "claimable" sandboxes are private preview | N | P2 | no (no API) |
 
@@ -193,14 +193,14 @@ Counted over the 56 side-effect rows of the matrix (rows marked `n/a` have nothi
 
 | Measure | Covered | Coverage |
 |---|---|---|
-| Rows | 17 of 56 | **30.4%** |
-| Weighted by priority | 37 of 90 | **41.1%** |
+| Rows | 18 of 56 | **32.1%** |
+| Weighted by priority | 38 of 90 | **42.2%** |
 | P0 rows only | 7 of 9 | 77.8% |
-| Rows an API reaches (all but `manual`) | 17 of 53 | 32.1% |
-| Weighted, rows an API reaches | 37 of 85 | 43.5% |
+| Rows an API reaches (all but `manual`) | 18 of 53 | 34.0% |
+| Weighted, rows an API reaches | 38 of 85 | 44.7% |
 | Secret sources (separate) | 4 of 9 vendors; weighted 7 of 14 | 44.4%; 50.0% |
 
-Covered: Vercel (`vercel.env`, `vercel.deploy`); Netlify (`netlify.env`); Cloudflare Pages / Workers (`cloudflare.pages_env`); Render (recipe [`render.env_var`](/reference/recipes#render-env_var)); Heroku (recipe [`heroku.config_var`](/reference/recipes#heroku-config_var)); Neon (`neon.branch`); Supabase (`supabase.branch`); PlanetScale (`planetscale.branch`, `planetscale.password`); Turso (recipe [`turso.database_branch`](/reference/recipes#turso-database_branch)); Prisma Postgres (recipe [`prisma.database`](/reference/recipes#prisma-database), recipe [`prisma.database_copy`](/reference/recipes#prisma-database_copy)); Clerk (`clerk.redirect_allow`); Supabase Auth (`supabase.auth_redirect`); LaunchDarkly (`launchdarkly.flag_target`); Cloudflare DNS (recipe [`cloudflare.dns_cname`](/reference/recipes#cloudflare-dns_cname)); Vercel domains (recipe [`vercel.project_domain`](/reference/recipes#vercel-project_domain)); Upstash Redis (recipe [`upstash.redis_database`](/reference/recipes#upstash-redis_database)); Upstash QStash (recipe [`qstash.schedule`](/reference/recipes#qstash-schedule)).
+Covered: Vercel (`vercel.env`, `vercel.deploy`); Netlify (`netlify.env`); Cloudflare Pages / Workers (`cloudflare.pages_env`); Render (recipe [`render.env_var`](/reference/recipes#render-env_var)); Heroku (recipe [`heroku.config_var`](/reference/recipes#heroku-config_var)); Neon (`neon.branch`); Supabase (`supabase.branch`); PlanetScale (`planetscale.branch`, `planetscale.password`); Turso (recipe [`turso.database_branch`](/reference/recipes#turso-database_branch)); Prisma Postgres (recipe [`prisma.database`](/reference/recipes#prisma-database), recipe [`prisma.database_copy`](/reference/recipes#prisma-database_copy)); Clerk (`clerk.redirect_allow`); Supabase Auth (`supabase.auth_redirect`); LaunchDarkly (`launchdarkly.flag_target`); Cloudflare DNS (recipe [`cloudflare.dns_cname`](/reference/recipes#cloudflare-dns_cname)); Vercel domains (recipe [`vercel.project_domain`](/reference/recipes#vercel-project_domain)); Upstash Redis (recipe [`upstash.redis_database`](/reference/recipes#upstash-redis_database)); Upstash QStash (recipe [`qstash.schedule`](/reference/recipes#qstash-schedule)); Algolia (`algolia.index`).
 
 Automated coverage counts only rows an op manages without a person. Rows no API reaches (`manual`, or a `manual.step` line that records the step a person does; weight 5): Google OAuth clients (no public API for standard OAuth web clients); Clerk webhooks (Clerk's API manages the Svix app, not its endpoints); Stripe sandboxes (no public API for account sandboxes). They cap coverage at 53 rows, 85 of 90 weighted (94.4%).
 

@@ -48,7 +48,7 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CLERK_DEFAULT_API_URL, CLOUDFLARE_DEFAULT_API_URL, LAUNCHDARKLY_DEFAULT_API_URL, NETLIFY_DEFAULT_API_URL, PLANETSCALE_DEFAULT_API_URL, SUPABASE_DEFAULT_API_URL, clerkAdapter, cloudflareAdapter, launchdarklyAdapter, neonAdapter, netlifyAdapter, planetscaleAdapter, supabaseAdapter, vercelAdapter } from "@sponson/adapters";
+import { CLERK_DEFAULT_API_URL, CLOUDFLARE_DEFAULT_API_URL, algoliaAdapter, LAUNCHDARKLY_DEFAULT_API_URL, NETLIFY_DEFAULT_API_URL, PLANETSCALE_DEFAULT_API_URL, SUPABASE_DEFAULT_API_URL, clerkAdapter, cloudflareAdapter, launchdarklyAdapter, neonAdapter, netlifyAdapter, planetscaleAdapter, supabaseAdapter, vercelAdapter } from "@sponson/adapters";
 import type { AdapterContext, Ctx } from "@sponson/core";
 import { SUPABASE_DEMO_PROJECT, simEnv, startSim, type SimHandle } from "@sponson/sim";
 import { cliEnv, runCli, workspace, type CliRun, type Workspace } from "./support.js";
@@ -586,5 +586,44 @@ describe.skipIf(LIVE && !NETLIFY_LIVE)(`contract netlify (${LIVE ? "@live" : "si
     expect((await getVar())!.values.map((v) => v.context)).toEqual(["dev"]);
     await op.destroy(nctx(), devLive!.resources);
     expect(await getVar()).toBeNull();
+  });
+});
+
+/**
+ * Algolia (`assumption AL…`, packages/sim/src/routes/algolia.ts). Live only with ALGOLIA_API_KEY (addObject,
+ * deleteIndex and settings ACLs), SPONSON_LIVE_ALGOLIA_APP_ID and SPONSON_LIVE_ALGOLIA_TEMPLATE (an index to copy);
+ * it copies the template into `sponson_contract_<tag>` and deletes the copy in `afterAll`.
+ */
+const AL_LIVE = ["ALGOLIA_API_KEY", "SPONSON_LIVE_ALGOLIA_APP_ID", "SPONSON_LIVE_ALGOLIA_TEMPLATE"].every((k) => process.env[k]);
+describe.skipIf(LIVE && !AL_LIVE)(`contract: algolia (${LIVE ? "@live" : "sim"})`, () => {
+  const op = algoliaAdapter.ops.index!;
+  const appId = () => (LIVE ? process.env.SPONSON_LIVE_ALGOLIA_APP_ID! : "APP123");
+  const params = () => ({ name: `sponson_contract_${tag}`, copy_from: LIVE ? process.env.SPONSON_LIVE_ALGOLIA_TEMPLATE! : "products" });
+  const alctx = (): AdapterContext => {
+    const ctx: Ctx = { env: "preview", git: { branch, sha, short_sha: sha.slice(0, 7) }, pr: { number: pr }, scope: `pr-${pr}` };
+    return { ctx, provider: { application_id: appId() }, env: { ...env, SPONSON_ALGOLIA_POLL_MS: LIVE ? "1000" : "1" }, log: () => {}, intend: async () => {}, redact: (t) => t };
+  };
+  const settings = async (name: string) => {
+    const res = await fetch(`${env.ALGOLIA_API_URL ?? `https://${appId()}.algolia.net`}/1/indexes/${encodeURIComponent(name)}/settings`, { headers: { "x-algolia-api-key": env.ALGOLIA_API_KEY ?? "", "x-algolia-application-id": appId() } });
+    return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+  };
+
+  afterAll(async () => {
+    await op.destroy(alctx(), [{ key: `index:${params().name}`, id: params().name, hash: "" }]).catch(() => {});
+  });
+
+  it("assumption AL3, AL4, AL5: a copy, once its task is published, has the template's settings; before, it does not exist", async () => {
+    expect((await settings(params().name)).status).toBe(404);
+    const r = await op.apply(alctx(), params(), null);
+    expect(r.created).toEqual([`index:${params().name}`]);
+    expect((await settings(params().name)).body).toEqual((await settings(params().copy_from)).body);
+    expect(op.diff(await op.read(alctx(), params()), params())[0]!.kind).toBe("unchanged");
+  });
+
+  it("assumption AL6: deleting the copy removes it, and deleting it again succeeds", async () => {
+    const live = await op.read(alctx(), params());
+    await op.destroy(alctx(), live!.resources);
+    expect(await op.read(alctx(), params())).toBeNull();
+    await op.destroy(alctx(), live!.resources);
   });
 });

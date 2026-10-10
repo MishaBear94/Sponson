@@ -446,7 +446,8 @@ categories:
         api_shape: "`POST /1/indexes/{src}/operation` `{operation: copy, destination}`, `DELETE /1/indexes/{name}`; `X-Algolia-Application-Id` + `X-Algolia-API-Key`; async task to poll"
         generic: P (async task)
         priority: P2
-        covered_by: null
+        covered_by: algolia.index
+        note: "copies records, settings, synonyms and rules (or a scope of them) and waits for the copy task; only the index's existence is compared for drift"
       - id: stripe-test-objects
         provider: Stripe test-mode objects
         side_effect: Products / prices / coupons the preview's code expects

@@ -235,6 +235,7 @@ The base URL override replaces the provider's API base URL (the test suites poin
 | `supabase` | [`supabase.branch`](/reference/plan-format#supabase-branch), [`supabase.auth_redirect`](/reference/plan-format#supabase-auth_redirect) | `SUPABASE_ACCESS_TOKEN` | `SUPABASE_API_URL` |
 | `netlify` | [`netlify.env`](/reference/plan-format#netlify-env) | `NETLIFY_AUTH_TOKEN` | `NETLIFY_API_URL` |
 | `cloudflare` | [`cloudflare.pages_env`](/reference/plan-format#cloudflare-pages_env) | `CLOUDFLARE_API_TOKEN` | `CLOUDFLARE_API_URL` |
+| `algolia` | [`algolia.index`](/reference/plan-format#algolia-index) | `ALGOLIA_API_KEY` | `ALGOLIA_API_URL` |
 
 A missing credential fails the line with `PROVIDER_AUTH`. Every resource has a key that identifies it within the
 adapter and provider block; the ledger treats two resources with the same key as the same resource.
@@ -637,6 +638,24 @@ branch alias URL of a preview (`<alias>.<project>.pages.dev`) is not an output: 
 the branch name lowercased with other characters replaced by `-`, but not how long names are shortened or collisions
 resolved.
 
+### `algolia.index`
+
+An Algolia index per scope, copied from a template index (`POST /1/indexes/{copy_from}/operation`). The copy is an
+asynchronous task: `apply` polls it until it is published, so the index is ready when the line is applied (a copy
+not published within `SPONSON_ALGOLIA_TASK_TIMEOUT_MS`, five minutes by default, is `WAIT_TIMEOUT`; the next run
+finds the copy). Requires `providers.algolia.application_id` and `ALGOLIA_API_KEY` with the addObject, deleteIndex
+and settings ACLs.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | string | (required) | The new index, such as `products_${ctx.scope}`; its identity (key `index:<name>`). |
+| `copy_from` | string | (required) | The template index. It must exist (copying a missing index would make an empty one), and differ from `name`. |
+| `scope` | list of `settings`, `synonyms`, `rules` | everything | Copy only these, without records. |
+
+**Drift**: only existence. An index does not record what it was copied from, so changing `copy_from` or `scope`
+later copies nothing, and an edit of the copy's records or settings is not drift; a deleted copy is `missing` and
+is copied again. Destroy deletes the copy, never the template. Not listed for drift or adoption.
+
 ### Outputs
 
 The outputs each built-in op declares. `immediate` outputs exist once the line is applied; `external` ones only after
@@ -674,6 +693,7 @@ the named event. Sensitive outputs are never displayed, logged or written to rec
 | `netlify.env` | `deploy_id` | external (`deploy`) | no |
 | `netlify.env` | `deploy_preview_url` | external (`deploy`) | no |
 | `cloudflare.pages_env` | (none) | | |
+| `algolia.index` | `name` | immediate | no |
 
 ### Once-only outputs
 

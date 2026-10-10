@@ -1,0 +1,66 @@
+# The Algolia adapter end to end through the CLI against the sim: an index per scope copied from a template, the
+# copy task waited for (AL5), re-apply without writes, a deleted copy copied again, destroy removing only the copy.
+# Format: see the top of scenarios/runner.test.ts.
+name: "algolia.index: copy from the template and wait for the task, apply twice without writes, recreate a deleted copy, destroy only the copy"
+plan: |
+  version: 1
+  providers:
+    algolia: { application_id: APP123 }
+  changes:
+    - id: search
+      adapter: algolia
+      op: index
+      name: "products_${ctx.scope}"
+      copy_from: products
+      environments: [preview]
+env:
+  SPONSON_ALGOLIA_POLL_MS: "5"
+seed:
+  algolia:
+    indices:
+      products: { entries: 3, settings: { searchableAttributes: [name] } }
+      orders: { entries: 7 }
+    taskPolls: 2
+steps:
+  - run: plan --json
+    expect:
+      exit: 0
+      plan_lines: { search: create }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { search: applied }
+      outputs: { search: { name: products_pr-42 } }
+  - sim:
+      write_order: ["POST /algolia/1/indexes/products/operation"]
+      state:
+        "algolia.indices.products_pr-42.entries": 3
+  - run: apply --json
+    expect:
+      exit: 0
+      writes: 0
+      lines: { search: unchanged }
+  # Someone deletes the copy in the dashboard: missing drift, and the next apply copies it again.
+  - chaos:
+      drift: { "algolia.index.products_pr-42": "delete" }
+  - run: plan --json
+    expect:
+      exit: 0
+      drift: [{ kind: missing, line: search }]
+      plan_lines: { search: create }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { search: applied }
+  - run: apply --destroy --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { search: destroyed }
+  - sim:
+      write_order: ["POST /algolia/1/indexes/products/operation", "POST /algolia/1/indexes/products/operation", "DELETE /algolia/1/indexes/products_pr-42"]
+      state:
+        "algolia.indices.products.entries": 3
+        "algolia.indices.orders.entries": 7
