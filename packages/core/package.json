@@ -1,6 +1,6 @@
 {
   "name": "@sponson/core",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Plan model, planner, execution engine, receipt stores and adapter interfaces for Sponson.",
   "license": "Apache-2.0",
   "repository": {
