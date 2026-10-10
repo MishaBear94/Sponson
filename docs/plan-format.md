@@ -45,7 +45,7 @@ changes: []                               # required
 |---|---|---|---|
 | `version` | `1` | (required) | Format version. Anything else is `PLAN_INVALID`. |
 | `environments` | non-empty list of names | `preview`, `production`, plus every name a line's `environments:` uses | The environments `--env` may name. An unknown `--env` is `ENV_UNKNOWN`; a line naming an undeclared environment is `PLAN_INVALID`. |
-| `providers` | map: adapter name → map | `{}` | Static configuration per adapter, handed to the adapter as `providers.<adapter>`. Built-in: `vercel.project` (required by the Vercel ops), `vercel.team` (optional), `neon.project` (required by the Neon op). Clerk needs none. A missing required key fails the line with `PLAN_INVALID` when the adapter runs. |
+| `providers` | map: adapter name → map | `{}` | Static configuration per adapter, handed to the adapter as `providers.<adapter>`. Built-in: `vercel.project` (required by the Vercel ops), `vercel.team` (optional), `neon.project` (required by the Neon op). Clerk needs none. `http.<api>` holds one block per API (see [the generic `http` adapter](#the-generic-http-adapter)). A missing required key fails the line with `PLAN_INVALID` when the adapter runs. |
 | `receipts` | `git-branch` \| `local` | `git-branch` | Where receipts are stored. `git-branch`: orphan branches `sponson-receipts/<env>/<scope>` (one per environment and scope) on the `origin` remote (override with `--receipts-remote` or `SPONSON_RECEIPTS_REMOTE`); with no remote, Sponson warns and uses `local`. `local`: `.sponson/receipts/` (override with `--receipts-dir` or `SPONSON_RECEIPTS_DIR`). The `--receipts` flag overrides this key. |
 | `changes` | list of changes | (required) | The plan lines. Order in the file does not matter. |
 
@@ -69,7 +69,7 @@ Each change ("line") is one adapter op:
 | Key | Type | Meaning |
 |---|---|---|
 | `id` | string matching `^[a-z][a-z0-9_-]*$` | Unique within the plan. Other lines refer to it in `from:` and `depends_on`. Receipts key line results by it. |
-| `adapter` | non-empty string | `neon`, `vercel`, `clerk`, or one added by a plugin (`SPONSON_PLUGINS`). Unknown: `ADAPTER_UNKNOWN`. |
+| `adapter` | non-empty string | `neon`, `vercel`, `clerk`, `http`, or one added by a plugin (`SPONSON_PLUGINS`). Unknown: `ADAPTER_UNKNOWN`. |
 | `op` | non-empty string | An op of that adapter. Unknown: `OP_UNKNOWN`. |
 | `environments` | non-empty list of declared environment names | The line applies only in these environments. Absent: every environment. |
 | `depends_on` | list of ids | Run after these lines although no value flows between them. Prefer `from:` references, which imply the order. |
@@ -228,6 +228,7 @@ The base URL override replaces the provider's API base URL (the test suites poin
 | `vercel` | [`vercel.env`](#vercelenv), [`vercel.deploy`](#verceldeploy) | `VERCEL_TOKEN` | `VERCEL_API_URL` |
 | `clerk` | [`clerk.redirect_allow`](#clerkredirect_allow) | `CLERK_SECRET_KEY` | `CLERK_API_URL` |
 | `launchdarkly` | [`launchdarkly.flag_target`](#launchdarklyflag_target) | `LAUNCHDARKLY_ACCESS_TOKEN` | `LAUNCHDARKLY_API_URL` |
+| `http` | [`http.resource`](#httpresource), [`http.list_item`](#httplist_item) | `providers.http.<api>.auth` | `providers.http.<api>.base_url_env` |
 <!-- generated:adapters:end -->
 
 A missing credential fails the line with `PROVIDER_AUTH`. Every resource has a key that identifies it within the
@@ -318,6 +319,101 @@ from whichever variation serves it; the flag's other targets and rules are untou
 approvals for flag changes fails the line with `PROVIDER_INVALID` (Sponson does not open approval requests). For drift
 and adoption, every individual target of the line's flag in the environment is in scope.
 
+### The generic `http` adapter
+
+For the long tail of APIs that have no adapter of their own (feature flags, webhooks, allow-lists, CORS origins,
+per-environment config): the plan describes the requests, and Sponson keeps every rule it keeps for the built-in
+adapters (intents before creates, idempotent apply, drift by hash, destroy only what it created, secrets as
+references). Why it exists and what it deliberately does not do: [ADR 0017](adr/0017-generic-http-adapter.md).
+It speaks JSON (or form-encoded) REST; an API whose lifecycle is more than create, read, update and delete wants a
+first-class adapter.
+
+Each API is a block under `providers.http`, and each line names one with `api:`. A block is part of the identity of
+the resources made through it: editing it (a new base URL, another credential variable, a header) re-identifies
+them, as moving a Vercel line to another project would.
+
+```yaml
+providers:
+  http:
+    statsig:
+      base_url: https://statsigapi.net/console/v1
+      auth: { header: STATSIG-API-KEY, value_env: STATSIG_CONSOLE_KEY }
+    stripe:
+      base_url: https://api.stripe.com/v1
+      auth: { bearer_env: STRIPE_SECRET_KEY }
+      encoding: form
+```
+
+| Key | Type | Meaning |
+|---|---|---|
+| `base_url` | http(s) URL | Request paths are relative to it. |
+| `base_url_env` | variable name | Optional. When this variable is set, it replaces `base_url` (a staging API; the test suites point it at the local fake cloud). |
+| `auth` | map | `{ bearer_env: NAME }` (`Authorization: Bearer`), `{ header: X-Api-Key, value_env: NAME }` (the value in that header), or `{ basic: { user_env: NAME, password_env: NAME } }`. Always variable NAMES, never values; the credential's name must end in `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `_KEY` or `APIKEY` so that its value is masked in every output. Unset: `PROVIDER_AUTH`. |
+| `headers` | map: header → string | Optional static headers (an API version pin). `Authorization`, `Accept` and `Content-Type` are Sponson's. |
+| `encoding` | `json` \| `form` | Request bodies as JSON (default) or `application/x-www-form-urlencoded`, nested as `a[b]=c` and `a[0]=c`. Answers are read as JSON either way. |
+
+A malformed block, or a line naming an API that is not configured, is `PLAN_INVALID` before any request is sent;
+a malformed line is `PARAM_INVALID` naming the field. Paths take `{id}` (the object's id, once known) and
+`{name}` placeholders filled from the line's `vars:` (literals or references; URI-encoded). Fields are a top-level
+name (`url`) or a JSON pointer (`/config/url`); write a key that is literally `from`, `secret` or `keep` as a pointer
+(`/from`), since a map holding one of those keys is a [reference](#values).
+
+### `http.resource`
+
+One object per item: a feature flag, a webhook endpoint, a DNS record.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `api` | string | (required) | The API block under `providers.http`. |
+| `vars` | map | `{}` | Values for `{name}` placeholders in paths. |
+| `find` | `{ path, list_path?, match, next?, cursor_param? }` | — | Locate the object by natural key: GET `path`, take the array at `list_path` (default: the whole body), keep the objects whose fields equal every `match` value. More than one is `PARAM_INVALID`. With `next` (a pointer to the next page's cursor), pages are followed, sending the cursor as `cursor_param` (default `cursor`); without it only the first page is read. |
+| `read` | `{ path }` | — | GET the object. With `find`, the path takes `{id}` and fetches the found object's detail; without `find`, it must be a path that names the object (a client-chosen id or key). One of `find` and `read` is required. 404 means it does not exist. |
+| `create` | `{ method?, path, body?, content_type?, idempotency_key? }` | (required) | `POST` (or `PUT`, `PATCH`) to create. The body is `match`, then `fields`, then `body` merged. `idempotency_key: true` sends an `Idempotency-Key` derived from the resource key, the commit and the body, and lets a create whose connection dropped be sent again. |
+| `update` | `{ method?, path?, body?, content_type? }` | none | `PATCH` (or `PUT`, `POST`) when `fields` differ from live; path defaults to `read.path`. `PATCH` and `POST` send the declared fields; `PUT` sends the whole declared state (`match`, `fields`, kept values). Without `update`, a difference is `PARAM_INVALID`. |
+| `delete` | `{ method?, path? }` | `DELETE read.path` | How the object is removed (`DELETE` or `POST`). |
+| `destroy` | `delete` \| `keep` | `delete` | `keep` leaves the object in place when the scope is destroyed. |
+| `item_path` | JSON pointer | `""` | Where the object is in read, create and update answers (`/data` for a `{ data: {...} }` envelope). |
+| `id_path` | JSON pointer | `/id` | Where the id is in the object. |
+| `fields` | map: field → value | `{}` | The desired state, compared for drift and sent on create and update. Values are literals, `{ from }`, `{ secret }` or `{ keep: true }`. |
+| `outputs` | map: name → pointer, or `{ path, sensitive: true }` | `{}` | Outputs read from the object, besides `id` (always there). A sensitive one is never shown or written to a receipt. |
+| `exists_status` | list of statuses | `[]` | Besides 409, the statuses a create answers when the object exists already: it is then found and taken over, not created. |
+| `gone_status` | list of statuses | `[]` | Besides 404, the statuses that mean "gone" on read and delete. |
+
+Key: `<find.path>[<field>=<value>,…]` when located by `find`, else `read.path`. The record id is the request that
+removes the object (`DELETE /flags/<id>`), so destroy needs only the ledger; a new id means it was deleted and
+re-created outside Sponson. **Drift** covers the declared `fields` only, hashed as canonical JSON: a console edit of
+a declared field is `changed`, an edit of anything else is not Sponson's business, a deleted object is `missing`.
+Write values with the type the API returns (`true`, not `"true"`), or every plan shows an update. A value the API
+never returns (a write-only secret) belongs in `create.body`, which is sent but not compared. An object that exists
+before the first apply is taken over as adopted, never deleted. Not listed for drift or adoption: a collection holds
+much that is not this release's.
+
+### `http.list_item`
+
+One value kept in a collection on a parent object: an allowed origin, a callback URL, a config var. The parent is
+read, the collection changed, and the result written back; then the parent is read again, and the write counts only
+once the item is there as planned (written again, up to three times, if another writer dropped it).
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `api` | string | (required) | The API block under `providers.http`. |
+| `vars` | map | `{}` | Values for `{name}` placeholders in paths. |
+| `parent` | `{ path, read_path?, method?, send?, content_type? }` | (required) | GET `read_path` (default `path`), write with `method` (`PATCH` by default, `PUT`, `POST`) to `path`. `send: field` (default) sends only the collection at `list_path`; `send: parent` sends the whole object read just before, with the collection replaced. |
+| `list_path` | JSON pointer | (required except for `map`) | Where the collection is in the parent. `""` is the whole parent (a map of config vars). |
+| `shape` | `array` \| `delimited` \| `map` | `array` | A JSON array; one string of values joined by `separator` (a comma-separated allow-list); or a map of name → value, where an entry is written as a merge patch and `null` deletes it (config vars). |
+| `separator` | string | `,` | For `delimited`. |
+| `item` | value or map | (required) | `array`: the value, or a map whose `key_field` identifies it; `delimited`: the string; `map`: the entry's name. |
+| `key_field` | field | — | Required when an array `item` is a map: the field that identifies it (`name`, `/match/host`). |
+| `value` | value | — | Required for `map`: the entry's value (a literal, `{ from }`, `{ secret }`, `{ keep: true }`). |
+| `destroy` | `delete` \| `keep` | `delete` | `keep` leaves the item in place when the scope is destroyed. |
+
+Key: `<parent.path>#<list_path>=<item>`. **Drift**: the item missing from the collection is `missing`; for map items
+and keyed entries, a declared field or value edited in the console is `changed`. Items no line declares are left
+exactly as they are, and are reported as `unmanaged`. Writes replace the whole collection (except keyed maps sent
+as `field`), so they are sent as idempotent and retried after a dropped connection. There is no precondition: two
+runs editing the same parent at the same moment can still lose one write, which the re-read reports as
+`PROVIDER_CONFLICT` when it happens to see it ([ADR 0017](adr/0017-generic-http-adapter.md)).
+
 ### Outputs
 
 The outputs each built-in op declares. `immediate` outputs exist once the line is applied; `external` ones only after
@@ -337,6 +433,8 @@ the named event. Sensitive outputs are never displayed, logged or written to rec
 | `launchdarkly.flag_target` | `variation_id` | immediate | no |
 | `launchdarkly.flag_target` | `variation_name` | immediate | no |
 | `launchdarkly.flag_target` | `variation_value` | immediate | no |
+| `http.resource` | `id` | immediate | no |
+| `http.list_item` | (none) | | |
 <!-- generated:outputs:end -->
 
 ## What is checked when

@@ -40,6 +40,13 @@ and registers them. The checklist is in CONTRIBUTING.md.
 
 [docs/coverage.md](/reference/coverage) measures which providers' per-environment state is covered today and ranks what to build next.
 
+Many rows need no adapter at all: the generic `http` adapter ([ADR 0017](/contributing/adr/0017-generic-http-adapter),
+[plan format](/reference/plan-format#the-generic-http-adapter)) manages plain CRUD objects and list entries of any JSON
+REST API from the plan. The items below are those whose lifecycle needs more (asynchronous provisioning, a deploy
+barrier, instruction-based updates, an output that exists only once), or that are common enough to deserve a
+tested, documented first-class op. Next for the `http` adapter itself: preconditions (ETag) for list writes,
+polling until ready, an OAuth2 client-credentials token, and pagination by page number or `Link` header.
+
 | Item | Notes | Label |
 |------|-------|-------|
 | Feature flags: LaunchDarkly rules — serve a variation to contexts whose `url` matches (an `addRule` clause), beside the individual targets `launchdarkly.flag_target` manages ([#15](https://github.com/MishaBear94/Sponson/issues/15)) | Rules are ordered and have no client-chosen identity; needs a rule `ref` or description to find ours | adapter |

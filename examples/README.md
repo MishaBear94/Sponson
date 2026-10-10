@@ -16,6 +16,7 @@ The format is specified in [docs/plan-format.md](../docs/plan-format.md).
 | [explicit-deploy.plan.yaml](explicit-deploy.plan.yaml) | Sponson starting the deploy; `depends_on` |
 | [production-with-approval.plan.yaml](production-with-approval.plan.yaml) | preview and production in one file; approval |
 | [adopting-an-existing-project.plan.yaml](adopting-an-existing-project.plan.yaml) | what `sponson init` writes when it adopts; `{ keep: true }` |
+| [http-flags-webhooks-allowlists.plan.yaml](http-flags-webhooks-allowlists.plan.yaml) | APIs with no adapter of their own, through the generic `http` adapter (illustrative) |
 
 ## nextjs-neon-preview.plan.yaml
 
@@ -109,3 +110,15 @@ What `sponson init` appends to an existing plan when it finds resources no scope
 `{ keep: true }`, grouped by target and git branch; an existing Neon branch is adopted by its `name:`. Nothing live
 changes, and adopted resources are never destroyed. Run `sponson init --adopt <key>` to adopt a single resource; the
 keys are listed under `drift` (`kind: unmanaged`) in `sponson plan --json`.
+
+## http-flags-webhooks-allowlists.plan.yaml
+
+**Illustrative.** The generic `http` adapter managing what has no Sponson adapter: a feature gate per pull request
+(`http.resource`, located by name), a test-mode webhook endpoint (form-encoded, with an idempotency key and a
+sensitive output), the preview URL on an application's allowed web origins (`http.list_item`, an item of a JSON
+array), and a callback on a comma-separated redirect allow-list (`shape: delimited`). Each API is a block under
+`providers.http` naming its credential's environment variable. The endpoints follow the providers' published API
+references as we understand them; plan against the real API (`sponson plan` only reads) before the first apply.
+`apply --destroy` removes the gate, the endpoint and the two list items, and leaves every other origin and
+redirect as it was. Reference: [`http.resource`](../docs/plan-format.md#httpresource),
+[`http.list_item`](../docs/plan-format.md#httplist_item).

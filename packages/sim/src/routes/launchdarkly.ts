@@ -110,7 +110,8 @@ const BOOLEAN = [
 /** The simulated LaunchDarkly API, registered in `PROVIDERS` (packages/sim/src/state.ts) and served under `/launchdarkly`. */
 export const launchdarklySim: ProviderSim<LaunchdarklyState, LaunchdarklySeed> = {
   env: { token: "LAUNCHDARKLY_ACCESS_TOKEN", url: "LAUNCHDARKLY_API_URL", testToken: "api-sim-launchdarkly" },
-  auth: "raw",
+  // LD1: the token alone in Authorization; a `Bearer` header is refused, so an adapter that sends one fails its tests.
+  authorized: (headers) => /^\S+$/.test(headers.authorization ?? "") && !/^Bearer$/i.test(headers.authorization ?? ""),
   defaultSeed: { projects: { demo: { environments: ["preview", "production"], flags: { "new-checkout": {} } } } },
 
   reset(core, seed) {

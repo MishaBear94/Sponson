@@ -20,15 +20,6 @@
       "type": "object",
       "additionalProperties": { "type": "object" },
       "properties": {
-        "launchdarkly": {
-          "type": "object",
-          "description": "LaunchDarkly project key and environment key (usually a preview or test environment) whose flag targets the lines manage.",
-          "required": ["project", "environment"],
-          "properties": {
-            "project": { "type": "string", "minLength": 1 },
-            "environment": { "type": "string", "minLength": 1 }
-          }
-        },
         "vercel": {
           "type": "object",
           "description": "Vercel project (`prj_…`) and, for team projects, the team id (`team_…`).",
@@ -49,6 +40,20 @@
         "clerk": {
           "type": "object",
           "description": "Clerk needs no provider configuration; the instance is the one CLERK_SECRET_KEY belongs to."
+        },
+        "launchdarkly": {
+          "type": "object",
+          "description": "LaunchDarkly project key and environment key (usually a preview or test environment) whose flag targets the lines manage.",
+          "required": ["project", "environment"],
+          "properties": {
+            "project": { "type": "string", "minLength": 1 },
+            "environment": { "type": "string", "minLength": 1 }
+          }
+        },
+        "http": {
+          "type": "object",
+          "description": "The generic http adapter: one block per API, named by each line's `api:`. Each block is part of its resources' identity.",
+          "additionalProperties": { "$ref": "#/$defs/httpApi" }
         }
       }
     },
@@ -166,7 +171,7 @@
       "required": ["id", "adapter", "op"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk, launchdarkly. Plugins (SPONSON_PLUGINS) add more." },
+        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk, launchdarkly, and http (any JSON REST API described in the plan). Plugins (SPONSON_PLUGINS) add more." },
         "op": { "type": "string", "minLength": 1 },
         "environments": { "$ref": "#/$defs/nameList", "description": "Environments this line applies to. Absent: all." },
         "depends_on": { "type": "array", "items": { "$ref": "#/$defs/id" }, "description": "Ordering without a data dependency. Prefer `from:` references." }
@@ -188,6 +193,14 @@
         {
           "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "clerk" }, "op": { "const": "redirect_allow" } } },
           "then": { "$ref": "#/$defs/op_clerk_redirect_allow" }
+        },
+        {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "http" }, "op": { "const": "resource" } } },
+          "then": { "$ref": "#/$defs/op_http_resource" }
+        },
+        {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "http" }, "op": { "const": "list_item" } } },
+          "then": { "$ref": "#/$defs/op_http_list_item" }
         },
         {
           "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "launchdarkly" }, "op": { "const": "flag_target" } } },
@@ -272,6 +285,135 @@
         "environments": true,
         "depends_on": true,
         "url": { "$ref": "#/$defs/stringOrRef", "description": "The URL to allow. Usually `{ from: <vercel.env line>.preview_url }`." }
+      },
+      "additionalProperties": false
+    },
+    "envName": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "description": "The NAME of an environment variable, never a value."
+    },
+    "credentialEnvName": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*([Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Pp][Aa][Ss][Ss][Ww][Dd]|_[Kk][Ee][Yy]|[Aa][Pp][Ii][Kk][Ee][Yy])$",
+      "description": "The NAME of the environment variable holding a credential. It must end in TOKEN, SECRET, PASSWORD, PASSWD, _KEY or APIKEY, so that Sponson masks its value everywhere."
+    },
+    "httpApi": {
+      "type": "object",
+      "description": "One API for the http adapter: where it is, and how its credential is sent.",
+      "required": ["base_url", "auth"],
+      "additionalProperties": false,
+      "properties": {
+        "base_url": { "type": "string", "pattern": "^https?://\\S+$", "description": "The API's base URL; request paths are relative to it." },
+        "base_url_env": { "$ref": "#/$defs/envName", "description": "Optional: a variable that overrides base_url when set (a staging API, the local fake cloud)." },
+        "auth": {
+          "description": "`{ bearer_env: NAME }`, `{ header: X-Api-Key, value_env: NAME }` or `{ basic: { user_env: NAME, password_env: NAME } }`.",
+          "oneOf": [
+            { "type": "object", "required": ["bearer_env"], "additionalProperties": false, "properties": { "bearer_env": { "$ref": "#/$defs/credentialEnvName" } } },
+            { "type": "object", "required": ["header", "value_env"], "additionalProperties": false, "properties": { "header": { "type": "string", "minLength": 1 }, "value_env": { "$ref": "#/$defs/credentialEnvName" } } },
+            {
+              "type": "object",
+              "required": ["basic"],
+              "additionalProperties": false,
+              "properties": {
+                "basic": { "type": "object", "required": ["user_env", "password_env"], "additionalProperties": false, "properties": { "user_env": { "$ref": "#/$defs/envName" }, "password_env": { "$ref": "#/$defs/credentialEnvName" } } }
+              }
+            }
+          ]
+        },
+        "headers": { "type": "object", "description": "Static headers sent with every request (an API version pin).", "additionalProperties": { "type": "string" } },
+        "encoding": { "enum": ["json", "form"], "description": "Request bodies as JSON (default) or application/x-www-form-urlencoded (`a[b]=c`)." }
+      }
+    },
+    "httpPath": { "type": "string", "pattern": "^/", "description": "A path relative to the API's base_url. `{id}` is the object's id; `{name}` is `vars.name`." },
+    "jsonPointer": { "type": "string", "pattern": "^(/.*)?$", "description": "A JSON pointer: \"\" for the whole body, \"/data/id\" for a field." },
+    "httpStatuses": { "type": "array", "items": { "type": "integer", "minimum": 400, "maximum": 599 } },
+    "httpDestroy": { "enum": ["delete", "keep"], "description": "What destroying the scope does: delete (default) or keep (leave it in place)." },
+    "httpRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "method": { "type": "string" },
+        "path": { "$ref": "#/$defs/httpPath" },
+        "body": { "type": "object", "description": "Extra body fields sent with this request only (not compared)." },
+        "content_type": { "type": "string", "description": "A media type other than the API's encoding, e.g. application/merge-patch+json." },
+        "idempotency_key": { "type": "boolean", "description": "Create only: send an Idempotency-Key so a create whose answer was lost can be retried." }
+      }
+    },
+    "op_http_resource": {
+      "description": "http.resource: one object per item in a JSON REST API (a flag, a webhook endpoint). Outputs: id, plus those under `outputs`.",
+      "required": ["api", "create"],
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "api": { "type": "string", "minLength": 1, "description": "The API: a block under providers.http." },
+        "vars": { "type": "object", "description": "Values for `{name}` placeholders in paths: literals or references." },
+        "find": {
+          "type": "object",
+          "required": ["path", "match"],
+          "additionalProperties": false,
+          "description": "Locate the object by natural key: a list, the array in it, and the fields that must match.",
+          "properties": {
+            "path": { "$ref": "#/$defs/httpPath" },
+            "list_path": { "$ref": "#/$defs/jsonPointer" },
+            "match": { "type": "object", "minProperties": 1 },
+            "next": { "$ref": "#/$defs/jsonPointer", "description": "Pointer to the next page's cursor in a list response." },
+            "cursor_param": { "type": "string", "description": "Query parameter that sends the cursor back. Default: cursor." }
+          }
+        },
+        "read": { "type": "object", "required": ["path"], "additionalProperties": false, "properties": { "path": { "$ref": "#/$defs/httpPath" } }, "description": "GET the object: by `{id}` after find, or a path that names it." },
+        "create": { "allOf": [{ "$ref": "#/$defs/httpRequest" }, { "required": ["path"], "properties": { "path": true, "method": { "enum": ["POST", "PUT", "PATCH"] } } }] },
+        "update": { "allOf": [{ "$ref": "#/$defs/httpRequest" }, { "properties": { "method": { "enum": ["PATCH", "PUT", "POST"] } } }] },
+        "delete": { "allOf": [{ "$ref": "#/$defs/httpRequest" }, { "properties": { "method": { "enum": ["DELETE", "POST"] } } }] },
+        "destroy": { "$ref": "#/$defs/httpDestroy" },
+        "item_path": { "$ref": "#/$defs/jsonPointer", "description": "Where the object is in read, create and update answers. Default: the whole body." },
+        "id_path": { "$ref": "#/$defs/jsonPointer", "description": "Where the id is in the object. Default: /id." },
+        "fields": { "type": "object", "description": "The desired state: field (or /pointer) → value. Compared for drift, sent on create and update." },
+        "outputs": {
+          "type": "object",
+          "description": "Output name → JSON pointer into the object, or { path, sensitive: true }.",
+          "additionalProperties": {
+            "anyOf": [{ "$ref": "#/$defs/jsonPointer" }, { "type": "object", "required": ["path"], "additionalProperties": false, "properties": { "path": { "$ref": "#/$defs/jsonPointer" }, "sensitive": { "type": "boolean" } } }]
+          }
+        },
+        "exists_status": { "$ref": "#/$defs/httpStatuses", "description": "Statuses that mean 'already exists' on create, besides 409." },
+        "gone_status": { "$ref": "#/$defs/httpStatuses", "description": "Statuses that mean 'gone' on read and delete, besides 404." }
+      },
+      "additionalProperties": false
+    },
+    "op_http_list_item": {
+      "description": "http.list_item: one value kept in an array, delimited string or keyed map on a parent object, by read-modify-write. No outputs.",
+      "required": ["api", "parent", "item"],
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "api": { "type": "string", "minLength": 1, "description": "The API: a block under providers.http." },
+        "vars": { "type": "object", "description": "Values for `{name}` placeholders in paths: literals or references." },
+        "parent": {
+          "type": "object",
+          "required": ["path"],
+          "additionalProperties": false,
+          "properties": {
+            "path": { "$ref": "#/$defs/httpPath", "description": "The parent object: read with GET, written with `method`." },
+            "read_path": { "$ref": "#/$defs/httpPath", "description": "GET this instead when reading differs from writing." },
+            "method": { "enum": ["PATCH", "PUT", "POST"], "description": "Default: PATCH." },
+            "send": { "enum": ["field", "parent"], "description": "field (default): send only the collection; parent: send the whole object back." },
+            "content_type": { "type": "string" }
+          }
+        },
+        "list_path": { "$ref": "#/$defs/jsonPointer", "description": "Where the collection is in the parent." },
+        "shape": { "enum": ["array", "delimited", "map"], "description": "array (default), delimited (one string, see separator) or map (name → value; null deletes)." },
+        "separator": { "type": "string", "minLength": 1, "description": "For shape: delimited. Default: ,." },
+        "item": { "description": "The value (array), the string (delimited) or the entry's name (map)." },
+        "key_field": { "type": "string", "description": "For map items of an array: the field that identifies the item." },
+        "value": { "description": "For shape: map: the entry's value." },
+        "destroy": { "$ref": "#/$defs/httpDestroy" }
       },
       "additionalProperties": false
     },

@@ -673,3 +673,54 @@ describe("v2: scope and environment boundaries", () => {
     await expect(planRun(opts(PLAN.replace("a.id", "a.idd")))).rejects.toMatchObject({ code: "REF_OUTPUT_UNKNOWN" });
   });
 });
+
+describe("ops that narrow their provider block and declare outputs per line (OpSpec.providerFor, outputsFor)", () => {
+  const NARROW = `
+version: 1
+providers:
+  fake:
+    one: { region: eu }
+    two: { region: us }
+changes:
+  - { id: a, adapter: fake, op: item, api: one, name: alpha, value: v, declared: [extra] }
+  - { id: b, adapter: fake, op: item, api: two, name: beta, value: { from: a.extra } }
+`;
+
+  beforeEach(() => {
+    const base = cloud.adapter();
+    const item = base.ops.item!;
+    const narrowed = {
+      ...item,
+      providerFor: (block: Record<string, unknown>, params: Record<string, unknown>) => {
+        const b = block[String(params.api)];
+        if (!b || typeof b !== "object") throw new SponsonError("PLAN_INVALID", `no api ${String(params.api)}`);
+        return b as Record<string, unknown>;
+      },
+      outputsFor: (params: Record<string, unknown>) => ({
+        ...item.outputs,
+        ...Object.fromEntries(((params.declared as string[] | undefined) ?? []).map((n) => [n, { available: "immediate" as const }])),
+      }),
+    };
+    registry = new Registry().addAdapter({ ...base, ops: { item: narrowed } });
+  });
+
+  it("records each resource under its own part of the provider block", async () => {
+    const { receipt } = await applyRun(opts(NARROW.replace("{ from: a.extra }", "w")));
+    expect(receipt.ledger.map((e) => [e.key, e.provider])).toEqual([
+      ["item:alpha", { region: "eu" }],
+      ["item:beta", { region: "us" }],
+    ]);
+  });
+
+  it("checks references against the outputs a line declares, before any provider call", async () => {
+    await expect(planRun(opts(NARROW.replace("a.extra", "a.undeclared")))).rejects.toMatchObject({ code: "REF_OUTPUT_UNKNOWN" });
+    expect(cloud.reads).toBe(0);
+    const r = await planRun(opts(NARROW));
+    expect(r.lines.find((l) => l.id === "b")!.waitingOn).toBe("a");
+  });
+
+  it("fails the run before any provider call when a line names a block that does not exist", async () => {
+    await expect(planRun(opts(NARROW.replace("api: two", "api: three")))).rejects.toMatchObject({ code: "PLAN_INVALID" });
+    expect(cloud.reads).toBe(0);
+  });
+});

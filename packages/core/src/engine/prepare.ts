@@ -4,6 +4,7 @@ import { orderChanges, outputRefs } from "../graph.js";
 import { changesFor } from "../plan.js";
 import { secretRefs } from "../resolve.js";
 import type { Change, OpSpec } from "../types.js";
+import { providerOf } from "./run-context.js";
 import type { RunOptions } from "./types.js";
 
 /** Everything about a run that follows from the plan and context alone, before touching any provider. */
@@ -34,7 +35,12 @@ export function prepare(opts: RunOptions): Prepared {
   const refs = new Set<string>();
   const productionLines: string[] = [];
 
-  for (const c of ordered) ops.set(c.id, registry.op(c.adapter, c.op));
+  for (const c of ordered) {
+    const op = specialize(registry.op(c.adapter, c.op), c);
+    // A provider block the op cannot use (an unknown API name) must fail here, before any provider call.
+    providerOf(plan.providers[c.adapter] ?? {}, op, c);
+    ops.set(c.id, op);
+  }
 
   for (const c of ordered) {
     const op = ops.get(c.id)!;
@@ -65,6 +71,16 @@ export function prepare(opts: RunOptions): Prepared {
     requiresApproval: ctx.env === "production" || productionLines.length > 0,
     productionLines,
   };
+}
+
+/**
+ * The op as this line uses it: with the outputs the line declares when the op derives them from its params
+ * (`OpSpec.outputsFor`), so references to them are checked here like any other output. The prototype keeps every
+ * other member of the op.
+ */
+function specialize(op: OpSpec, c: Change): OpSpec {
+  if (!op.outputsFor) return op;
+  return Object.assign(Object.create(op) as OpSpec, { outputs: op.outputsFor(c.params) });
 }
 
 /**

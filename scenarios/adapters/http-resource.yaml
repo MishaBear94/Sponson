@@ -1,0 +1,91 @@
+name: "http.resource: two APIs, create, idempotent re-apply, changed and missing drift, destroy; credentials and secrets never leak"
+plan: |
+  version: 1
+  providers:
+    http:
+      flags:
+        base_url: https://flags.example.test/v1
+        base_url_env: REST_API_URL
+        auth: { bearer_env: REST_API_TOKEN }
+      hooks:
+        base_url: https://hooks.example.test/v1
+        base_url_env: REST_API_URL
+        auth: { header: X-Api-Key, value_env: HOOKS_API_KEY }
+        encoding: form
+  changes:
+    - id: flag
+      adapter: http
+      op: resource
+      api: flags
+      find: { path: /flags, list_path: /data, match: { name: "checkout-${ctx.scope}" } }
+      read: { path: "/flags/{id}" }
+      create: { path: /flags }
+      update: { method: PATCH }
+      item_path: /data
+      fields: { description: New checkout, enabled: true }
+      outputs: { flag_name: /name }
+    - id: hook
+      adapter: http
+      op: resource
+      api: hooks
+      find: { path: /hooks, list_path: /data, match: { url: "https://${ctx.scope}.preview.example.app/hooks" } }
+      create:
+        path: /hooks
+        idempotency_key: true
+        body: { name: "hook-${ctx.scope}", signing: { secret: "env://HOOK_SIGNING_SECRET" } }
+      delete: { path: "/hooks/{id}" }
+      item_path: /data
+      fields: { description: { from: flag.flag_name } }
+env:
+  REST_API_TOKEN: tok_rest_scenario_bearer_0042
+  HOOKS_API_KEY: hooks_scenario_header_key_0042
+  HOOK_SIGNING_SECRET: whsec_scenario_signing_0042
+secrets: [tok_rest_scenario_bearer_0042, hooks_scenario_header_key_0042, whsec_scenario_signing_0042]
+steps:
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { flag: create, hook: pending } }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { flag: applied, hook: applied }
+      outputs: { flag: { flag_name: checkout-pr-42 } }
+  - sim:
+      state:
+        rest.collections./flags: { includes: { name: checkout-pr-42, description: New checkout, enabled: true } }
+        rest.collections./hooks: { includes: { url: "https://pr-42.preview.example.app/hooks", description: checkout-pr-42, signing: whsec_scenario_signing_0042 } }
+      write_order: ["POST /rest/flags", "POST /rest/hooks"]
+  # apply; apply: nothing to write.
+  - run: apply --json
+    expect: { exit: 0, writes: 0, lines: { flag: unchanged, hook: unchanged } }
+  # A console edit of a declared field is changed drift: refused until --reconcile.
+  - chaos: { drift: { "rest.items./flags.checkout-pr-42.enabled": "false" } }
+  - run: plan --json
+    expect: { exit: 1, drift: [{ kind: changed, line: flag }], plan_lines: { flag: blocked } }
+  - run: apply --json
+    expect: { exit: 1, status: failed, lines: { flag: blocked, hook: skipped } }
+  - run: apply --reconcile --json
+    expect: { exit: 0, status: complete, lines: { flag: applied } }
+  - sim:
+      state:
+        rest.collections./flags: { includes: { name: checkout-pr-42, enabled: true } }
+  # A field the plan does not declare is not Sponson's business.
+  - chaos: { drift: { "rest.items./flags.checkout-pr-42.owner": '"someone"' } }
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { flag: unchanged, hook: unchanged } }
+  # Deleted by hand: missing drift, recreated by the next apply.
+  - chaos: { drift: { "rest.items./hooks.hook-pr-42": "delete" } }
+  - run: plan --json
+    expect: { exit: 0, drift: [{ kind: missing, line: hook }], plan_lines: { hook: create } }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { hook: applied } }
+  - sim:
+      state:
+        rest.collections./hooks: { length: 1 }
+  - run: apply --destroy --json
+    expect: { exit: 0, status: complete, lines: { hook: destroyed, flag: destroyed } }
+  - sim:
+      state:
+        rest.collections./flags: { length: 0 }
+        rest.collections./hooks: { length: 0 }
+      write_order: ["DELETE /rest/hooks", "DELETE /rest/flags"]

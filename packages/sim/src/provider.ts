@@ -3,6 +3,7 @@
  * A provider lives in one `routes/<name>.ts` file: its state, its seed, its drift keys and its HTTP routes.
  * Adding a provider = writing that file and registering it in `PROVIDERS` (state.ts).
  */
+import type { IncomingHttpHeaders } from "node:http";
 import type { ChaosConfig } from "./chaos.js";
 
 /** Who made a record: the sim itself (seed, drift, a "human in the console") or a client through the API. */
@@ -56,18 +57,17 @@ export interface DriftRequest {
 export interface ProviderSim<S, Seed> {
   /** Env var names the adapter reads its credential and base URL from, and the token the sim hands out. */
   env: { token: string; url: string; testToken: string };
-  /**
-   * How the provider expects its token in `Authorization`: `bearer` (`Bearer <token>`, the default) or `raw` (the
-   * token alone, as LaunchDarkly documents). The sim refuses the other form with 401, so an adapter that sends the
-   * wrong one fails its tests.
-   */
-  auth?: "bearer" | "raw";
   /** Seed used when a reset does not name this provider. */
   defaultSeed: Seed;
   /** Fresh state from a seed (`undefined`: empty). Called on every reset, in registry order. */
   reset(core: SimCore, seed: Seed | undefined): S;
   /** Apply one drift key to the state; false when the key is not one this provider knows. */
   drift(core: SimCore, state: S, d: DriftRequest): boolean;
+  /**
+   * Whether a request's headers carry a credential this provider accepts. Absent: any non-empty bearer token. Like
+   * the default, accept any non-empty value: the point is that a missing credential surfaces as 401.
+   */
+  authorized?(headers: IncomingHttpHeaders): boolean;
   /** Answer one authenticated, chaos-checked request under `/<name>/`. */
   routes(core: SimCore, state: S, req: RouteRequest): Reply;
 }
@@ -83,7 +83,7 @@ export function page<T>(core: SimCore, list: T[], cursor: string | null, limit?:
 }
 
 /** The `:name` segments of a route path, e.g. `"project" | "id"` for `/v9/projects/:project/env/:id`. */
-type ParamNames<P extends string> = P extends `${string}:${infer N}/${infer Rest}` ? N | ParamNames<`/${Rest}`> : P extends `${string}:${infer N}` ? N : never;
+type ParamNames<P extends string> = P extends `${string}:${infer N}/${infer Rest}` ? N | ParamNames<`/${Rest}`> : P extends `${string}:${infer N}` ? N : P extends `${string}*${infer N}` ? N : never;
 
 /** The decoded `:name` segments of a matched path, typed from the route's path literal. */
 export type PathParams<P extends string> = { [K in ParamNames<P>]: string };
@@ -107,8 +107,9 @@ export interface Route<S> {
 }
 
 /**
- * A route: an HTTP method, a path whose `:name` segments match one non-empty path segment each, and the handler
- * that answers it. `params` is typed from the path: `route("GET", "/projects/:project", ({ params }) => …)` gets
+ * A route: an HTTP method, a path whose `:name` segments match one non-empty path segment each (and whose last
+ * segment may be `*name`, matching the rest of the path, slashes included, undecoded), and the handler that
+ * answers it. `params` is typed from the path: `route("GET", "/projects/:project", ({ params }) => …)` gets
  * `params.project: string`.
  */
 export function route<S, P extends string>(method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", path: P, handle: (ctx: RouteContext<S, PathParams<P>>) => Reply): Route<S> {
@@ -126,19 +127,24 @@ export function router<S>(routes: Array<Route<S>>, fallback: () => Reply): (core
     const source = r.path
       .split("/")
       .map((seg) => {
+        if (seg.startsWith("*")) {
+          names.push(seg.slice(1));
+          return "(.+)";
+        }
         if (!seg.startsWith(":")) return seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         names.push(seg.slice(1));
         return "([^/]+)";
       })
       .join("/");
-    return { route: r, pattern: new RegExp(`^${source}$`), names };
+    return { route: r, pattern: new RegExp(`^${source}$`), names, rest: r.path.split("/").some((s) => s.startsWith("*")) };
   });
   return (core, state, req) => {
-    for (const { route: r, pattern, names } of compiled) {
+    for (const { route: r, pattern, names, rest } of compiled) {
       if (r.method !== req.method) continue;
       const m = pattern.exec(req.path);
       if (!m) continue;
-      const params = Object.fromEntries(names.map((n, i) => [n, decodeURIComponent(m[i + 1]!)]));
+      // A `*name` segment (always the last) is passed as matched: its own segments decode separately.
+      const params = Object.fromEntries(names.map((n, i) => [n, rest && i === names.length - 1 ? m[i + 1]! : decodeURIComponent(m[i + 1]!)]));
       return r.handle({ core, state, params, url: req.url, body: req.body, headers: req.headers ?? {} });
     }
     return fallback();
