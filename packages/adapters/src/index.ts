@@ -8,6 +8,7 @@ import { netlifyAdapter } from "./netlify.js";
 import { planetscaleAdapter } from "./planetscale.js";
 import { launchdarklyAdapter } from "./launchdarkly.js";
 import { supabaseAdapter } from "./supabase.js";
+import { manualAdapter } from "./manual.js";
 import { cloudflareAdapter } from "./cloudflare.js";
 
 /**
@@ -28,10 +29,11 @@ export * from "./secrets.js";
 export * from "./planetscale.js";
 export * from "./launchdarkly.js";
 export * from "./supabase.js";
+export { manualAdapter } from "./manual.js";
 export * from "./netlify.js";
 export * from "./cloudflare.js";
 
 /** Every built-in adapter and secret source. The CLI uses this; tests build narrower registries. */
 export function createRegistry(): Registry {
-  return new Registry().addAdapter(neonAdapter).addAdapter(vercelAdapter).addAdapter(clerkAdapter).addAdapter(planetscaleAdapter).addAdapter(launchdarklyAdapter).addAdapter(httpAdapter).addAdapter(supabaseAdapter).addAdapter(netlifyAdapter).addAdapter(cloudflareAdapter).addSecretSource(envSecretSource).addSecretSource(dopplerSecretSource()).addSecretSource(opSecretSource()).addSecretSource(awsSecretsManagerSource()).addSecretSource(gcpSecretManagerSource());
+  return new Registry().addAdapter(neonAdapter).addAdapter(vercelAdapter).addAdapter(clerkAdapter).addAdapter(planetscaleAdapter).addAdapter(launchdarklyAdapter).addAdapter(httpAdapter).addAdapter(supabaseAdapter).addAdapter(netlifyAdapter).addAdapter(cloudflareAdapter).addAdapter(manualAdapter).addSecretSource(envSecretSource).addSecretSource(dopplerSecretSource()).addSecretSource(opSecretSource()).addSecretSource(awsSecretsManagerSource()).addSecretSource(gcpSecretManagerSource());
 }

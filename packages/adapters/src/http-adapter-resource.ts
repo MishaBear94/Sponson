@@ -15,7 +15,7 @@ import { SponsonError, canonicalJson, sha256, type AdapterContext, type ApplyRes
 import { ABSENT, SENSITIVE, assertNoPending, desiredSide, paramError } from "./common.js";
 import { isObject, listAll, type ApiClient } from "./http.js";
 import { failedWith, httpClient, idOf, itemOf, literalOf, write } from "./http-adapter-client.js";
-import { ADAPTER, apiBlock, at, bodyOf, deepMerge, fieldTokens, fillPath, firstMarker, isKeep, parseResource, pointerTokens, projection, resourceOutputs, stateHash, type FindSpec, type ResourceSpec } from "./http-adapter-spec.js";
+import { ADAPTER, apiBlock, apiEnvironment, at, bodyOf, deepMerge, fieldTokens, fillPath, firstMarker, isKeep, parseResource, pointerTokens, projection, resourceOutputs, stateHash, type FindSpec, type ResourceSpec } from "./http-adapter-spec.js";
 
 /** An object as found: its provider id and its body. */
 interface Located {
@@ -203,11 +203,13 @@ async function create(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, 
     if (!existing) throw new SponsonError("PROVIDER_CONFLICT", `${ADAPTER}: ${label(spec, key)}: the provider says it exists, but it cannot be found with the line's \`find\`/\`read\``, { adapter: ADAPTER, key });
     return { resources: [record(spec, key, existing)], outputs: outputsOf(spec, existing.item, existing.id), created: [] };
   }
-  let item = itemOf(sent.response, spec.itemPath);
+  // `create.locate`: the answer is not the object (the parent it was added to, an acknowledgement).
+  let item = spec.create.locate ? undefined : itemOf(sent.response, spec.itemPath);
   let id = idOf(item, spec.idPath);
   const revealed = id !== undefined;
   if (id === undefined) {
-    // Some APIs answer a create with no body (201, 204): find what was created. It reveals no once-only value.
+    // Some APIs answer a create with no body (201, 204), or with something else: find what was created. Found so,
+    // it reveals no once-only value.
     const l = await locate(api, spec);
     if (!l) throw noId(spec, `the answer to ${spec.create.method} ${path}`);
     ({ id, item } = l);
@@ -240,6 +242,7 @@ export const resource: OpSpec = {
   outputs: { id: { available: "immediate" } },
   outputsFor: resourceOutputs,
   providerFor: apiBlock,
+  writesEnvironment: apiEnvironment,
 
   async read(actx, params) {
     const spec = parseResource(params);

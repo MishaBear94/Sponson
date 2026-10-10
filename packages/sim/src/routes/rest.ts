@@ -10,21 +10,24 @@
  *
  * Assumptions it encodes (about "a conventional JSON REST API", not about one provider; every real API the adapter
  * is pointed at is described by its plan line or recipe instead, see docs/api-verification.md):
- *   R1. Credentials arrive as `Authorization: Bearer <token>`, `Authorization: Basic <base64>` or a header whose
- *       name ends in `-api-key`, `-key` or `-token` (`X-Api-Key`, `Statsig-Api-Key`, `X-Auth-Token`), or one the
- *       seed declares in `auth_headers` (`X-Honeycomb-Team`); anything else is 401.
+ *   R1. Credentials arrive as `Authorization: Bearer <token>`, `Authorization: Basic <base64>`, a bare token in
+ *       `Authorization` (`Authorization: <token>`, as Unleash takes it), a header whose name ends in `-api-key`,
+ *       `-key` or `-token` (`X-Api-Key`, `Statsig-Api-Key`, `X-Auth-Token`), or one the seed declares in
+ *       `auth_headers` (`X-Honeycomb-Team`); anything else is 401.
  *   R2. Collection objects are answered in a `{ data: <object> }` envelope, lists as `{ data: [...], next_cursor }`,
  *       paged with `?cursor=` under chaos `page_size` (`next_cursor` is null on the last page). Objects that are
  *       not in a collection are answered bare. A collection's style (seed `styles`, by collection path) changes the
  *       envelopes, the cursor's place, and the id's field and type, so that a recipe is tested in its provider's
- *       own response shapes.
+ *       own response shapes. An object's style (by its path) may give it an `item_path` envelope for reads; writes
+ *       go to the object itself. A create may be posted to another path than the collection's (seed `aliases`:
+ *       `POST /gates/g/rule` adds to `/gates/g/rules`).
  *   R3. A path is known once seeded or created: a POST to an unknown path creates the collection; a GET of an
  *       unknown path is 404. A create may choose the id (the id field, or the style's `id_from` field, in the
  *       body, like a flag key or a database name); otherwise the sim assigns `it_<n>` (the next integer with
  *       `numeric_ids`). A create whose `name` (or chosen id) already exists in the collection answers 409. Query
  *       parameters other than `cursor` are ignored: a filtered list answers the whole collection. A trailing slash
- *       is ignored (`/releases/` is `/releases`), and seeded `aliases` name a collection under a second path, for
- *       providers whose list URL differs from their create URL (`GET /settings/all`, `POST /settings`).
+ *       is ignored (`/releases/` is `/releases`). An alias (R2) names its collection for every method, so it also
+ *       serves a provider that lists at another URL than it creates at (`GET /settings/all` lists `/settings`).
  *   R4. PATCH (and POST to an object) is a JSON merge patch (RFC 7396: maps merge recursively, `null` deletes a
  *       field, lists are replaced whole); PUT replaces everything but a collection object's id. Bodies may be JSON
  *       or form-encoded (`a[b]=c`, every value a string). No write has a precondition (no ETag): the last write
@@ -61,7 +64,8 @@ export interface RestState {
   collections: Record<string, RestItem[]>;
   objects: Record<string, Record<string, unknown>>;
   styles: Record<string, RestStyle>;
-  /** Paths that list a collection kept under another path (`/settings/all` lists `/settings`), by path. */
+  /** Paths that name a collection kept under another path, by path: a create posted elsewhere
+   * (`/gates/g/rule` adds to `/gates/g/rules`), or a list at another URL (`/settings/all` lists `/settings`). */
   aliases: Record<string, string>;
   /** Further header names (lower-case) that carry a credential (assumption R1). */
   auth_headers: string[];
@@ -73,7 +77,7 @@ export interface RestSeed {
   objects?: Record<string, Record<string, unknown>>;
   /** How each collection answers, by collection path (assumption R2). */
   styles?: Record<string, RestStyle>;
-  /** Paths that list a collection kept under another path, by path: a provider whose list URL is not its create URL. */
+  /** Paths that name a collection kept under another path, by path: `{ "/gates/g/rule": "/gates/g/rules" }`. */
   aliases?: Record<string, string>;
   /** Further header names that carry a credential, for an API whose header is not named `*-Key` or `*-Token`. */
   auth_headers?: string[];
@@ -126,7 +130,8 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
 };
 
 function authorized(headers: IncomingHttpHeaders, declared: string[]): boolean {
-  if (/^(Bearer|Basic)\s+\S+$/.test(headers.authorization ?? "")) return true;
+  const a = headers.authorization ?? "";
+  if (/^(Bearer|Basic)\s+\S+$/.test(a) || (/^\S+$/.test(a) && !/^(Bearer|Basic)$/i.test(a))) return true;
   const carries = (name: string) => /(^|-)(api-key|key|token)$/.test(name) || declared.includes(name);
   return Object.entries(headers).some(([name, v]) => carries(name) && typeof v === "string" && v.trim() !== "");
 }
@@ -296,7 +301,7 @@ const routes = router<RestState>(
   [
     route("GET", "/*path", ({ core, state, params, url }) => {
       const t = resolve(state, `/${params.path}`);
-      if (t.kind === "object") return new Reply(200, t.object);
+      if (t.kind === "object") return new Reply(200, envelope(state.styles[t.path]?.item_path ?? "", t.object));
       if (t.kind === "item") return new Reply(200, envelope(styleOf(state, t.collection).item_path, t.item));
       if (t.kind === "none") return notFound();
       return list(core, state, t, url.searchParams.get("cursor"));
@@ -306,7 +311,8 @@ const routes = router<RestState>(
       const t = resolve(state, `/${params.path}`);
       if (t.kind === "object") return patch(state, t, body);
       if (t.kind === "item") return error(405, "cannot POST to an object of a collection");
-      return create(core, state, t.kind === "collection" ? t.path : normPath(`/${params.path}`), body);
+      const path = normPath(`/${params.path}`);
+      return create(core, state, t.kind === "collection" ? t.path : (state.aliases[path] ?? path), body);
     }),
 
     route("PATCH", "/*path", ({ state, params, body }) => patch(state, resolve(state, `/${params.path}`), body)),

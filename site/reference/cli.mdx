@@ -78,6 +78,10 @@ Options:
                             value its provider shows only on create reaches its
                             dependents (repeatable, or comma-separated)
                             (default: [])
+  --confirm <line>          a person did this manual step (with --destroy: its
+                            undo); recorded with --approved-by or the git user
+                            as who confirmed (repeatable, or comma-separated)
+                            (default: [])
   --wait                    poll for deploys and locks instead of stopping with
                             status partial
   --wait-timeout <seconds>  give up waiting after this long (default: 600)

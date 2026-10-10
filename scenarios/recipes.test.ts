@@ -43,28 +43,17 @@ function exampleParams(op: RecipeOp, env: NodeJS.ProcessEnv = {}): Record<string
   return out;
 }
 
-/** `{name}` placeholders of a sim path filled from values (the expanded line's `vars`), as the sim keys it. */
+/** `{name}` placeholders of a sim path filled from values (the expanded line's `vars`), without query or trailing slash. */
 function fill(path: string, vars: Record<string, unknown>): string {
   const filled = path.split("?")[0]!.replace(/\{([A-Za-z_]\w*)\}/g, (_m, n: string) => encodeURIComponent(String(vars[n])));
-  return filled.length > 1 && filled.endsWith("/") ? filled.slice(0, -1) : filled;
-}
-
-/** A declared field (`name` or a JSON pointer `/config/url`) of an object: its value, or a way to set it. */
-function fieldPath(f: string): string[] {
-  return f.startsWith("/") ? f.slice(1).split("/") : [f];
-}
-function getField(o: Record<string, unknown>, f: string): unknown {
-  return fieldPath(f).reduce<unknown>((cur, t) => (cur as Record<string, unknown> | undefined)?.[t], o);
-}
-function setField(o: Record<string, unknown>, f: string, v: unknown): void {
-  const tokens = fieldPath(f);
-  const parent = tokens.slice(0, -1).reduce<Record<string, unknown>>((cur, t) => (cur[t] ??= {}) as Record<string, unknown>, o);
-  parent[tokens.at(-1)!] = v;
+  return filled.length > 1 ? filled.replace(/\/$/, "") : filled;
 }
 
 function planText(r: Recipe, name: string, op: RecipeOp, params: Record<string, unknown>): string {
   const line = { id: "it", adapter: "http", op: op.kind, recipe: `${r.provider}.${name}`, ...params };
-  return `version: 1\nchanges:\n  - ${JSON.stringify(line)}\n`;
+  // A per-account API (no default base_url) needs its block; the test points base_url_env at the fake cloud.
+  const block = r.api.base_url === undefined ? `providers:\n  http:\n    ${r.provider}: ${JSON.stringify({ recipe: r.provider, base_url: r.base_url_example })}\n` : "";
+  return `version: 1\n${block}changes:\n  - ${JSON.stringify(line)}\n`;
 }
 
 /** The pointer's single token (`/Name` → `Name`). */
@@ -72,15 +61,41 @@ function token(pointer: unknown, fallback: string): string {
   return typeof pointer === "string" && pointer !== "" ? pointer.slice(1) : fallback;
 }
 
+/** The tokens of a JSON pointer, or of a field name (`name` → `["name"]`). */
+function tokens(field: string): string[] {
+  if (field === "") return [];
+  if (!field.startsWith("/")) return [field];
+  return field.slice(1).split("/").map((t) => t.replace(/~1/g, "/").replace(/~0/g, "~"));
+}
+
+/** `v` set at a field name or JSON pointer of `doc`, creating maps on the way. */
+function setAt(doc: Record<string, unknown>, field: string, v: unknown): void {
+  const path = tokens(field);
+  const parent = path.slice(0, -1).reduce<Record<string, unknown>>((cur, t) => (cur[t] ??= {}) as Record<string, unknown>, doc);
+  parent[path.at(-1)!] = v;
+}
+
+/** The value at a field name or JSON pointer. */
+function valueAt(doc: unknown, field: string): unknown {
+  return tokens(field).reduce<unknown>((cur, t) => (cur !== null && typeof cur === "object" ? (cur as Record<string, unknown>)[t] : undefined), doc);
+}
+
+/** The collection a resource op's objects live in: its `sim.collection`, else the create's path. */
+function collectionOf(op: RecipeOp, spec: Record<string, unknown>): string {
+  return fill(op.sim?.collection ?? (spec.create as { path: string }).path, spec.vars as Record<string, unknown>);
+}
+
 /** The sim, shaped like the provider: the create's collection (envelopes, id field) and the seeded parents. */
 function simSeed(r: Recipe, op: RecipeOp, spec: Record<string, unknown>) {
   const vars = spec.vars as Record<string, unknown>;
   const collections: Record<string, Array<Record<string, unknown>>> = {};
   const styles: Record<string, RestStyle> = {};
+  const aliases: Record<string, string> = {};
   const create = spec.create as { path?: string; method?: string } | undefined;
   if (op.kind === "resource" && create?.path) {
     const find = spec.find as { list_path?: string; next?: string } | undefined;
-    const coll = fill(create.path, vars);
+    const coll = collectionOf(op, spec);
+    if (coll !== fill(create.path, vars)) aliases[fill(create.path, vars)] = coll;
     collections[coll] = [];
     styles[coll] = {
       list_path: find?.list_path ?? "",
@@ -91,11 +106,14 @@ function simSeed(r: Recipe, op: RecipeOp, spec: Record<string, unknown>) {
       ...(op.sim?.numeric_ids ? { numeric_ids: true } : {}),
     };
   }
-  // A provider that lists at another URL than it creates at (`GET /settings/all`): the sim lists the same collection.
-  const aliases: Record<string, string> = {};
+  // A provider that lists at another URL than its objects' collection (`GET /settings/all`): the same collection.
   const findPath = (spec.find as { path?: string } | undefined)?.path;
-  if (op.kind === "resource" && create?.path && findPath && fill(findPath, vars) !== fill(create.path, vars)) aliases[fill(findPath, vars)] = fill(create.path, vars);
+  if (op.kind === "resource" && create?.path && findPath && fill(findPath, vars) !== collectionOf(op, spec)) aliases[fill(findPath, vars)] = collectionOf(op, spec);
   const objects = Object.fromEntries(Object.entries(op.sim?.objects ?? {}).map(([p, o]) => [fill(p, vars), structuredClone(o)]));
+  // A parent read in an envelope (`parent.item_path`) is answered in it.
+  const parent = spec.parent as { path: string; read_path?: string; item_path?: string } | undefined;
+  if (op.kind === "list_item" && parent?.item_path) styles[fill(parent.read_path ?? parent.path, vars)] = { item_path: parent.item_path };
+  // A credential header the sim would not recognise by its name (`X-Honeycomb-Team`).
   const header = (r.api.auth as { header?: string }).header;
   return { rest: { collections, objects, styles, aliases, ...(header ? { auth_headers: [header] } : {}) } };
 }
@@ -122,9 +140,8 @@ function lineOf(r: CliRun): { status?: string } {
 const diag = (r: CliRun) => `\n--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.stderr}`;
 
 /** The object a resource op made, in the sim. */
-function simItems(sim: SimHandle, spec: Record<string, unknown>): Array<Record<string, unknown>> {
-  const create = spec.create as { path: string };
-  return sim.state.rest.collections[fill(create.path, spec.vars as Record<string, unknown>)] ?? [];
+function simItems(sim: SimHandle, op: RecipeOp, spec: Record<string, unknown>): Array<Record<string, unknown>> {
+  return sim.state.rest.collections[collectionOf(op, spec)] ?? [];
 }
 
 /** A value different from `v` of the same type. */
@@ -139,22 +156,28 @@ function edited(v: unknown): unknown {
 function parentList(sim: SimHandle, spec: Record<string, unknown>): { parent: Record<string, unknown>; field: string; has: () => boolean; remove: () => void } {
   const parentPath = fill((spec.parent as { path: string; read_path?: string }).read_path ?? (spec.parent as { path: string }).path, spec.vars as Record<string, unknown>);
   const parent = sim.state.rest.objects[parentPath]!;
-  const field = token(spec.list_path, "");
+  const listPath = (spec.list_path as string | undefined) ?? "";
   const shape = (spec.shape as string | undefined) ?? "array";
   const sep = (spec.separator as string | undefined) ?? ",";
   const item = spec.item;
   const keyField = spec.key_field as string | undefined;
-  const value = () => (field === "" ? parent : parent[field]);
-  const matches = (e: unknown) => JSON.stringify(keyField ? (e as Record<string, unknown>)[keyField] : e) === JSON.stringify(keyField ? (item as Record<string, unknown>)[keyField] : item);
+  const value = () => (listPath === "" ? parent : valueAt(parent, listPath));
+  const set = (v: unknown) => {
+    const path = tokens(listPath);
+    const holder = valueAt(parent, `/${path.slice(0, -1).join("/")}`.replace(/^\/$/, "")) as Record<string, unknown>;
+    holder[path.at(-1)!] = v;
+  };
+  const keyOf = (e: unknown) => JSON.stringify(keyField ? valueAt(e, keyField) : e);
+  const matches = (e: unknown) => keyOf(e) === keyOf(item);
   const list = () => (shape === "delimited" ? String(value() ?? "").split(sep).map((s) => s.trim()) : shape === "map" ? Object.keys(value() as object) : (value() as unknown[]));
   return {
     parent,
-    field,
+    field: listPath,
     has: () => list().some((e) => (shape === "array" ? matches(e) : e === item)),
     remove: () => {
-      if (shape === "delimited") parent[field] = list().filter((e) => e !== item).join(sep);
+      if (shape === "delimited") set(list().filter((e) => e !== item).join(sep));
       else if (shape === "map") delete (value() as Record<string, unknown>)[String(item)];
-      else parent[field] = (value() as unknown[]).filter((e) => !matches(e));
+      else set((value() as unknown[]).filter((e) => !matches(e)));
     },
   };
 }
@@ -176,22 +199,22 @@ async function lifecycleInSim(r: Recipe, name: string, op: RecipeOp): Promise<vo
     expect(res.code, `apply${diag(res)}`).toBe(0);
     expect(lineOf(res).status).toBe("applied");
     if (op.kind === "resource") {
-      expect(simItems(sim, spec)).toHaveLength(1);
-      for (const [f, v] of Object.entries((spec.fields as Record<string, unknown> | undefined) ?? {})) expect(getField(simItems(sim, spec)[0]!, f), `field ${f}`).toEqual(v);
+      expect(simItems(sim, op, spec)).toHaveLength(1);
+      for (const [f, v] of Object.entries((spec.fields as Record<string, unknown> | undefined) ?? {})) expect(valueAt(simItems(sim, op, spec)[0], f), `field ${f}`).toEqual(v);
     } else expect(parentList(sim, spec).has(), "the item is in the parent's collection").toBe(true);
 
     res = await run.cli("apply --json", sim);
     expect({ code: res.code, writes: res.writes, status: lineOf(res).status }, `re-apply${diag(res)}`).toEqual({ code: 0, writes: 0, status: "unchanged" });
 
-    if (op.kind === "resource") await resourceDrift(run, sim, spec);
+    if (op.kind === "resource") await resourceDrift(run, sim, op, spec);
     else await listDrift(run, sim, spec);
 
     res = await run.cli("apply --destroy --json", sim);
     expect(res.code, `destroy${diag(res)}`).toBe(0);
     expect(lineOf(res).status).toBe("destroyed");
     // An op the recipe keeps on destroy (shared history, or no delete API) is left in place, and nothing is sent.
-    if (op.kind === "resource" && spec.destroy === "keep") expect({ items: simItems(sim, spec).length, writes: res.writes }).toEqual({ items: 1, writes: 0 });
-    else if (op.kind === "resource") expect(simItems(sim, spec)).toEqual([]);
+    if (op.kind === "resource" && spec.destroy === "keep") expect({ items: simItems(sim, op, spec).length, writes: res.writes }).toEqual({ items: 1, writes: 0 });
+    else if (op.kind === "resource") expect(simItems(sim, op, spec)).toEqual([]);
     else expect(sim.state.rest.objects, "destroy left every other item as seeded").toEqual(seededObjects);
   } finally {
     await sim.close();
@@ -199,23 +222,23 @@ async function lifecycleInSim(r: Recipe, name: string, op: RecipeOp): Promise<vo
   }
 }
 
-async function resourceDrift(run: Run, sim: SimHandle, spec: Record<string, unknown>): Promise<void> {
+async function resourceDrift(run: Run, sim: SimHandle, op: RecipeOp, spec: Record<string, unknown>): Promise<void> {
   const fields = Object.entries((spec.fields as Record<string, unknown> | undefined) ?? {});
   if (fields.length > 0) {
     const [f, v] = fields[0]!;
-    setField(simItems(sim, spec)[0]!, f, edited(v));
+    setAt(simItems(sim, op, spec)[0]!, f, edited(v));
     let res = await run.cli("plan --json", sim);
     expect({ code: res.code, status: lineOf(res).status, drift: (res.json?.drift as Array<{ kind: string }>).map((d) => d.kind) }, `changed drift${diag(res)}`).toEqual({ code: 1, status: "blocked", drift: ["changed"] });
     res = await run.cli("apply --reconcile --json", sim);
     expect(res.code, `reconcile${diag(res)}`).toBe(0);
-    expect(getField(simItems(sim, spec)[0]!, f)).toEqual(v);
+    expect(valueAt(simItems(sim, op, spec)[0], f)).toEqual(v);
   }
-  sim.state.rest.collections[fill((spec.create as { path: string }).path, spec.vars as Record<string, unknown>)] = [];
+  sim.state.rest.collections[collectionOf(op, spec)] = [];
   let res = await run.cli("plan --json", sim);
   expect({ code: res.code, status: lineOf(res).status, drift: (res.json?.drift as Array<{ kind: string }>).map((d) => d.kind) }, `missing drift${diag(res)}`).toEqual({ code: 0, status: "create", drift: ["missing"] });
   res = await run.cli("apply --json", sim);
   expect(res.code, `recreate${diag(res)}`).toBe(0);
-  expect(simItems(sim, spec)).toHaveLength(1);
+  expect(simItems(sim, op, spec)).toHaveLength(1);
 }
 
 async function listDrift(run: Run, sim: SimHandle, spec: Record<string, unknown>): Promise<void> {
@@ -247,6 +270,7 @@ async function lifecycleLive(r: Recipe, name: string, op: RecipeOp): Promise<voi
 describe.each(cases)("recipe %s", (_ref, r, name, op) => {
   it("create, idempotent re-apply, drift and destroy against the fake cloud", () => lifecycleInSim(r, name, op), 60_000);
 
-  const live = [...credentialVars(r), ...Object.values(op.live?.params ?? {})];
+  // A per-account API is reached live through its base_url_env.
+  const live = [...credentialVars(r), ...(r.api.base_url === undefined ? [String(r.api.base_url_env)] : []), ...Object.values(op.live?.params ?? {})];
   it.skipIf(!LIVE || live.some((v) => !process.env[v]))(`@live: create, re-apply and destroy against the real API (needs ${live.join(", ")})`, () => lifecycleLive(r, name, op), 120_000);
 });

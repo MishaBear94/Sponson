@@ -1,0 +1,116 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Statsig Console API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: statsig
+title: Statsig
+category: flags
+verified_on: "2026-10-11"
+docs:
+  - title: Console API introduction (base URL, STATSIG-API-KEY, STATSIG-API-VERSION)
+    url: https://docs.statsig.com/console-api/introduction
+  - title: Add gate rule
+    url: https://docs.statsig.com/api-reference/gates/add-gate-rule
+  - title: Read gate rules
+    url: https://docs.statsig.com/api-reference/gates/read-gate-rules
+  - title: Update gate rules (one rule)
+    url: https://docs.statsig.com/api-reference/gates/update-gate-rules
+  - title: Delete gate rule
+    url: https://docs.statsig.com/api-reference/gates/delete-gate-rule
+  - title: Console API OpenAPI spec (20240601)
+    url: https://api.statsig.com/openapi/20240601.json
+api:
+  base_url: https://statsigapi.net/console/v1
+  base_url_env: STATSIG_API_URL
+  auth: { header: STATSIG-API-KEY, value_env: STATSIG_CONSOLE_API_KEY }
+  headers: { STATSIG-API-VERSION: "20240601" }
+assumptions:
+  - id: SG1
+    verified: true
+    text: "The Console API is at `https://statsigapi.net/console/v1`, authenticated with a Console API key in the `STATSIG-API-KEY` header; `STATSIG-API-VERSION: 20240601` (the only version) is optional today and announced as required later, so it is always sent."
+    source: https://docs.statsig.com/console-api/introduction
+  - id: SG2
+    verified: true
+    text: "`POST /gates/{id}/rule` (singular) adds one rule (`name`, `passPercentage`, `conditions`, `environments`) and answers `{ message, data: <the whole gate> }`, not the rule: the new rule is located by name afterwards (`create.locate`)."
+    source: https://docs.statsig.com/api-reference/gates/add-gate-rule
+  - id: SG3
+    verified: false
+    text: "`GET /gates/{id}/rules` answers the rules under `data.rules` (the documented example); the spec's schema says `data` is a list of `{ rules }` objects instead. If the API follows the schema, every read fails with PROVIDER_RESPONSE naming `find.list_path` (it does not create duplicates). The rules of one gate fit on the first page."
+    source: https://docs.statsig.com/api-reference/gates/read-gate-rules
+  - id: SG4
+    verified: true
+    text: "`PATCH /gates/{id}/rules/{ruleID}` updates the given fields of one rule; `DELETE` on the same path removes it. Rules carry a server-assigned `id`."
+    source: https://docs.statsig.com/api-reference/gates/update-gate-rules
+  - id: SG5
+    verified: false
+    text: "Rule names are unique within a gate (not documented): the rule is identified by its name, and two rules with that name are PARAM_INVALID rather than a guess."
+  - id: SG6
+    verified: false
+    text: "A rule is read back with `conditions` exactly as written (`type`, `operator`, `targetValue`, and `field` when sent). If Statsig adds keys such as `field: null` to a condition, every plan shows the rule as changed."
+  - id: SG7
+    verified: false
+    text: "DELETE of a rule that is already gone answers 404 (the spec lists only 200); any other answer fails the destroy rather than passing silently."
+  - id: SG8
+    verified: false
+    text: "On a gate that requires reviews, what a Console API rule write does (apply, fail, or open a pending review) is not documented; a write that does not take effect is seen on the next read as missing or changed, never as done."
+    source: https://docs.statsig.com/guides/setting-up-reviews
+ops:
+  gate_rule:
+    kind: resource
+    title: Feature gate rule
+    summary: "A rule on an existing feature gate that passes the preview, such as `custom_field preview any [pr-42]`. Located by its name in the gate's rules; a console edit of its pass percentage, conditions or environments is drift. Destroy deletes the rule."
+    covers: [statsig-gate-rule]
+    params:
+      gate_id:
+        type: string
+        required: true
+        description: The gate's id (its name in the console URL).
+        example: new_checkout
+      name:
+        type: string
+        required: true
+        description: The rule's name, unique within the gate; it identifies the rule.
+        example: "preview ${ctx.scope}"
+      condition_type:
+        type: string
+        default: custom_field
+        enum: [custom_field, url, environment_tier, user_id, email]
+        description: "The condition's type: `custom_field` (with `field`), `url`, `environment_tier`, `user_id` or `email`."
+      field:
+        type: string
+        description: The custom field's name, for `condition_type` `custom_field`.
+        example: preview
+      operator:
+        type: string
+        default: any
+        description: "The condition's operator: `any`, `none`, `str_contains_any`, … (see the Statsig rule docs)."
+      values:
+        type: list
+        required: true
+        description: The values the condition matches (its `targetValue`).
+        example: ["${ctx.scope}"]
+      pass_percentage:
+        type: number
+        default: 100
+        description: The share of matching users that pass (0–100).
+      environment_names:
+        type: list
+        description: The environments the rule applies in (for example `[development, staging]`); all when left out.
+    http:
+      find:
+        path: "/gates/{gate_id}/rules"
+        list_path: /data/rules
+        match: { name: { param: name } }
+      create: { path: "/gates/{gate_id}/rule", locate: true }
+      update: { method: PATCH, path: "/gates/{gate_id}/rules/{id}" }
+      delete: { path: "/gates/{gate_id}/rules/{id}" }
+      fields:
+        passPercentage: { param: pass_percentage }
+        conditions:
+          - type: { param: condition_type }
+            field: { param: field }
+            operator: { param: operator }
+            targetValue: { param: values }
+        environments: { param: environment_names }
+    sim:
+      collection: "/gates/{gate_id}/rules"
+    live:
+      params: { gate_id: SPONSON_LIVE_STATSIG_GATE_ID }

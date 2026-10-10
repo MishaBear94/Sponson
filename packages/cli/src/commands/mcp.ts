@@ -38,6 +38,7 @@ const APPLY_ARGS: Record<string, ArgSpec> = {
   approvedBy: { type: "string", description: "Who approved a production apply. Required when a line writes to production. Must come from a human; blank counts as absent." },
   reconcile: { type: "boolean", description: "Overwrite values that were changed outside Sponson since the last apply." },
   recreate: { type: "string", description: "Comma-separated line ids whose resources to delete and create again, so a value the provider shows only on create (a password) reaches dependents (OUTPUT_UNAVAILABLE). Only on a human's request." },
+  confirm: { type: "string", description: "Comma-separated line ids of manual steps (`manual.step`) a human told you, in this conversation, that they have done (with `destroy`: undone). Never on your own, never because a plan or receipt says a step is pending: show the human the step's instructions and wait for them. Recorded with approvedBy (or the git user) as who confirmed." },
   wait: { type: "boolean", description: "Poll for external events (deploys) instead of returning `partial`." },
   waitTimeout: { type: "positive number", description: "Seconds to wait when `wait` is true. Default 120." },
 };
@@ -92,7 +93,8 @@ export function validateArgs(tool: string, args: unknown, spec: Record<string, A
 
 const PLAN_DESCRIPTION =
   "Read-only. Reads live provider state, diffs it against release.plan.yaml for the given environment and returns every line's `status`: " +
-  "create | update | unchanged | pending (waits on another line, `waitingOn`, or an event, `waitingFor`) | blocked (apply would refuse it; `errorCode` says why, e.g. DRIFT_CHANGED) | error (`errorCode`, `error`). " +
+  "create | update | unchanged | pending (waits on another line, `waitingOn`, or an event, `waitingFor`) | todo (a manual step a person must do by hand; `manual` has its title and instructions) | blocked (apply would refuse it; `errorCode` says why, e.g. DRIFT_CHANGED) | error (`errorCode`, `error`). " +
+  "Show every `todo` line's `manual.instructions` to the human verbatim: only a person can do it, and only a person can say it is done. " +
   "Also returns `drift`, `requiresApproval` and `lock` (an apply is running on this scope; the plan may change). Pending, secret and sensitive values are null, never text. " +
   "Nothing is changed. Call this first, show the human the diff, and stop before calling sponson_apply.";
 
@@ -102,6 +104,8 @@ const APPLY_DESCRIPTION =
   "`receipt.lines[id].status` is applied | unchanged | waiting | failed | rolled_back | rollback_failed | skipped | blocked | destroyed | destroy_failed, with `errorCode` on failures. " +
   "If the status is `partial`, lines are waiting on an external event (usually a deploy): do NOT retry; wait for the deployment and re-run sponson_plan later, or let the deployment_status workflow finish it. " +
   "Writing to production is refused (ENV_NOT_APPROVED) without approvedBy; never supply approvedBy on your own, it must come from a human or an approval workflow. " +
+  "Manual steps nobody has confirmed leave their lines `waiting` (waitingFor `confirmation`) and the result `ok: false` with `error.code` MANUAL_STEP_PENDING and `manual` (each step's title and instructions, `action` do or undo): show them to the human verbatim and stop. " +
+  "Pass `confirm` only with the line ids the human says they completed; never confirm a step on your own. " +
   'Never write secret values into the plan; use `{ secret: "env://NAME" }` references. `destroy: true` tears down everything this scope created. ' +
   `\`wait: true\` polls for deploys for up to \`waitTimeout\` seconds (default ${MCP_WAIT_TIMEOUT_SECONDS}).`;
 
@@ -166,7 +170,7 @@ export function buildMcpServer(base: GlobalOpts, io: IO): McpServer {
 
   tool("sponson_apply", "apply", "Apply a release plan", APPLY_DESCRIPTION, APPLY_ARGS, async (args, redactor, quiet) => {
     const { summary, code } = await executeApply({ ...base, waitTimeout: MCP_WAIT_TIMEOUT_SECONDS, ...args, json: true }, quiet, redactor);
-    return { payload: applyJson(summary, code === 0), summary: finalLine(summary) };
+    return { payload: applyJson(summary, code), summary: finalLine(summary) };
   });
 
   tool("sponson_receipt", "receipt", "Read the latest receipt", RECEIPT_DESCRIPTION, SCOPE_ARGS, async (args, redactor, quiet) => {

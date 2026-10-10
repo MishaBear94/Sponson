@@ -44,6 +44,11 @@ export const ERROR_CODES = {
   OP_UNKNOWN: { exit: 2, doc: "The adapter has no op of that name." },
   PARAM_INVALID: { exit: 2, doc: "An adapter rejected a parameter." },
   USAGE: { exit: 2, doc: "The command line is wrong." },
+  MANUAL_STEP_PENDING: {
+    exit: 2,
+    doc: "A manual step (`manual.step`) is not done yet, or its undo on destroy: a person must do it, by its instructions, and then confirm it; its line and the lines that depend on it wait. Nothing else is held back.",
+    cliHint: "A person does the step as instructed, then runs apply again with --confirm <line> (with --approved-by <who>, or as the git user). Agents never confirm on their own.",
+  },
   DRIFT_CHANGED: {
     exit: 1,
     doc: "A resource was changed or replaced outside Sponson; the line is refused unless the run reconciles.",

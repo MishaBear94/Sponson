@@ -88,6 +88,12 @@ beforeAll(async () => {
   // v2: the refused apply reports the line as `blocked` (SKILL.md Output, types.ts LineStatus).
   await cli("apply drift refused", ["apply", "--json"], 7);
 
+  // 9. a manual step nobody has done (ADR 0021): `todo` in plan; `waiting`, `partial` and exit 2 in apply
+  await w.writePlan(previewPlan([{ id: "by-hand", adapter: "manual", op: "step", title: "Register the callback", instructions: "In the console, add it.", environments: ["preview"] }]));
+  await cli("plan manual", ["plan", "--json"], 9);
+  const manual = await cli("apply manual", ["apply", "--json"], 9);
+  if (manual.code !== 2 || manual.json?.error?.code !== "MANUAL_STEP_PENDING") throw new Error(`apply manual: ${manual.stdout}`);
+
   // 8. top-level errors
   await cli("apply production", ["apply", "--env", "production", "--json"], 8);
   await cli("plan unknown env", ["plan", "--env", "stagging", "--json"], 8);

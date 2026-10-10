@@ -19,7 +19,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "DiffKind", "DiffSide", "Drift", "DriftKind", "ERROR_CODES", "ErrorCode", "ErrorCodeSpec", "ExitCode", "FromRef",
     "GitBranchReceiptStore", "GitBranchStoreOptions", "KeepRef", "LEGACY_RECEIPTS_BRANCH", "Ledger", "LedgerEntry", "LineOutputs", "LineStatus",
     "Literal", "LiveState", "LocalReceiptStore", "LockHeldError", "LockInfo", "LockLostError", "MASK",
-    "MIN_REDACT_LENGTH", "MarkerKind", "OpSpec", "OutputSpec", "PARENT_LOCKS_ENVIRONMENT", "PLAN_FILENAME", "ParseWarning", "ParsedPlan", "Plan",
+    "MIN_REDACT_LENGTH", "ManualStep", "ManualTodo", "MarkerKind", "OpSpec", "OutputSpec", "PARENT_LOCKS_ENVIRONMENT", "PLAN_FILENAME", "ParseWarning", "ParsedPlan", "Plan",
     "PlanLine", "PlanLineStatus", "PlanResult", "RECEIPTS_REF_PREFIX", "RECEIPT_VERSION", "Receipt", "ReceiptLine", "ReceiptStore",
     "RedactDeepOptions", "Redactor", "Registry", "ResolveResult", "ResolvedParams", "ResolvedValue",
     "ResourceAdapter", "ResourceDiff", "ResourceRecord", "RunOptions", "RunStatus", "SecretRef", "SecretSource",
@@ -45,6 +45,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "RECIPES_DIR", "Recipe", "RecipeAssumption", "RecipeOp", "RecipeParam", "RecipeParamType", "RecipeSimHints", "expandRecipe", "loadRecipe", "loadRecipes", "recipeNames", "resolveRecipeApi",
     "SUPABASE_DEFAULT_API_URL", "supabaseAdapter",
     "CLOUDFLARE_DEFAULT_API_URL", "cloudflareAdapter",
+    "manualAdapter",
   ],
   "@sponson/sim": [
     "CHAOS_KEYS", "ChaosAction", "ChaosConfig", "ChaosRequest", "ClerkRedirect", "ClerkSeed", "ClerkState",

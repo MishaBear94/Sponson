@@ -10,6 +10,20 @@
     "key": "/zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records?type=CNAME&name.exact=pr-42.preview.example.com[name=pr-42.preview.example.com,type=CNAME]",
     "id": "DELETE /zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records/ID"
   },
+  "configcat.targeting_rule": {
+    "provider": {
+      "base_url": "https://api.configcat.com",
+      "base_url_env": "CONFIGCAT_API_URL",
+      "auth": {
+        "basic": {
+          "user_env": "CONFIGCAT_BASIC_AUTH_USERNAME",
+          "password_env": "CONFIGCAT_BASIC_AUTH_PASSWORD"
+        }
+      }
+    },
+    "key": "/v2/environments/08d8becf-d4d9-4c66-8b48-6ac74cd95fba/settings/12345/value#/targetingRules=pr-42",
+    "id": "{\"item\":\"pr-42\",\"key_field\":\"/conditions/0/userCondition/comparisonValue/listValue/0/value\",\"list\":\"/targetingRules\",\"read\":\"/v2/environments/08d8becf-d4d9-4c66-8b48-6ac74cd95fba/settings/12345/value\",\"send\":[\"defaultValue\",\"percentageEvaluationAttribute\"],\"shape\":\"array\",\"write\":\"PUT /v2/environments/08d8becf-d4d9-4c66-8b48-6ac74cd95fba/settings/12345/value\"}"
+  },
   "github.repo_webhook": {
     "provider": {
       "base_url": "https://api.github.com",
@@ -25,6 +39,17 @@
     "key": "/repos/acme/app/hooks?per_page=100[/config/url=https://pr-42.preview.example.com/api/github]",
     "id": "DELETE /repos/acme/app/hooks/ID"
   },
+  "growthbook.force_rule": {
+    "provider": {
+      "base_url": "https://api.growthbook.io/api",
+      "base_url_env": "GROWTHBOOK_API_URL",
+      "auth": {
+        "bearer_env": "GROWTHBOOK_API_KEY"
+      }
+    },
+    "key": "/v2/features/new-checkout#/rules=Sponson preview pr-42",
+    "id": "{\"item\":\"Sponson preview pr-42\",\"item_path\":\"/feature\",\"key_field\":\"description\",\"list\":\"/rules\",\"read\":\"/v2/features/new-checkout\",\"send\":\"field\",\"shape\":\"array\",\"write\":\"POST /v2/features/new-checkout\"}"
+  },
   "honeycomb.marker": {
     "provider": {
       "base_url": "https://api.honeycomb.io",
@@ -36,6 +61,17 @@
     },
     "key": "/1/markers/__all__[message=deploy pr-42 0123456789abcdef0123456789abcdef01234567,type=deploy]",
     "id": "DELETE /1/markers/__all__/ID"
+  },
+  "posthog.release_condition": {
+    "provider": {
+      "base_url": "https://us.posthog.com",
+      "base_url_env": "POSTHOG_API_URL",
+      "auth": {
+        "bearer_env": "POSTHOG_PERSONAL_API_KEY"
+      }
+    },
+    "key": "/api/projects/12345/feature_flags/678/#/filters/groups=pr-42.preview.example.com",
+    "id": "{\"item\":\"pr-42.preview.example.com\",\"key_field\":\"/properties/0/value/0\",\"list\":\"/filters/groups\",\"read\":\"/api/projects/12345/feature_flags/678/\",\"send\":\"field\",\"shape\":\"array\",\"write\":\"PATCH /api/projects/12345/feature_flags/678/\"}"
   },
   "postmark.server": {
     "provider": {
@@ -127,6 +163,32 @@
     "key": "/organizations/acme/releases/app%400123456789abcdef0123456789abcdef01234567/deploys/[environment=preview,name=sponson-pr-42]",
     "id": "KEEP /organizations/acme/releases/app%400123456789abcdef0123456789abcdef01234567/deploys/ID/"
   },
+  "split.targeting_rule": {
+    "provider": {
+      "base_url": "https://api.split.io/internal/api/v2",
+      "base_url_env": "SPLIT_API_URL",
+      "auth": {
+        "bearer_env": "SPLIT_ADMIN_API_KEY"
+      }
+    },
+    "key": "/splits/ws/a3b6f5d0-0e8f-11ee-9b0f-0242ac120002/new_checkout/environments/Staging#/rules=pr-42",
+    "id": "{\"item\":\"pr-42\",\"key_field\":\"/condition/matchers/0/strings/0\",\"list\":\"/rules\",\"read\":\"/splits/ws/a3b6f5d0-0e8f-11ee-9b0f-0242ac120002/new_checkout/environments/Staging\",\"send\":[\"treatments\",\"defaultTreatment\",\"baselineTreatment\",\"trafficAllocation\",\"defaultRule\"],\"shape\":\"array\",\"write\":\"PUT /splits/ws/a3b6f5d0-0e8f-11ee-9b0f-0242ac120002/new_checkout/environments/Staging\"}"
+  },
+  "statsig.gate_rule": {
+    "provider": {
+      "base_url": "https://statsigapi.net/console/v1",
+      "base_url_env": "STATSIG_API_URL",
+      "auth": {
+        "header": "STATSIG-API-KEY",
+        "value_env": "STATSIG_CONSOLE_API_KEY"
+      },
+      "headers": {
+        "STATSIG-API-VERSION": "20240601"
+      }
+    },
+    "key": "/gates/new_checkout/rules[name=preview pr-42]",
+    "id": "DELETE /gates/new_checkout/rules/ID"
+  },
   "svix.endpoint": {
     "provider": {
       "base_url": "https://api.us.svix.com",
@@ -148,5 +210,17 @@
     },
     "key": "/organizations/acme/databases/app-pr-42",
     "id": "DELETE /organizations/acme/databases/app-pr-42"
+  },
+  "unleash.flag_strategy": {
+    "provider": {
+      "base_url_env": "UNLEASH_API_URL",
+      "auth": {
+        "header": "Authorization",
+        "value_env": "UNLEASH_AUTH_TOKEN"
+      },
+      "base_url": "https://unleash.example.com"
+    },
+    "key": "/api/admin/projects/default/features/new-checkout/environments/development/strategies[title=preview pr-42]",
+    "id": "DELETE /api/admin/projects/default/features/new-checkout/environments/development/strategies/ID"
   }
 }

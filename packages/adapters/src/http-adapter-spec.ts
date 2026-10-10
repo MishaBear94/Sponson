@@ -157,8 +157,8 @@ export function fillPath(path: string, vars: Record<string, unknown>, id?: strin
 // The provider block: one per API
 // ---------------------------------------------------------------------------
 
-/** How the credential is sent. */
-export type Auth = { kind: "bearer"; env: string } | { kind: "header"; header: string; env: string } | { kind: "basic"; userEnv: string; passwordEnv: string };
+/** How the credential is sent; `none` only for a public endpoint a manual step's verify request reads. */
+export type Auth = { kind: "bearer"; env: string } | { kind: "header"; header: string; env: string } | { kind: "basic"; userEnv: string; passwordEnv: string } | { kind: "none" };
 
 /** One API's configuration, from `providers.http.<api>`. */
 export interface ApiConfig {
@@ -167,9 +167,11 @@ export interface ApiConfig {
   auth: Auth;
   headers: Record<string, string>;
   encoding: "json" | "form";
+  /** The API is a production system: lines through it need Sponson's approval (`writesEnvironment`). */
+  production: boolean;
 }
 
-const API_KEYS = ["base_url", "base_url_env", "auth", "headers", "encoding"];
+const API_KEYS = ["base_url", "base_url_env", "auth", "headers", "encoding", "production"];
 
 /**
  * Variable names the engine masks everywhere (packages/core/src/engine/run-context.ts, CREDENTIAL_NAME). A
@@ -217,17 +219,36 @@ function parseHeaders(v: unknown, where: string): Record<string, string> {
   return v as Record<string, string>;
 }
 
-/** One API block, checked. `where` names it in messages (`providers.http.statsig`). */
-export function parseApi(block: Record<string, unknown>, where: string): ApiConfig {
+function parseProduction(v: unknown, where: string): boolean {
+  if (v === undefined || typeof v === "boolean") return v ?? false;
+  throw planError("must be true (lines through this API write production and need approval) or false", where);
+}
+
+/**
+ * `OpSpec.writesEnvironment` for both ops: `production` when the line's API block says `production: true` (a live
+ * Stripe account, a production tenant), so the run needs approval whatever its environment; otherwise not
+ * environment-specific. `provider` is the block `apiBlock` narrowed to, already checked.
+ */
+export function apiEnvironment(_params: Record<string, unknown>, _ctx: unknown, provider?: Record<string, unknown>): "production" | null {
+  return provider?.production === true ? "production" : null;
+}
+
+/**
+ * One API block, checked. `where` names it in messages (`providers.http.statsig`). `authOptional`: a block without
+ * `auth` sends no credential (the `manual` adapter's verify requests to public endpoints); the `http` adapter's
+ * blocks always need one.
+ */
+export function parseApi(block: Record<string, unknown>, where: string, opts: { authOptional?: boolean } = {}): ApiConfig {
   const base = block.base_url;
   if (typeof base !== "string" || !/^https?:\/\/[^\s]+$/.test(base)) throw planError("`base_url` must be an http(s) URL", where);
   const unknown = Object.keys(block).filter((k) => !API_KEYS.includes(k));
   if (unknown.length) throw planError(`unknown key \`${unknown[0]}\` (known: ${API_KEYS.join(", ")})`, where);
   const cfg: ApiConfig = {
     baseUrl: base,
-    auth: parseAuth(block.auth, `${where}.auth`),
+    auth: block.auth === undefined && opts.authOptional ? { kind: "none" } : parseAuth(block.auth, `${where}.auth`),
     headers: parseHeaders(block.headers, `${where}.headers`),
     encoding: parseEncoding(block.encoding, `${where}.encoding`),
+    production: parseProduction(block.production, `${where}.production`),
   };
   if (block.base_url_env !== undefined) cfg.baseUrlEnv = envName(block.base_url_env, `${where}.base_url_env`, false);
   return cfg;
@@ -327,7 +348,8 @@ export interface OutputDecl {
 export interface ResourceSpec {
   api: string;
   vars: Record<string, unknown>;
-  create: RequestSpec & { idempotencyKey: boolean };
+  /** `locate`: the create's answer is not the object (the parent, an acknowledgement); find it afterwards. */
+  create: RequestSpec & { idempotencyKey: boolean; locate: boolean };
   read?: { path: string };
   find?: FindSpec;
   update?: RequestSpec;
@@ -355,9 +377,10 @@ function parseRequest(v: unknown, param: string, methods: readonly string[], fal
 
 function parseCreate(v: unknown, vars: Record<string, unknown>): ResourceSpec["create"] {
   const r = parseRequest(v, "create", ["POST", "PUT", "PATCH"], "POST", vars, false);
-  const key = (v as Record<string, unknown>).idempotency_key;
+  const { idempotency_key: key, locate } = v as Record<string, unknown>;
   if (key !== undefined && typeof key !== "boolean") throw fail("`create.idempotency_key` must be true or false", "create.idempotency_key");
-  return { ...r, idempotencyKey: key === true };
+  if (locate !== undefined && typeof locate !== "boolean") throw fail("`create.locate` must be true or false", "create.locate");
+  return { ...r, idempotencyKey: key === true, locate: locate === true };
 }
 
 function parseFind(v: unknown, vars: Record<string, unknown>): FindSpec | undefined {
@@ -470,11 +493,18 @@ export function resourceOutputs(line: Record<string, unknown>): Record<string, O
  */
 export type ListShape = "array" | "delimited" | "map";
 
+/**
+ * What a write of the parent sends besides the collection: nothing (`field`), the whole object read just before
+ * (`parent`), or the listed fields of it (names or pointers), for a replace that resets what it is not sent.
+ */
+export type ParentSend = "field" | "parent" | string[];
+
 /** `http.list_item` params, checked. */
 export interface ListItemSpec {
   api: string;
   vars: Record<string, unknown>;
-  parent: { path: string; readPath: string; method: string; send: "field" | "parent"; contentType?: string };
+  /** `itemPath`: where the parent object is in the read answer (`/feature` for `{ feature: {...} }`); default the whole body. */
+  parent: { path: string; readPath: string; method: string; send: ParentSend; itemPath: string; contentType?: string };
   listPath: string;
   shape: ListShape;
   separator: string;
@@ -495,10 +525,21 @@ function parseParent(v: unknown, vars: Record<string, unknown>): ListItemSpec["p
   checkPlaceholders(path, "parent.path", vars, false);
   const readPath = o.read_path === undefined ? path : pathParam(o.read_path, "parent.read_path");
   checkPlaceholders(readPath, "parent.read_path", vars, false);
-  const send = o.send ?? "field";
-  if (send !== "field" && send !== "parent") throw fail("`parent.send` must be `field` (send only the list) or `parent` (send the whole object back)", "parent.send");
   const contentType = contentTypeParam(o.content_type, "parent.content_type");
-  return { path, readPath, method: methodParam(o.method, "parent.method", ["PATCH", "PUT", "POST"], "PATCH"), send, ...(contentType ? { contentType } : {}) };
+  return {
+    path,
+    readPath,
+    method: methodParam(o.method, "parent.method", ["PATCH", "PUT", "POST"], "PATCH"),
+    send: parseSend(o.send),
+    itemPath: pointerParam(o.item_path, "parent.item_path", ""),
+    ...(contentType ? { contentType } : {}),
+  };
+}
+
+function parseSend(v: unknown): ParentSend {
+  if (v === undefined || v === "field" || v === "parent") return v ?? "field";
+  if (Array.isArray(v) && v.length > 0 && v.every((f) => typeof f === "string" && f !== "")) return v as string[];
+  throw fail("`parent.send` must be `field` (send only the list), `parent` (send the whole object back) or a list of the object's fields to send back with it", "parent.send");
 }
 
 function scalarItem(v: unknown, what: string): unknown {

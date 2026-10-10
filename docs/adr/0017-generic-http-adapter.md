@@ -130,9 +130,10 @@ Adapters that do not define them behave exactly as before.
 
 ## What it deliberately does not do
 
-- **No preconditions** (ETag / `If-Match`, version fields) for list writes, and no per-parent lock across scopes.
-  The re-read narrows the window and reports what it sees; it cannot close it. Two scopes editing one parent at the
-  same moment can still lose a write (ROADMAP, the shared-parent item).
+- **No preconditions** (ETag / `If-Match`, version fields) for list writes. The re-read narrows the window and
+  reports what it sees; it cannot close it. *Amended:* `http.list_item` now declares its parent object with `lockOn`
+  ([ADR 0019](0019-parent-object-locks.md)), so two scopes editing one parent no longer lose a write; only a writer
+  outside Sponson still can.
 - **No polling**: an object that becomes ready asynchronously, or whose output appears later, needs a first-class
   adapter.
 - **Create-only outputs** (a Stripe webhook signing secret) are returned by the run that creates the object and

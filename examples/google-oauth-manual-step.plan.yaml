@@ -1,0 +1,47 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/MishaBear94/Sponson/main/schema/release.plan.schema.json
+#
+# Google has no API for a web OAuth client's authorized redirect URIs, so a person adds each
+# preview's callback in the Google Cloud console. The plan says exactly what to do, with the
+# preview URL filled in; `apply` waits for the step (exit 2, MANUAL_STEP_PENDING) and holds back
+# the line that turns Google sign-in on, until a person runs `sponson apply --confirm google-redirect`.
+# `apply --destroy` shows the undo and waits for the same confirmation (ADR 0021).
+version: 1
+providers:
+  vercel: { project: prj_acme_web }
+
+changes:
+  - id: env
+    adapter: vercel
+    op: env
+    target: preview
+    values:
+      AUTH_GOOGLE_ID: acme-web.apps.googleusercontent.com
+      AUTH_GOOGLE_SECRET: { secret: "env://GOOGLE_OAUTH_CLIENT_SECRET" }
+    environments: [preview]
+
+  # The preview URL exists after the deploy, so this step waits for it like any `from:` reference.
+  - id: google-redirect
+    adapter: manual
+    op: step
+    title: "Allow ${ctx.scope}'s OAuth callback on the Google OAuth client acme-web"
+    vars: { url: { from: env.preview_url } }
+    instructions: |
+      Google offers no API for a web client's redirect URIs, so this is done by hand.
+
+      1. Open https://console.cloud.google.com/apis/credentials (project `acme-web`).
+      2. Open the OAuth 2.0 client **acme-web**.
+      3. Under **Authorized redirect URIs**, add `{url}/api/auth/callback/google`.
+      4. Save. Google may take a few minutes to accept the new URI.
+    undo: |
+      In the same client, remove `{url}/api/auth/callback/google` from **Authorized redirect URIs**, and save.
+    environments: [preview]
+
+  # Sign-in with Google is switched on for the preview only once the redirect URI is in place.
+  - id: google-login
+    adapter: vercel
+    op: env
+    target: preview
+    depends_on: [google-redirect]
+    values:
+      NEXT_PUBLIC_GOOGLE_LOGIN: "on"
+    environments: [preview]

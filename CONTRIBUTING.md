@@ -98,11 +98,12 @@ existing file in `packages/adapters/recipes/` and:
    `# yaml-language-server` line gives editor checks): `api` with the provider's conventional credential variable
    and `<PROVIDER>_API_URL`; per op its `kind`, typed `params` with an `example` for each required one, and `http`
    using `{ param: <name> }` and `{<name>}` path placeholders. Add `sim` hints when the sim needs them (a parent
-   object to seed for a list item, the body field a client-chosen id comes from). A value the provider shows only in
-   the create answer (an API key's token) is an output `{ path, sensitive: true, once: true }`; a value it shows on
-   every read is not `once`. When destroying a scope must not delete what the op made, say so on the op:
-   `destroy: keep` (shared history; a line may still opt into `destroy: delete`) or `destroy: never` (the provider
-   cannot delete it).
+   object to seed for a list item, the body field a client-chosen id comes from, the `collection` when the create
+   posts to another path than the list). A per-account API leaves `base_url` out and gives a `base_url_example`. A
+   value the provider shows only in the create answer (an API key's token) is an output
+   `{ path, sensitive: true, once: true }`; a value it shows on every read is not `once`. When destroying a scope must
+   not delete what the op made, say so on the op: `destroy: keep` (shared history; a line may still opt into
+   `destroy: delete`) or `destroy: never` (the provider cannot delete it).
 3. **Mark the row covered** in `docs/coverage.yaml` (`covered_by: recipe:<provider>.<op>`) and list its id in the
    op's `covers`.
 4. **Run `SPONSON_UPDATE_RECIPE_LOCK=1 pnpm vitest run packages/adapters/src/recipes.test.ts`** to pin the new op's
@@ -145,7 +146,7 @@ time and keep the tests green while you replace the TODOs with the real API.
 
 The checklist, in full:
 
-1. **The adapter file**, `packages/adapters/src/<name>.ts`, built only with the stable authoring API of `@sponson/adapters` (below). Implement `adopt()` on each op that `sponson init` should be able to adopt, and `writesEnvironment()` when the op targets a deployment environment. Every export carries a doc comment and is listed in `PUBLIC_API` (`packages/core/src/public-api.test.ts`); the scaffold does this for the names the template exports, so only renamed or new exports need adding by hand.
+1. **The adapter file**, `packages/adapters/src/<name>.ts`, built only with the stable authoring API of `@sponson/adapters` (below). Implement `adopt()` on each op that `sponson init` should be able to adopt, and `writesEnvironment(params, ctx, provider)` when the op targets a deployment environment, from its params or from its provider block (a block naming a production environment must make the line need approval). Every export carries a doc comment and is listed in `PUBLIC_API` (`packages/core/src/public-api.test.ts`); the scaffold does this for the names the template exports, so only renamed or new exports need adding by hand.
 2. **Register it**: in-tree, add it to `createRegistry()` in `packages/adapters/src/index.ts`; out of tree, publish a module exporting `register(registry)` and load it with `SPONSON_PLUGINS=<module>`.
 3. **Sim routes**: `packages/sim/src/routes/<name>.ts` implementing `ProviderSim` (seed, reset, drift, routes, and its `env` token/URL variable names), plus one entry in `PROVIDERS` in `packages/sim/src/state.ts`. Routes are a table: one `route(method, path, handler)` per endpoint, with `:name` path segments arriving in `params`, served by `router(…)`. Write the API assumptions your routes encode at the top of that file, numbered, each marked verified (cite the provider's docs or OpenAPI spec) or unverified; add a section for them to `docs/api-verification.md`. Pin the ones a wrong guess would break in `scenarios/contract.test.ts` (`assumption <id>: …`) so `pnpm test:live` can check them.
 4. **One scenario** under `scenarios/`, and an adapter unit test against the sim (`packages/adapters/src/testing.ts`).

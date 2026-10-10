@@ -2,14 +2,14 @@
  * Text rendering (for humans) and the JSON envelopes (for agents).
  * Display strings such as `(secret)` or `(pending ← db.x)` exist only here, in text; JSON carries engine data as-is.
  */
-import type { ErrorCode, ApplyResultSummary, DiffSide, Drift, LineStatus, PlanLine, PlanLineStatus, PlanResult, ReceiptLine, ResourceDiff } from "@sponson/core";
+import type { ErrorCode, ApplyResultSummary, DiffSide, Drift, LineStatus, ManualTodo, PlanLine, PlanLineStatus, PlanResult, ReceiptLine, ResourceDiff } from "@sponson/core";
 import { cliHint } from "./output.js";
 
 export interface RenderOptions {
   color: boolean;
 }
 
-export const PLAN_SYMBOL: Record<PlanLineStatus, string> = { create: "+", update: "~", unchanged: "=", pending: "?", blocked: "-", error: "!" };
+export const PLAN_SYMBOL: Record<PlanLineStatus, string> = { create: "+", update: "~", unchanged: "=", pending: "?", todo: "*", blocked: "-", error: "!" };
 export const LINE_SYMBOL: Record<LineStatus, string> = {
   applied: "+",
   unchanged: "=",
@@ -109,6 +109,9 @@ function planRow(l: PlanLine): Row {
   } else if (l.status === "error" || l.status === "blocked") {
     row.detail = errorText(l.error, l.errorCode);
     if (l.status === "blocked") row.sub = diffRows();
+  } else if (l.manual) {
+    row.detail = `by hand: ${l.manual.title}`;
+    row.sub = todoText(l.manual);
   } else if (l.diffs.length === 1) {
     row.detail = diffText(l.diffs[0]!);
   } else if (l.diffs.length > 1) {
@@ -120,7 +123,7 @@ function planRow(l: PlanLine): Row {
 export function planSummary(lines: PlanLine[]): string {
   const counts = new Map<PlanLineStatus, number>();
   for (const l of lines) counts.set(l.status, (counts.get(l.status) ?? 0) + 1);
-  const label: Record<PlanLineStatus, string> = { create: "to create", update: "to update", unchanged: "unchanged", pending: "pending", blocked: "blocked", error: "error" };
+  const label: Record<PlanLineStatus, string> = { create: "to create", update: "to update", unchanged: "unchanged", pending: "pending", todo: "to do by hand", blocked: "blocked", error: "error" };
   const parts = (Object.keys(label) as PlanLineStatus[]).filter((s) => counts.has(s)).map((s) => `${counts.get(s)} ${label[s]}`);
   return parts.length ? parts.join(", ") : "nothing to do";
 }
@@ -133,6 +136,23 @@ export function renderPlan(result: PlanResult, opts: RenderOptions): string {
   const noteText = notes.length ? `\n${notes.join("\n")}\n` : "";
   const body = result.lines.length ? table(result.lines.map(planRow), opts.color) : "(no lines for this environment)";
   return `${header}\n${noteText}\n${body}\n${driftSection(result.drift)}${warningsSection(result.warnings)}\n${planSummary(result.lines)}\n`;
+}
+
+/**
+ * A manual step for the person who must do it (ADR 0021): its instructions as written, then how to say it is done.
+ * Shown whole, never truncated: it is the only place a person reads them.
+ */
+function todoText(t: ManualTodo): string[] {
+  const done = t.action === "do" ? "Then confirm it" : "Then confirm the undo";
+  const verify = t.action === "do" && t.observable ? " (or let its verify request see it: the next apply records it)" : "";
+  const flag = t.action === "do" ? `sponson apply --confirm ${t.line}` : `sponson apply --destroy --confirm ${t.line}`;
+  return [...t.instructions.replace(/\s+$/, "").split("\n").map((l) => `| ${l}`.trimEnd()), `${done}: ${flag}${verify}`];
+}
+
+function manualSection(todos: ManualTodo[] | undefined): string {
+  if (!todos?.length) return "";
+  const blocks = todos.map((t) => [`  ${t.line}: ${t.action === "undo" ? "undo " : ""}${t.title}`, ...todoText(t).map((l) => `    ${l}`)].join("\n"));
+  return `\nmanual steps (a person does these; agents never confirm them)\n${blocks.join("\n\n")}\n`;
 }
 
 // ---------------------------------------------------------------------------
@@ -177,7 +197,7 @@ export function renderApply(summary: ApplyResultSummary, opts: RenderOptions): s
   const body = lines.length ? table(lines.map(receiptRow), opts.color) : "(nothing to do)";
   const outputs = lines.flatMap((l) => Object.entries(l.outputs).map(([k, v]) => `  ${l.id}.${k} = ${String(v)}`));
   const outputSection = outputs.length ? `\noutputs\n${outputs.join("\n")}\n` : "";
-  return `${header}\n\n${body}\n${outputSection}${driftSection(summary.drift)}${warningsSection(summary.warnings)}\n${finalLine(summary)}\n`;
+  return `${header}\n\n${body}\n${outputSection}${manualSection(summary.manual)}${driftSection(summary.drift)}${warningsSection(summary.warnings)}\n${finalLine(summary)}\n`;
 }
 
 // ---------------------------------------------------------------------------
@@ -199,6 +219,30 @@ export function planJson(result: PlanResult, ok: boolean) {
   };
 }
 
-export function applyJson(summary: ApplyResultSummary, ok: boolean) {
-  return { ok, command: "apply" as const, receipt: summary.receipt, drift: summary.drift, warnings: summary.warnings };
+/**
+ * The apply envelope. `code` is the command's exit code: 0 is `ok`. Manual steps left for a person come as `manual`,
+ * and, when nothing failed, as the reason the command did not succeed (`error.code` MANUAL_STEP_PENDING).
+ */
+export function applyJson(summary: ApplyResultSummary, code: number) {
+  const manual = summary.manual?.length ? summary.manual : undefined;
+  return {
+    ok: code === 0,
+    command: "apply" as const,
+    receipt: summary.receipt,
+    drift: summary.drift,
+    warnings: summary.warnings,
+    ...(manual ? { manual } : {}),
+    ...(manual && summary.receipt.status !== "failed" ? { error: manualError(manual) } : {}),
+  };
+}
+
+function manualError(manual: ManualTodo[]) {
+  const steps = manual.map((t) => `\`${t.line}\` (${t.action === "undo" ? "undo: " : ""}${t.title})`).join(", ");
+  const hint = cliHint("MANUAL_STEP_PENDING");
+  return {
+    code: "MANUAL_STEP_PENDING" as const,
+    message: `${manual.length === 1 ? "A manual step waits" : `${manual.length} manual steps wait`} for a person: ${steps}. Their instructions are in \`manual\`.`,
+    ...(hint ? { hint } : {}),
+    lines: manual.map((t) => t.line),
+  };
 }

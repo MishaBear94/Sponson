@@ -80,13 +80,19 @@
           "required": ["project", "environment"],
           "properties": {
             "project": { "type": "string", "minLength": 1 },
-            "environment": { "type": "string", "minLength": 1 }
+            "environment": { "type": "string", "minLength": 1 },
+            "production": { "type": "boolean", "description": "Whether the environment is production, for Sponson's approval gate (--approved-by). Absent: production when the environment key contains `prod` (any case). Set false for a key such as `preprod` that only looks like one." }
           }
         },
         "http": {
           "type": "object",
           "description": "The generic http adapter: one block per API, named by each line's `api:` (or a recipe line's provider). Each block, as resolved, is part of its resources' identity.",
-          "additionalProperties": { "$ref": "#/$defs/httpApi" }
+          "additionalProperties": { "allOf": [{ "$ref": "#/$defs/httpApi" }, { "anyOf": [{ "properties": { "base_url": true, "auth": true }, "required": ["base_url", "auth"] }, { "properties": { "recipe": true }, "required": ["recipe"] }] }] }
+        },
+        "manual": {
+          "type": "object",
+          "description": "The manual adapter: API blocks a manual step's verify request reads, named by its `verify.api` (the http adapter's block format, without `recipe`; `auth` optional for a public endpoint). Steps without verify need none.",
+          "additionalProperties": { "allOf": [{ "$ref": "#/$defs/httpApi" }, { "properties": { "base_url": true, "recipe": false }, "required": ["base_url"] }] }
         }
       }
     },
@@ -204,7 +210,7 @@
       "required": ["id", "adapter", "op"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk, planetscale, launchdarkly, supabase, netlify, cloudflare, and http (any JSON REST API described in the plan). Plugins (SPONSON_PLUGINS) add more." },
+        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk, planetscale, launchdarkly, supabase, netlify, cloudflare, http (any JSON REST API described in the plan), and manual (a step a person does by hand). Plugins (SPONSON_PLUGINS) add more." },
         "op": { "type": "string", "minLength": 1 },
         "environments": { "$ref": "#/$defs/nameList", "description": "Environments this line applies to. Absent: all." },
         "depends_on": { "type": "array", "items": { "$ref": "#/$defs/id" }, "description": "Ordering without a data dependency. Prefer `from:` references." }
@@ -266,6 +272,10 @@
         {
           "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "cloudflare" }, "op": { "const": "pages_env" } } },
           "then": { "$ref": "#/$defs/op_cloudflare_pages_env" }
+        },
+        {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "manual" }, "op": { "const": "step" } } },
+          "then": { "$ref": "#/$defs/op_manual_step" }
         }
       ]
     },
@@ -393,11 +403,7 @@
     },
     "httpApi": {
       "type": "object",
-      "description": "One API for the http adapter: where it is, and how its credential is sent. With `recipe`, the recipe's API defaults fill in what the block leaves out.",
-      "anyOf": [
-        { "properties": { "base_url": true, "auth": true }, "required": ["base_url", "auth"] },
-        { "properties": { "recipe": true }, "required": ["recipe"] }
-      ],
+      "description": "One API for the http adapter (or a manual step's verify request): where it is, and how its credential is sent. With `recipe`, the recipe's API defaults fill in what the block leaves out.",
       "additionalProperties": false,
       "properties": {
         "recipe": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$", "description": "A shipped recipe's provider (docs/recipes.md): its base URL, credential variable, headers and encoding are the defaults of this block." },
@@ -419,7 +425,8 @@
           ]
         },
         "headers": { "type": "object", "description": "Static headers sent with every request (an API version pin).", "additionalProperties": { "type": "string" } },
-        "encoding": { "enum": ["json", "form"], "description": "Request bodies as JSON (default) or application/x-www-form-urlencoded (`a[b]=c`)." }
+        "encoding": { "enum": ["json", "form"], "description": "Request bodies as JSON (default) or application/x-www-form-urlencoded (`a[b]=c`)." },
+        "production": { "type": "boolean", "description": "true when the API is a production system (a live Stripe account, a production tenant): every line through it needs approval (--approved-by), whatever the run's environment." }
       }
     },
     "httpPath": { "type": "string", "pattern": "^/", "description": "A path relative to the API's base_url. `{id}` is the object's id; `{name}` is `vars.name`." },
@@ -622,6 +629,34 @@
           "additionalProperties": { "$ref": "#/$defs/value" }
         },
         "rewrite_secrets": { "type": "boolean", "description": "Send every secret on every apply, so a changed value is written. Default: false." }
+      },
+      "additionalProperties": false
+    },
+    "op_manual_step": {
+      "description": "manual.step: a change a person makes by hand because no API can (a Google OAuth client's redirect URIs). Shown as todo with its instructions until a person confirms it (apply --confirm <line>) or its verify request sees it done. No outputs.",
+      "required": ["title", "instructions"],
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "title": { "type": "string", "minLength": 1, "description": "One line naming the step; its identity (key `step:<title>`). Takes `{name}` placeholders from vars and ${ctx.*}." },
+        "instructions": { "$ref": "#/$defs/stringOrRef", "description": "What to do, as Markdown, shown whole to the person. `{name}` placeholders are filled from vars; ${ctx.*} works too. Changing what it says (a new preview URL) makes the step a todo again." },
+        "undo": { "$ref": "#/$defs/stringOrRef", "description": "What to do when the scope is destroyed, as Markdown; apply --destroy shows it and waits for the same confirmation. Without it, destroy forgets the step." },
+        "vars": { "type": "object", "description": "Values for `{name}` placeholders in title, instructions, undo and verify.path: literals or `{ from }` references (never secrets).", "additionalProperties": { "anyOf": [{ "$ref": "#/$defs/literal" }, { "$ref": "#/$defs/fromRef" }] } },
+        "verify": {
+          "type": "object",
+          "description": "Optional: a GET that tells whether the step is done, sent with the http adapter's client to an API block under providers.manual. Done when it answers 2xx and every match holds; 404 (or absent_status) means not yet.",
+          "required": ["api", "path"],
+          "additionalProperties": false,
+          "properties": {
+            "api": { "type": "string", "minLength": 1, "description": "The API block under providers.manual." },
+            "path": { "$ref": "#/$defs/httpPath" },
+            "match": { "type": "object", "description": "JSON pointer → the value the answer must have there.", "propertyNames": { "pattern": "^/" } },
+            "absent_status": { "$ref": "#/$defs/httpStatuses" }
+          }
+        }
       },
       "additionalProperties": false
     }

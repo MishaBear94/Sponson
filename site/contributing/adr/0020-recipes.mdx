@@ -134,7 +134,7 @@ chosen: its signing secret exists only in the create response, which the `http` 
 - **No schema per recipe in `schema/release.plan.schema.json`**: an editor checks `recipe:`'s form, `sponson plan`
   checks the params.
 - Everything ADR 0017 leaves out stays out (polling, OAuth exchanges, SigV4). Once-only outputs were left out too,
-  until the amendment below.
+  until Amendment 2 below.
 
 ## Alternatives considered
 
@@ -159,7 +159,30 @@ chosen: its signing secret exists only in the create response, which the `http` 
 - The sim proves a recipe consistent with its own declarations, not with the provider: the verified assumptions and
   `pnpm test:live` are what tie a recipe to the real API.
 
-## Amendment: once-only outputs, destroy defaults, and sim shapes
+## Amendment 1 (2026-10-11): what the feature-flag recipes needed
+
+Writing the feature-flag recipes (Statsig, GrowthBook, Unleash, PostHog, ConfigCat, Split) found four shapes the
+framework could not express. Each was added as a general option, with no provider named in the code:
+
+- **`create.locate: true`** (`http.resource`): the create answers with something other than the object (Statsig's
+  add-rule answers with the whole gate, whose own `id` would be taken for the rule's). The new object is located with
+  `find`/`read` after the create, as for an empty answer. Identity is unchanged.
+- **`parent.item_path`** (`http.list_item`): the parent is read in an envelope (`{ feature: {...} }`) but written
+  bare. `list_path` and `send` are relative to it. It joins the locator only when set, so existing record ids are
+  unchanged.
+- **`parent.send: [fields]`** (`http.list_item`): a `PUT` that resets what it is not sent and is not documented to
+  take the read-only fields of its own GET (ConfigCat's value, Split's definition) gets those fields back and nothing
+  else.
+- **Per-account recipes in the tests and docs**: a recipe without a default `base_url` names a `base_url_example`
+  (required then, by the schema); the unit checks, the sim harness and docs/recipes.md write the provider block
+  with it. The sim harness also follows `sim.collection` (a create posted to another path than the list: the sim's
+  new `aliases`), list and key fields given as JSON pointers, and parent envelopes; the rest sim accepts a bare
+  token in `Authorization` (Unleash), and answers a styled object in its `item_path` envelope (assumptions R1, R2).
+
+Flagsmith was not written: its Admin API takes `Authorization: Api-Key <key>` (or `Token <key>`), a scheme prefix the
+three auth forms do not send, and Bearer only for short-lived OIDC-exchanged tokens. Adding a prefix form to `auth`
+was left for a decision of its own.
+## Amendment 2 (2026-10-11): once-only outputs, destroy defaults, and sim shapes
 
 Writing the webhook, API key and release-marker recipes of [docs/coverage.yaml](https://github.com/MishaBear94/Sponson/blob/main/docs/coverage.yaml) found three gaps.
 Each is closed by the smallest general change; none names a provider.
@@ -176,11 +199,12 @@ Each is closed by the smallest general change; none names a provider.
   line's `destroy: delete` is `PARAM_INVALID` naming the recipe). The record id is then `KEEP <path>`, as for a
   hand-written line with `destroy: keep`, so identity follows ADR 0017 unchanged; a `never` op still declares the
   object's URL as `delete.path`, used only as its identity.
-- **Sim shapes.** The generic REST sim ignores a trailing slash (`/releases/` is `/releases`), lists a collection under
-  a second path when a provider lists at another URL than it creates at (seed `aliases`, which the recipe harness
-  derives from `find.path`), and accepts the credential in a header the seed names (`auth_headers`, derived from the
-  recipe's `auth.header`, for header names that do not end in `-Key` or `-Token`). `ProviderSim.authorized` receives
-  the provider's state for this.
+- **Sim shapes.** Amendment 1's `aliases` now name their collection for every method, not only for a create, so a
+  provider that lists at another URL than its objects' collection (`GET /settings/all`) is served too (the recipe
+  harness derives that alias from `find.path`); seeded paths, aliases and create paths ignore a trailing slash
+  (`/releases/` is `/releases`); and the sim accepts the credential in a header the seed names (`auth_headers`,
+  derived from the recipe's `auth.header`, for header names that do not end in `-Key` or `-Token`, such as
+  `X-Honeycomb-Team`). `ProviderSim.authorized` receives the provider's state for this.
 
 Still out of reach for recipes, and recorded on the coverage rows that need them: an API that needs two credentials on
 every request, a list request sent as a POST, a delete that names the object in its body, and a credential that is

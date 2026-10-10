@@ -69,7 +69,7 @@ Each change ("line") is one adapter op:
 | Key | Type | Meaning |
 |---|---|---|
 | `id` | string matching `^[a-z][a-z0-9_-]*$` | Unique within the plan. Other lines refer to it in `from:` and `depends_on`. Receipts key line results by it. |
-| `adapter` | non-empty string | `neon`, `vercel`, `clerk`, `http`, or one added by a plugin (`SPONSON_PLUGINS`). Unknown: `ADAPTER_UNKNOWN`. |
+| `adapter` | non-empty string | A [built-in adapter](#built-in-ops) (`neon`, `vercel`, `clerk`, `http`, `manual`, …), or one added by a plugin (`SPONSON_PLUGINS`). Unknown: `ADAPTER_UNKNOWN`. |
 | `op` | non-empty string | An op of that adapter. Unknown: `OP_UNKNOWN`. |
 | `environments` | non-empty list of declared environment names | The line applies only in these environments. Absent: every environment. |
 | `depends_on` | list of ids | Run after these lines although no value flows between them. Prefer `from:` references, which imply the order. |
@@ -201,9 +201,26 @@ A line may not reference a line that the filter removed: that is `REF_FILTERED`,
 change.
 
 **Approval.** A run needs an approver (`--approved-by <who>` or `SPONSON_APPROVED_BY`) when it can write to
-production: when `--env production`, or when any active line writes to production whatever the run's environment
-(`vercel.env` with `target: production`). Without one, `apply` is refused with `ENV_NOT_APPROVED` before any provider
-is called. `plan --json` reports `requiresApproval: true` in both cases. A blank name is no name.
+production: when `--env production`, or when any active line writes to production whatever the run's environment.
+An op decides that from the line or from the provider block it writes through, before any provider call:
+
+| Op | Writes production when |
+|---|---|
+| `vercel.env` | `target: production` (or no `target` under `--env production`) |
+| `vercel.deploy` | `--env production` |
+| `launchdarkly.flag_target` | `providers.launchdarkly.production: true`, or, without that key, an `environment` key containing `prod` in any case (`production`, `prod-eu`); `production: false` opts a key such as `preprod` out |
+| `netlify.env` | `context: production` (or no `context` under `--env production`) |
+| `cloudflare.pages_env` | `target: production` (or no `target` under `--env production`) |
+| `http.resource`, `http.list_item` | the line's API block says `production: true` (a recipe line's resolved block too) |
+
+Without an approver, `apply` is refused with `ENV_NOT_APPROVED` before any provider is called. `plan --json` reports
+`requiresApproval: true` in both cases. A blank name is no name.
+
+The other ops never decide by themselves: `neon.branch`, `supabase.branch` and `planetscale.branch` create preview
+branches, never the production one. Lines that write a production object through a credential or a name the plan
+cannot judge (a Clerk production instance's `sk_live_` key, a `planetscale.password` on the production branch, the
+parent project's `supabase.auth_redirect` allow-list) are gated only when they run under `--env production`: give
+such lines `environments: [production]`.
 
 YAML anchors and aliases are allowed but produce the warning `YAML_ANCHOR`: repeated lines are easier to review.
 
@@ -233,6 +250,7 @@ The base URL override replaces the provider's API base URL (the test suites poin
 | `supabase` | [`supabase.branch`](#supabasebranch), [`supabase.auth_redirect`](#supabaseauth_redirect) | `SUPABASE_ACCESS_TOKEN` | `SUPABASE_API_URL` |
 | `netlify` | [`netlify.env`](#netlifyenv) | `NETLIFY_AUTH_TOKEN` | `NETLIFY_API_URL` |
 | `cloudflare` | [`cloudflare.pages_env`](#cloudflarepages_env) | `CLOUDFLARE_API_TOKEN` | `CLOUDFLARE_API_URL` |
+| `manual` | [`manual.step`](#manualstep) | `none (verify: providers.manual.<api>.auth, optional)` | `providers.manual.<api>.base_url_env` |
 <!-- generated:adapters:end -->
 
 A missing credential fails the line with `PROVIDER_AUTH`. Every resource has a key that identifies it within the
@@ -410,6 +428,12 @@ environment: typically a flag turned on for a pull request's preview. Requires `
 project key) and `providers.launchdarkly.environment` (the environment key, usually a preview or test environment).
 The flag must already exist; Sponson never creates or deletes flags, and never turns a flag on or off.
 
+A block whose environment is production needs [approval](#environments) for every run, even under `--env preview`:
+`production: true` in the block says so; without the key, an environment key containing `prod` (any case) counts as
+production, and `production: false` says a key such as `preprod` is not. The provider block is part of each target's
+identity, so set `production` before the first apply (adding it later re-identifies the targets, as editing any
+provider key does).
+
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
 | `flag` | string | (required) | The flag key. An unknown flag, or an environment the project lacks, is `PROVIDER_NOT_FOUND`. |
@@ -459,9 +483,11 @@ comma-separated string, `uri_allow_list`.
 | `project` | string | `providers.supabase.project` | The ref of the project whose allow-list to edit. A preview branch is a project with its own Auth config, so a preview that talks to its branch sets `project: { from: db.project_ref }`. When set, it is part of the key (`redirect:<project>:<url>`). |
 
 `apply` reads the list, appends the URL and writes the whole field back (a `PATCH` carrying only `uri_allow_list`),
-then reads it again to confirm. The API offers no precondition, so a concurrent edit can overwrite the write; the
-re-read notices and the round is repeated (three times, then `PROVIDER_CONFLICT`). A URL already on the list is taken
-over, not duplicated. Destroy removes exactly that entry and leaves every other entry in place; when the project is
+then reads it again to confirm. The API offers no precondition, so every pull request and environment adding a URL
+to one project's list writes it holding a lock on that list, `supabase:<project ref>:auth-uri-allow-list`
+([ADR 0019](adr/0019-parent-object-locks.md)): Sponson's writers never lose each other's entries. An edit made in the
+dashboard at the same moment can still overwrite the write; the re-read notices and the round is repeated (three
+times, then `PROVIDER_CONFLICT`). A URL already on the list is taken over, not duplicated. Destroy removes exactly that entry and leaves every other entry in place; when the project is
 already gone (a branch deleted first), there is nothing to remove. For drift and adoption, every URL on the list of
 `providers.supabase.project` is in scope.
 
@@ -497,6 +523,7 @@ providers:
 | `auth` | map | `{ bearer_env: NAME }` (`Authorization: Bearer`), `{ header: X-Api-Key, value_env: NAME }` (the value in that header), or `{ basic: { user_env: NAME, password_env: NAME } }`. Always variable NAMES, never values; the credential's name must end in `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `_KEY` or `APIKEY` so that its value is masked in every output. Unset: `PROVIDER_AUTH`. |
 | `headers` | map: header → string | Optional static headers (an API version pin). `Authorization`, `Accept` and `Content-Type` are Sponson's. |
 | `encoding` | `json` \| `form` | Request bodies as JSON (default) or `application/x-www-form-urlencoded`, nested as `a[b]=c` and `a[0]=c`. Answers are read as JSON either way. |
+| `production` | boolean | Optional. `true` for a production system (a live Stripe account, a production tenant): every line through this API needs [approval](#environments), whatever the run's environment. |
 
 A malformed block, or a line naming an API that is not configured, is `PLAN_INVALID` before any request is sent;
 a malformed line is `PARAM_INVALID` naming the field. Paths take `{id}` (the object's id, once known) and
@@ -514,7 +541,7 @@ One object per item: a feature flag, a webhook endpoint, a DNS record.
 | `vars` | map | `{}` | Values for `{name}` placeholders in paths. |
 | `find` | `{ path, list_path?, match, next?, cursor_param? }` | — | Locate the object by natural key: GET `path`, take the array at `list_path` (default: the whole body), keep the objects whose fields equal every `match` value. More than one is `PARAM_INVALID`. With `next` (a pointer to the next page's cursor), pages are followed, sending the cursor as `cursor_param` (default `cursor`); without it only the first page is read. |
 | `read` | `{ path }` | — | GET the object. With `find`, the path takes `{id}` and fetches the found object's detail; without `find`, it must be a path that names the object (a client-chosen id or key). One of `find` and `read` is required. 404 means it does not exist. |
-| `create` | `{ method?, path, body?, content_type?, idempotency_key? }` | (required) | `POST` (or `PUT`, `PATCH`) to create. The body is `match`, then `fields`, then `body` merged. `idempotency_key: true` sends an `Idempotency-Key` derived from the resource key, the commit and the body, and lets a create whose connection dropped be sent again. |
+| `create` | `{ method?, path, body?, content_type?, idempotency_key?, locate? }` | (required) | `POST` (or `PUT`, `PATCH`) to create. The body is `match`, then `fields`, then `body` merged. `idempotency_key: true` sends an `Idempotency-Key` derived from the resource key, the commit and the body, and lets a create whose connection dropped be sent again. `locate: true` for an API whose create answers with something other than the object (the parent it was added to): the new object is then located with `find` (or `read`) instead. |
 | `update` | `{ method?, path?, body?, content_type? }` | none | `PATCH` (or `PUT`, `POST`) when `fields` differ from live; path defaults to `read.path`. `PATCH` and `POST` send the declared fields; `PUT` sends the whole declared state (`match`, `fields`, kept values). Without `update`, a difference is `PARAM_INVALID`. |
 | `delete` | `{ method?, path? }` | `DELETE read.path` | How the object is removed (`DELETE` or `POST`). |
 | `destroy` | `delete` \| `keep` | `delete` | `keep` leaves the object in place when the scope is destroyed. |
@@ -544,7 +571,7 @@ once the item is there as planned (written again, up to three times, if another 
 |---|---|---|---|
 | `api` | string | (required) | The API block under `providers.http`. |
 | `vars` | map | `{}` | Values for `{name}` placeholders in paths. |
-| `parent` | `{ path, read_path?, method?, send?, content_type? }` | (required) | GET `read_path` (default `path`), write with `method` (`PATCH` by default, `PUT`, `POST`) to `path`. `send: field` (default) sends only the collection at `list_path`; `send: parent` sends the whole object read just before, with the collection replaced. |
+| `parent` | `{ path, read_path?, method?, send?, item_path?, content_type? }` | (required) | GET `read_path` (default `path`), write with `method` (`PATCH` by default, `PUT`, `POST`) to `path`. `item_path` is where the parent is in the read answer (`/feature` for `{ feature: {...} }`; default the whole body); `list_path` and `send` are relative to it. `send: field` (default) sends only the collection at `list_path`; `send: parent` sends the whole object read just before, with the collection replaced; a list of fields (names or pointers) sends those fields of it as read, with the collection: for a `PUT` that resets what it is not sent but refuses or ignores read-only fields. |
 | `list_path` | JSON pointer | (required except for `map`) | Where the collection is in the parent. `""` is the whole parent (a map of config vars). |
 | `shape` | `array` \| `delimited` \| `map` | `array` | A JSON array; one string of values joined by `separator` (a comma-separated allow-list); or a map of name → value, where an entry is written as a merge patch and `null` deletes it (config vars). |
 | `separator` | string | `,` | For `delimited`. |
@@ -556,9 +583,63 @@ once the item is there as planned (written again, up to three times, if another 
 Key: `<parent.path>#<list_path>=<item>`. **Drift**: the item missing from the collection is `missing`; for map items
 and keyed entries, a declared field or value edited in the console is `changed`. Items no line declares are left
 exactly as they are, and are reported as `unmanaged`. Writes replace the whole collection (except keyed maps sent
-as `field`), so they are sent as idempotent and retried after a dropped connection. There is no precondition: two
-runs editing the same parent at the same moment can still lose one write, which the re-read reports as
-`PROVIDER_CONFLICT` when it happens to see it ([ADR 0017](adr/0017-generic-http-adapter.md)).
+as `field`), so they are sent as idempotent and retried after a dropped connection. There is no precondition, so
+every write holds a lock on the parent object ([ADR 0019](adr/0019-parent-object-locks.md)), named
+`http:<base_url><parent.path>` (the block's `base_url` without user info, query or fragment, and the filled path;
+never a credential): runs in other pull requests and environments that edit the same parent wait for each other
+and never lose an item. A writer outside Sponson editing the parent at the same moment can still drop one; the
+re-read puts it back, or reports `PROVIDER_CONFLICT` after three rounds.
+
+### `manual.step`
+
+A change a person makes by hand, because no API can: a Google OAuth web client's redirect URIs, a Clerk webhook
+endpoint, a Stripe sandbox. Sponson cannot do the step; it says exactly what to do for this environment, holds back
+the lines that depend on it, records who did it and when, notices when it must be done again, and asks for it to be
+undone when the scope is destroyed ([ADR 0021](adr/0021-manual-steps.md)).
+
+```yaml
+- id: google-redirect
+  adapter: manual
+  op: step
+  title: "Allow ${ctx.scope}'s OAuth callback on the Google OAuth client"
+  vars: { url: { from: web.preview_url } }
+  instructions: |
+    In Google Cloud console > APIs & Services > Credentials, open the OAuth client "acme-web" and add
+    {url}/api/auth/callback/google under "Authorized redirect URIs". Save.
+  undo: Remove {url}/api/auth/callback/google from the client's "Authorized redirect URIs".
+```
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `title` | string | (required) | One line naming the step; its identity (key `step:<title>`). |
+| `instructions` | Markdown | (required) | What to do, shown whole to the person. A `{ from }` reference works too. |
+| `undo` | Markdown | none | What to do when the scope is destroyed. Without it, destroy forgets the step. |
+| `vars` | map | `{}` | Values for `{name}` placeholders in `title`, `instructions`, `undo` and `verify.path`: literals or `{ from }` references. A placeholder not in `vars` is `PARAM_INVALID`. |
+| `verify` | `{ api, path, match?, absent_status? }` | none | A GET that tells whether the step is done: `path` on the API block `providers.manual.<api>`; done when it answers 2xx and every `match` (JSON pointer → value) holds; 404, or a status in `absent_status`, means not yet. |
+
+`${ctx.*}` works in every text. A `{ secret }` or `{ keep: true }` anywhere in the line is `PARAM_INVALID`: the text
+is shown to people and kept in receipts. The step has no outputs; other lines wait for it with `depends_on`.
+
+`providers.manual.<api>` blocks have the [`http` adapter's format](#the-generic-http-adapter) (`base_url`,
+`base_url_env`, `headers`, `encoding`), except that `auth` is optional, for public endpoints such as a DNS-over-HTTPS
+resolver. Steps without `verify` need no block.
+
+**How a step is done.** The step's hash covers its title and rendered instructions. It is done when its verify
+request sees it, or when a person confirmed these very instructions: `sponson apply --confirm <line>` (repeatable,
+or comma-separated; the MCP tool's `confirm`). The confirmation is recorded in the ledger with who confirmed it
+(`--approved-by`, or else the git user's `user.name` or `user.email`; with neither, `USAGE`) and when. Confirming a
+line that is not a manual step is `USAGE`. Instructions that change (a new preview URL) make it a step to do again.
+
+| Command | A step that is not done |
+|---|---|
+| `plan` | `todo`, with `manual: { line, title, action: do, instructions, observable }`; exit 0. While an input is pending, `pending` as usual. |
+| `apply` | without `--confirm`: the line is `waiting` (`waitingFor: confirmation`, `MANUAL_STEP_PENDING`), so are the lines that depend on it, every other line is applied, nothing is rolled back; the receipt is `partial`, and the command exits 2 with `error.code: MANUAL_STEP_PENDING` and `manual` (each step's instructions). With `--confirm <line>`: recorded, `applied`. |
+| `apply --destroy` | a recorded step with `undo` waits the same way (`action: undo`) until `apply --destroy --confirm <line>`; one without `undo` is forgotten. Nothing is deleted at any provider. |
+
+A verified step that its verify request no longer sees is `missing` drift, and a todo again; a person's confirmation
+counts even when the verify request does not (yet) agree. A failed run never rolls a manual step back, and
+`--recreate` refuses one. Agents show the instructions to a person and never confirm on their own (see
+[SKILL.md](../SKILL.md)).
 
 ### Recipes
 
@@ -673,6 +754,7 @@ the named event. Sensitive outputs are never displayed, logged or written to rec
 | `netlify.env` | `deploy_id` | external (`deploy`) | no |
 | `netlify.env` | `deploy_preview_url` | external (`deploy`) | no |
 | `cloudflare.pages_env` | (none) | | |
+| `manual.step` | (none) | | |
 <!-- generated:outputs:end -->
 
 ### Once-only outputs

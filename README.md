@@ -77,8 +77,9 @@ One release, one plan. Three commands.
 - **Drift is reported, never silently overwritten.** Something changed in a console since the last apply? `plan` says so; `apply` refuses that line until you pass `--reconcile`. Something exists that the plan does not mention? It is listed and left alone.
 - **Receipts are the agent's memory.** Each run writes what actually happened to an orphan branch of your repo, one per environment and scope (`sponson-receipts/<env>/<scope>`, so unrelated pull requests never wait on each other): a ledger of every resource the scope owns (kept across failed, refused and crashed runs), what each line did, and which commits were applied. Creates are recorded before they are sent, so even a write whose response was lost is never forgotten. The agent reads the receipt, not its own last tool call.
 - **Adopting is not copying.** `sponson init` adopts existing resources as `{ keep: true }`: Sponson takes over that they exist, keeps their live values, and never destroys them.
-- **Production needs a human.** `--env production` without `--approved-by` is refused before any adapter is touched. The default environment is always `preview`; nothing is inferred from a branch name.
+- **Production needs a human.** `--env production` without `--approved-by` is refused before any adapter is touched, and so is any run with a line that writes to production (a Vercel `target: production`, a LaunchDarkly environment that is production). The default environment is always `preview`; nothing is inferred from a branch name.
 - **Destroy is symmetric.** `sponson apply --destroy` removes what Sponson created, in reverse order, and never touches resources it merely adopted.
+- **What no API can do is a step for a person.** A [`manual.step`](docs/plan-format.md#manualstep) line (a Google OAuth redirect URI for the preview URL) shows its instructions as a todo, holds back the lines that depend on it until someone runs `apply --confirm <line>`, records who confirmed it and when, and asks for its undo on destroy. Agents show the step to a person; they never confirm it.
 
 ## Quick start
 

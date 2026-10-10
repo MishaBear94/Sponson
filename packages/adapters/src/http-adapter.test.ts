@@ -140,6 +140,18 @@ describe("http.resource", () => {
     expect(retried.outputs).not.toHaveProperty("token");
   });
 
+  it("create.locate: a create answered with the parent (not the object) is located with find afterwards", async () => {
+    await h.close();
+    // As Statsig answers an added rule: with the whole gate, whose own id must not be taken for the rule's.
+    h = await harness({ rest: { collections: { "/gates/g/rules": [] }, aliases: { "/gates/g/rule": "/gates/g/rules" } } });
+    const rule = { api: "demo", find: { path: "/gates/g/rules", list_path: "/data", match: { name: "pr-42" } }, create: { path: "/gates/g/rule", locate: true }, delete: { path: "/gates/g/rules/{id}" }, item_path: "/data", fields: { passPercentage: 100 } };
+    const r = await resource.apply(h.actx("http", API), rule, null);
+    const [made] = h.sim.state.rest.collections["/gates/g/rules"]!;
+    expect(r.resources[0]!.id).toBe(`DELETE /gates/g/rules/${String(made!.id)}`);
+    expect(h.sim.state.writes.map((w) => w.method)).toEqual(["POST"]);
+    expect(() => resource.diff(null, { ...rule, create: { path: "/x", locate: "yes" } })).toThrow(/`create.locate` must be true or false/);
+  });
+
   it("exists_status and gone_status classify a provider's own statuses", async () => {
     // A provider that answers a duplicate create with 400 and a deleted object with 410.
     const server = createServer((req, res) => {
@@ -353,6 +365,8 @@ describe("http: malformed specs name the field", () => {
     ["map item without key_field", { ...ITEM, item: { url: "x" } }, /`key_field` must be/],
     ["key_field on a scalar", { ...ITEM, key_field: "url" }, /`key_field` applies only/],
     ["bad send", { ...ITEM, parent: { path: "/apps/demo", send: "all" } }, /`parent.send` must be/],
+    ["empty send list", { ...ITEM, parent: { path: "/apps/demo", send: [] } }, /`parent.send` must be/],
+    ["bad parent.item_path", { ...ITEM, parent: { path: "/apps/demo", item_path: "app" } }, /`parent.item_path` must be a JSON pointer/],
     ["map without value", { ...ITEM, shape: "map", list_path: "/env_vars" }, /`value` is required/],
     ["value on an array", { ...ITEM, value: 1 }, /`value` does not apply/],
     ["bad shape", { ...ITEM, shape: "set" }, /`shape` must be/],
@@ -372,6 +386,13 @@ describe("http: malformed specs name the field", () => {
     expect(() => providerFor({ demo: { ...API, encoding: "xml" } }, GATE)).toThrow(/`json`/);
     expect(() => providerFor({ demo: { ...API, retries: 3 } }, GATE)).toThrow(/unknown key `retries`/);
     expect(providerFor({ demo: API, other: { base_url: "https://x.test" } }, GATE)).toEqual(API);
+    expect(() => providerFor({ demo: { ...API, production: "yes" } }, GATE)).toThrow(/production: must be true/);
+    // An API block marked production makes every line through it need approval.
+    const ctx = { env: "preview", git: { branch: "b", sha: "s", short_sha: "s" }, pr: { number: null }, scope: "branch-b" };
+    expect(resource.writesEnvironment!(GATE, ctx, providerFor({ demo: { ...API, production: true } }, GATE))).toBe("production");
+    expect(listItem.writesEnvironment!(GATE, ctx, { ...API, production: true })).toBe("production");
+    expect(resource.writesEnvironment!(GATE, ctx, API)).toBeNull();
+    expect(resource.writesEnvironment!(GATE, ctx)).toBeNull();
     try {
       providerFor({ demo: API }, { ...GATE, api: "nope" });
     } catch (e) {
@@ -403,6 +424,17 @@ describe("http.list_item", () => {
 
   const ORIGIN = { api: "demo", parent: { path: "/apps/demo" }, list_path: "/allowed_origins", item: "https://pr-42.example.app" };
   const ORIGIN_KEY = "/apps/demo#/allowed_origins=https://pr-42.example.app";
+
+  it("locks the parent object (ADR 0019), named by the base URL without credentials and the filled parent path", () => {
+    const lockOn = listItem.lockOn!;
+    expect(lockOn(ORIGIN, API)).toBe("http:https://api.example.test/v1/apps/demo");
+    // Every collection of one parent shares its lock; the read path does not name another object.
+    expect(lockOn({ ...ORIGIN, list_path: "/callbacks", parent: { path: "/apps/demo", read_path: "/apps/demo?fields=all" } }, API)).toBe("http:https://api.example.test/v1/apps/demo");
+    const withVars = { ...ORIGIN, parent: { path: "/clients/{client}" }, vars: { client: "abc 123" } };
+    expect(lockOn(withVars, { ...API, base_url: "https://user:pa55word@tenant.example.test/api/v2/?x=1#f" })).toBe("http:https://tenant.example.test/api/v2/clients/abc%20123");
+    expect(lockOn({ ...withVars, vars: { client: resolved({ c: { from: "app.id" } }).c } }, API)).toBeNull();
+    expect(resource.lockOn).toBeUndefined();
+  });
 
   it("adds by read-modify-write after the intent, is idempotent, removes, and removing twice writes nothing", async () => {
     await h.chaos({ drift: { "rest.objects./apps/demo.allowed_origins": "add:https://prod.example.app" } });
@@ -518,6 +550,32 @@ describe("http.list_item", () => {
     const r = await listItem.apply(actx, { ...ORIGIN, destroy: "keep" }, null);
     await listItem.destroy(actx, r.resources);
     expect(h.sim.state.rest.objects["/apps/demo"]!.allowed_origins).toEqual(["https://pr-42.example.app"]);
+  });
+
+  it("parent.item_path reads the parent out of its envelope; send: a list sends those fields back with the list", async () => {
+    await h.close();
+    // As GrowthBook reads `{ feature: {...} }` and takes `{ rules }`; as ConfigCat's PUT resets what it is not sent.
+    h = await harness({ rest: { objects: { "/features/f": { id: "f", owner: "x", defaultValue: "false", rules: [{ id: "r1", description: "prod" }] } }, styles: { "/features/f": { item_path: "/feature" } } } });
+    const actx = h.actx("http", API);
+    const rule = { api: "demo", parent: { path: "/features/f", method: "PUT", item_path: "/feature", send: ["defaultValue", "/missing/field"] }, list_path: "/rules", key_field: "description", item: { description: "pr-42", value: "true" } };
+    expect(await listItem.read(actx, rule)).toBeNull();
+    const r = await listItem.apply(actx, rule, null);
+    expect(r.created).toHaveLength(1);
+    expect(h.sim.state.rest.objects["/features/f"]).toEqual({ defaultValue: "false", rules: [{ id: "r1", description: "prod" }, { description: "pr-42", value: "true" }] });
+    expect((await readApply(h, listItem, rule)).diffs[0]!.kind).toBe("unchanged");
+    await listItem.destroy(actx, r.resources);
+    expect(h.sim.state.rest.objects["/features/f"]).toEqual({ defaultValue: "false", rules: [{ id: "r1", description: "prod" }] });
+    await expect(listItem.read(actx, { ...rule, parent: { path: "/features/f", item_path: "/nope" } })).rejects.toMatchObject({ code: "PROVIDER_RESPONSE", message: expect.stringMatching(/no object at `parent.item_path` \/nope/) });
+  });
+
+  it("map items may be identified by a pointer into the item (a condition's value)", async () => {
+    const group = { api: "demo", parent: { path: "/apps/demo" }, list_path: "/rules", key_field: "/properties/0/value/0", item: { properties: [{ key: "host", value: ["pr-42.example.app"] }], rollout_percentage: 100 } };
+    const actx = h.actx("http", API);
+    const r = await listItem.apply(actx, group, null);
+    expect(r.resources[0]!.key).toBe("/apps/demo#/rules=pr-42.example.app");
+    expect((await readApply(h, listItem, group)).diffs[0]!.kind).toBe("unchanged");
+    await listItem.destroy(actx, r.resources);
+    expect(h.sim.state.rest.objects["/apps/demo"]!.rules).toEqual([]);
   });
 
   it("the live state passed to diff and apply is the one read returned", async () => {

@@ -1,0 +1,115 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# GrowthBook REST API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: growthbook
+title: GrowthBook
+category: flags
+verified_on: "2026-10-11"
+docs:
+  - title: REST API reference (authentication, versioning)
+    url: https://docs.growthbook.io/api
+  - title: Get a feature (v2)
+    url: https://docs.growthbook.io/api#operation/getFeatureV2
+  - title: Update a feature (v2)
+    url: https://docs.growthbook.io/api#operation/updateFeatureV2
+  - title: OpenAPI spec
+    url: https://api.growthbook.io/api/v1/openapi.yaml
+api:
+  base_url: https://api.growthbook.io/api
+  base_url_env: GROWTHBOOK_API_URL
+  auth: { bearer_env: GROWTHBOOK_API_KEY }
+assumptions:
+  - id: GB1
+    verified: true
+    text: "GrowthBook Cloud's API is at `https://api.growthbook.io/api` (self-hosted: its API host plus `/api`), authenticated with a secret key or personal access token as `Authorization: Bearer`."
+    source: https://docs.growthbook.io/api
+  - id: GB2
+    verified: true
+    text: "The v1 feature endpoints (rules per environment) are deprecated; in v2 a feature's rules are one top-level `rules` array, each rule naming its `environments` (or `allEnvironments`)."
+    source: https://docs.growthbook.io/api#operation/getFeatureV2
+  - id: GB3
+    verified: true
+    text: "`GET /v2/features/{id}` answers `{ feature: { …, rules: [...] } }`."
+    source: https://docs.growthbook.io/api#operation/getFeatureV2
+  - id: GB4
+    verified: true
+    text: "`POST /v2/features/{id}` patch-merges the top-level fields it is sent, and `rules`, when sent, replaces the whole array: so the array is read, the rule added or changed, and the whole array sent back. Rules read with GET may be posted back unchanged. The update publishes a new revision at once."
+    source: https://docs.growthbook.io/api#operation/updateFeatureV2
+  - id: GB5
+    verified: true
+    text: "A force rule is `{ type: force, description, condition, value, enabled, allEnvironments, environments }`; `condition` is a JSON query serialised as a string and `value` is a string (`\"true\"` for a boolean feature)."
+    source: https://api.growthbook.io/api/v1/openapi.yaml
+  - id: GB6
+    verified: false
+    text: "Rule ids may be chosen by the client but what the server does with them is not documented, so the rule is identified by its `description`, which it stores as written; two rules with that description are one rule to Sponson."
+  - id: GB7
+    verified: false
+    text: "A rule is read back with `condition` exactly as sent (not reformatted), so the compared fields do not show as changed on every plan."
+  - id: GB8
+    verified: true
+    text: "When the feature requires approval, the update answers 422 with the gates that blocked it, unless the organisation lets the REST API bypass approvals; the apply then fails."
+    source: https://docs.growthbook.io/api#operation/updateFeatureV2
+ops:
+  force_rule:
+    kind: list_item
+    title: Feature force rule
+    summary: "A force rule on an existing feature that serves a value to the preview in one environment, such as `value \"true\"` when `{\"preview\": \"pr-42\"}`. Added after the feature's other rules (rules are evaluated in order: an earlier rule that matches the preview wins). A console edit of its condition, value, environments or enabled state is drift. Destroy removes the rule."
+    covers: [growthbook-force-rule]
+    params:
+      feature_id:
+        type: string
+        required: true
+        description: The feature's key.
+        example: new-checkout
+      environment:
+        type: string
+        required: true
+        description: The environment the rule applies in.
+        example: staging
+      description:
+        type: string
+        required: true
+        description: The rule's description, unique among the feature's rules; it identifies the rule.
+        example: "Sponson preview ${ctx.scope}"
+      condition:
+        type: string
+        required: true
+        description: The targeting condition, a JSON query as a string.
+        example: "{\"preview\": \"${ctx.scope}\"}"
+      value:
+        type: string
+        required: true
+        description: The value served, as a string (`"true"` for a boolean feature, JSON for a JSON feature).
+        example: "true"
+      enabled:
+        type: boolean
+        default: true
+        description: Whether the rule is on.
+    http:
+      parent: { path: "/v2/features/{feature_id}", method: POST, item_path: /feature }
+      list_path: /rules
+      key_field: description
+      item:
+        description: { param: description }
+        type: force
+        condition: { param: condition }
+        value: { param: value }
+        enabled: { param: enabled }
+        allEnvironments: false
+        environments: [{ param: environment }]
+    sim:
+      objects:
+        "/v2/features/{feature_id}":
+          id: new-checkout
+          valueType: boolean
+          defaultValue: "false"
+          rules:
+            - id: fr_internal
+              type: force
+              description: Internal users
+              condition: "{\"internal\": true}"
+              value: "true"
+              enabled: true
+              allEnvironments: true
+              environments: []
+    live:
+      params: { feature_id: SPONSON_LIVE_GROWTHBOOK_FEATURE_ID, environment: SPONSON_LIVE_GROWTHBOOK_ENVIRONMENT }

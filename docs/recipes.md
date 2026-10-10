@@ -39,8 +39,11 @@ names are set.
 | Recipe | Op | What it manages | Credential |
 |---|---|---|---|
 | [`cloudflare.dns_cname`](#cloudflaredns_cname) | `resource` | DNS CNAME record | `CLOUDFLARE_API_TOKEN` (bearer) |
+| [`configcat.targeting_rule`](#configcattargeting_rule) | `list_item` | Feature flag targeting rule | `CONFIGCAT_BASIC_AUTH_USERNAME` / `CONFIGCAT_BASIC_AUTH_PASSWORD` (basic) |
 | [`github.repo_webhook`](#githubrepo_webhook) | `resource` | Repository webhook | `GITHUB_TOKEN` (bearer) |
+| [`growthbook.force_rule`](#growthbookforce_rule) | `list_item` | Feature force rule | `GROWTHBOOK_API_KEY` (bearer) |
 | [`honeycomb.marker`](#honeycombmarker) | `resource` | Deploy marker | `HONEYCOMB_API_KEY` (header `X-Honeycomb-Team`) |
+| [`posthog.release_condition`](#posthogrelease_condition) | `list_item` | Flag release condition | `POSTHOG_PERSONAL_API_KEY` (bearer) |
 | [`postmark.server`](#postmarkserver) | `resource` | Server | `POSTMARK_ACCOUNT_TOKEN` (header `X-Postmark-Account-Token`) |
 | [`postmark_server.webhook`](#postmark_serverwebhook) | `resource` | Webhook of a server | `POSTMARK_SERVER_TOKEN` (header `X-Postmark-Server-Token`) |
 | [`resend.api_key`](#resendapi_key) | `resource` | API key | `RESEND_API_KEY` (bearer) |
@@ -49,8 +52,11 @@ names are set.
 | [`sendgrid.parse_setting`](#sendgridparse_setting) | `resource` | Inbound Parse setting | `SENDGRID_API_KEY` (bearer) |
 | [`sentry.release`](#sentryrelease) | `resource` | Release | `SENTRY_AUTH_TOKEN` (bearer) |
 | [`sentry.deploy`](#sentrydeploy) | `resource` | Deploy of a release to an environment | `SENTRY_AUTH_TOKEN` (bearer) |
+| [`split.targeting_rule`](#splittargeting_rule) | `list_item` | Feature flag targeting rule | `SPLIT_ADMIN_API_KEY` (bearer) |
+| [`statsig.gate_rule`](#statsiggate_rule) | `resource` | Feature gate rule | `STATSIG_CONSOLE_API_KEY` (header `STATSIG-API-KEY`) |
 | [`svix.endpoint`](#svixendpoint) | `resource` | Application endpoint | `SVIX_AUTH_TOKEN` (bearer) |
 | [`turso.database_branch`](#tursodatabase_branch) | `resource` | Database branch | `TURSO_API_TOKEN` (bearer) |
+| [`unleash.flag_strategy`](#unleashflag_strategy) | `resource` | Flag strategy with constraints | `UNLEASH_AUTH_TOKEN` (header `Authorization`) |
 
 ## Cloudflare
 
@@ -133,6 +139,89 @@ fields:
   comment: { param: comment }
 outputs:
   hostname: /name
+```
+
+## ConfigCat
+
+Recipe file: [`packages/adapters/recipes/configcat.yaml`](../packages/adapters/recipes/configcat.yaml). Verified on 2026-10-11 against:
+
+- [Public Management API](https://api.configcat.com/docs/)
+- [OpenAPI spec (get value v2, replace value v2, targeting rule models)](https://api.configcat.com/docs/v1/swagger.json)
+- [Terraform provider (credential variable names)](https://github.com/configcat/terraform-provider-configcat/blob/main/docs/index.md)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.configcat.com` |
+| `base_url_env` | `CONFIGCAT_API_URL` |
+| Credential | `CONFIGCAT_BASIC_AUTH_USERNAME` / `CONFIGCAT_BASIC_AUTH_PASSWORD` (basic) |
+
+Assumptions:
+
+- **CC1** (verified, [source](https://api.configcat.com/docs/v1/swagger.json)): The API is at `https://api.configcat.com`, authenticated with Basic auth from Public API credentials (the Terraform provider's `CONFIGCAT_BASIC_AUTH_USERNAME` / `CONFIGCAT_BASIC_AUTH_PASSWORD`).
+- **CC2** (verified, [source](https://api.configcat.com/docs/v1/swagger.json)): `GET /v2/environments/{environmentId}/settings/{settingId}/value` answers the setting's value in the environment bare: `defaultValue`, `targetingRules`, `percentageEvaluationAttribute` and read-only fields.
+- **CC3** (verified, [source](https://api.configcat.com/docs/v1/swagger.json)): `PUT` on the same path replaces the value: only `defaultValue`, `targetingRules` and `percentageEvaluationAttribute` can be set, and one not sent is reset. So those three are sent, as read, with the rule list changed (`parent.send`).
+- **CC4** (verified, [source](https://api.configcat.com/docs/v1/swagger.json)): A targeting rule is `{ conditions: [{ userCondition: { comparisonAttribute, comparator, comparisonValue: { stringValue, doubleValue, listValue: [{ value, hint }] } } }], value | percentageOptions }`; rules have no id and are evaluated in order. `isOneOf` and `sensitiveIsOneOf` compare a user attribute with a list.
+- **CC5** (verified, [source](https://api.configcat.com/docs/v1/swagger.json)): Answers carry every member of a value (`boolValue`, `stringValue`, `intValue`, `doubleValue`, `predefinedVariationId`) and of a comparison value, the unused ones null; the rule is written with the same nulls so that it reads back equal.
+- **CC6** **(unverified)**: A condition is read back with `segmentCondition` and `prerequisiteFlagCondition` null and each list value's `hint` null, exactly as written; otherwise every plan shows the rule as changed.
+- **CC7** **(unverified)**: In a product with "Config changes require a reason" or approvals turned on, the PUT without `reason` / `bypassApproval` is refused (the query parameters are not sent); the apply then fails.
+
+### `configcat.targeting_rule`
+
+**Feature flag targeting rule** (`http.list_item`). A targeting rule on a boolean feature flag in one environment that serves a value to the preview, such as `IF Preview IS ONE OF [pr-42] THEN true`. Added after the flag's other rules (evaluated in order: an earlier matching rule wins); the default value and the other rules are written back as read. Identified by the matched value; a console edit of its condition or served value is drift. Destroy removes the rule.
+
+Covers: `configcat-rule` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: none. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `environment_id` | string | yes | — | The environment's id (a UUID). |
+| `setting_id` | string | yes | — | The feature flag's numeric setting id. Matches `^[0-9]+$`. |
+| `attribute` | string | yes | — | The user attribute the rule compares (a custom attribute such as `Preview`, or `Identifier`, `Email`). |
+| `comparator` | string | no | `isOneOf` | `isOneOf`, or `sensitiveIsOneOf` (hashed in the config JSON). One of `isOneOf`, `sensitiveIsOneOf`. |
+| `match` | string | yes | — | The attribute value that is the preview; it identifies the rule. |
+| `serve` | boolean | no | `true` | The value the flag serves to the preview. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: targeting_rule
+  adapter: http
+  op: list_item
+  recipe: configcat.targeting_rule
+  environment_id: 08d8becf-d4d9-4c66-8b48-6ac74cd95fba
+  setting_id: "12345"
+  attribute: Preview
+  match: ${ctx.scope}
+```
+
+What the line expands into: the [`http.list_item`](plan-format.md#httplist_item) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+parent:
+  path: /v2/environments/{environment_id}/settings/{setting_id}/value
+  method: PUT
+  send:
+    - defaultValue
+    - percentageEvaluationAttribute
+list_path: /targetingRules
+key_field: /conditions/0/userCondition/comparisonValue/listValue/0/value
+item:
+  conditions:
+    - userCondition:
+        comparisonAttribute: { param: attribute }
+        comparator: { param: comparator }
+        comparisonValue:
+          stringValue: null
+          doubleValue: null
+          listValue:
+            - value: { param: match }
+              hint: null
+      segmentCondition: null
+      prerequisiteFlagCondition: null
+  value:
+    boolValue: { param: serve }
+    stringValue: null
+    intValue: null
+    doubleValue: null
+    predefinedVariationId: null
 ```
 
 ## GitHub
@@ -219,6 +308,80 @@ fields:
   /config/insecure_ssl: { param: insecure_ssl }
 ```
 
+## GrowthBook
+
+Recipe file: [`packages/adapters/recipes/growthbook.yaml`](../packages/adapters/recipes/growthbook.yaml). Verified on 2026-10-11 against:
+
+- [REST API reference (authentication, versioning)](https://docs.growthbook.io/api)
+- [Get a feature (v2)](https://docs.growthbook.io/api#operation/getFeatureV2)
+- [Update a feature (v2)](https://docs.growthbook.io/api#operation/updateFeatureV2)
+- [OpenAPI spec](https://api.growthbook.io/api/v1/openapi.yaml)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.growthbook.io/api` |
+| `base_url_env` | `GROWTHBOOK_API_URL` |
+| Credential | `GROWTHBOOK_API_KEY` (bearer) |
+
+Assumptions:
+
+- **GB1** (verified, [source](https://docs.growthbook.io/api)): GrowthBook Cloud's API is at `https://api.growthbook.io/api` (self-hosted: its API host plus `/api`), authenticated with a secret key or personal access token as `Authorization: Bearer`.
+- **GB2** (verified, [source](https://docs.growthbook.io/api#operation/getFeatureV2)): The v1 feature endpoints (rules per environment) are deprecated; in v2 a feature's rules are one top-level `rules` array, each rule naming its `environments` (or `allEnvironments`).
+- **GB3** (verified, [source](https://docs.growthbook.io/api#operation/getFeatureV2)): `GET /v2/features/{id}` answers `{ feature: { …, rules: [...] } }`.
+- **GB4** (verified, [source](https://docs.growthbook.io/api#operation/updateFeatureV2)): `POST /v2/features/{id}` patch-merges the top-level fields it is sent, and `rules`, when sent, replaces the whole array: so the array is read, the rule added or changed, and the whole array sent back. Rules read with GET may be posted back unchanged. The update publishes a new revision at once.
+- **GB5** (verified, [source](https://api.growthbook.io/api/v1/openapi.yaml)): A force rule is `{ type: force, description, condition, value, enabled, allEnvironments, environments }`; `condition` is a JSON query serialised as a string and `value` is a string (`"true"` for a boolean feature).
+- **GB6** **(unverified)**: Rule ids may be chosen by the client but what the server does with them is not documented, so the rule is identified by its `description`, which it stores as written; two rules with that description are one rule to Sponson.
+- **GB7** **(unverified)**: A rule is read back with `condition` exactly as sent (not reformatted), so the compared fields do not show as changed on every plan.
+- **GB8** (verified, [source](https://docs.growthbook.io/api#operation/updateFeatureV2)): When the feature requires approval, the update answers 422 with the gates that blocked it, unless the organisation lets the REST API bypass approvals; the apply then fails.
+
+### `growthbook.force_rule`
+
+**Feature force rule** (`http.list_item`). A force rule on an existing feature that serves a value to the preview in one environment, such as `value "true"` when `{"preview": "pr-42"}`. Added after the feature's other rules (rules are evaluated in order: an earlier rule that matches the preview wins). A console edit of its condition, value, environments or enabled state is drift. Destroy removes the rule.
+
+Covers: `growthbook-force-rule` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: none. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `feature_id` | string | yes | — | The feature's key. |
+| `environment` | string | yes | — | The environment the rule applies in. |
+| `description` | string | yes | — | The rule's description, unique among the feature's rules; it identifies the rule. |
+| `condition` | string | yes | — | The targeting condition, a JSON query as a string. |
+| `value` | string | yes | — | The value served, as a string (`"true"` for a boolean feature, JSON for a JSON feature). |
+| `enabled` | boolean | no | `true` | Whether the rule is on. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: force_rule
+  adapter: http
+  op: list_item
+  recipe: growthbook.force_rule
+  feature_id: new-checkout
+  environment: staging
+  description: Sponson preview ${ctx.scope}
+  condition: '{"preview": "${ctx.scope}"}'
+  value: "true"
+```
+
+What the line expands into: the [`http.list_item`](plan-format.md#httplist_item) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+parent:
+  path: /v2/features/{feature_id}
+  method: POST
+  item_path: /feature
+list_path: /rules
+key_field: description
+item:
+  description: { param: description }
+  type: force
+  condition: { param: condition }
+  value: { param: value }
+  enabled: { param: enabled }
+  allEnvironments: false
+  environments:
+    - { param: environment }
+```
+
 ## Honeycomb
 
 Recipe file: [`packages/adapters/recipes/honeycomb.yaml`](../packages/adapters/recipes/honeycomb.yaml). Verified on 2026-10-11 against:
@@ -286,6 +449,80 @@ delete:
   path: /1/markers/{dataset}/{id}
 fields:
   url: { param: url }
+```
+
+## PostHog
+
+Recipe file: [`packages/adapters/recipes/posthog.yaml`](../packages/adapters/recipes/posthog.yaml). Verified on 2026-10-11 against:
+
+- [Private API (hosts, personal API keys)](https://posthog.com/docs/api)
+- [Feature flags API](https://posthog.com/docs/api/feature-flags)
+- [OpenAPI schema (FeatureFlag, PersonalAPIKeyAuth)](https://us.posthog.com/api/schema/?format=json)
+- [Feature flag serializer (filters validation and merge)](https://github.com/PostHog/posthog/blob/master/products/feature_flags/backend/api/feature_flag.py)
+- [Feature flag filters schema (condition groups)](https://github.com/PostHog/posthog/blob/master/products/feature_flags/backend/api/filters_schema.py)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://us.posthog.com` |
+| `base_url_env` | `POSTHOG_API_URL` |
+| Credential | `POSTHOG_PERSONAL_API_KEY` (bearer) |
+
+Assumptions:
+
+- **PH1** (verified, [source](https://posthog.com/docs/api)): The private API is at `https://us.posthog.com` (US cloud) or `https://eu.posthog.com` (EU cloud; set `base_url`), authenticated with a personal API key as `Authorization: Bearer`, with the `feature_flag:read` and `feature_flag:write` scopes.
+- **PH2** (verified, [source](https://us.posthog.com/api/schema/?format=json)): `GET /api/projects/{project_id}/feature_flags/{id}/` (trailing slash) answers the flag bare, with its release conditions in `filters.groups`; `PATCH` on the same path updates it and answers it bare.
+- **PH3** (verified, [source](https://github.com/PostHog/posthog/blob/master/products/feature_flags/backend/api/filters_schema.py)): A condition group is `{ properties: [{ key, type, operator, value }], rollout_percentage, variant }`; `exact` takes a list of values. Groups have no id, so the group is identified by the first value of its first property (the preview host).
+- **PH4** (verified, [source](https://github.com/PostHog/posthog/blob/master/products/feature_flags/backend/api/feature_flag.py)): A PATCH of `filters` merges top-level keys into the stored filters (`{**stored_filters, **filters}`): sending `{ filters: { groups } }` replaces the groups and keeps `multivariate`, `payloads` and the rest. This is in the serializer's source, not the docs.
+- **PH5** **(unverified)**: Self-hosted or older PostHog versions merge `filters` the same way (the merge arrived with 2026's validation work). On a version that replaces `filters` whole, every write would drop the flag's variants and payloads: check before pointing the recipe at one.
+- **PH6** **(unverified)**: A group is read back as written (the serializer drops unknown keys and adds none to the declared ones), so the compared `properties`, `rollout_percentage` and `variant` do not show as changed on every plan.
+- **PH7** (verified, [source](https://github.com/PostHog/posthog/blob/master/products/approvals/backend/decorators.py)): A flag under an approval policy answers a PATCH with 409 (`approval_required` or `change_request_pending`); the apply then fails with PROVIDER_CONFLICT rather than waiting for the approval.
+
+### `posthog.release_condition`
+
+**Flag release condition** (`http.list_item`). A release condition (condition group) on an existing feature flag that matches the preview, such as `$host exact [pr-42.preview.example.com]` at 100%. Groups are OR'd; the flag's other groups, variants and payloads are left as they are. A console edit of its properties, rollout or variant is drift. Destroy removes the group (with the last group gone, the flag matches no one).
+
+Covers: `posthog-release-condition` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: none. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `project_id` | string | yes | — | The project's numeric id (Project settings). Matches `^[0-9]+$`. |
+| `flag_id` | string | yes | — | The flag's numeric id (in the flag's URL), not its key. Matches `^[0-9]+$`. |
+| `property` | string | yes | — | The property the condition tests. It must be known when the flag is evaluated (a person property, or one passed with the evaluation). |
+| `property_type` | string | no | `person` | Whether `property` is a person or a group property. One of `person`, `group`. |
+| `operator` | string | no | `exact` | How the property is compared with `value`. One of `exact`, `is_not`, `icontains`, `regex`. |
+| `value` | string | yes | — | The value that matches the preview (such as its host); it identifies the condition on the flag. |
+| `rollout_percentage` | integer | no | `100` | The share of matching users the flag is on for (0–100). |
+| `variant` | string | no | — | For a multivariate flag, the variant the condition serves. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: release_condition
+  adapter: http
+  op: list_item
+  recipe: posthog.release_condition
+  project_id: "12345"
+  flag_id: "678"
+  property: $host
+  value: ${ctx.scope}.preview.example.com
+```
+
+What the line expands into: the [`http.list_item`](plan-format.md#httplist_item) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+parent:
+  path: /api/projects/{project_id}/feature_flags/{flag_id}/
+  method: PATCH
+list_path: /filters/groups
+key_field: /properties/0/value/0
+item:
+  properties:
+    - key: { param: property }
+      type: { param: property_type }
+      operator: { param: operator }
+      value:
+        - { param: value }
+  rollout_percentage: { param: rollout_percentage }
+  variant: { param: variant }
 ```
 
 ## Postmark (Account API)
@@ -821,6 +1058,174 @@ delete:
   path: /organizations/{organization}/releases/{version}/deploys/{id}/
 ```
 
+## Split (Harness FME)
+
+Recipe file: [`packages/adapters/recipes/split.yaml`](../packages/adapters/recipes/split.yaml). Verified on 2026-10-11 against:
+
+- [Authentication](https://docs.split.io/reference/authentication)
+- [Get feature flag definition in environment](https://docs.split.io/reference/get-feature-flag-definition-in-environment)
+- [Full update feature flag definition in environment](https://docs.split.io/reference/full-update-feature-flag-definition-in-environment)
+- [Feature flag definition, rule, condition, matcher](https://docs.split.io/reference/feature-flag-definition)
+- [Matcher types](https://docs.split.io/reference/matcher-type)
+- [API for Split admins after the move to Harness](https://developer.harness.io/docs/feature-management-experimentation/split-to-harness/api-for-split-admins/)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.split.io/internal/api/v2` |
+| `base_url_env` | `SPLIT_API_URL` |
+| Credential | `SPLIT_ADMIN_API_KEY` (bearer) |
+
+Assumptions:
+
+- **SP1** (verified, [source](https://developer.harness.io/docs/feature-management-experimentation/split-to-harness/api-for-split-admins/)): The Admin API is at `https://api.split.io/internal/api/v2`, authenticated as `Authorization: Bearer` with a Split Admin API key (or a Harness PAT/SAT, accepted as Bearer on the non-deprecated endpoints). Host and paths are unchanged by the move to Harness; the workspace id is still Split's `wsId`.
+- **SP2** (verified, [source](https://docs.split.io/reference/get-feature-flag-definition-in-environment)): `GET /splits/ws/{wsId}/{featureFlagName}/environments/{environmentIdOrName}` answers the flag's definition in the environment bare: `treatments`, `defaultTreatment`, `baselineTreatment`, `trafficAllocation`, `rules`, `defaultRule` and read-only fields (`name`, `environment`, `trafficType`, times).
+- **SP3** (verified, [source](https://docs.split.io/reference/full-update-feature-flag-definition-in-environment)): `PUT` on the same path replaces the definition with `treatments`, `defaultTreatment`, `baselineTreatment`, `trafficAllocation`, `rules` and `defaultRule` (the first three of the required fields). Those are sent as read, with the rule list changed (`parent.send`); whether PUT takes the read-only fields back is not documented, so they are not sent.
+- **SP4** (verified, [source](https://docs.split.io/reference/matcher-type)): A rule is `{ condition: { combiner: AND, matchers: [...] }, buckets: [{ treatment, size }] }` (bucket sizes sum to 100); rules have no id and are evaluated in order. `IN_LIST_STRING` with `attribute` and `strings` matches an attribute in a list.
+- **SP5** **(unverified)**: A rule is read back with its matcher exactly as written (no added `negate: false` or null members); otherwise every plan shows the rule as changed.
+- **SP6** **(unverified)**: A full update leaves the flag's killed state alone (`killed` is not a documented PUT field).
+- **SP7** (verified, [source](https://developer.harness.io/docs/feature-management-experimentation/api/feature-flags/)): In a project that requires a title and comment on changes, they are query parameters of the update; this recipe does not send them, so such a project refuses the write and the apply fails.
+
+### `split.targeting_rule`
+
+**Feature flag targeting rule** (`http.list_item`). A targeting rule on a feature flag's definition in one environment that serves a treatment to the preview, such as `if preview is in list [pr-42] serve on`. Added after the flag's other rules (evaluated in order: an earlier matching rule wins); the treatments, default rule and traffic allocation are written back as read. Identified by the matched value; a console edit of its matcher or treatment is drift. Destroy removes the rule.
+
+Covers: `split-rule` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: none. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `workspace_id` | string | yes | — | The workspace (project) id, Split's `wsId`. |
+| `flag` | string | yes | — | The feature flag's name. |
+| `environment` | string | yes | — | The environment's id or name; the flag must have a definition there. |
+| `attribute` | string | yes | — | The attribute the rule tests (passed with the evaluation). |
+| `match` | string | yes | — | The attribute value that is the preview; it identifies the rule. |
+| `treatment` | string | yes | — | The treatment served to the preview; one of the flag's treatments. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: targeting_rule
+  adapter: http
+  op: list_item
+  recipe: split.targeting_rule
+  workspace_id: a3b6f5d0-0e8f-11ee-9b0f-0242ac120002
+  flag: new_checkout
+  environment: Staging
+  attribute: preview
+  match: ${ctx.scope}
+  treatment: on
+```
+
+What the line expands into: the [`http.list_item`](plan-format.md#httplist_item) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+parent:
+  path: /splits/ws/{workspace_id}/{flag}/environments/{environment}
+  method: PUT
+  send:
+    - treatments
+    - defaultTreatment
+    - baselineTreatment
+    - trafficAllocation
+    - defaultRule
+list_path: /rules
+key_field: /condition/matchers/0/strings/0
+item:
+  condition:
+    combiner: AND
+    matchers:
+      - type: IN_LIST_STRING
+        attribute: { param: attribute }
+        strings:
+          - { param: match }
+  buckets:
+    - treatment: { param: treatment }
+      size: 100
+```
+
+## Statsig
+
+Recipe file: [`packages/adapters/recipes/statsig.yaml`](../packages/adapters/recipes/statsig.yaml). Verified on 2026-10-11 against:
+
+- [Console API introduction (base URL, STATSIG-API-KEY, STATSIG-API-VERSION)](https://docs.statsig.com/console-api/introduction)
+- [Add gate rule](https://docs.statsig.com/api-reference/gates/add-gate-rule)
+- [Read gate rules](https://docs.statsig.com/api-reference/gates/read-gate-rules)
+- [Update gate rules (one rule)](https://docs.statsig.com/api-reference/gates/update-gate-rules)
+- [Delete gate rule](https://docs.statsig.com/api-reference/gates/delete-gate-rule)
+- [Console API OpenAPI spec (20240601)](https://api.statsig.com/openapi/20240601.json)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://statsigapi.net/console/v1` |
+| `base_url_env` | `STATSIG_API_URL` |
+| Credential | `STATSIG_CONSOLE_API_KEY` (header `STATSIG-API-KEY`) |
+| `headers` | {"STATSIG-API-VERSION":"20240601"} |
+
+Assumptions:
+
+- **SG1** (verified, [source](https://docs.statsig.com/console-api/introduction)): The Console API is at `https://statsigapi.net/console/v1`, authenticated with a Console API key in the `STATSIG-API-KEY` header; `STATSIG-API-VERSION: 20240601` (the only version) is optional today and announced as required later, so it is always sent.
+- **SG2** (verified, [source](https://docs.statsig.com/api-reference/gates/add-gate-rule)): `POST /gates/{id}/rule` (singular) adds one rule (`name`, `passPercentage`, `conditions`, `environments`) and answers `{ message, data: <the whole gate> }`, not the rule: the new rule is located by name afterwards (`create.locate`).
+- **SG3** **(unverified)**: `GET /gates/{id}/rules` answers the rules under `data.rules` (the documented example); the spec's schema says `data` is a list of `{ rules }` objects instead. If the API follows the schema, every read fails with PROVIDER_RESPONSE naming `find.list_path` (it does not create duplicates). The rules of one gate fit on the first page.
+- **SG4** (verified, [source](https://docs.statsig.com/api-reference/gates/update-gate-rules)): `PATCH /gates/{id}/rules/{ruleID}` updates the given fields of one rule; `DELETE` on the same path removes it. Rules carry a server-assigned `id`.
+- **SG5** **(unverified)**: Rule names are unique within a gate (not documented): the rule is identified by its name, and two rules with that name are PARAM_INVALID rather than a guess.
+- **SG6** **(unverified)**: A rule is read back with `conditions` exactly as written (`type`, `operator`, `targetValue`, and `field` when sent). If Statsig adds keys such as `field: null` to a condition, every plan shows the rule as changed.
+- **SG7** **(unverified)**: DELETE of a rule that is already gone answers 404 (the spec lists only 200); any other answer fails the destroy rather than passing silently.
+- **SG8** **(unverified)**: On a gate that requires reviews, what a Console API rule write does (apply, fail, or open a pending review) is not documented; a write that does not take effect is seen on the next read as missing or changed, never as done.
+
+### `statsig.gate_rule`
+
+**Feature gate rule** (`http.resource`). A rule on an existing feature gate that passes the preview, such as `custom_field preview any [pr-42]`. Located by its name in the gate's rules; a console edit of its pass percentage, conditions or environments is drift. Destroy deletes the rule.
+
+Covers: `statsig-gate-rule` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `gate_id` | string | yes | — | The gate's id (its name in the console URL). |
+| `name` | string | yes | — | The rule's name, unique within the gate; it identifies the rule. |
+| `condition_type` | string | no | `custom_field` | The condition's type: `custom_field` (with `field`), `url`, `environment_tier`, `user_id` or `email`. One of `custom_field`, `url`, `environment_tier`, `user_id`, `email`. |
+| `field` | string | no | — | The custom field's name, for `condition_type` `custom_field`. |
+| `operator` | string | no | `any` | The condition's operator: `any`, `none`, `str_contains_any`, … (see the Statsig rule docs). |
+| `values` | list | yes | — | The values the condition matches (its `targetValue`). |
+| `pass_percentage` | number | no | `100` | The share of matching users that pass (0–100). |
+| `environment_names` | list | no | — | The environments the rule applies in (for example `[development, staging]`); all when left out. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: gate_rule
+  adapter: http
+  op: resource
+  recipe: statsig.gate_rule
+  gate_id: new_checkout
+  name: preview ${ctx.scope}
+  field: preview
+  values:
+    - ${ctx.scope}
+```
+
+What the line expands into: the [`http.resource`](plan-format.md#httpresource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /gates/{gate_id}/rules
+  list_path: /data/rules
+  match:
+    name: { param: name }
+create:
+  path: /gates/{gate_id}/rule
+  locate: true
+update:
+  method: PATCH
+  path: /gates/{gate_id}/rules/{id}
+delete:
+  path: /gates/{gate_id}/rules/{id}
+fields:
+  passPercentage: { param: pass_percentage }
+  conditions:
+    - type: { param: condition_type }
+      field: { param: field }
+      operator: { param: operator }
+      targetValue: { param: values }
+  environments: { param: environment_names }
+```
+
 ## Svix
 
 Recipe file: [`packages/adapters/recipes/svix.yaml`](../packages/adapters/recipes/svix.yaml). Verified on 2026-10-11 against:
@@ -963,4 +1368,103 @@ id_path: /Name
 outputs:
   hostname: /Hostname
   db_id: /DbId
+```
+
+## Unleash
+
+Recipe file: [`packages/adapters/recipes/unleash.yaml`](../packages/adapters/recipes/unleash.yaml). Verified on 2026-10-11 against:
+
+- [Admin API overview (authorization, base URL)](https://docs.getunleash.io/reference/api/unleash)
+- [Add a strategy to a flag in an environment](https://docs.getunleash.io/reference/api/unleash/add-feature-strategy)
+- [Get feature flag strategies](https://docs.getunleash.io/reference/api/unleash/get-feature-strategies)
+- [Update a strategy (replace)](https://docs.getunleash.io/reference/api/unleash/update-feature-strategy)
+- [Delete a strategy](https://docs.getunleash.io/reference/api/unleash/delete-feature-strategy)
+- [API tokens and client keys](https://docs.getunleash.io/reference/api-tokens-and-client-keys)
+
+| API default | Value |
+|---|---|
+| `base_url` | none: set it in the provider block |
+| `base_url_env` | `UNLEASH_API_URL` |
+| Credential | `UNLEASH_AUTH_TOKEN` (header `Authorization`) |
+
+Assumptions:
+
+- **UN1** (verified, [source](https://docs.getunleash.io/reference/api/unleash)): Every request carries the token as it is in `Authorization` (`Authorization: <token>`, no `Bearer`); a personal access token or service account token (admin tokens are deprecated) reaches the Admin API. The spec also lists a Bearer scheme, but the server does not strip a `Bearer ` prefix, so the bare form is used.
+- **UN2** (verified, [source](https://docs.getunleash.io/reference/api/unleash/add-feature-strategy)): `POST /api/admin/projects/{projectId}/features/{featureName}/environments/{environment}/strategies` with `name`, `title`, `disabled`, `constraints` and `parameters` adds a strategy and answers it bare, with its server-assigned `id` (a UUID).
+- **UN3** (verified, [source](https://github.com/Unleash/unleash/blob/main/src/lib/features/feature-toggle/feature-toggle-controller.ts)): `GET` on the same path answers a bare array of the environment's strategies (the source returns `FeatureStrategySchema[]`; the docs page's schema shows a single strategy, which is wrong).
+- **UN4** (verified, [source](https://docs.getunleash.io/reference/api/unleash/update-feature-strategy)): `PUT .../strategies/{strategyId}` replaces a strategy's configuration (so it sends `name`, `title` and every compared field); `DELETE` on the same path removes it.
+- **UN5** (verified, [source](https://docs.getunleash.io/reference/api/unleash/add-feature-strategy)): A constraint is `{ contextName, operator, values, caseInsensitive, inverted }` (`caseInsensitive` and `inverted` default to false, and are written explicitly so the comparison does not depend on defaults); `parameters` is a map of strings (`rollout: "100"`).
+- **UN6** **(unverified)**: `title` is optional and not unique on the server: the strategy is identified by its title in the environment, and two strategies with that title are PARAM_INVALID rather than a guess.
+- **UN7** **(unverified)**: A strategy is read back with `constraints` and `parameters` exactly as written (no extra keys such as `value: ""`); otherwise every plan shows it as changed.
+- **UN8** (verified, [source](https://github.com/Unleash/unleash/blob/main/src/lib/features/feature-toggle/feature-toggle-service.ts)): Deleting a strategy that is gone already answers 200 (nothing to do). Deleting the last strategy of an environment turns the flag off in that environment (the service calls `disableEnvironmentIfNoStrategies`). Adding a strategy does not turn the environment on.
+- **UN9** (verified, [source](https://github.com/Unleash/unleash/blob/main/src/lib/features/feature-toggle/feature-toggle-service.ts)): With change requests enabled for the environment, these writes are refused unless the caller may bypass them; the refusal fails the apply.
+
+### `unleash.flag_strategy`
+
+**Flag strategy with constraints** (`http.resource`). A `flexibleRollout` strategy on a flag in one environment, constrained to the preview (such as `preview IN [pr-42]`). Located by its title in the environment's strategies; a console edit of its constraints, rollout parameters or `disabled` is drift. Destroy deletes it; if it was the environment's last strategy, Unleash turns the flag off there (UN8). The environment itself must be enabled for the flag to be served.
+
+Covers: `unleash-strategy` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `project` | string | no | `default` | The project id. |
+| `feature` | string | yes | — | The flag's name; also the rollout's `groupId`. |
+| `environment` | string | yes | — | The environment the strategy is added in. |
+| `title` | string | yes | — | The strategy's title, unique among the environment's strategies; it identifies the strategy. |
+| `context_name` | string | yes | — | The context field the constraint tests (a custom context field such as `preview`, or `environment`, `userId`, …). |
+| `operator` | string | no | `IN` | The constraint's operator. One of `IN`, `NOT_IN`, `STR_ENDS_WITH`, `STR_STARTS_WITH`, `STR_CONTAINS`. |
+| `values` | list | yes | — | The values the context field is compared with. |
+| `rollout` | string | no | `100` | The share of matching users the strategy enables, as a string (0–100). Matches `^(100\|[1-9]?[0-9])$`. |
+| `stickiness` | string | no | `default` | The rollout's stickiness (`default`, `userId`, `sessionId`, `random`, or a context field). |
+| `disabled` | boolean | no | `false` | Keep the strategy but switch it off. |
+
+```yaml
+providers:
+  http:
+    unleash:
+      recipe: unleash
+      base_url: https://unleash.example.com
+changes:
+  - id: flag_strategy
+    adapter: http
+    op: resource
+    recipe: unleash.flag_strategy
+    feature: new-checkout
+    environment: development
+    title: preview ${ctx.scope}
+    context_name: preview
+    values:
+      - ${ctx.scope}
+```
+
+What the line expands into: the [`http.resource`](plan-format.md#httpresource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /api/admin/projects/{project}/features/{feature}/environments/{environment}/strategies
+  match:
+    title: { param: title }
+create:
+  path: /api/admin/projects/{project}/features/{feature}/environments/{environment}/strategies
+  body:
+    name: flexibleRollout
+update:
+  method: PUT
+  path: /api/admin/projects/{project}/features/{feature}/environments/{environment}/strategies/{id}
+  body:
+    name: flexibleRollout
+delete:
+  path: /api/admin/projects/{project}/features/{feature}/environments/{environment}/strategies/{id}
+fields:
+  disabled: { param: disabled }
+  constraints:
+    - contextName: { param: context_name }
+      operator: { param: operator }
+      values: { param: values }
+      caseInsensitive: false
+      inverted: false
+  parameters:
+    rollout: { param: rollout }
+    stickiness: { param: stickiness }
+    groupId: { param: feature }
 ```

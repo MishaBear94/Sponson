@@ -15,8 +15,9 @@ export interface RequestOptions {
 }
 
 /** The header value to send and how to send it. Basic credentials are joined and encoded here, never stored. */
-function credential(cfg: ApiConfig, env: NodeJS.ProcessEnv): { token: string; authHeader: "bearer" | `header:${string}`; masks: string[] } {
+function credential(cfg: ApiConfig, env: NodeJS.ProcessEnv): { token: string; authHeader: "bearer" | "none" | `header:${string}`; masks: string[] } {
   const auth = cfg.auth;
+  if (auth.kind === "none") return { token: "", authHeader: "none", masks: [] };
   if (auth.kind === "bearer") return { token: requireEnv(env, auth.env, ADAPTER), authHeader: "bearer", masks: [] };
   if (auth.kind === "header") return { token: requireEnv(env, auth.env, ADAPTER), authHeader: `header:${auth.header}`, masks: [] };
   const encoded = Buffer.from(`${requireEnv(env, auth.userEnv, ADAPTER)}:${requireEnv(env, auth.passwordEnv, ADAPTER)}`).toString("base64");
@@ -25,15 +26,16 @@ function credential(cfg: ApiConfig, env: NodeJS.ProcessEnv): { token: string; au
 
 /**
  * The client for the line's API. The credential (and, for Basic, its encoded form) is masked in this client's
- * error text too, whatever the engine already masks.
+ * error text too, whatever the engine already masks. `opts`: where the block is, for messages; whether a block
+ * without `auth` sends no credential (a manual step's verify request); the adapter named in errors.
  */
-export function httpClient(actx: AdapterContext, req: RequestOptions = {}): ApiClient {
-  const cfg = parseApi(actx.provider, "providers.http.<api>");
+export function httpClient(actx: AdapterContext, req: RequestOptions = {}, opts: { where?: string; authOptional?: boolean; adapter?: string } = {}): ApiClient {
+  const cfg = parseApi(actx.provider, opts.where ?? "providers.http.<api>", opts);
   const { token, authHeader, masks } = credential(cfg, actx.env);
   const baseUrl = (cfg.baseUrlEnv ? optionalEnv(actx.env, cfg.baseUrlEnv) : undefined) ?? cfg.baseUrl;
   const hidden = [token, ...masks].filter((s) => s.length >= 4);
   const redact = (t: string) => hidden.reduce((s, h) => s.split(h).join("****"), actx.redact(t));
-  return clientFor({ ...actx, redact }, ADAPTER, {
+  return clientFor({ ...actx, redact }, opts.adapter ?? ADAPTER, {
     baseUrl,
     token,
     authHeader,

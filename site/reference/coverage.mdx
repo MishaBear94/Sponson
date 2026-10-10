@@ -48,7 +48,9 @@ Columns:
   **P** partly (the lifecycle needs more than request templates, noted), **N** no.
 - **Pri**: how often it appears in preview-environment workflows. **P0** most preview setups on that stack hit it;
   **P1** common; **P2** occasional. An estimate from public templates, integrations and docs, not a survey.
-- **Now**: **yes** when a built-in op or a shipped [recipe](/reference/recipes) covers it; **no (no API)** when nothing can.
+- **Now**: **yes** when a built-in op or a shipped [recipe](/reference/recipes) covers it; **manual step** when no API can
+  and a [`manual.step`](/reference/plan-format#manual-step) line tracks what a person does ([ADR 0021](/contributing/adr/0021-manual-steps)),
+  never counted as automated; **no (no API)** when nothing can.
 
 The rows live in [coverage.yaml](https://github.com/MishaBear94/Sponson/blob/main/docs/coverage.yaml) (`covered_by` names the op or recipe op that manages each one) and
 the tables below are generated from it: edit the data, then run `pnpm docs:gen`.
@@ -88,26 +90,26 @@ the tables below are generated from it: edit the data, then run `pnpm docs:gen`.
 |---|---|---|---|---|---|
 | Clerk | Preview URL on the instance's redirect allow-list | Backend API `POST /v1/redirect_urls`, `DELETE /v1/redirect_urls/{id}`, bearer secret key; object | Y | P0 | **yes** (`clerk.redirect_allow`) |
 | Auth0 | Preview URL in an application's `callbacks`, `allowed_logout_urls`, `web_origins`, `allowed_origins` | Management API `PATCH /api/v2/clients/{id}`, bearer from client-credentials; **list** (each array replaced whole); no ETag | Y (list mode, token exchange) | P0 | no |
-| Supabase Auth | Preview URL in "Additional Redirect URLs" | Management API `PATCH /v1/projects/{ref}/config/auth` with `uri_allow_list`, bearer; **list** encoded as one comma-separated string; send only that field | Y (list mode over a delimited string) | P0 | **yes** (`supabase.auth_redirect`) |
+| Supabase Auth | Preview URL in "Additional Redirect URLs" | Management API `PATCH /v1/projects/{ref}/config/auth` with `uri_allow_list`, bearer; **list** encoded as one comma-separated string; send only that field; no precondition, so the op locks the list (`lockOn`) | Y (list mode over a delimited string) | P0 | **yes** (`supabase.auth_redirect`) |
 | Firebase Auth | Preview domain in `authorizedDomains` | Identity Toolkit `PATCH admin/v2/projects/{p}/config?updateMask=authorizedDomains`, Google OAuth; **list** full replace | Y (list mode, Google token) | P1 | no |
 | WorkOS | Redirect URI for AuthKit | `POST /user_management/redirect_uris`, list via `GET`; bearer; object. Delete endpoint not confirmed **(unverified)** | Y | P1 | no |
 | Stytch | Redirect URL per environment | PWA `POST /pwa/v3/projects/{p}/environments/{e}/redirect_urls` (+ get/delete by URL), Basic workspace key; object | Y | P2 | no |
 | Okta | `redirect_uris` on an OIDC app; trusted origin for CORS | `PUT /api/v1/apps/{id}` (**list**, whole app object), `POST /api/v1/trustedOrigins` (object); `SSWS` token or OAuth | Y (list mode; trusted origins object) | P2 | no |
 | Kinde | Callback and logout URLs on an application | Management API `POST`/`PUT /api/v1/applications/{id}/auth_redirect_urls` (add / replace); M2M client-credentials token. Path from SDK docs, not the reference **(unverified)** | Y (token exchange) | P2 | no |
-| Google OAuth clients | Preview URL in a web client's authorized redirect URIs | **No public API** for standard OAuth web clients (Console only); only IAM workforce OAuth clients and IAP are programmable | N | P1 | no (no API) |
+| Google OAuth clients | Preview URL in a web client's authorized redirect URIs | **No public API** for standard OAuth web clients (Console only); only IAM workforce OAuth clients and IAP are programmable | N | P1 | manual step (`manual.step`) |
 
 ### Feature flags and targeting
 
 | Provider | Side effect | API shape | Generic? | Pri | Now |
 |---|---|---|---|---|---|
 | LaunchDarkly | Flag on for a preview: target a context key or add a rule on `url`, in a per-PR or shared preview environment | `PATCH /api/v2/flags/{proj}/{flag}` with semantic patch (`Content-Type: application/json; domain-model=launchdarkly.semanticpatch`, instructions `addTargets`/`removeTargets`/`addRule`), API token; instructions are idempotent per target; approvals may gate production | P (instruction-based diff, approvals) | P0 | **yes** (`launchdarkly.flag_target`: context-key targets; `url` rules not yet) |
-| PostHog | Release condition matching the preview host on a flag | `PATCH /api/projects/{id}/feature_flags/{id}` `filters.groups`, personal API key bearer; **list** in `filters` | Y (list mode) | P1 | no |
-| Statsig | Gate rule for the preview (condition `url` or `environment_tier`) | Console API `POST /console/v1/gates/{id}/rule`, `PATCH`/`DELETE .../rules/{ruleID}`, `STATSIG-API-KEY` header; object per rule; reviews may gate changes | Y | P1 | no |
-| GrowthBook | Force rule in a per-environment feature | REST `POST /api/v1/features/{id}` with `environments.{env}.rules`, bearer; **list** per environment | Y (list mode) | P2 | no |
-| Unleash | Strategy (with constraints) on a flag in an environment | Admin API `POST /api/admin/projects/{p}/features/{f}/environments/{env}/strategies`, `DELETE .../{id}`; token header; object | Y | P2 | no |
-| Flagsmith | Segment override or a per-PR environment | `POST /api/v1/environments/`, feature-state endpoints; `Token` header; object | Y | P2 | no |
-| ConfigCat | Targeting rule on a setting in an environment | Management API v2 `PATCH /v2/environments/{e}/settings/{s}/value` (JSON Patch), Basic; **list** of rules | Y (JSON Patch body) | P2 | no |
-| Split (Harness FME) | Targeting rule / individual target in an environment | Admin API `PATCH /internal/api/v2/splits/ws/{ws}/{split}/environments/{env}` (JSON Patch), bearer; **list** **(unverified paths since the Harness migration)** | Y | P2 | no |
+| PostHog | Release condition matching the preview host on a flag | `PATCH /api/projects/{id}/feature_flags/{id}` `filters.groups`, personal API key bearer; **list** in `filters` | Y (list mode) | P1 | **yes** (recipe [`posthog.release_condition`](/reference/recipes#posthog-release_condition): condition on a person or group property; needs the merging `filters` PATCH of current PostHog (PH5)) |
+| Statsig | Gate rule for the preview (condition `url` or `environment_tier`) | Console API `POST /console/v1/gates/{id}/rule` (answers the whole gate), `GET .../rules`, `PATCH`/`DELETE .../rules/{ruleID}`, `STATSIG-API-KEY` header; object per rule; reviews may gate changes | Y | P1 | **yes** (recipe [`statsig.gate_rule`](/reference/recipes#statsig-gate_rule): gates requiring reviews: write behaviour undocumented (SG8)) |
+| GrowthBook | Force rule in a per-environment feature | REST v2 `POST /api/v2/features/{id}` replacing the top-level `rules` (each rule names its environments; v1's `environments.{env}.rules` is deprecated), bearer; **list** | Y (list mode) | P2 | **yes** (recipe [`growthbook.force_rule`](/reference/recipes#growthbook-force_rule): v2 API (rules with per-rule environments); approval-gated features refuse the write) |
+| Unleash | Strategy (with constraints) on a flag in an environment | Admin API `POST /api/admin/projects/{p}/features/{f}/environments/{env}/strategies`, `DELETE .../{id}`; token header; object | Y | P2 | **yes** (recipe [`unleash.flag_strategy`](/reference/recipes#unleash-flag_strategy): deleting the last strategy turns the flag off in that environment (UN8)) |
+| Flagsmith | Segment override or a per-PR environment | `POST /api/v1/environments/`, feature-state endpoints; `Authorization: Api-Key <key>` (organisation key) or `Token <key>`; object | P (credential needs an `Api-Key` scheme prefix) | P2 | no (not yet: the Admin API takes `Authorization: Api-Key <key>`, a scheme prefix the http adapter's auth forms do not send (Bearer only for short-lived OIDC-exchanged tokens)) |
+| ConfigCat | Targeting rule on a setting in an environment | Management API v2 `PUT /v2/environments/{e}/settings/{s}/value` (replaces `defaultValue`, `targetingRules`, `percentageEvaluationAttribute`; `PATCH` is JSON Patch), Basic; **list** of rules | Y (list mode, PUT with the other fields sent back) | P2 | **yes** (recipe [`configcat.targeting_rule`](/reference/recipes#configcat-targeting_rule): boolean flags; products requiring a change reason or approval refuse the write) |
+| Split (Harness FME) | Targeting rule / individual target in an environment | Admin API `PUT /internal/api/v2/splits/ws/{ws}/{split}/environments/{env}` (full definition; `PATCH` is JSON Patch), bearer; **list**; same host and paths after the Harness migration | Y | P2 | **yes** (recipe [`split.targeting_rule`](/reference/recipes#split-targeting_rule): targeting rule (not individual targets); projects requiring title/comment refuse the write) |
 
 ### Webhooks registered per environment
 
@@ -116,7 +118,7 @@ the tables below are generated from it: edit the data, then run `pnpm docs:gen`.
 | Stripe | Test-mode webhook endpoint pointing at the preview URL; its signing secret into the app's env | `POST /v1/webhook_endpoints` (form-encoded), `DELETE /v1/webhook_endpoints/{id}`; bearer; object; `Idempotency-Key`; **`secret` returned only on create** | P (once-only secret must flow into an env line in the same run) | P0 | no |
 | GitHub | Repository webhook to the preview URL | `POST /repos/{o}/{r}/hooks`, `DELETE .../hooks/{id}`; bearer; object; secret write-only (caller supplies it) | Y | P2 | **yes** (recipe [`github.repo_webhook`](/reference/recipes#github-repo_webhook)) |
 | Svix (as a sender) | Endpoint per environment on an application | `POST /api/v1/app/{app}/endpoint` with caller-chosen `uid`; bearer; object, idempotent by `uid`; secret readable via `GET .../secret` | Y | P2 | **yes** (recipe [`svix.endpoint`](/reference/recipes#svix-endpoint)) |
-| Clerk webhooks | Preview URL as a webhook endpoint | Clerk's Backend API only creates/deletes the Svix app and a dashboard link; **no endpoint API** through Clerk | N | P1 | no (no API) |
+| Clerk webhooks | Preview URL as a webhook endpoint | Clerk's Backend API only creates/deletes the Svix app and a dashboard link; **no endpoint API** through Clerk | N | P1 | manual step (`manual.step`) |
 
 ### Email: sending domains, webhooks, test inboxes
 
@@ -163,7 +165,7 @@ the tables below are generated from it: edit the data, then run `pnpm docs:gen`.
 |---|---|---|---|---|---|
 | Algolia | Index per environment, copied from a template index | `POST /1/indexes/{src}/operation` `{operation: copy, destination}`, `DELETE /1/indexes/{name}`; `X-Algolia-Application-Id` + `X-Algolia-API-Key`; async task to poll | P (async task) | P2 | no |
 | Stripe test-mode objects | Products / prices / coupons the preview's code expects | `POST /v1/products`, `/v1/prices` (form-encoded, `lookup_key` as identity, `Idempotency-Key`); prices cannot be deleted, only `active=false` | Y (destroy = archive) | P2 | no |
-| Stripe sandboxes | A sandbox per PR | No public API for account sandboxes; anonymous "claimable" sandboxes are private preview | N | P2 | no (no API) |
+| Stripe sandboxes | A sandbox per PR | No public API for account sandboxes; anonymous "claimable" sandboxes are private preview | N | P2 | manual step (`manual.step`) |
 
 ### Secret managers (read side: secret sources, not side effects)
 
@@ -193,18 +195,20 @@ Counted over the 56 side-effect rows of the matrix (rows marked `n/a` have nothi
 
 | Measure | Covered | Coverage |
 |---|---|---|
-| Rows | 17 of 56 | **30.4%** |
-| Weighted by priority | 36 of 90 | **40.0%** |
+| Rows | 23 of 56 | **41.1%** |
+| Weighted by priority | 44 of 90 | **48.9%** |
 | P0 rows only | 7 of 9 | 77.8% |
-| Rows an API reaches (all but `manual`) | 17 of 53 | 32.1% |
-| Weighted, rows an API reaches | 36 of 85 | 42.4% |
+| Rows an API reaches (all but `manual`) | 23 of 53 | 43.4% |
+| Weighted, rows an API reaches | 44 of 85 | 51.8% |
+| Rows, including manual steps (`manual.step`) | 26 of 56 | 46.4% |
+| Weighted, including manual steps | 49 of 90 | 54.4% |
 | Secret sources (separate) | 4 of 9 vendors; weighted 7 of 14 | 44.4%; 50.0% |
 
-Covered: Vercel (`vercel.env`, `vercel.deploy`); Netlify (`netlify.env`); Cloudflare Pages / Workers (`cloudflare.pages_env`); Neon (`neon.branch`); Supabase (`supabase.branch`); PlanetScale (`planetscale.branch`, `planetscale.password`); Turso (recipe [`turso.database_branch`](/reference/recipes#turso-database_branch)); Clerk (`clerk.redirect_allow`); Supabase Auth (`supabase.auth_redirect`); LaunchDarkly (`launchdarkly.flag_target`); GitHub (recipe [`github.repo_webhook`](/reference/recipes#github-repo_webhook)); Svix (as a sender) (recipe [`svix.endpoint`](/reference/recipes#svix-endpoint)); Resend (recipe [`resend.api_key`](/reference/recipes#resend-api_key), recipe [`resend.webhook`](/reference/recipes#resend-webhook)); SendGrid (recipe [`sendgrid.event_webhook`](/reference/recipes#sendgrid-event_webhook), recipe [`sendgrid.parse_setting`](/reference/recipes#sendgrid-parse_setting)); Sentry (recipe [`sentry.release`](/reference/recipes#sentry-release), recipe [`sentry.deploy`](/reference/recipes#sentry-deploy)); Honeycomb (recipe [`honeycomb.marker`](/reference/recipes#honeycomb-marker)); Cloudflare DNS (recipe [`cloudflare.dns_cname`](/reference/recipes#cloudflare-dns_cname)).
+Covered: Vercel (`vercel.env`, `vercel.deploy`); Netlify (`netlify.env`); Cloudflare Pages / Workers (`cloudflare.pages_env`); Neon (`neon.branch`); Supabase (`supabase.branch`); PlanetScale (`planetscale.branch`, `planetscale.password`); Turso (recipe [`turso.database_branch`](/reference/recipes#turso-database_branch)); Clerk (`clerk.redirect_allow`); Supabase Auth (`supabase.auth_redirect`); LaunchDarkly (`launchdarkly.flag_target`); PostHog (recipe [`posthog.release_condition`](/reference/recipes#posthog-release_condition)); Statsig (recipe [`statsig.gate_rule`](/reference/recipes#statsig-gate_rule)); GrowthBook (recipe [`growthbook.force_rule`](/reference/recipes#growthbook-force_rule)); Unleash (recipe [`unleash.flag_strategy`](/reference/recipes#unleash-flag_strategy)); ConfigCat (recipe [`configcat.targeting_rule`](/reference/recipes#configcat-targeting_rule)); Split (Harness FME) (recipe [`split.targeting_rule`](/reference/recipes#split-targeting_rule)); GitHub (recipe [`github.repo_webhook`](/reference/recipes#github-repo_webhook)); Svix (as a sender) (recipe [`svix.endpoint`](/reference/recipes#svix-endpoint)); Resend (recipe [`resend.api_key`](/reference/recipes#resend-api_key), recipe [`resend.webhook`](/reference/recipes#resend-webhook)); SendGrid (recipe [`sendgrid.event_webhook`](/reference/recipes#sendgrid-event_webhook), recipe [`sendgrid.parse_setting`](/reference/recipes#sendgrid-parse_setting)); Sentry (recipe [`sentry.release`](/reference/recipes#sentry-release), recipe [`sentry.deploy`](/reference/recipes#sentry-deploy)); Honeycomb (recipe [`honeycomb.marker`](/reference/recipes#honeycomb-marker)); Cloudflare DNS (recipe [`cloudflare.dns_cname`](/reference/recipes#cloudflare-dns_cname)).
 
 Automated coverage counts only rows an op manages without a person. Rows no API reaches (`manual`, or a `manual.step` line that records the step a person does; weight 5): Google OAuth clients (no public API for standard OAuth web clients); Clerk webhooks (Clerk's API manages the Svix app, not its endpoints); Stripe sandboxes (no public API for account sandboxes). They cap coverage at 53 rows, 85 of 90 weighted (94.4%).
 
-Recipe candidates, rows the generic adapter can express fully (`Y`) that nothing covers yet: 22 (Render, Heroku, Prisma Postgres, Auth0, Firebase Auth, WorkOS, Stytch, Okta, Kinde, PostHog, Statsig, GrowthBook, Unleash, Flagsmith, ConfigCat, Split (Harness FME), Vercel domains, Firebase Storage (GCS bucket), Upstash Redis, Upstash QStash, Inngest, Stripe test-mode objects).
+Recipe candidates, rows the generic adapter can express fully (`Y`) that nothing covers yet: 15 (Render, Heroku, Prisma Postgres, Auth0, Firebase Auth, WorkOS, Stytch, Okta, Kinde, Vercel domains, Firebase Storage (GCS bucket), Upstash Redis, Upstash QStash, Inngest, Stripe test-mode objects).
 
 ## Strategy
 
