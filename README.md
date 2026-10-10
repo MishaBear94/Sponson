@@ -1,5 +1,9 @@
 # Sponson
 
+[![ci](https://github.com/MishaBear94/Sponson/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MishaBear94/Sponson/actions/workflows/ci.yml)
+[![license: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![node: >=20](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
+
 Sponson is the plan for everything that ships beside the code.
 
 A sponson is the float welded to the side of a hull so the boat does not roll. The code is the hull. The preview database, environment variables, callbacks, and feature flags are the float. Sponson writes that float into one file an agent can read and a human can diff.
