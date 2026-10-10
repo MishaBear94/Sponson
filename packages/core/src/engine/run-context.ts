@@ -2,7 +2,7 @@ import { scopeFor } from "../ctx.js";
 import { isSponsonError, type ErrorCode } from "../errors.js";
 import { sha256 } from "../hash.js";
 import { Redactor } from "../redact.js";
-import type { AdapterContext, LedgerEntry, Receipt } from "../types.js";
+import type { AdapterContext, Change, LedgerEntry, OpSpec, Receipt } from "../types.js";
 import { identity, Ledger } from "./ledger.js";
 import type { Prepared } from "./prepare.js";
 import type { RunOptions } from "./types.js";
@@ -105,8 +105,12 @@ export class RunContext {
     for (const [k, v] of Object.entries(values)) if (specs[k]?.sensitive && typeof v === "string") this.redactor.register(v);
   }
 
-  provider(adapter: string): Record<string, unknown> {
-    return this.opts.plan.providers[adapter] ?? {};
+  /**
+   * The provider block a line's resources live in: `providers.<adapter>`, narrowed by the op's `providerFor` when it
+   * has one (the generic `http` adapter keeps one block per API there). It is part of every ledger identity.
+   */
+  provider(change: Change): Record<string, unknown> {
+    return providerOf(this.opts.plan.providers[change.adapter] ?? {}, this.opts.registry.op(change.adapter, change.op), change);
   }
 
   foreignScopeOf(entry: Pick<LedgerEntry, "adapter" | "provider" | "key">): string | undefined {
@@ -131,4 +135,9 @@ export class RunContext {
     const message = this.redactor.redact(String(thrown ?? e));
     return isSponsonError(e) ? { message, code: e.code } : { message };
   }
+}
+
+/** `block` as the op narrows it for `change` (see `OpSpec.providerFor`); the whole block when the op does not. */
+export function providerOf(block: Record<string, unknown>, op: OpSpec, change: Change): Record<string, unknown> {
+  return op.providerFor ? op.providerFor(block, change.params) : block;
 }

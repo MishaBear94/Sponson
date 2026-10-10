@@ -1,5 +1,5 @@
 import { SponsonError, markerKind, pendingRef, sha256, type AdapterContext, type DiffSide, type ResolvedParams, type ResourceDiff, type ResourceRecord } from "@sponson/core";
-import { apiClient, isProviderError, type ApiClient } from "./http.js";
+import { apiClient, isProviderError, type ApiClient, type ApiClientOptions } from "./http.js";
 
 /**
  * The adapter authoring API. These helpers are stable and exported from `@sponson/adapters`; third-party
@@ -60,7 +60,7 @@ export function optionalProvider(actx: AdapterContext, key: string): string | un
  * const site = await api.get(`/sites/${stringParam(params, "name", "acme")}`);
  * ```
  */
-export function clientFor(actx: AdapterContext, adapter: string, opts: { baseUrl: string; token: string; authHeader?: "bearer" | `header:${string}` }): ApiClient {
+export function clientFor(actx: AdapterContext, adapter: string, opts: Pick<ApiClientOptions, "baseUrl" | "token" | "authHeader" | "headers" | "encoding" | "contentType">): ApiClient {
   return apiClient({ adapter, ...opts, redact: actx.redact, env: actx.env });
 }
 

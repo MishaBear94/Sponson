@@ -6,7 +6,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { SponsonError } from "../errors.js";
 import { LockHeldError, LockLostError, type LockInfo, type Receipt, type ReceiptStore } from "../types.js";
 import { GitCommandError, GitWorkdir, isMissingRef, stripCredentials, type PushOutcome } from "./git-workdir.js";
-import { latestPath, lockExpired, lockPath, parseLock, parseReceipt, receiptDir, runPath, safeSegment, serialize } from "./layout.js";
+import { latestPath, lockExpired, lockPath, PARENT_LOCKS_ENVIRONMENT, parentLockScope, parseLock, parseReceipt, receiptDir, runPath, safeSegment, serialize } from "./layout.js";
 
 const exec = promisify(execFile);
 
@@ -260,6 +260,25 @@ export class GitBranchReceiptStore implements ReceiptStore {
     });
   }
 
+  // Parent-object locks (ADR 0019): one lock-only branch per parent object, `sponson-receipts/_locks/<hash>`, with
+  // the scope lock's compare-and-swap, takeover and renewal. Unrelated parents never share a ref.
+
+  async acquireParentLock(parent: string, holder: string, ttlMs: number): Promise<LockInfo | null> {
+    return this.acquireLock(PARENT_LOCKS_ENVIRONMENT, parentLockScope(parent), holder, ttlMs);
+  }
+
+  async renewParentLock(parent: string, holder: string, ttlMs: number): Promise<void> {
+    return this.renewLock(PARENT_LOCKS_ENVIRONMENT, parentLockScope(parent), holder, ttlMs);
+  }
+
+  async readParentLock(parent: string): Promise<LockInfo | null> {
+    return this.readLock(PARENT_LOCKS_ENVIRONMENT, parentLockScope(parent));
+  }
+
+  async releaseParentLock(parent: string, holder: string): Promise<void> {
+    return this.releaseLock(PARENT_LOCKS_ENVIRONMENT, parentLockScope(parent), holder);
+  }
+
   /**
    * Remove the working clone this instance created (a `workdir` you passed is kept). Call it when done with the
    * store: an MCP server builds one per tool call. Using the store again afterwards starts a fresh clone.
@@ -367,6 +386,13 @@ export class GitBranchReceiptStore implements ReceiptStore {
     await this.wd.git(["update-ref", "-d", `refs/heads/${branch}`]).catch(() => {});
     await this.wd.git(["rm", "-rfq", "--cached", "--ignore-unmatch", "."]).catch(() => {});
     for (const entry of await readdir(this.wd.path)) if (entry !== ".git") await rm(this.wd.file(entry), { recursive: true, force: true });
+    if (isParentLock(environment, scope)) {
+      // Lock-only: no receipts, so nothing to migrate from the legacy branch either.
+      await this.wd.put("README.md", PARENT_LOCK_README);
+      await this.wd.git(["add", "-A"]);
+      await this.wd.git(["commit", "-qm", `Start parent-object lock ${scope}`]);
+      return;
+    }
     await this.wd.put("README.md", RECEIPTS_README);
     const migrated = await this.seedFromLegacy(environment, scope);
     await this.wd.git(["add", "-A"]);
@@ -491,6 +517,21 @@ It is an orphan branch so it never conflicts with your code. Do not merge it.
 Deleting it is safe only when no apply is running for this scope (a running apply's lock lives here).
 Deleting it makes Sponson forget what it created in this scope: those resources will then be reported as
 unmanaged, and destroy will no longer remove them. Sponson recreates the branch on the next run.
+`;
+
+/** True for the lock-only branch of a parent object (a plan's own environment named `_locks` has no hash scopes). */
+function isParentLock(environment: string, scope: string): boolean {
+  return environment === PARENT_LOCKS_ENVIRONMENT && /^[0-9a-f]{32}$/.test(scope);
+}
+
+/** Written once at the root of every parent-object lock branch (ADR 0019). */
+const PARENT_LOCK_README = `# Sponson parent-object lock
+
+This branch is written by \`sponson apply\`. It holds no receipts: only the lock (\`_locks/<hash>/lock.json\`) that
+serialises writes to one shared provider object (for example the callback list of one Auth0 application) across
+every pull request and environment. The hash is of the object's identity; the lock names the run holding it.
+
+Deleting it is safe when no apply is running. Sponson recreates it the next time a line writes that object.
 `;
 
 /** The receipts among `blobs` (one per `wanted` object) that exist and parse, sorted by scope. */

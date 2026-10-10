@@ -6,7 +6,7 @@
  *   S1. 429s carry `Retry-After` in seconds (chaos `retry_after`).
  */
 import { createHash } from "node:crypto";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { Reply, route, router, type RouteRequest } from "./provider.js";
 import { providerEntries, type SimSeed, type SimState, type WriteLogEntry } from "./state.js";
@@ -34,7 +34,9 @@ async function handle(state: SimState, req: IncomingMessage, res: ServerResponse
   const method = (req.method ?? "GET").toUpperCase();
   const url = new URL(req.url ?? "/", "http://sim.local");
   const raw = await readBody(req);
-  const parsed = parseJson(raw);
+  // Control endpoints take JSON whatever the client says: `curl -d '{…}'` labels a JSON body as a form.
+  const form = !url.pathname.startsWith("/_") && (req.headers["content-type"] ?? "").startsWith("application/x-www-form-urlencoded");
+  const parsed = form ? { body: parseForm(raw) } : parseJson(raw);
   if (!parsed) return send(res, 400, { error: "invalid json" });
   const { body } = parsed;
 
@@ -43,10 +45,21 @@ async function handle(state: SimState, req: IncomingMessage, res: ServerResponse
     return send(res, r.status, r.body);
   }
 
-  // Any non-empty bearer token is accepted; missing-token bugs must surface as 401.
-  const auth = req.headers.authorization ?? "";
-  if (!/^Bearer\s+\S+$/.test(auth)) return send(res, 401, { error: "unauthorized" });
+  // Any non-empty credential is accepted; missing-token bugs must surface as 401.
+  if (!authorized(url, req.headers)) return send(res, 401, { error: "unauthorized" });
   await serveProvider(state, req, res, { method, url, raw, body });
+}
+
+/** `/<provider>` → how that provider takes its credential, when not as a bearer token. */
+const AUTH: Record<string, (headers: IncomingHttpHeaders) => boolean> = Object.fromEntries(
+  providerEntries().flatMap(([name, p]) => (p.authorized ? [[`/${name}`, (h: IncomingHttpHeaders) => p.authorized!(h)]] : [])),
+);
+
+/** The credential check of the provider the path belongs to; a non-empty bearer token by default. */
+function authorized(url: URL, headers: IncomingHttpHeaders): boolean {
+  const prefix = url.pathname.match(/^\/[^/]+/)?.[0] ?? "";
+  const check = AUTH[prefix];
+  return check ? check(headers) : /^Bearer\s+\S+$/.test(headers.authorization ?? "");
 }
 
 /** An authenticated provider request: latency, chaos, the write log, then the provider's routes. */
@@ -67,7 +80,7 @@ async function serveProvider(state: SimState, req: IncomingMessage, res: ServerR
   const logged: WriteLogEntry = { ...entry };
   if (isWrite) state.writes.push(logged);
 
-  const r = dispatch(state, method, url, body);
+  const r = dispatch(state, method, url, body, headersOf(req));
   // A refused write (409, 423, 404, …) did not change anything.
   if (r.status >= 400) logged.failed = true;
   if (action?.kind === "drop") {
@@ -79,11 +92,11 @@ async function serveProvider(state: SimState, req: IncomingMessage, res: ServerR
 }
 
 /** `/<provider>/…` → that provider's routes, with the prefix stripped from the path. */
-function dispatch(state: SimState, method: string, url: URL, body: unknown): Reply {
+function dispatch(state: SimState, method: string, url: URL, body: unknown, headers: Record<string, string>): Reply {
   const prefix = url.pathname.match(/^\/[^/]+(?=\/)/)?.[0];
   const routes = prefix === undefined ? undefined : ROUTES[prefix];
   if (prefix === undefined || !routes) return new Reply(404, { error: "not found" });
-  return routes(state, { method, url, path: url.pathname.slice(prefix.length), body });
+  return routes(state, { method, url, path: url.pathname.slice(prefix.length), body, headers });
 }
 
 /** The control endpoints tests and scenarios drive the sim with. */
@@ -110,7 +123,33 @@ const control = router<SimState>(
   () => new Reply(404, { error: "not found" }),
 );
 
+/** The request's headers as strings (multi-valued ones joined with `, `). */
+function headersOf(req: IncomingMessage): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(req.headers)) if (v !== undefined) out[k] = Array.isArray(v) ? v.join(", ") : v;
+  return out;
+}
+
 /** A request body: empty is `undefined`; null when it is not JSON. */
+/**
+ * A form body (`application/x-www-form-urlencoded`) as the object it encodes, bracket-nested the way Stripe reads
+ * it: `a[b]=1&c[0]=x` is `{ a: { b: "1" }, c: ["x"] }`. Every value is a string.
+ */
+function parseForm(raw: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [name, value] of new URLSearchParams(raw)) {
+    const path = name.split(/\[|\]\[|\]/).filter((s) => s !== "");
+    let cur: Record<string, unknown> | unknown[] = out;
+    path.forEach((seg, i) => {
+      const last = i === path.length - 1;
+      const slot = cur as Record<string, unknown>;
+      if (last) slot[seg] = value;
+      else cur = (slot[seg] ??= /^\d+$/.test(path[i + 1]!) ? [] : {}) as Record<string, unknown> | unknown[];
+    });
+  }
+  return out;
+}
+
 function parseJson(raw: string): { body: unknown } | null {
   if (raw.length === 0) return { body: undefined };
   try {
@@ -131,7 +170,7 @@ function readBody(req: IncomingMessage): Promise<string> {
 
 function send(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
   if (status === 204) {
-    // No Content: a body (even `null`) is not allowed.
+    // No Content means no body, not the JSON `null`.
     res.writeHead(204, headers);
     res.end();
     return;

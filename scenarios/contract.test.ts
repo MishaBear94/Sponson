@@ -9,26 +9,52 @@
  *   NEON_API_KEY=... SPONSON_LIVE_NEON_PROJECT=... \
  *   CLERK_SECRET_KEY=fake_ts_... \
  *   [NETLIFY_AUTH_TOKEN=... SPONSON_LIVE_NETLIFY_SITE=<site id> [SPONSON_LIVE_NETLIFY_ACCOUNT=<slug>]] \
+ *   [LAUNCHDARKLY_ACCESS_TOKEN=api-... SPONSON_LIVE_LAUNCHDARKLY_PROJECT=... \
+ *    SPONSON_LIVE_LAUNCHDARKLY_ENVIRONMENT=... SPONSON_LIVE_LAUNCHDARKLY_FLAG=<a boolean flag>] \
  *   pnpm test:live
+ *
+ * The LaunchDarkly assumptions run live only when its four variables are set (it is optional, so a live run of
+ * the original three providers needs no LaunchDarkly account); they add and remove one individual target,
+ * `sponson-contract-<random>`, on the given flag and environment. Use a test environment without required approvals.
  *
  * Use throwaway projects: the suite creates a Neon branch, preview env vars on a
  * unique git branch name, and a Clerk redirect URL, and destroys them in `afterAll`
  * even when an assertion fails. It never touches the production target.
  *
+ * Supabase is optional in a live run, because branching needs a paid plan: with SUPABASE_ACCESS_TOKEN and
+ * SPONSON_LIVE_SUPABASE_PROJECT (the parent project's ref, branching enabled) also set, the Supabase block runs
+ * live; without them it is skipped under SPONSON_LIVE=1. It creates one preview branch (billed while it exists;
+ * it may take minutes to come up) and one Auth redirect URL, and removes both in its `afterAll`.
+ *
  * Each `assumption <id>:` test pins the API assumption with that id, listed at the top of the sim's provider
- * file (packages/sim/src/routes/{vercel,neon,clerk,netlify}.ts). If one fails live, fix the sim first, then the adapter.
+ * file (packages/sim/src/routes/{vercel,neon,clerk,launchdarkly,planetscale,supabase,netlify}.ts). If one fails live, fix the sim first, then the
+ * adapter.
+ *
+ * PlanetScale has its own block, live only when its credentials are set too (it is skipped in a live run without
+ * them, so the Vercel/Neon/Clerk suite does not need a PlanetScale account):
+ *
+ *   PLANETSCALE_SERVICE_TOKEN_ID=... PLANETSCALE_SERVICE_TOKEN=... \
+ *   SPONSON_LIVE_PLANETSCALE_ORG=... SPONSON_LIVE_PLANETSCALE_DATABASE=... (a throwaway Vitess database with a `main` branch)
+ *
+ * It creates one development branch and a password on it, and deletes both in `afterAll`.
  */
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CLERK_DEFAULT_API_URL, NETLIFY_DEFAULT_API_URL, clerkAdapter, neonAdapter, netlifyAdapter, vercelAdapter } from "@sponson/adapters";
+import { CLERK_DEFAULT_API_URL, LAUNCHDARKLY_DEFAULT_API_URL, NETLIFY_DEFAULT_API_URL, PLANETSCALE_DEFAULT_API_URL, SUPABASE_DEFAULT_API_URL, clerkAdapter, launchdarklyAdapter, neonAdapter, netlifyAdapter, planetscaleAdapter, supabaseAdapter, vercelAdapter } from "@sponson/adapters";
 import type { AdapterContext, Ctx } from "@sponson/core";
-import { startSim, type SimHandle } from "@sponson/sim";
+import { SUPABASE_DEMO_PROJECT, simEnv, startSim, type SimHandle } from "@sponson/sim";
 import { cliEnv, runCli, workspace, type CliRun, type Workspace } from "./support.js";
 
 const LIVE = process.env.SPONSON_LIVE === "1";
 const MISSING = ["VERCEL_TOKEN", "SPONSON_LIVE_VERCEL_PROJECT", "NEON_API_KEY", "SPONSON_LIVE_NEON_PROJECT", "CLERK_SECRET_KEY"].filter((k) => !process.env[k]);
 if (LIVE && MISSING.length) throw new Error(`SPONSON_LIVE=1 but missing: ${MISSING.join(", ")}`);
+const LD_VARS = ["LAUNCHDARKLY_ACCESS_TOKEN", "SPONSON_LIVE_LAUNCHDARKLY_PROJECT", "SPONSON_LIVE_LAUNCHDARKLY_ENVIRONMENT", "SPONSON_LIVE_LAUNCHDARKLY_FLAG"];
+/** LaunchDarkly is checked against the sim always, and live only when all of its variables are set. */
+const LD_RUNS = !LIVE || LD_VARS.every((k) => process.env[k]);
+const ld = LIVE
+  ? { project: process.env.SPONSON_LIVE_LAUNCHDARKLY_PROJECT ?? "", environment: process.env.SPONSON_LIVE_LAUNCHDARKLY_ENVIRONMENT ?? "", flag: process.env.SPONSON_LIVE_LAUNCHDARKLY_FLAG ?? "" }
+  : { project: "demo", environment: "preview", flag: "new-checkout" };
 
 const tag = randomBytes(4).toString("hex");
 const pr = 900000 + (parseInt(tag, 16) % 99999); // unique scope per run, never collides with a real PR
@@ -91,9 +117,25 @@ function cli(args: string[]): Promise<CliRun> {
   return runCli([...args, "--json", "--receipts", "local", "--receipts-dir", join(ws.dir, "r"), "--pr", String(pr), "--branch", branch, "--sha", sha], { env, cwd: ws.dir });
 }
 
-function actx(adapter: "vercel" | "neon" | "clerk"): AdapterContext {
+function actx(adapter: "vercel" | "neon" | "clerk" | "launchdarkly"): AdapterContext {
   const ctx: Ctx = { env: "preview", git: { branch, sha, short_sha: sha.slice(0, 7) }, pr: { number: pr }, scope: `pr-${pr}` };
-  return { ctx, provider: adapter === "clerk" ? {} : providers[adapter], env, log: () => {}, intend: async () => {}, redact: (t) => t };
+  const provider = adapter === "clerk" ? {} : adapter === "launchdarkly" ? { project: ld.project, environment: ld.environment } : providers[adapter];
+  return { ctx, provider, env, log: () => {}, intend: async () => {}, redact: (t) => t };
+}
+
+/** LaunchDarkly's REST API, called directly to pin what the adapter relies on (LD1: the token without `Bearer`). */
+async function ldFetch(method: "GET" | "PATCH", path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
+  const headers: Record<string, string> = { authorization: env.LAUNCHDARKLY_ACCESS_TOKEN ?? "" };
+  if (body !== undefined) headers["content-type"] = "application/json; domain-model=launchdarkly.semanticpatch";
+  const res = await fetch(`${env.LAUNCHDARKLY_API_URL ?? LAUNCHDARKLY_DEFAULT_API_URL}${path}`, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+  return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+}
+
+/** The variation index serving `key` (kind user) in the environment, from either target list (LD3); -1 when none. */
+function servedIndex(flag: Record<string, unknown>, key: string): number {
+  const e = (flag.environments as Record<string, Record<string, unknown>>)[ld.environment]!;
+  const all = [...((e.targets as unknown[]) ?? []), ...((e.contextTargets as unknown[]) ?? [])] as Array<{ contextKind?: string; values: string[]; variation: number }>;
+  return all.find((t) => (t.contextKind ?? "user") === "user" && t.values.includes(key))?.variation ?? -1;
 }
 
 describe(`contract (${LIVE ? "@live" : "sim"})`, () => {
@@ -145,6 +187,39 @@ describe(`contract (${LIVE ? "@live" : "sim"})`, () => {
     expect(body.total_count).toBeGreaterThanOrEqual(1);
   });
 
+  it.skipIf(!LD_RUNS)("assumption LD5: adding a target its variation already serves succeeds and changes nothing; LD7: visible at once", async () => {
+    const key = `sponson-contract-${tag}`;
+    const path = `/flags/${encodeURIComponent(ld.project)}/${encodeURIComponent(ld.flag)}`;
+    const flag = await ldFetch("GET", `${path}?env=${encodeURIComponent(ld.environment)}`);
+    expect(flag.status).toBe(200);
+    const variationId = (flag.body.variations as Array<{ _id: string }>)[0]!._id;
+    const add = { environmentKey: ld.environment, comment: "sponson contract suite", instructions: [{ kind: "addTargets", contextKind: "user", values: [key], variationId }] };
+    try {
+      expect((await ldFetch("PATCH", path, add)).status).toBe(200);
+      const again = await ldFetch("PATCH", path, add);
+      expect(again.status).toBe(200);
+      expect(servedIndex(again.body, key)).toBe(0);
+      expect(servedIndex((await ldFetch("GET", `${path}?env=${encodeURIComponent(ld.environment)}`)).body, key)).toBe(0);
+    } finally {
+      const remove = { ...add, instructions: [{ ...add.instructions[0], kind: "removeTargets" }] };
+      expect((await ldFetch("PATCH", path, remove)).status).toBe(200);
+    }
+  });
+
+  it.skipIf(!LD_RUNS)("assumption LD7: a flag target applied by the adapter reads back unchanged, and is gone after destroy", async () => {
+    const op = launchdarklyAdapter.ops.flag_target!;
+    const params = op.defaults!({ flag: ld.flag, key: `sponson-contract-${tag}-adapter` }, actx("launchdarkly").ctx);
+    const applied = await op.apply(actx("launchdarkly"), params, null);
+    try {
+      const live = await op.read(actx("launchdarkly"), params);
+      expect(live?.resources).toEqual(applied.resources);
+      expect(op.diff(live, params)[0]!.kind).toBe("unchanged");
+    } finally {
+      await op.destroy(actx("launchdarkly"), applied.resources);
+    }
+    expect(await op.read(actx("launchdarkly"), params)).toBeNull();
+  });
+
   it("second apply writes nothing", async () => {
     const before = sim?.state.writes.length ?? 0;
     const r = await cli(["apply"]);
@@ -161,6 +236,198 @@ describe(`contract (${LIVE ? "@live" : "sim"})`, () => {
     expect(await neon.read(actx("neon"), neon.defaults!({}, actx("neon").ctx))).toBeNull();
     const clerk = clerkAdapter.ops.redirect_allow!;
     expect(await clerk.read(actx("clerk"), { url: callbackUrl })).toBeNull();
+  }, 120_000);
+});
+
+const SUPABASE_LIVE = LIVE && Boolean(process.env.SUPABASE_ACCESS_TOKEN && process.env.SPONSON_LIVE_SUPABASE_PROJECT);
+
+describe.skipIf(LIVE && !SUPABASE_LIVE)(`contract supabase (${SUPABASE_LIVE ? "@live" : "sim"})`, () => {
+  const branchOp = supabaseAdapter.ops.branch!;
+  const redirectOp = supabaseAdapter.ops.auth_redirect!;
+  const ctx: Ctx = { env: "preview", git: { branch, sha, short_sha: sha.slice(0, 7) }, pr: { number: pr }, scope: `pr-${pr}` };
+  const params = branchOp.defaults!({}, ctx);
+  const redirect = () => ({ key: `redirect:${callbackUrl}`, id: `${project}:${callbackUrl}`, hash: "" });
+  let ssim: SimHandle | null = null;
+  let senv: NodeJS.ProcessEnv;
+  let project: string;
+  let listBefore: string[] = [];
+  let siteUrlBefore: unknown;
+
+  const sactx = (): AdapterContext => ({ ctx, provider: { project }, env: senv, log: () => {}, intend: async () => {}, redact: (t) => t });
+  const api = (path: string, init: RequestInit = {}) =>
+    fetch(`${senv.SUPABASE_API_URL ?? SUPABASE_DEFAULT_API_URL}${path}`, { ...init, headers: { authorization: `Bearer ${senv.SUPABASE_ACCESS_TOKEN}`, "content-type": "application/json" } });
+  const authConfig = async () => (await (await api(`/projects/${project}/config/auth`)).json()) as { uri_allow_list: string | null; site_url?: unknown };
+  const entries = (s: string | null) =>
+    (s ?? "")
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
+
+  beforeAll(async () => {
+    if (SUPABASE_LIVE) {
+      senv = { ...process.env };
+      project = process.env.SPONSON_LIVE_SUPABASE_PROJECT!;
+    } else {
+      ssim = await startSim();
+      senv = { ...simEnv(ssim), SPONSON_HTTP_RETRY_BASE_MS: "5" };
+      project = SUPABASE_DEMO_PROJECT;
+    }
+    const before = await authConfig();
+    listBefore = entries(before.uri_allow_list);
+    siteUrlBefore = before.site_url;
+  }, 60_000);
+
+  afterAll(async () => {
+    // Always clean up, even when assertions failed half-way.
+    const live = await branchOp.read(sactx(), params).catch(() => null);
+    if (live) await branchOp.destroy(sactx(), live.resources).catch(() => {});
+    await redirectOp.destroy(sactx(), [redirect()]).catch(() => {});
+    await ssim?.close();
+  }, 120_000);
+
+  it("assumption S1, S3, S4: a created branch comes up ACTIVE_HEALTHY with its own ref and database credentials", async () => {
+    const r = await branchOp.apply(sactx(), params, null);
+    expect(r.created).toEqual([`branch:${String(params.name)}`]);
+    expect(String(r.outputs.project_ref)).toMatch(/^[a-z]{20}$/);
+    expect(r.outputs.api_url).toBe(`https://${String(r.outputs.project_ref)}.supabase.co`);
+    expect(String(r.outputs.connection_string)).toMatch(/^postgresql:\/\/[^:]+:[^@]+@[^:/]+:\d+\/postgres$/);
+  }, 900_000);
+
+  it("assumption S2: the branch list names the new branch with its own project_ref; the project's own branch is the default", async () => {
+    const res = await api(`/projects/${project}/branches`);
+    expect(res.status).toBe(200);
+    const list = (await res.json()) as Array<{ name: string; project_ref: string; is_default: boolean }>;
+    const mine = list.find((b) => b.name === params.name);
+    expect(mine?.is_default).toBe(false);
+    expect(mine?.project_ref).not.toBe(project);
+    for (const b of list.filter((x) => x.is_default)) expect(b.project_ref).toBe(project);
+  });
+
+  it("assumption S5: creating a branch whose name exists is refused (400, 409 or 422), and apply claims the existing one", async () => {
+    const res = await api(`/projects/${project}/branches`, { method: "POST", body: JSON.stringify({ branch_name: params.name }) });
+    expect([400, 409, 422]).toContain(res.status);
+    expect((await branchOp.apply(sactx(), params, null)).created).toEqual([]);
+  }, 900_000);
+
+  it("assumption S7, S8: PATCH with uri_allow_list alone appends one comma-separated entry and leaves the rest", async () => {
+    const r = await redirectOp.apply(sactx(), { url: callbackUrl }, null);
+    expect(r.created).toEqual([redirect().key]);
+    const after = await authConfig();
+    expect(entries(after.uri_allow_list)).toEqual([...listBefore, callbackUrl]);
+    expect(after.site_url).toEqual(siteUrlBefore);
+  });
+
+  it("assumption S9: a branch's own Auth allow-list is read and written through /projects/{branch ref}/config/auth", async () => {
+    const live = await branchOp.read(sactx(), params);
+    const ref = String(live!.outputs.project_ref);
+    const r = await redirectOp.apply(sactx(), { url: callbackUrl, project: ref }, null);
+    expect(r.created).toEqual([`redirect:${ref}:${callbackUrl}`]);
+    expect(await redirectOp.read(sactx(), { url: callbackUrl, project: ref })).not.toBeNull();
+    await redirectOp.destroy(sactx(), r.resources);
+    expect(await redirectOp.read(sactx(), { url: callbackUrl, project: ref })).toBeNull();
+  });
+
+  it("assumption S6: DELETE /branches/{ref} removes the branch from the list at once; the allow-list is restored", async () => {
+    const live = await branchOp.read(sactx(), params);
+    await branchOp.destroy(sactx(), live!.resources);
+    expect(await branchOp.read(sactx(), params)).toBeNull();
+    await redirectOp.destroy(sactx(), [redirect()]);
+    expect(entries((await authConfig()).uri_allow_list)).toEqual(listBefore);
+  }, 120_000);
+});
+
+// ---------------------------------------------------------------------------
+// PlanetScale (assumptions PS1… in packages/sim/src/routes/planetscale.ts)
+// ---------------------------------------------------------------------------
+
+const PS_MISSING = ["PLANETSCALE_SERVICE_TOKEN_ID", "PLANETSCALE_SERVICE_TOKEN", "SPONSON_LIVE_PLANETSCALE_ORG", "SPONSON_LIVE_PLANETSCALE_DATABASE"].filter((k) => !process.env[k]);
+const PS_LIVE = LIVE && PS_MISSING.length === 0;
+
+describe.skipIf(LIVE && !PS_LIVE)(`contract planetscale (${PS_LIVE ? "@live" : "sim"})`, () => {
+  const psBranch = `sponson-contract-${tag}`;
+  let psSim: SimHandle | null = null;
+  let psEnv: NodeJS.ProcessEnv;
+  let psProvider: { organization: string; database: string };
+  let base: string;
+  let auth: string;
+
+  beforeAll(async () => {
+    if (PS_LIVE) {
+      psEnv = { ...process.env };
+      psProvider = { organization: process.env.SPONSON_LIVE_PLANETSCALE_ORG!, database: process.env.SPONSON_LIVE_PLANETSCALE_DATABASE! };
+    } else {
+      psSim = await startSim();
+      psEnv = { ...cliEnv(psSim), SPONSON_PLANETSCALE_POLL_MS: "10" };
+      psProvider = { organization: "acme", database: "app" };
+    }
+    base = `${psEnv.PLANETSCALE_API_URL ?? PLANETSCALE_DEFAULT_API_URL}/organizations/${psProvider.organization}/databases/${psProvider.database}`;
+    auth = `${psEnv.PLANETSCALE_SERVICE_TOKEN_ID}:${psEnv.PLANETSCALE_SERVICE_TOKEN}`;
+  });
+
+  afterAll(async () => {
+    // Deleting the branch deletes its password too; already gone is fine.
+    await fetch(`${base}/branches/${psBranch}`, { method: "DELETE", headers: { authorization: auth } }).catch(() => {});
+    await psSim?.close();
+  }, 120_000);
+
+  function psActx(): AdapterContext {
+    const ctx: Ctx = { env: "preview", git: { branch, sha, short_sha: sha.slice(0, 7) }, pr: { number: pr }, scope: `pr-${pr}` };
+    return { ctx, provider: psProvider, env: psEnv, log: () => {}, intend: async () => {}, redact: (t) => t };
+  }
+
+  async function getBranch(): Promise<{ status: number; body: Record<string, unknown> }> {
+    const res = await fetch(`${base}/branches/${psBranch}`, { headers: { authorization: auth } });
+    return { status: res.status, body: res.status === 200 ? ((await res.json()) as Record<string, unknown>) : {} };
+  }
+
+  it("assumption PS1: a service token is sent as `Authorization: <id>:<token>`; as a bearer token it is refused", async () => {
+    const ok = await fetch(`${base}/branches`, { headers: { authorization: auth } });
+    expect(ok.status).toBe(200);
+    const bearer = await fetch(`${base}/branches`, { headers: { authorization: `Bearer ${psEnv.PLANETSCALE_SERVICE_TOKEN}` } });
+    expect(bearer.status).toBe(401);
+  });
+
+  it("assumption PS4: a created branch answers 201 not ready, and becomes ready later", async () => {
+    const res = await fetch(`${base}/branches`, { method: "POST", headers: { authorization: auth, "content-type": "application/json" }, body: JSON.stringify({ name: psBranch, parent_branch: "main" }) });
+    expect(res.status).toBe(201);
+    expect((await res.json()) as Record<string, unknown>).toMatchObject({ name: psBranch, ready: false });
+    const deadline = Date.now() + 10 * 60_000;
+    for (;;) {
+      const b = await getBranch();
+      expect(b.status).toBe(200);
+      if (b.body.ready === true) break;
+      expect(Date.now()).toBeLessThan(deadline);
+      await new Promise((r) => setTimeout(r, PS_LIVE ? 5000 : 10));
+    }
+  }, 11 * 60_000);
+
+  it("assumption PS5: creating a branch whose name exists answers 422 (the adapter also accepts 409)", async () => {
+    const res = await fetch(`${base}/branches`, { method: "POST", headers: { authorization: auth, "content-type": "application/json" }, body: JSON.stringify({ name: psBranch, parent_branch: "main" }) });
+    expect(res.status).toBe(422);
+  });
+
+  it("assumption PS8: a password's plaintext is in the create answer and in no read", async () => {
+    const op = planetscaleAdapter.ops.password!;
+    const params = op.defaults!({ branch: psBranch }, psActx().ctx);
+    const r = await op.apply(psActx(), params, null);
+    expect(String(r.outputs.connection_string)).toMatch(/^mysql:\/\/[^:]+:[^@]+@[^/]+\//);
+    expect(typeof r.outputs.password).toBe("string");
+    const list = await fetch(`${base}/branches/${psBranch}/passwords`, { headers: { authorization: auth } });
+    const data = ((await list.json()) as { data: Array<Record<string, unknown>> }).data;
+    expect(data.length).toBeGreaterThan(0);
+    for (const p of data) expect(p.plain_text ?? null).toBeNull();
+    const live = await op.read(psActx(), params);
+    expect(live?.outputs).not.toHaveProperty("connection_string");
+    expect(live?.outputs).not.toHaveProperty("password");
+  });
+
+  it("assumption PS7: a deleted branch is gone when DELETE returns", async () => {
+    const op = planetscaleAdapter.ops.branch!;
+    const params = { name: psBranch, parent: "main" };
+    const live = await op.read(psActx(), params);
+    expect(live).not.toBeNull();
+    await op.destroy(psActx(), live!.resources);
+    expect(await op.read(psActx(), params)).toBeNull();
   }, 120_000);
 });
 

@@ -32,12 +32,19 @@ const NEXT_VERCEL_NEON_CLERK: Files = {
   ".env.local": `DATABASE_URL="postgresql://neondb_owner:${SECRET_PASSWORD}@ep-quiet-sky-a1b2c3.us-east-2.aws.neon.tech/neondb?sslmode=require"\nCLERK_SECRET_KEY=${SECRET_CLERK}\nNEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_public\n`,
 };
 
-/** Next.js on Vercel with Supabase: Vercel is managed, Supabase is reported as not supported yet. */
+/** Next.js on Vercel with Supabase: both managed, a Supabase preview branch as the database. */
 const NEXT_VERCEL_SUPABASE: Files = {
   "package.json": { dependencies: { next: "15.1.0", "@supabase/supabase-js": "^2.45.0", "@supabase/ssr": "^0.5.0" } },
   "vercel.json": { framework: "nextjs" },
   "supabase/config.toml": 'project_id = "demo"\n',
   ".env.local": `NEXT_PUBLIC_SUPABASE_URL=https://abcd.supabase.co\nSUPABASE_SERVICE_ROLE_KEY=${SECRET_SUPABASE}\n`,
+};
+
+/** Next.js on Vercel (linked) with PlanetScale's serverless driver; a real database URL in .env.local. */
+const NEXT_VERCEL_PLANETSCALE: Files = {
+  "package.json": { dependencies: { next: "15.1.0", "@planetscale/database": "^1.19.0" } },
+  ".vercel/project.json": { projectId: "prj_demo" },
+  ".env.local": `DATABASE_URL="mysql://abc123:${SECRET_PASSWORD}@aws.connect.psdb.cloud/app?ssl={"rejectUnauthorized":true}"\n`,
 };
 
 /** SvelteKit + Drizzle on Neon (context file from `neonctl set-context`), deployed on Netlify (linked with `netlify link`). */
@@ -101,24 +108,37 @@ describe("sponson init detects the stack", () => {
     expect(p.json.lines.map((l: any) => [l.id, l.status])).toEqual([["db", "create"], ["env", "pending"], ["callback", "pending"]]);
   });
 
-  it("Next.js + Vercel + Supabase: Supabase reported as not supported yet with a pointer, never silently ignored", async () => {
+  it("Next.js + Vercel + Supabase: a Supabase preview branch feeding the env line, the preview URL on the branch's Auth allow-list; it plans", async () => {
     const cwd = await repoWith(NEXT_VERCEL_SUPABASE);
     const r = await init(cwd, "--json");
     expect(r.code, r.stderr).toBe(0);
-    expect(r.json.detected.found.map((f: any) => f.id)).toEqual(["vercel", "next"]);
-    expect(r.json.detected.unsupported).toEqual([
-      expect.objectContaining({ id: "supabase", name: "Supabase", kind: "service", pointer: expect.stringMatching(/ROADMAP\.md/), evidence: expect.arrayContaining(["package.json: @supabase/supabase-js", "supabase/config.toml"]) }),
+    expect(r.json.detected.found.map((f: any) => f.id)).toEqual(["vercel", "supabase", "next"]);
+    expect(r.json.detected.found[1]).toEqual(expect.objectContaining({ id: "supabase", name: "Supabase", kind: "provider", evidence: expect.arrayContaining(["package.json: @supabase/supabase-js", "supabase/config.toml"]) }));
+    expect(r.json.detected.unsupported).toEqual([]);
+    expect(r.json.detected.todo).toEqual([
+      expect.objectContaining({ path: "providers.vercel.project", placeholder: "prj_xxx", hint: expect.stringMatching(/vercel link/) }),
+      expect.objectContaining({ path: "providers.supabase.project", placeholder: "abcdefghijklmnopqrst", hint: expect.stringMatching(/supabase link/) }),
     ]);
-    expect(r.json.detected.todo).toEqual([expect.objectContaining({ path: "providers.vercel.project", placeholder: "prj_xxx", hint: expect.stringMatching(/vercel link/) })]);
     const { text, ids } = await writtenPlan(cwd);
-    expect(ids).toEqual(["env"]);
-    expect(text).toContain("# Not supported yet, so no line below manages it: Supabase");
+    expect(ids).toEqual(["db", "env", "auth_redirect"]);
+    expect(text).toContain("DATABASE_URL: { from: db.connection_string }");
+    expect(text).toContain("NEXT_PUBLIC_SUPABASE_URL: { from: db.api_url }");
+    expect(text).not.toContain("Not supported yet");
     expect(text).not.toMatch(/neon/);
+    expect(text).not.toContain(SECRET_SUPABASE);
 
-    // and the human summary says the same
+    // and the human summary names the credential to set
     await rm(join(cwd, "release.plan.yaml"));
     const human = await init(cwd);
-    expect(human.stdout).toMatch(/Not supported yet \(no line manages them\):\n {2}Supabase \(package\.json: @supabase\/supabase-js\): database branches/);
+    expect(human.stdout).toContain("Next: set VERCEL_TOKEN, SUPABASE_ACCESS_TOKEN in your environment");
+    expect(human.stdout).not.toContain("Not supported yet");
+
+    // Once the TODOs are filled in, the plan plans against the (fake) cloud: the branch to create, the rest pending.
+    sim = await startSim();
+    await writeFile(join(cwd, "release.plan.yaml"), text.replace('"prj_xxx"', '"prj_demo"').replace('"abcdefghijklmnopqrst"', '"demoprojectrefabcdef"') + "receipts: local\n");
+    const p = await runCli(["plan", "--json", "--branch", "feat/x", "--sha", SHA, "--pr", "42"], { env: cliEnv(sim), cwd });
+    expect(p.code, p.stdout + p.stderr).toBe(0);
+    expect(p.json.lines.map((l: any) => [l.id, l.status])).toEqual([["db", "create"], ["env", "pending"], ["auth_redirect", "pending"]]);
   });
 
   it("SvelteKit + Drizzle + Neon on Netlify: both ids from their files, the variable Drizzle reads, a Netlify line that plans", async () => {
@@ -143,6 +163,26 @@ describe("sponson init detects the stack", () => {
     expect(p.json.lines.map((l: any) => [l.id, l.status])).toEqual([["db", "create"], ["env", "pending"]]);
   });
 
+  it("Next.js + Vercel + PlanetScale: branch → password → env by reference, the two PlanetScale ids TODOs, and it plans", async () => {
+    const cwd = await repoWith(NEXT_VERCEL_PLANETSCALE);
+    const r = await init(cwd);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^Detected: Vercel \(\.vercel\/project\.json\), PlanetScale \(package\.json: @planetscale\/database/m);
+    expect(r.stdout).toMatch(/To fill in:\n {2}providers\.planetscale\.organization \(now "my-org"\): the name slugs[^\n]*\n {2}providers\.planetscale\.database \(now "my-db"\)/);
+    expect(r.stdout).toContain("Next: set VERCEL_TOKEN, PLANETSCALE_SERVICE_TOKEN_ID, PLANETSCALE_SERVICE_TOKEN in your environment");
+    expect(r.stdout).not.toContain("Not supported yet");
+    const { text, ids } = await writtenPlan(cwd);
+    expect(ids).toEqual(["db", "dbpw", "env"]);
+    expect(text).toContain("DATABASE_URL: { from: dbpw.connection_string }");
+    expect(text).not.toContain(SECRET_PASSWORD);
+
+    sim = await startSim();
+    await writeFile(join(cwd, "release.plan.yaml"), text.replace('"my-org"', '"acme"').replace('"my-db"', '"app"') + "receipts: local\n");
+    const p = await runCli(["plan", "--json", "--branch", "feat/x", "--sha", SHA, "--pr", "42"], { env: cliEnv(sim), cwd });
+    expect(p.code, p.stdout + p.stderr).toBe(0);
+    expect(p.json.lines.map((l: any) => [l.id, l.status])).toEqual([["db", "create"], ["dbpw", "pending"], ["env", "pending"]]);
+  });
+
   it("a bare repository: the Vercel + Neon template, explained, with both ids to fill in", async () => {
     const cwd = await repoWith({});
     const r = await init(cwd);
@@ -158,7 +198,7 @@ describe("sponson init detects the stack", () => {
   });
 
   it("a secret value in .env.local never appears in the written plan or in any output", async () => {
-    for (const files of [NEXT_VERCEL_NEON_CLERK, NEXT_VERCEL_SUPABASE]) {
+    for (const files of [NEXT_VERCEL_NEON_CLERK, NEXT_VERCEL_SUPABASE, NEXT_VERCEL_PLANETSCALE]) {
       for (const args of [[], ["--json"]]) {
         const cwd = await repoWith(files);
         const r = await init(cwd, ...args);

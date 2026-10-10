@@ -67,11 +67,13 @@ sponson apply         # creates the branch, injects the variable, waits for the 
 `vercel.json`, `netlify.toml` and `.netlify/state.json`, `package.json` dependencies, Prisma and Drizzle configs,
 `.neon`, and the variable *names* in
 `.env.example`, `.env.local` and the other `.env*` files. It never reads a value out of them, except to recognise a
-database host such as `*.neon.tech`. It writes a line only for what it found (a Neon branch, the Vercel or Netlify
-preview variable that references it under the name your code reads, a Clerk redirect for the preview URL), fills in
-the project ids it can find, and marks each one it cannot with a `TODO` comment saying where to look
-(`vercel link`, `netlify link`, `neonctl projects list`). Services Sponson does not manage yet (Supabase, PlanetScale,
-Auth0, Cloudflare, LaunchDarkly, PostHog, Stripe, Sentry, …) are listed as "not supported yet" with a link to the
+database host such as `*.neon.tech`. It writes a line only for what it found (one database: a Neon branch, a PlanetScale branch and
+password, or a Supabase preview branch, in that order of preference when several are detected; the Vercel or Netlify preview
+variable that references it under the name your code reads; a Clerk redirect or a Supabase Auth redirect for the
+preview URL), fills in the project ids it can find, and marks each one it cannot with a `TODO` comment saying where to
+look (`vercel link`, `netlify link`, `neonctl projects list`, `supabase link`). LaunchDarkly gets a commented example line to fill in with a
+flag key and uncomment. Services Sponson does not manage yet (Auth0, Cloudflare, PostHog, Stripe,
+Sentry, …) are listed as "not supported yet" with a link to the
 [roadmap](/contributing/roadmap), never silently dropped. With nothing detected it writes the Vercel + Neon template.
 
 ```

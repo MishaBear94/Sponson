@@ -88,6 +88,11 @@ pin new ones the same way — Dependabot keeps the pins current, including in `a
 
 ## Adding an adapter
 
+First check whether the provider needs one: the generic `http` adapter
+([docs/plan-format.md](docs/plan-format.md#the-generic-http-adapter)) already manages plain CRUD objects and list
+entries of any JSON REST API from the plan. Write a first-class adapter when the lifecycle needs more than a
+request template can say ([ADR 0017](docs/adr/0017-generic-http-adapter.md)).
+
 An adapter is an object implementing `ResourceAdapter` from `@sponson/core`: a name and a map of ops. Read `packages/core/src/types.ts` (the contract, with the marker rules next to `OpSpec.diff`) and the fake adapter in `packages/core/src/testing/fake.ts` (`@sponson/core/testing`), the smallest complete example.
 
 The quickest start is the scaffold:
@@ -129,8 +134,14 @@ Where the template's shape does not fit, change it:
 - **No object per item** (a list stored on a parent object, such as an application's callback URLs): `apply` becomes
   read-modify-write of the whole list. Send the replacement with `put()`, or `patch(…, { idempotent: true })`, so a
   dropped connection is retried. Re-read after writing, and say in your assumptions whether the provider offers
-  a precondition (ETag, version). Scope locks do not serialise two scopes writing the same parent object; see
-  ROADMAP.md, section 4.
+  a precondition (ETag, version); send it when it does. Scope locks do not serialise two scopes (or environments)
+  writing the same parent object, so implement `lockOn(params, provider)`: return an identity for the object,
+  `<adapter>:<account>:<kind>:<id>` (`auth0:${provider.domain}:client:${provider.client_id}`), built only from
+  names and ids, never a credential. The engine then writes the line, and rolls back and destroys its resources,
+  holding that object's lease, and hands `apply` and `destroy` live state read under it
+  ([ADR 0019](docs/adr/0019-parent-object-locks.md)); `apply` and `destroy` must therefore read the list
+  themselves (or use the `live` they are given) and change only their own items. The `member` op of the fake adapter
+  (`packages/core/src/testing/fake.ts`) is the smallest example.
 
 The **stable authoring API** — everything the template uses, exported from `@sponson/adapters` and kept
 compatible across minor releases, so an out-of-tree plugin can copy the template and import the same names from
@@ -154,6 +165,11 @@ Rules the engine relies on:
 - The ledger identifies a resource by adapter, provider block and key, so the key need not repeat what the provider block already says (the project, the application).
 - `missing` drift (Sponson created it, it is gone) never blocks: the next apply recreates it. `changed` drift (the hash differs) is refused until `--reconcile`.
 - `destroy` treats "already gone" as success.
+- An output the provider shows only in the create response (a password's plaintext, a webhook signing secret) is
+  declared `once: true` and `sensitive: true`, and `apply` returns it only from the call that created the resource.
+  The engine fingerprints it and decides what later runs may keep (ADR 0018); never fake it from `read`.
+- An op whose items live in a list on a shared provider object declares that object with `lockOn`; it is pure, and
+  its identity names the object (it is written to receipts), never a secret.
 - Outputs marked `sensitive` may be returned, but never logged by the adapter; the engine redacts them.
 - Throw `SponsonError` with a code from `ERROR_CODES`; adding a code means adding it there, with its exit code and, if the CLI has a remedy, a `cliHint`.
 
