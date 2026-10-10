@@ -39,7 +39,7 @@ export interface UnsupportedFinding extends Finding {
 }
 
 export interface StackDetection {
-  /** What Sponson can use, in a fixed order: providers (vercel, neon, clerk, supabase), then frameworks, then ORMs. */
+  /** What Sponson can use, in a fixed order: providers (vercel, neon, planetscale, clerk, launchdarkly, supabase), then frameworks, then ORMs. */
   found: Finding[];
   /** Detected but not managed by any built-in adapter. Never silently dropped. */
   unsupported: UnsupportedFinding[];
@@ -170,7 +170,9 @@ interface Rule {
 const SUPPORTED: Rule[] = [
   { id: "vercel", name: "Vercel", kind: "provider", deps: ["vercel", "@vercel/"], env: /^VERCEL_/, files: ["vercel.json", ".vercel/project.json"] },
   { id: "neon", name: "Neon", kind: "provider", deps: ["@neondatabase/", "@prisma/adapter-neon", "neonctl"], env: /^NEON_/, files: [".neon"] },
+  { id: "planetscale", name: "PlanetScale", kind: "provider", deps: ["@planetscale/"], env: /^PLANETSCALE_/ },
   { id: "clerk", name: "Clerk", kind: "provider", deps: ["@clerk/"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_|NUXT_PUBLIC_)?CLERK_/ },
+  { id: "launchdarkly", name: "LaunchDarkly", kind: "provider", deps: ["@launchdarkly/", "launchdarkly-node-server-sdk", "launchdarkly-js-client-sdk", "launchdarkly-react-client-sdk"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_)?LAUNCHDARKLY_/ },
   { id: "supabase", name: "Supabase", kind: "provider", deps: ["@supabase/"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_|NUXT_PUBLIC_)?SUPABASE_/, files: ["supabase/config.toml", "supabase/.temp/project-ref"] },
   { id: "next", name: "Next.js", kind: "framework", deps: ["next"] },
   { id: "remix", name: "Remix", kind: "framework", deps: ["@remix-run/"] },
@@ -183,7 +185,6 @@ const SUPPORTED: Rule[] = [
 
 /** Detected and reported, but not managed yet. Never silently ignored. */
 const UNSUPPORTED: Rule[] = [
-  { id: "planetscale", name: "PlanetScale", kind: "service", deps: ["@planetscale/"], env: /^PLANETSCALE_/, pointer: `database branches: ${ROADMAP_ADAPTERS}` },
   { id: "turso", name: "Turso", kind: "service", deps: ["@libsql/client"], env: /^TURSO_/, pointer: NEW_ISSUE },
   { id: "auth0", name: "Auth0", kind: "service", deps: ["auth0", "@auth0/"], env: /^AUTH0_/, pointer: "allowed callback URLs: issue #16 (https://github.com/MishaBear94/Sponson/issues/16)" },
   { id: "netlify", name: "Netlify", kind: "service", deps: ["@netlify/", "netlify-cli"], env: /^NETLIFY_/, files: ["netlify.toml", ".netlify/state.json"], pointer: `deploy-target env vars: ${ROADMAP_ADAPTERS}` },
@@ -191,7 +192,6 @@ const UNSUPPORTED: Rule[] = [
   { id: "railway", name: "Railway", kind: "service", env: /^RAILWAY_/, files: ["railway.json", "railway.toml"], pointer: `deploy-target env vars: ${ROADMAP_ADAPTERS}` },
   { id: "fly", name: "Fly.io", kind: "service", files: ["fly.toml"], env: /^FLY_/, pointer: `deploy-target env vars: ${ROADMAP_ADAPTERS}` },
   { id: "firebase", name: "Firebase", kind: "service", deps: ["firebase", "firebase-admin"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_)?FIREBASE_/, files: ["firebase.json"], pointer: NEW_ISSUE },
-  { id: "launchdarkly", name: "LaunchDarkly", kind: "service", deps: ["@launchdarkly/", "launchdarkly-node-server-sdk", "launchdarkly-js-client-sdk", "launchdarkly-react-client-sdk"], env: /^(NEXT_PUBLIC_)?LAUNCHDARKLY_/, pointer: "feature flags: issue #15 (https://github.com/MishaBear94/Sponson/issues/15)" },
   { id: "posthog", name: "PostHog", kind: "service", deps: ["posthog-js", "posthog-node"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_)?POSTHOG_/, pointer: `feature flags, a second provider: ${ROADMAP_ADAPTERS}` },
   { id: "stripe", name: "Stripe", kind: "service", deps: ["stripe", "@stripe/"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_)?STRIPE_/, pointer: `${NEW_ISSUE} (its keys can already be passed as \`{ secret: "env://STRIPE_SECRET_KEY" }\`)` },
   { id: "sentry", name: "Sentry", kind: "service", deps: ["@sentry/"], env: /^(NEXT_PUBLIC_)?SENTRY_/, files: ["sentry.client.config.ts", "sentry.client.config.js", "sentry.server.config.ts", "sentry.server.config.js"], pointer: `${NEW_ISSUE} (its DSN can already be passed as a Vercel variable)` },

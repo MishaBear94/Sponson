@@ -13,7 +13,7 @@ export interface InitOpts extends GlobalOpts {
 }
 
 export interface InitDetected {
-  /** What Sponson can use: providers (vercel, neon, clerk), frameworks and ORMs, each with its evidence. */
+  /** What Sponson can use: providers (vercel, neon, planetscale, clerk, launchdarkly), frameworks and ORMs, each with its evidence. */
   found: Finding[];
   /** Detected but not managed by any built-in adapter yet, each with a pointer to the roadmap or an issue. */
   unsupported: UnsupportedFinding[];

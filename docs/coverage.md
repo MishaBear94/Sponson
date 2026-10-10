@@ -67,7 +67,7 @@ Columns:
 |---|---|---|---|---|---|
 | Neon | Copy-on-write branch per PR, connection string out | REST `/api/v2/projects/{p}/branches`, bearer; object; async operations, `423` while busy | P (async ops) | P0 | **yes** (`neon.branch`) |
 | Supabase | Preview branch per PR (a separate project with its own ref, keys and URL) | Management API `POST /v1/projects/{ref}/branches`, `GET`/`DELETE /v1/branches/{ref}`, bearer PAT; object; async provisioning (`ACTIVE_HEALTHY`), migrations run by Supabase | P (async, outputs from a second project) | P0 | **yes** (`supabase.branch`) |
-| PlanetScale | Branch per PR; password (credential) per branch; deploy request on merge | REST `POST /v1/organizations/{o}/databases/{d}/branches`, `.../branches/{b}/passwords`; service token header; object; branch `ready` async; password plaintext returned once | P (async, once-only secret) | P1 | no |
+| PlanetScale | Branch per PR; password (credential) per branch; deploy request on merge | REST `POST /v1/organizations/{o}/databases/{d}/branches`, `.../branches/{b}/passwords`; service token header; object; branch `ready` async; password plaintext returned once | P (async, once-only secret) | P1 | **yes** (`planetscale.branch`, `planetscale.password`; deploy requests on merge are not managed) |
 | Turso | Database branched from a parent (`seed: {type: database}`), token per DB | Platform API `POST /v1/organizations/{o}/databases`, `.../databases/{d}/auth/tokens`; bearer; object | Y | P1 | no |
 | Xata | Copy-on-write Postgres branch | REST control plane and `xata branch create --from`; API keys. Endpoint paths not confirmed **(unverified)**; the product was re-platformed onto Postgres in 2025 | P (async; API in flux) | P2 | no |
 | MongoDB Atlas | No branching; per-PR database user and database name on a shared cluster (cluster per PR is slow and costly) | Admin API v2 `POST /api/atlas/v2/groups/{g}/databaseUsers`, digest or service-account OAuth; object | P (digest auth) | P2 | no |
@@ -92,7 +92,7 @@ Columns:
 
 | Provider | Side effect | API shape | Generic? | Pri | Now |
 |---|---|---|---|---|---|
-| LaunchDarkly | Flag on for a preview: target a context key or add a rule on `url`, in a per-PR or shared preview environment | `PATCH /api/v2/flags/{proj}/{flag}` with semantic patch (`Content-Type: application/json; domain-model=launchdarkly.semanticpatch`, instructions `addTargets`/`removeTargets`/`addRule`), API token; instructions are idempotent per target; approvals may gate production | P (instruction-based diff, approvals) | P0 | no |
+| LaunchDarkly | Flag on for a preview: target a context key or add a rule on `url`, in a per-PR or shared preview environment | `PATCH /api/v2/flags/{proj}/{flag}` with semantic patch (`Content-Type: application/json; domain-model=launchdarkly.semanticpatch`, instructions `addTargets`/`removeTargets`/`addRule`), API token; instructions are idempotent per target; approvals may gate production | P (instruction-based diff, approvals) | P0 | yes (`launchdarkly.flag_target`: context-key targets; `url` rules not yet) |
 | PostHog | Release condition matching the preview host on a flag | `PATCH /api/projects/{id}/feature_flags/{id}` `filters.groups`, personal API key bearer; **list** in `filters` | Y (list mode) | P1 | no |
 | Statsig | Gate rule for the preview (condition `url` or `environment_tier`) | Console API `POST /console/v1/gates/{id}/rule`, `PATCH`/`DELETE .../rules/{ruleID}`, `STATSIG-API-KEY` header; object per rule; reviews may gate changes | Y | P1 | no |
 | GrowthBook | Force rule in a per-environment feature | REST `POST /api/v1/features/{id}` with `environments.{env}.rules`, bearer; **list** per environment | Y (list mode) | P2 | no |
@@ -183,13 +183,15 @@ manage). Weights: P0 = 3, P1 = 2, P2 = 1 (9 P0, 16 P1, 31 P2; total weight 90).
 
 | Measure | Covered | Coverage |
 |---|---|---|
-| Rows | 5 of 56 (Vercel env, Neon branch, Clerk redirect, Supabase branch, Supabase Auth redirect) | **8.9%** |
-| Weighted by priority | 15 of 90 | **16.7%** |
-| P0 rows only | 5 of 9 | 56% |
+| Rows | 7 of 56 (Vercel env, Neon branch, PlanetScale branch and password, Supabase branch, Clerk redirect, Supabase Auth redirect, LaunchDarkly targeting) | **12.5%** |
+| Weighted by priority | 20 of 90 | **22.2%** |
+| P0 rows only | 6 of 9 | 67% |
 | Secret sources (separate) | 4 of 9 vendors; weighted 7 of 14 | 44%; 50% |
 
-Plainly: Sponson covers the canonical Vercel + Neon + Clerk preview stack, Supabase (preview branches and Auth
-redirect URLs), and almost nothing else. Three rows (Google
+Rows that the generic `http` adapter could reach are not counted: its example plan is illustrative and its tests run
+against a generic REST sim, not against any one provider's API, so no row has a tested example yet.
+
+Plainly: Sponson covers the canonical Vercel + Neon (or PlanetScale, or Supabase) + Clerk (or Supabase Auth) preview stack, plus LaunchDarkly flag targeting, and almost nothing else. Three rows (Google
 OAuth clients, Clerk webhooks, Stripe sandboxes; weight 5) have no usable API, so no adapter can reach them; the
 ceiling is 53 rows / 94.4% weighted.
 
@@ -203,8 +205,8 @@ Railway deploys, like `vercel.env`), outputs that exist only once (Stripe webhoo
 instruction-based diffs (LaunchDarkly), GraphQL, or non-bearer signing (SigV4).
 
 **A generic declarative HTTP adapter** (`adapter: http`) for the long tail where each item is a URL, a rule or a record
-and the lifecycle is plain CRUD. Rows marked **Y**: 33 rows not covered today, which would bring coverage to 38 rows
-(67.9%), 61 of 90 weighted (67.8%), without a line of provider code.
+and the lifecycle is plain CRUD. Rows marked **Y**: 33 rows not covered today, which would bring coverage to 40 rows
+(71.4%), 66 of 90 weighted (73.3%), without a line of provider code.
 
 ### What `adapter: http` must support to cover the P0/P1 rows
 
@@ -240,7 +242,8 @@ and the lifecycle is plain CRUD. Rows marked **Y**: 33 rows not covered today, w
     items are reported and adoptable.
 11. **Once-only outputs**: an output that is only in the create response must be declared as such, so the engine
     feeds it to dependent lines in the same run and refuses a later run that needs it (instead of reading an empty
-    value). Needed for Stripe webhook secrets, API keys and DB passwords even in first-class adapters.
+    value). Needed for Stripe webhook secrets, API keys and DB passwords even in first-class adapters. The engine
+    side exists: `OutputSpec.once` ([ADR 0018](adr/0018-once-only-outputs.md)), first used by `planetscale.password`.
 12. **Sim support**: a generic sim route set driven by the same declaration, so every `http` line gets the chaos and
     drift scenarios the built-in adapters get.
 
@@ -252,10 +255,10 @@ Ranked by weighted rows covered, then by how much they need more than `adapter: 
 |---|---|---|---|
 | 1 | `supabase` (done: `supabase.branch`, `supabase.auth_redirect`) | branch (P0), auth redirect URLs (P0) | Two P0 rows with one credential; preview branches are separate projects provisioned asynchronously, and their URL and keys are outputs the env line needs. |
 | 2 | `netlify` | env per deploy context (P0) | Second most common preview host; needs the same deploy barrier and redeploy-after-write logic as `vercel.env`. |
-| 3 | `launchdarkly` | flag targeting (P0) | The README's fourth console ([#15](https://github.com/MishaBear94/Sponson/issues/15)); semantic-patch instructions and approval workflows do not fit a request template. |
+| 3 | `launchdarkly` | flag targeting (P0) | **Shipped** as `launchdarkly.flag_target` ([#15](https://github.com/MishaBear94/Sponson/issues/15)); semantic-patch instructions and approval workflows do not fit a request template. Rules on `url` are not covered yet. |
 | 4 | `stripe` | test-mode webhook endpoint (P0), test objects (P2) | Its signing secret exists only in the create response and must flow into the app's env in the same run; form encoding and `Idempotency-Key`. |
 | 5 | `auth0` | callbacks / logout URLs / web origins (P0) | Four arrays on one shared application with no precondition: the reference case for the list-mode lock, worth owning before generalising ([#16](https://github.com/MishaBear94/Sponson/issues/16)). |
-| 6 | `planetscale` | branch + password (P1) | Asynchronous branch readiness and a password returned once; closest to `neon.branch`. |
+| 6 | `planetscale` | branch + password (P1) | **Done** (`planetscale.branch`, `planetscale.password`): asynchronous branch readiness, and the password as the first once-only output ([ADR 0018](adr/0018-once-only-outputs.md)). |
 | 7 | `railway` | PR-environment variables (P1) | GraphQL, environment-id lookup, and a deploy barrier; Railway creates the PR environment, Sponson fills it. |
 | 8 | `cloudflare` | Pages/Workers env (P1), DNS record (P1), R2 CORS (P2) | One token, three rows; Workers secrets and preview versions need script-level handling a template cannot express. |
 
@@ -280,7 +283,7 @@ The Netlify, Cloudflare Pages, Fly.io, Supabase Auth, Turso, Prisma Postgres, Cl
 - DigitalOcean App Platform: [docs.digitalocean.com](https://docs.digitalocean.com/reference/api/digitalocean/#tag/Apps)
 - Neon API: [api-docs.neon.tech](https://api-docs.neon.tech/reference/getting-started-with-neon-api)
 - Supabase Management API: [supabase.com](https://supabase.com/docs/reference/api/introduction); auth config: [supabase.com](https://supabase.com/docs/reference/api/v1-update-auth-service-config); branching: [supabase.com](https://supabase.com/docs/guides/deployment/branching)
-- PlanetScale API: [api-docs.planetscale.com](https://api-docs.planetscale.com/reference/getting-started-with-planetscale-api)
+- PlanetScale API: [planetscale.com](https://planetscale.com/docs/openapi.yaml) (OpenAPI document; checked call by call for the adapter on 2026-10-11, see [api-verification.md](api-verification.md#planetscale))
 - Turso branching: [docs.turso.tech](https://docs.turso.tech/features/branching); create database: [docs.turso.tech](https://docs.turso.tech/api-reference/databases/create)
 - Xata branching: [xata.io](https://xata.io/docs/core-concepts/branching)
 - MongoDB Atlas Admin API: [mongodb.com](https://www.mongodb.com/docs/atlas/reference/api-resources-spec/v2/)

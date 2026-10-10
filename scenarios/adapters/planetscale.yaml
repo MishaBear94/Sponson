@@ -1,0 +1,88 @@
+# The PlanetScale adapter end to end through the CLI against the sim: a branch per scope and a password on it.
+# Format: see the top of scenarios/runner.test.ts.
+name: "planetscale: create, apply twice without writes, drift (missing recreated, replaced refused until --reconcile), destroy"
+plan: |
+  version: 1
+  providers:
+    planetscale: { organization: acme, database: app }
+  changes:
+    - id: db
+      adapter: planetscale
+      op: branch
+      parent: main
+      environments: [preview]
+    - id: dbpw
+      adapter: planetscale
+      op: password
+      branch: { from: db.name }
+      environments: [preview]
+chaos:
+  # The branch reports `ready: false` for a while after the create (PS4): apply waits for it.
+  planetscale_ready_ms: 50
+env:
+  SPONSON_PLANETSCALE_POLL_MS: "10"
+secrets: ["pscale_pw_sim_"]
+steps:
+  - run: plan --json
+    expect:
+      exit: 0
+      plan_lines: { db: create, dbpw: pending }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { db: applied, dbpw: applied }
+      outputs: { db: { name: sponson-preview-pr-42 }, dbpw: { host: aws.connect.psdb.sim, role: admin } }
+  - sim:
+      write_order: ["POST /planetscale/organizations/acme/databases/app/branches", "POST /planetscale/organizations/acme/databases/app/branches/sponson-preview-pr-42/passwords"]
+      state:
+        "planetscale.organizations.acme.databases.app.branches": { includes: { name: sponson-preview-pr-42, parent_branch: main, createdBy: api } }
+  # Idempotent: the plaintext is gone for good, and nothing needs it, so nothing is written.
+  - run: plan --json
+    expect:
+      exit: 0
+      plan_lines: { db: unchanged, dbpw: unchanged }
+  - run: apply --json
+    expect:
+      exit: 0
+      writes: 0
+      lines: { db: unchanged, dbpw: unchanged }
+  # Someone deletes the password in the console: `missing` drift never blocks; the next apply creates a new one.
+  - chaos:
+      drift: { "planetscale.password.sponson-preview-pr-42.sponson-preview-pr-42": "delete" }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      drift: [{ kind: missing, line: dbpw }]
+      lines: { db: unchanged, dbpw: applied }
+  # Someone deletes the branch and creates another of the same name: not Sponson's, refused until --reconcile.
+  - chaos:
+      drift: { "planetscale.branch.sponson-preview-pr-42": "recreate" }
+  - run: plan --json
+    expect:
+      exit: 1
+      drift: [{ kind: changed, line: db }]
+      plan_lines: { db: blocked, dbpw: blocked }
+  - run: apply --json
+    expect:
+      exit: 1
+      status: failed
+      writes: 0
+      lines: { db: blocked }
+      errors: { db: "reconcile" }
+  - run: apply --reconcile --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { dbpw: applied }
+  - run: apply --destroy --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { dbpw: destroyed }
+  - sim:
+      write_order: ["DELETE /planetscale/organizations/acme/databases/app/branches/sponson-preview-pr-42/passwords/"]
+      state:
+        # Taken over with --reconcile, the re-created branch is adopted: destroy leaves it, and only it.
+        "planetscale.organizations.acme.databases.app.branches": { length: 2 }

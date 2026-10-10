@@ -94,7 +94,7 @@ export function renderOutputs(): string {
       const outputs = Object.entries(op.outputs);
       if (outputs.length === 0) rows.push(`| \`${name}.${opName}\` | (none) | | |`);
       for (const [out, spec] of outputs) {
-        const available = spec.available === "external" ? `external (\`${spec.event ?? "external event"}\`)` : "immediate";
+        const available = spec.available === "external" ? `external (\`${spec.event ?? "external event"}\`)` : spec.once ? "immediate, [once](#once-only-outputs)" : "immediate";
         rows.push(`| \`${name}.${opName}\` | \`${out}\` | ${available} | ${spec.sensitive ? "yes" : "no"} |`);
       }
     }
@@ -128,7 +128,8 @@ export function renderAdapters(doc: string): string {
     });
     const about = registry.adapter(name).about;
     if (!about) throw new Error(`built-in adapter \`${name}\` declares no \`about\` (credentialEnv, baseUrlEnv): set it on the adapter object`);
-    rows.push(`| \`${name}\` | ${ops.join(", ")} | \`${about.credentialEnv}\` | ${about.baseUrlEnv ? `\`${about.baseUrlEnv}\`` : "—"} |`);
+    const credential = [...(about.extraCredentialEnv ?? []), about.credentialEnv].map((v) => `\`${v}\``).join(" + ");
+    rows.push(`| \`${name}\` | ${ops.join(", ")} | ${credential} | ${about.baseUrlEnv ? `\`${about.baseUrlEnv}\`` : "—"} |`);
   }
   return rows.join("\n");
 }

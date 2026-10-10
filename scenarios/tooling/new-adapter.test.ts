@@ -36,7 +36,7 @@ const TSX_LOADER = pathToFileURL(join(REPO, "node_modules/tsx/dist/loader.mjs"))
 const BIN = (pkg: string, rel: string) => join(REPO, "node_modules", pkg, rel);
 
 /** Never copied: the dependencies (symlinked instead), git, and build output anywhere in the tree. */
-const SKIP_TOP = new Set(["node_modules", ".git"]);
+const SKIP_TOP = new Set(["node_modules", ".git", ".claude"]);
 const SKIP = new Set(["dist", "coverage"]);
 
 interface Run {

@@ -26,7 +26,31 @@ const SEEDS: Record<string, (plan: Plan) => Partial<SimSeed>> = {
     },
     neon: { projects: { [project(plan, "neon")]: { branches: [{ name: "main" }, { name: "staging", parent: "main" }] } } },
   }),
+  // The generic REST sim serves any path once it is known: the example's collections (empty) and parents.
+  "http-flags-webhooks-allowlists.plan.yaml": () => ({
+    rest: {
+      collections: { "/gates": [], "/webhook_endpoints": [] },
+      objects: { "/clients/aBcD1234eFgH5678": { web_origins: ["https://acme.dev"] }, "/projects/abcdefghijklmnopqrst/config/auth": { uri_allow_list: "https://acme.dev/**" } },
+    },
+  }),
 };
+
+/**
+ * For every `providers.http` API: its base URL override pointed at the sim's generic REST provider, and a
+ * placeholder for each credential variable it names.
+ */
+function httpEnv(plan: Plan, sim: SimHandle): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [api, raw] of Object.entries(plan.providers.http ?? {})) {
+    const block = raw as { base_url_env?: string; auth?: Record<string, unknown> };
+    if (!block.base_url_env) throw new Error(`examples: providers.http.${api} needs base_url_env, so this suite can point it at the sim`);
+    env[block.base_url_env] = `${sim.url}/rest`;
+    const auth = block.auth ?? {};
+    const basic = (auth.basic ?? {}) as Record<string, unknown>;
+    for (const name of [auth.bearer_env, auth.value_env, basic.user_env, basic.password_env]) if (typeof name === "string") env[name] = `example-credential-for-${name}`;
+  }
+  return env;
+}
 
 function project(plan: Plan, adapter: string): string {
   return String(plan.providers[adapter]?.project ?? "");
@@ -37,8 +61,26 @@ function seedFor(file: string, plan: Plan): Partial<SimSeed> {
   const seed: Partial<SimSeed> = {};
   if (plan.providers.vercel) seed.vercel = { projects: { [project(plan, "vercel")]: { envs: [] } } };
   if (plan.providers.neon) seed.neon = { projects: { [project(plan, "neon")]: { branches: [{ name: "main" }] } } };
+  const ps = plan.providers.planetscale;
+  if (ps) seed.planetscale = { organizations: { [String(ps.organization)]: { [String(ps.database)]: [{ name: "main", production: true }] } } };
+  if (plan.providers.launchdarkly) seed.launchdarkly = { projects: { [project(plan, "launchdarkly")]: launchdarklyProject(plan) } };
   if (plan.providers.supabase) seed.supabase = { projects: { [project(plan, "supabase")]: {} } };
   return { ...seed, ...(SEEDS[file]?.(plan) ?? {}) };
+}
+
+/**
+ * The LaunchDarkly project an example's lines target: its environment, and each flag a line names, with on/off
+ * variations plus the names an example asks for (`variation: Treatment`).
+ */
+function launchdarklyProject(plan: Plan) {
+  const lines = plan.changes.filter((c) => c.adapter === "launchdarkly");
+  const flags = Object.fromEntries(
+    lines.map((c) => {
+      const named = typeof c.params.variation === "string" ? [{ value: c.params.variation.toLowerCase(), name: c.params.variation }] : [];
+      return [String(c.params.flag), { variations: [{ value: true, name: "on" }, { value: false, name: "off" }, ...named] }];
+    }),
+  );
+  return { environments: [String(plan.providers.launchdarkly?.environment)], flags };
 }
 
 /** A value for every `env://NAME` the plan references, so secrets resolve the way they would in CI. */
@@ -80,7 +122,7 @@ describe.each(examples.map((e) => [e.name.split("/").pop()!, e.source] as const)
     for (const env of plan.environments) {
       const r = await runCli(
         ["plan", "--json", "--plan", join(EXAMPLES_DIR, file), "--env", env, "--pr", "42", "--branch", "feat/checkout", "--sha", SHA, "--receipts", "local", "--receipts-dir", join(ws.dir, file)],
-        { env: cliEnv(sim, secretEnv(plan)), cwd: ws.dir },
+        { env: cliEnv(sim, { ...secretEnv(plan), ...httpEnv(plan, sim) }), cwd: ws.dir },
       );
       const bad = (r.json?.lines ?? []).filter((l: { status: string }) => l.status === "error" || l.status === "blocked");
       expect({ env, code: r.code, ok: r.json?.ok, bad, error: r.json?.error }).toEqual({ env, code: 0, ok: true, bad: [], error: undefined });

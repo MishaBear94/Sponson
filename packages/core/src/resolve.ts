@@ -5,6 +5,11 @@ import { isFromRef, isKeepRef, isSecretRef, type Literal, type OutputSpec, type 
 export interface LineOutputs {
   values: Record<string, Literal>;
   specs: Record<string, OutputSpec>;
+  /**
+   * The line's resource exists and this run did not reveal its `once` outputs: those absent from `values` were
+   * shown in an earlier run and never come back, so references to them resolve to `{ keep: true }`.
+   */
+  spent?: boolean;
 }
 
 /** Marker placed into params for values that are not known yet. Adapters compare on shape when they see it. */
@@ -56,6 +61,8 @@ export interface ResolveResult {
   inputs: Record<string, ResolvedValue>;
   pending: Array<{ path: string; ref: string; line: string }>;
   secrets: Array<{ path: string; ref: string }>;
+  /** References to `once` outputs revealed in an earlier run, resolved to `{ keep: true }` (see `OutputSpec.once`). */
+  spent: Array<{ path: string; ref: string; line: string }>;
 }
 
 /**
@@ -70,6 +77,7 @@ export function resolveParams(
   const inputs: Record<string, ResolvedValue> = {};
   const pending: ResolveResult["pending"] = [];
   const secrets: ResolveResult["secrets"] = [];
+  const spent: ResolveResult["spent"] = [];
 
   /** An output reference: its value when the line has produced it, else a pending marker. */
   const fromRef = (ref: string, key: string): unknown => {
@@ -80,6 +88,12 @@ export function resolveParams(
     if (lo && output in lo.values) {
       inputs[key] = { state: "resolved", value: sensitive ? null : lo.values[output]!, ref, sensitive, dependsOn: line };
       return lo.values[output];
+    }
+    if (lo?.spent && lo.specs[output]?.once) {
+      // Shown once, in the run that created it: whoever received it then keeps it.
+      inputs[key] = { state: "kept", value: null, ref, sensitive, dependsOn: line };
+      spent.push({ path: key, ref, line });
+      return KEEP_MARKER;
     }
     inputs[key] = { state: "pending", value: null, ref, dependsOn: line, sensitive };
     pending.push({ path: key, ref, line });
@@ -111,7 +125,7 @@ export function resolveParams(
   };
 
   const resolved = rebuild(params, []) as ResolvedParams;
-  return { params: resolved, inputs, pending, secrets };
+  return { params: resolved, inputs, pending, secrets, spent };
 }
 
 /** All `{secret}` references in a params object. */

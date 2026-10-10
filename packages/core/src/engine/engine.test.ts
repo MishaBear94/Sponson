@@ -673,3 +673,113 @@ describe("v2: scope and environment boundaries", () => {
     await expect(planRun(opts(PLAN.replace("a.id", "a.idd")))).rejects.toMatchObject({ code: "REF_OUTPUT_UNKNOWN" });
   });
 });
+
+describe("once-only outputs (ADR 0018)", () => {
+  const ONCE = `
+version: 1
+changes:
+  - id: pw
+    adapter: fake
+    op: item
+    name: pw
+    value: one
+  - id: env
+    adapter: fake
+    op: item
+    name: env
+    value: { from: pw.token }
+`;
+
+  it("reaches dependents in the run that creates it, is never recorded, and a re-apply writes nothing", async () => {
+    const first = await applyRun(opts(ONCE));
+    expect(first.receipt.status).toBe("complete");
+    expect(cloud.items.get("env")!.value).toBe(`t-${cloud.items.get("pw")!.id}-pw`);
+    expect(JSON.stringify(first.receipt)).not.toContain("t-it_");
+
+    const writes = cloud.writes.length;
+    const plan = await planRun(opts(ONCE));
+    expect(plan.lines.map((l) => l.status)).toEqual(["unchanged", "unchanged"]);
+    expect(plan.lines[1]!.inputs["value"]).toMatchObject({ state: "kept", ref: "pw.token", dependsOn: "pw" });
+    const again = await applyRun(opts(ONCE));
+    expect(again.receipt.status).toBe("complete");
+    expect(Object.values(again.receipt.lines).map((l) => l.status)).toEqual(["unchanged", "unchanged"]);
+    expect(cloud.writes.length).toBe(writes);
+  });
+
+  it("is pending in a plan while the producing line still has to create its resource", async () => {
+    const r = await planRun(opts(ONCE));
+    expect(r.lines.map((l) => l.status)).toEqual(["create", "pending"]);
+  });
+
+  it("a re-created producer (missing drift) passes its new value on in that run", async () => {
+    await applyRun(opts(ONCE));
+    cloud.delete("pw");
+    const r = await applyRun(opts(ONCE));
+    expect(r.receipt.status).toBe("complete");
+    expect(cloud.items.get("env")!.value).toBe(`t-${cloud.items.get("pw")!.id}-pw`);
+  });
+
+  it("a dependent that would need the value in a later run is refused, and nothing is re-created", async () => {
+    await applyRun(opts(ONCE));
+    cloud.delete("env");
+    const writes = cloud.writes.length;
+    const plan = await planRun(opts(ONCE));
+    expect(plan.lines[1]).toMatchObject({ status: "blocked", errorCode: "OUTPUT_UNAVAILABLE" });
+    const r = await applyRun(opts(ONCE));
+    expect(r.receipt.status).toBe("failed");
+    expect(r.receipt.lines["env"]).toMatchObject({ status: "blocked", errorCode: "OUTPUT_UNAVAILABLE", error: expect.stringMatching(/`pw.token`.*earlier run.*Nothing was written/) });
+    expect(cloud.writes.length).toBe(writes);
+    expect(cloud.items.has("pw")).toBe(true);
+  });
+});
+
+describe("ops that narrow their provider block and declare outputs per line (OpSpec.providerFor, outputsFor)", () => {
+  const NARROW = `
+version: 1
+providers:
+  fake:
+    one: { region: eu }
+    two: { region: us }
+changes:
+  - { id: a, adapter: fake, op: item, api: one, name: alpha, value: v, declared: [extra] }
+  - { id: b, adapter: fake, op: item, api: two, name: beta, value: { from: a.extra } }
+`;
+
+  beforeEach(() => {
+    const base = cloud.adapter();
+    const item = base.ops.item!;
+    const narrowed = {
+      ...item,
+      providerFor: (block: Record<string, unknown>, params: Record<string, unknown>) => {
+        const b = block[String(params.api)];
+        if (!b || typeof b !== "object") throw new SponsonError("PLAN_INVALID", `no api ${String(params.api)}`);
+        return b as Record<string, unknown>;
+      },
+      outputsFor: (params: Record<string, unknown>) => ({
+        ...item.outputs,
+        ...Object.fromEntries(((params.declared as string[] | undefined) ?? []).map((n) => [n, { available: "immediate" as const }])),
+      }),
+    };
+    registry = new Registry().addAdapter({ ...base, ops: { item: narrowed } });
+  });
+
+  it("records each resource under its own part of the provider block", async () => {
+    const { receipt } = await applyRun(opts(NARROW.replace("{ from: a.extra }", "w")));
+    expect(receipt.ledger.map((e) => [e.key, e.provider])).toEqual([
+      ["item:alpha", { region: "eu" }],
+      ["item:beta", { region: "us" }],
+    ]);
+  });
+
+  it("checks references against the outputs a line declares, before any provider call", async () => {
+    await expect(planRun(opts(NARROW.replace("a.extra", "a.undeclared")))).rejects.toMatchObject({ code: "REF_OUTPUT_UNKNOWN" });
+    expect(cloud.reads).toBe(0);
+    const r = await planRun(opts(NARROW));
+    expect(r.lines.find((l) => l.id === "b")!.waitingOn).toBe("a");
+  });
+
+  it("fails the run before any provider call when a line names a block that does not exist", async () => {
+    await expect(planRun(opts(NARROW.replace("api: two", "api: three")))).rejects.toMatchObject({ code: "PLAN_INVALID" });
+    expect(cloud.reads).toBe(0);
+  });
+});

@@ -36,6 +36,12 @@ describe("router", () => {
     expect(serve(core, { hits: [] }, req("GET", "/projects/p")).body).toBe("fallback");
   });
 
+  it("passes a trailing *name segment as the rest of the path, undecoded", () => {
+    const rest = router<null>([route("GET", "/files/*path", ({ params }) => new Reply(200, params.path))], () => new Reply(404, "fallback"));
+    expect(rest(core, null, req("GET", "/files/a/b%2Fc")).body).toBe("a/b%2Fc");
+    expect(rest(core, null, req("GET", "/files/")).body).toBe("fallback");
+  });
+
   it("matches whole paths, segments literally, and never an empty segment", () => {
     expect(serve(core, { hits: [] }, req("GET", "/v1.0/ping")).body).toBe("pong");
     expect(serve(core, { hits: [] }, req("GET", "/v1x0/ping")).body).toBe("fallback");

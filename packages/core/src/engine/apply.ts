@@ -304,7 +304,8 @@ class ApplyRun {
   private setOutputs(c: Change, values: Record<string, unknown>): void {
     const op = this.prepared.ops.get(c.id)!;
     this.rc.guardOutputs(values, op.outputs);
-    this.outputs.set(c.id, { values: values as LineOutputs["values"], specs: op.outputs });
+    // The line's resource exists now: a `once` output it did not return in this run was shown in an earlier one.
+    this.outputs.set(c.id, { values: values as LineOutputs["values"], specs: op.outputs, spent: true });
     const pub = publicOutputs(values, op.outputs);
     const line = this.receipt.lines[c.id];
     if (line) line.outputs = pub;
@@ -375,7 +376,7 @@ class ApplyRun {
   private async rollback(): Promise<void> {
     await this.resolveIntents();
     for (const { line: c, keys } of [...this.created].reverse()) {
-      const provider = this.rc.provider(c.adapter);
+      const provider = this.rc.provider(c);
       const entries = [...keys].map((k) => this.rc.ledger.get(c.adapter, provider, k)).filter((e): e is LedgerEntry => !!e);
       const receiptLine = this.receipt.lines[c.id]!;
       try {
@@ -399,7 +400,7 @@ class ApplyRun {
   private async resolveIntents(): Promise<void> {
     for (const [lineId, keys] of this.intents) {
       const c = this.prepared.ordered.find((x) => x.id === lineId)!;
-      const provider = this.rc.provider(c.adapter);
+      const provider = this.rc.provider(c);
       const unresolved = [...keys].filter((k) => this.rc.ledger.get(c.adapter, provider, k)?.createdBy === "intent");
       if (unresolved.length === 0) continue;
       try {

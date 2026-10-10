@@ -1,3 +1,4 @@
+import { SponsonError } from "../errors.js";
 import { sha256 } from "../hash.js";
 import { isPendingMarker, markerKind, pendingRef } from "../resolve.js";
 import type { ApplyResult, DiffSide, LiveState, ResourceAdapter, ResourceRecord, SecretSource } from "../types.js";
@@ -6,7 +7,9 @@ import type { ApplyResult, DiffSide, LiveState, ResourceAdapter, ResourceRecord,
  * An in-memory provider for engine tests and property tests.
  *
  * One op, `item`, with params `{ name, value }`:
- *   outputs: id (immediate), secret (immediate, sensitive), url (external: "deploy")
+ *   outputs: id (immediate), secret (immediate, sensitive), url (external: "deploy"),
+ *            token (sensitive, once: only in the apply that creates the item)
+ * A `{ keep: true }` value is unchanged when the item exists and PARAM_INVALID when it does not.
  * Chaos knobs let a test fail the n-th write, make the deploy never happen, etc.
  */
 export interface FakeItem {
@@ -80,6 +83,7 @@ export class FakeCloud {
             id: { available: "immediate" },
             secret: { available: "immediate", sensitive: true },
             url: { available: "external", event: "deploy" },
+            token: { available: "immediate", sensitive: true, once: true },
           },
           defaults: (p, ctx) => ({ ...p, name: p.name ?? `item-${ctx.scope}` }),
           writesEnvironment: (p) => (typeof p.target === "string" ? p.target : null),
@@ -95,6 +99,10 @@ export class FakeCloud {
             const want = p.value;
             const current = live?.resources.find((r) => r.key === key(n));
             const marker = markerKind(want);
+            if (marker === "keep") {
+              if (current) return [{ key: key(n), label: n, kind: "unchanged" }];
+              throw new SponsonError("PARAM_INVALID", `${n} is declared \`{ keep: true }\` but does not exist`, { key: key(n) });
+            }
             const after: DiffSide = marker === "pending" || marker === "secret" ? { state: marker, ref: pendingRef(want as string) } : { state: "literal", value: String(want) };
             if (!current) return [{ key: key(n), label: n, kind: "create", after }];
             if (!isPendingMarker(want) && current.hash === sha256(String(want))) return [{ key: key(n), label: n, kind: "unchanged" }];
@@ -106,7 +114,7 @@ export class FakeCloud {
             cloud.maybeFail("apply", n);
             const existing = cloud.items.get(n);
             if (existing) {
-              if (existing.value !== String(p.value)) {
+              if (markerKind(p.value) !== "keep" && existing.value !== String(p.value)) {
                 existing.value = String(p.value);
                 cloud.writes.push({ op: "update", name: n });
               }
@@ -119,7 +127,7 @@ export class FakeCloud {
             cloud.writes.push({ op: "create", name: n });
             cloud.maybeFail("lost", n); // the write happened; the response did not arrive
             void live;
-            return { resources: [record(it)], outputs: outputsOf(it), created: [key(n)] };
+            return { resources: [record(it)], outputs: { ...outputsOf(it), token: `t-${it.id}-${it.name}` }, created: [key(n)] };
           },
           async destroy(_actx, resources) {
             for (const r of resources) {

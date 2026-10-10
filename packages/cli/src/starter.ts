@@ -26,17 +26,27 @@ const SCHEMA_LINE = "# yaml-language-server: $schema=https://raw.githubuserconte
 export const VERCEL_PROJECT_HINT =
   "run `vercel link` (it writes .vercel/project.json; then delete this file and run `sponson init` again), or Vercel dashboard → your project → Settings → General → Project ID";
 export const NEON_PROJECT_HINT = "run `neonctl projects list`, or https://console.neon.tech → your project → Settings → General → Project ID";
+export const PLANETSCALE_IDS_HINT = "the name slugs of your organization and database: run `pscale org list` and `pscale database list`, or see the URL https://app.planetscale.com/<organization>/<database>";
 export const SUPABASE_PROJECT_HINT =
   "run `supabase link` (it writes supabase/.temp/project-ref), or `supabase projects list` (REFERENCE ID), or Supabase dashboard → Project Settings → General → Project ID";
 
-/** Each provider's credential variable, read when Sponson runs (never written into the plan). */
-const CREDENTIALS: Record<string, string> = { vercel: "VERCEL_TOKEN", neon: "NEON_API_KEY", clerk: "CLERK_SECRET_KEY", supabase: "SUPABASE_ACCESS_TOKEN" };
+/** Each provider's credential variables, read when Sponson runs (never written into the plan). */
+const CREDENTIALS: Record<string, string[]> = {
+  vercel: ["VERCEL_TOKEN"],
+  neon: ["NEON_API_KEY"],
+  planetscale: ["PLANETSCALE_SERVICE_TOKEN_ID", "PLANETSCALE_SERVICE_TOKEN"],
+  clerk: ["CLERK_SECRET_KEY"],
+  supabase: ["SUPABASE_ACCESS_TOKEN"],
+};
 
 interface Shape {
   vercel: boolean;
   neon: boolean;
+  /** The database lines use PlanetScale: detected, and Neon (which wins when both are) was not. */
+  planetscale: boolean;
   clerk: boolean;
-  /** A Supabase preview branch is the database line (Supabase detected, Neon not). */
+  launchdarkly: boolean;
+  /** A Supabase preview branch is the database line (Supabase detected, neither Neon nor PlanetScale). */
   supabaseDb: boolean;
   /** The preview URL goes on a Supabase Auth allow-list (Supabase detected, and a preview URL from Vercel). */
   supabaseAuth: boolean;
@@ -44,29 +54,33 @@ interface Shape {
   supabase: boolean;
   deploy: boolean;
   assumed: boolean;
+  prisma: boolean;
 }
 
 function shapeOf(d: StackDetection): Shape {
-  const assumed = !has(d, "vercel") && !has(d, "neon") && !has(d, "supabase");
+  // Database precedence when several are detected: Neon > PlanetScale > Supabase (one `db` line). A Supabase
+  // auth_redirect line is still written whenever Supabase is present and there is a preview URL.
+  const assumed = !has(d, "vercel") && !has(d, "neon") && !has(d, "planetscale") && !has(d, "supabase");
   const vercel = has(d, "vercel") || assumed;
   const neon = has(d, "neon") || assumed;
-  const supabaseDb = has(d, "supabase") && !neon;
+  const planetscale = has(d, "planetscale") && !neon;
+  const supabaseDb = has(d, "supabase") && !neon && !planetscale;
   const supabaseAuth = has(d, "supabase") && vercel;
-  return { vercel, neon, clerk: has(d, "clerk"), supabaseDb, supabaseAuth, supabase: supabaseDb || supabaseAuth, deploy: vercel && d.vercelAutoDeployOff, assumed };
+  return { vercel, neon, planetscale, clerk: has(d, "clerk"), launchdarkly: has(d, "launchdarkly"), supabaseDb, supabaseAuth, supabase: supabaseDb || supabaseAuth, deploy: vercel && d.vercelAutoDeployOff, assumed, prisma: has(d, "prisma") };
 }
 
 /** The adapters the starter's lines use, for the "set these credentials" hint. */
 export function credentialsFor(d: StackDetection): string[] {
   const s = shapeOf(d);
-  return (["vercel", "neon", "clerk", "supabase"] as const).filter((a) => s[a] && (a !== "clerk" || s.vercel)).map((a) => CREDENTIALS[a]!);
+  return (["vercel", "neon", "planetscale", "clerk", "supabase"] as const).filter((a) => s[a] && (a !== "clerk" || s.vercel)).flatMap((a) => CREDENTIALS[a]!);
 }
 
 export function composeStarter(d: StackDetection): Starter {
   const s = shapeOf(d);
   const todos: Todo[] = [];
   const out = [...header(d, s), "version: 1", "environments: [preview, production]", ...providers(d, s, todos), "", "changes:"];
-  // Never empty: without Vercel, Neon or Supabase the template assumes Vercel and Neon.
-  out.push(...dbLine(s), ...supabaseBranchLine(s), ...envLine(d, s), ...deployLine(s), ...clerkLine(s), ...supabaseAuthLine(s), ...orphanNotes(s));
+  // Never empty: without Vercel, Neon, PlanetScale or Supabase the template assumes Vercel and Neon.
+  out.push(...dbLine(s), ...supabaseBranchLine(s), ...envLine(d, s), ...deployLine(s), ...clerkLine(s), ...supabaseAuthLine(s), ...flagLine(s), ...orphanNotes(s));
   const text = out.join("\n").replace(/\n+$/, "") + "\n";
   return { text, todos, assumed: s.assumed };
 }
@@ -76,12 +90,15 @@ function header(d: StackDetection, s: Shape): string[] {
   if (s.assumed) {
     out.push(
       "#",
-      "# Nothing Sponson manages (Vercel, Neon) was detected in this repository's files, so this is the template",
+      "# Nothing Sponson manages (Vercel, Neon, PlanetScale) was detected in this repository's files, so this is the template",
       "# for the most common stack: a Vercel app with a Neon database. Fill in the TODOs, or delete what you do not use.",
     );
   }
   if (d.found.length > 0) out.push("#", `# Detected: ${names(d.found)}.`);
   for (const u of d.unsupported) out.push(`# Not supported yet, so no line below manages it: ${u.name} — ${u.pointer}.`);
+  if (s.neon && has(d, "planetscale")) {
+    out.push("# PlanetScale was detected too, but the database lines below use Neon; for PlanetScale, see the `planetscale.branch` section of the reference.");
+  }
   out.push("#", "# Credentials are never written here: Sponson reads them from the environment when it runs.");
   return out;
 }
@@ -103,6 +120,11 @@ function providers(d: StackDetection, s: Shape, todos: Todo[]): string[] {
     const note = d.ids.neonProjectFrom ? `# from ${d.ids.neonProjectFrom}` : todo(todos, "providers.neon.project", project, NEON_PROJECT_HINT);
     out.push(`  neon: { project: ${q(project)} }   ${note}`);
   }
+  if (s.planetscale) {
+    const note = todo(todos, "providers.planetscale.organization", "my-org", PLANETSCALE_IDS_HINT);
+    todos.push({ path: "providers.planetscale.database", placeholder: "my-db", hint: PLANETSCALE_IDS_HINT });
+    out.push(`  planetscale: { organization: "my-org", database: "my-db" }   ${note}`);
+  }
   if (s.supabase) {
     const project = d.ids.supabaseProject ?? "abcdefghijklmnopqrst";
     const note = d.ids.supabaseProjectFrom ? `# from ${d.ids.supabaseProjectFrom}` : todo(todos, "providers.supabase.project", project, SUPABASE_PROJECT_HINT);
@@ -117,6 +139,7 @@ function todo(todos: Todo[], path: string, placeholder: string, hint: string): s
 }
 
 function dbLine(s: Shape): string[] {
+  if (s.planetscale) return planetscaleLines(s);
   if (!s.neon) return [];
   return [
     "  # One Neon branch per pull request (sponson/preview/pr-<n>), forked from `main`; deleted by `apply --destroy`.",
@@ -124,6 +147,27 @@ function dbLine(s: Shape): string[] {
     "    adapter: neon",
     "    op: branch",
     "    parent: main",
+    "    environments: [preview]",
+    "",
+  ];
+}
+
+function planetscaleLines(s: Shape): string[] {
+  return [
+    "  # One PlanetScale development branch per pull request (sponson-preview-pr-<n>), from `main`; deleted by `apply --destroy`.",
+    "  - id: db",
+    "    adapter: planetscale",
+    "    op: branch",
+    "    parent: main",
+    "    environments: [preview]",
+    "",
+    "  # A password on that branch. PlanetScale shows its plaintext only when it is created, so the lines that use",
+    "  # `dbpw.connection_string` must stay in this plan: later runs keep what they received and never rotate it.",
+    "  - id: dbpw",
+    "    adapter: planetscale",
+    "    op: password",
+    "    branch: { from: db.name }",
+    ...(s.prisma ? ['    connection_params: "sslaccept=strict"   # the TLS parameter Prisma reads'] : []),
     "    environments: [preview]",
     "",
   ];
@@ -144,9 +188,12 @@ function supabaseBranchLine(s: Shape): string[] {
 
 function envLine(d: StackDetection, s: Shape): string[] {
   if (!s.vercel) return [];
-  const values = s.neon || s.supabaseDb
-    ? [`      ${d.databaseVar}: { from: db.connection_string }   # ${d.databaseVarFrom ? `the name ${d.databaseVarFrom} uses; ` : ""}a reference, never a value`]
-    : [`      ${d.publicPrefix}SPONSON_SCOPE: "\${ctx.scope}"   # an example (pr-42, main, …): replace with the variables your previews need`];
+  const why = `# ${d.databaseVarFrom ? `the name ${d.databaseVarFrom} uses; ` : ""}a reference, never a value`;
+  const values = [s.planetscale
+    ? `      ${d.databaseVar}: { from: dbpw.connection_string }   ${why}`
+    : s.neon || s.supabaseDb
+      ? `      ${d.databaseVar}: { from: db.connection_string }   ${why}`
+      : `      ${d.publicPrefix}SPONSON_SCOPE: "\${ctx.scope}"   # an example (pr-42, main, …): replace with the variables your previews need`];
   // The branch's API keys are not an output yet: its anon/publishable key still has to be set by hand.
   if (s.supabaseDb) values.push(`      ${d.publicPrefix}SUPABASE_URL: { from: db.api_url }   # the branch's own API URL; set its API key by hand for now`);
   return [
@@ -207,6 +254,29 @@ function supabaseAuthLine(s: Shape): string[] {
   ];
 }
 
+/**
+ * LaunchDarkly: a commented example, because nothing in the repository names the flag, the project or the
+ * environment, and a guessed flag key would fail every plan.
+ */
+function flagLine(s: Shape): string[] {
+  if (!s.launchdarkly) return [];
+  const from = s.deploy ? "deploy.preview_url" : "env.preview_url";
+  const key = s.vercel ? [`  #   context_kind: url              # the context kind your app evaluates the preview URL as`, `  #   key: { from: ${from} }`] : [`  #   # key: defaults to the scope (pr-42); context_kind to user`];
+  return [
+    "  # LaunchDarkly was detected. To turn a flag on for each preview, add under `providers:`",
+    "  #   launchdarkly: { project: <project key>, environment: <environment key> }   # a preview or test environment",
+    "  # (LAUNCHDARKLY_ACCESS_TOKEN is read from the environment) and uncomment this line:",
+    "  # - id: flag",
+    "  #   adapter: launchdarkly",
+    "  #   op: flag_target",
+    "  #   flag: <flag key>",
+    ...key,
+    "  #   variation: true",
+    "  #   environments: [preview]",
+    "",
+  ];
+}
+
 /** Detected providers that have nothing to connect to, said in the plan instead of silently dropped. */
 function orphanNotes(s: Shape): string[] {
   const out: string[] = [];
@@ -215,6 +285,12 @@ function orphanNotes(s: Shape): string[] {
   }
   if (s.neon && !s.vercel) {
     out.push("  # The branch's connection string (`{ from: db.connection_string }`) has no deploy target Sponson manages yet;", "  # pass it to yours by hand, or follow ROADMAP.md section 2 for Netlify, Railway and Fly.io.");
+  }
+  if (s.planetscale && !s.vercel) {
+    out.push(
+      "  # The password's connection string (`{ from: dbpw.connection_string }`) has no deploy target Sponson manages yet,",
+      "  # and PlanetScale shows it only once: follow ROADMAP.md section 2 for Netlify, Railway and Fly.io.",
+    );
   }
   if (s.clerk && !s.vercel) out.push("  # Clerk was detected, but a redirect line needs a preview URL from a deploy target Sponson manages (Vercel).");
   return out;
