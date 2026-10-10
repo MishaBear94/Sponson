@@ -4,10 +4,23 @@ import { GitBranchReceiptStore, isKeepRef, planRun, walkParams, type Ctx, type D
 import { Document, isMap, isScalar, isSeq, parseDocument, visit, type Pair } from "yaml";
 import { UsageError, planPathFor, toRunOptions, withInvocation, type GlobalOpts, type Invocation, type IO } from "../context.js";
 import { withRedactorWarnings } from "../output.js";
+import { detectStack, fsReader, type Finding, type UnsupportedFinding } from "../stack.js";
+import { composeStarter, credentialsFor, type Todo } from "../starter.js";
 
 export interface InitOpts extends GlobalOpts {
   /** Adopt only the unmanaged resource whose key, id or label matches. */
   adopt?: string;
+}
+
+export interface InitDetected {
+  /** What Sponson can use: providers (vercel, neon, clerk), frameworks and ORMs, each with its evidence. */
+  found: Finding[];
+  /** Detected but not managed by any built-in adapter yet, each with a pointer to the roadmap or an issue. */
+  unsupported: UnsupportedFinding[];
+  /** Placeholders left in the plan, with where to find the real value. */
+  todo: Todo[];
+  /** True when nothing Sponson manages was detected and the plan is the Vercel + Neon template. */
+  assumed: boolean;
 }
 
 export interface InitResult {
@@ -16,6 +29,11 @@ export interface InitResult {
   /** True when the plan file did not exist and a starter was written. */
   created: boolean;
   path: string;
+  /**
+   * What the repository's files say it uses, when a starter was written; `null` when the plan already existed.
+   * File, dependency and variable names only: never a value read from an `.env` file.
+   */
+  detected: InitDetected | null;
   /** Lines appended to an existing plan, with the resource keys each one adopts. */
   added: Array<{ id: string; adapter: string; op: string; keys: string[] }>;
   warnings: string[];
@@ -29,13 +47,14 @@ export interface InitResult {
 export async function initCommand(opts: InitOpts, io: IO, redactor: Redactor): Promise<number> {
   const planPath = planPathFor(opts, io);
   const existing = await readFile(planPath, "utf8").catch(() => null);
-  const result: InitResult = { ok: true, command: "init", created: false, path: planPath, added: [], warnings: [] };
+  const result: InitResult = { ok: true, command: "init", created: false, path: planPath, detected: null, added: [], warnings: [] };
   const text: string[] = [];
 
   if (existing === null) {
-    await writeFile(planPath, await starterPlan(io), "utf8");
+    const starter = await writeStarter(planPath, io);
     result.created = true;
-    text.push(`Wrote ${planPath}`);
+    result.detected = starter.detected;
+    text.push(...starter.text);
   } else {
     text.push(...(await withInvocation(opts, io, redactor, (inv) => adoptUnmanaged(inv, existing, opts, io, result))));
     result.warnings = withRedactorWarnings(result.warnings, redactor);
@@ -98,44 +117,27 @@ async function adoptUnmanaged(inv: Invocation, existing: string, opts: InitOpts,
 // Starter plan
 // ---------------------------------------------------------------------------
 
-async function starterPlan(io: IO): Promise<string> {
-  let project = io.env.VERCEL_PROJECT_ID;
-  let team = io.env.VERCEL_ORG_ID;
-  try {
-    const vercel = JSON.parse(await readFile(join(io.cwd, ".vercel", "project.json"), "utf8")) as { projectId?: string; orgId?: string };
-    project ??= vercel.projectId;
-    team ??= vercel.orgId;
-  } catch {
-    /* no linked Vercel project */
-  }
-  const neon = io.env.NEON_PROJECT_ID ?? "proj_xxx";
-  const vercelLine = team ? `{ project: ${q(project ?? "prj_xxx")}, team: ${q(team)} }` : `{ project: ${q(project ?? "prj_xxx")} }`;
-  return `# release.plan.yaml — everything that ships beside the code. See https://github.com/MishaBear94/Sponson
-version: 1
-environments: [preview, production]
-providers:
-  vercel: ${vercelLine}
-  neon: { project: ${q(neon)} }
-
-changes:
-  - id: db
-    adapter: neon
-    op: branch
-    parent: main
-    environments: [preview]
-
-  - id: env
-    adapter: vercel
-    op: env
-    target: preview
-    values:
-      DATABASE_URL: { from: db.connection_string }
-    environments: [preview]
-`;
+/** Detect the stack from the repository's files, write the starter plan composed for it, and summarise. */
+async function writeStarter(planPath: string, io: IO): Promise<{ detected: InitDetected; text: string[] }> {
+  const { VERCEL_PROJECT_ID, VERCEL_ORG_ID, NEON_PROJECT_ID } = io.env;
+  const detection = await detectStack(fsReader(io.cwd), { VERCEL_PROJECT_ID, VERCEL_ORG_ID, NEON_PROJECT_ID });
+  const starter = composeStarter(detection);
+  await writeFile(planPath, starter.text, "utf8");
+  const detected: InitDetected = { found: detection.found, unsupported: detection.unsupported, todo: starter.todos, assumed: starter.assumed };
+  return { detected, text: [`Wrote ${planPath}`, ...initSummary(detected, credentialsFor(detection))] };
 }
 
-function q(s: string): string {
-  return JSON.stringify(s);
+/** The short human summary: what was found, what is not supported yet, what is left to fill in, what to run next. */
+export function initSummary(d: InitDetected, credentials: string[]): string[] {
+  const out = [
+    d.assumed
+      ? `Detected: ${d.found.length ? `${d.found.map((f) => f.name).join(", ")}, but ` : ""}nothing Sponson manages; wrote the Vercel + Neon template`
+      : `Detected: ${d.found.map((f) => `${f.name} (${f.evidence[0]!})`).join(", ")}`,
+  ];
+  if (d.unsupported.length) out.push("Not supported yet (no line manages them):", ...d.unsupported.map((u) => `  ${u.name} (${u.evidence[0]!}): ${u.pointer}`));
+  if (d.todo.length) out.push("To fill in:", ...d.todo.map((t) => `  ${t.path} (now ${JSON.stringify(t.placeholder)}): ${t.hint}`));
+  out.push(`Next: set ${credentials.join(", ")} in your environment, then run \`sponson plan\``);
+  return out;
 }
 
 async function ensureGitignore(cwd: string): Promise<boolean> {

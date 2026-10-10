@@ -55,7 +55,7 @@ Dependencies come from `from:` references. Use `depends_on: [id]` only for order
 
 | command | meaning | side effects |
 |---|---|---|
-| `sponson init` | make the plan catch up with reality: write a starter, or adopt unmanaged resources (`--adopt <key>`) | appends to the plan file only |
+| `sponson init` | make the plan catch up with reality: write a starter for the stack it detects (`--json` lists it under `detected`, with the `todo` placeholders to fill in), or adopt unmanaged resources (`--adopt <key>`) | appends to the plan file only |
 | `sponson plan` | read live state, print the diff and drift | none |
 | `sponson apply` | make reality catch up with the plan, roll back what this run created on failure, write a receipt | the ones in the file |
 

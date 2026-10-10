@@ -287,8 +287,10 @@ describe("sponson init", () => {
     const h = await harness(null);
     await mkdir(join(h.cwd, ".vercel"));
     await writeFile(join(h.cwd, ".vercel", "project.json"), JSON.stringify({ projectId: "prj_abc", orgId: "team_xyz" }));
+    await writeFile(join(h.cwd, "package.json"), JSON.stringify({ dependencies: { "@neondatabase/serverless": "1" } }));
     const r = await h.exec("init");
     expect(r.code).toBe(0);
+    expect(r.out).toContain("Detected: Vercel (.vercel/project.json), Neon (package.json: @neondatabase/serverless)");
     const plan = await readFile(join(h.cwd, "release.plan.yaml"), "utf8");
     expect(plan).toContain("version: 1");
     expect(plan).toContain('vercel: { project: "prj_abc", team: "team_xyz" }');
