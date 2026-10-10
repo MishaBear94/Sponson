@@ -15,6 +15,7 @@ The format is specified in [docs/plan-format.md](../docs/plan-format.md).
 | [explicit-deploy.plan.yaml](explicit-deploy.plan.yaml) | Sponson starting the deploy; `depends_on` |
 | [production-with-approval.plan.yaml](production-with-approval.plan.yaml) | preview and production in one file; approval |
 | [adopting-an-existing-project.plan.yaml](adopting-an-existing-project.plan.yaml) | what `sponson init` writes when it adopts; `{ keep: true }` |
+| [cloudflare-pages-vars.plan.yaml](cloudflare-pages-vars.plan.yaml) | Cloudflare Pages preview and production variables; shared preview keys; write-only secrets |
 
 ## nextjs-neon-preview.plan.yaml
 
@@ -99,3 +100,15 @@ What `sponson init` appends to an existing plan when it finds resources no scope
 `{ keep: true }`, grouped by target and git branch; an existing Neon branch is adopted by its `name:`. Nothing live
 changes, and adopted resources are never destroyed. Run `sponson init --adopt <key>` to adopt a single resource; the
 keys are listed under `drift` (`kind: unmanaged`) in `sponson plan --json`.
+
+## cloudflare-pages-vars.plan.yaml
+
+A Cloudflare Pages project's variables: plain text under `vars:`, secrets under `secrets:`. Pages has one set of
+preview variables for every preview deployment, so `pages-preview` holds only values that are the same for every pull
+request; apply it from the default branch first (scope `main`), and pull requests then rely on it without owning it.
+A pull request that sets another value for one of these keys is refused with `OWNED_BY_OTHER_SCOPE`. Each line's
+`target` must equal the run's `--env`; the production line requires approval like any other.
+
+Cloudflare never returns a secret's value, so Sponson compares secrets by presence and type: `pages-production` sets
+`rewrite_secrets: true` so that a rotated `STRIPE_LIVE_SECRET_KEY` is written on the next apply. Variables reach the
+next deployment; Sponson does not redeploy a Pages project.

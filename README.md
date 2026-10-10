@@ -146,8 +146,9 @@ sponson apply         # creates the branch, injects the variable, waits for the 
 database host such as `*.neon.tech`. It writes a line only for what it found (a Neon branch, the Vercel preview
 variable that references it under the name your code reads, a Clerk redirect for the preview URL), fills in the
 project ids it can find, and marks each one it cannot with a `TODO` comment saying where to look
-(`vercel link`, `neonctl projects list`). Services Sponson does not manage yet (Supabase, PlanetScale, Auth0,
-Netlify, Cloudflare, LaunchDarkly, PostHog, Stripe, Sentry, …) are listed as "not supported yet" with a link to the
+(`vercel link`, `neonctl projects list`). A Wrangler configuration (`wrangler.toml`, `wrangler.json`) gives a
+Cloudflare Pages variables line, with the project's `name`. Services Sponson does not manage yet (Supabase,
+PlanetScale, Auth0, Netlify, LaunchDarkly, PostHog, Stripe, Sentry, …) are listed as "not supported yet" with a link to the
 [roadmap](ROADMAP.md), never silently dropped. With nothing detected it writes the Vercel + Neon template.
 
 ```

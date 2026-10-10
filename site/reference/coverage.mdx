@@ -56,7 +56,7 @@ Columns:
 |---|---|---|---|---|---|
 | Vercel | Env vars per target and git branch; wait for the preview deployment, redeploy if it built before the write | REST `/v10/projects/{id}/env`, bearer; object per variable; deployment barrier | P (barrier, redeploy) | P0 | **yes** (`vercel.env`, `vercel.deploy`) |
 | Netlify | Env var values per deploy context (`deploy-preview`, `branch` + `context_parameter`) | REST `POST /api/v1/accounts/{account}/env?site_id=`, `PATCH .../env/{key}`; bearer; object per key, values list per context; deploys only see values set before they started | P (deploy barrier like Vercel) | P0 | no |
-| Cloudflare Pages / Workers | Pages: `deployment_configs.preview.env_vars` (all previews share one set, no per-branch values). Workers: secrets per script / preview version | REST `PATCH /accounts/{a}/pages/projects/{p}`, bearer; **map** merge-patch, `null` deletes; Workers `PUT .../workers/scripts/{s}/secrets` object | Y | P1 | no |
+| Cloudflare Pages / Workers | Pages: `deployment_configs.preview.env_vars` (all previews share one set, no per-branch values). Workers: secrets per script / preview version | REST `PATCH /accounts/{a}/pages/projects/{p}`, bearer; **map** merge-patch, `null` deletes; Workers `PUT .../workers/scripts/{s}/secrets` object | Y | P1 | **Pages** (`cloudflare.pages_env`); Workers no |
 | Render | Env vars on a preview service / preview environment | REST `PUT /v1/services/{id}/env-vars/{key}`, bearer; object per key; previews created by Render from `render.yaml` | Y | P1 | no |
 | Railway | Variables in a PR environment (Railway creates PR environments natively) | GraphQL `variableUpsert(projectId, environmentId, serviceId, name, value)`, bearer; object per name; deployment status for a barrier | P (GraphQL, env id lookup, barrier) | P1 | no |
 | Fly.io | Per-PR app (the usual pattern is one app per PR) plus its secrets | Machines API `api.machines.dev/v1/apps/{app}/secrets` (secret writes return a version, changed 2025) and GraphQL `setSecrets`; bearer; object; machines must be updated to see new secrets | P (app lifecycle, restart) | P1 | no |
@@ -188,12 +188,15 @@ manage). Weights: P0 = 3, P1 = 2, P2 = 1 (9 P0, 16 P1, 31 P2; total weight 90).
 
 | Measure | Covered | Coverage |
 |---|---|---|
-| Rows | 3 of 56 (Vercel env, Neon branch, Clerk redirect) | **5.4%** |
-| Weighted by priority | 9 of 90 | **10.0%** |
+| Rows | 4 of 56 (Vercel env, Neon branch, Clerk redirect, Cloudflare Pages env) | **7.1%** |
+| Weighted by priority | 11 of 90 | **12.2%** |
 | P0 rows only | 3 of 9 | 33% |
 | Secret sources (separate) | 4 of 9 vendors; weighted 7 of 14 | 44%; 50% |
 
-Plainly: Sponson covers the canonical Vercel + Neon + Clerk preview stack and almost nothing else. Three rows (Google
+The Cloudflare row counts as covered for its Pages half (`cloudflare.pages_env`); Workers secrets are not managed.
+
+Plainly: Sponson covers the canonical Vercel + Neon + Clerk preview stack, Cloudflare Pages variables, and almost
+nothing else. Three rows (Google
 OAuth clients, Clerk webhooks, Stripe sandboxes; weight 5) have no usable API, so no adapter can reach them; the
 ceiling is 53 rows / 94.4% weighted.
 
@@ -261,7 +264,7 @@ Ranked by weighted rows covered, then by how much they need more than `adapter: 
 | 5 | `auth0` | callbacks / logout URLs / web origins (P0) | Four arrays on one shared application with no precondition: the reference case for the list-mode lock, worth owning before generalising ([#16](https://github.com/MishaBear94/Sponson/issues/16)). |
 | 6 | `planetscale` | branch + password (P1) | Asynchronous branch readiness and a password returned once; closest to `neon.branch`. |
 | 7 | `railway` | PR-environment variables (P1) | GraphQL, environment-id lookup, and a deploy barrier; Railway creates the PR environment, Sponson fills it. |
-| 8 | `cloudflare` | Pages/Workers env (P1), DNS record (P1), R2 CORS (P2) | One token, three rows; Workers secrets and preview versions need script-level handling a template cannot express. |
+| 8 | `cloudflare` | Pages/Workers env (P1), DNS record (P1), R2 CORS (P2) | One token, three rows; Workers secrets and preview versions need script-level handling a template cannot express. Started: `cloudflare.pages_env` covers Pages variables ([docs/api-verification.md](/reference/api-verification#cloudflare)). |
 
 With these eight plus `adapter: http`, coverage reaches 44 rows (78.6%) and 75 of 90 weighted (83.3%). The rest are
 Fly.io, Amplify, Cloud Run, Azure Static Web Apps, DigitalOcean, Xata, MongoDB Atlas, CockroachDB, Algolia (all P1/P2

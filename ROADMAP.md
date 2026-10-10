@@ -42,6 +42,7 @@ and registers them. The checklist is in CONTRIBUTING.md.
 | Identity callbacks beyond Clerk: Auth0 (allowed callback URLs on an application), Supabase Auth redirect URLs ([#16](https://github.com/MishaBear94/Sponson/issues/16)) | Small, close to `clerk.ts` | adapter, **good first issue** |
 | Database branches: Supabase branching, PlanetScale branches | Close to `neon.ts`; output a connection string marked `sensitive` | adapter |
 | Deploy-target env vars: Netlify, Railway, Fly.io secrets | Close to `vercel.ts`'s `env` op, without the deploy barrier at first | adapter |
+| Cloudflare, after `pages_env`: Workers secrets per script, a Pages deployment op (redeploy after a variable write, and the branch alias URL from the deployment's `aliases` as an output), DNS records for preview hostnames | Pages variables shipped as `cloudflare.pages_env`; the alias URL is not computed from the branch name because Cloudflare does not document how long names are shortened | adapter |
 
 ## 3. More secret sources
 
