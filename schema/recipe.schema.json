@@ -6,6 +6,8 @@
   "type": "object",
   "required": ["provider", "title", "category", "verified_on", "docs", "api", "assumptions", "ops"],
   "additionalProperties": false,
+  "if": { "properties": { "api": { "not": { "properties": { "base_url": true }, "required": ["base_url"] } } } },
+  "then": { "properties": { "base_url_example": true }, "required": ["base_url_example"] },
   "properties": {
     "provider": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$", "description": "The provider's name: the file's name, and the first half of a line's `recipe: <provider>.<op>`." },
     "title": { "type": "string", "minLength": 1, "description": "The provider as people write it (Cloudflare)." },
@@ -47,6 +49,7 @@
         "encoding": { "enum": ["json", "form"] }
       }
     },
+    "base_url_example": { "type": "string", "pattern": "^https://\\S+$", "description": "For a per-account API (no `api.base_url`): an example base URL, used by the docs' example provider block and the recipe tests. Required then." },
     "assumptions": {
       "type": "array",
       "minItems": 1,
@@ -117,7 +120,8 @@
           "properties": {
             "id_from": { "type": "string", "description": "The body field a create chooses the id with." },
             "numeric_ids": { "type": "boolean" },
-            "objects": { "type": "object", "additionalProperties": { "type": "object" }, "description": "Objects to seed, by path (placeholders filled from the examples)." }
+            "objects": { "type": "object", "additionalProperties": { "type": "object" }, "description": "Objects to seed, by path (placeholders filled from the examples)." },
+            "collection": { "type": "string", "description": "The collection path (placeholders filled from the examples) a resource lives in, when its create is posted elsewhere. Default: the create's path." }
           }
         },
         "live": {

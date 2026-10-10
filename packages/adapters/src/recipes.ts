@@ -48,6 +48,11 @@ export interface RecipeSimHints {
   numeric_ids?: boolean;
   /** Objects to seed by path (placeholders filled from the example params): a list item's parent. */
   objects?: Record<string, Record<string, unknown>>;
+  /**
+   * The collection a resource lives in, when its create is posted to another path (Statsig adds a rule with
+   * `POST /gates/{id}/rule` and lists them at `/gates/{id}/rules`). Default: the create's path.
+   */
+  collection?: string;
 }
 
 /** One operation of a recipe: an `http.resource` or `http.list_item` spec with typed params. */
@@ -85,6 +90,8 @@ export interface Recipe {
   assumptions: RecipeAssumption[];
   /** The API block defaults: what `providers.http.<api>: { recipe: <provider> }` means. */
   api: Record<string, unknown>;
+  /** For a per-account API (no default `base_url`): the base URL the docs' example block and the recipe tests use. */
+  base_url_example?: string;
   ops: Record<string, RecipeOp>;
 }
 

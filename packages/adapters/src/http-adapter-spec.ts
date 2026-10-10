@@ -323,7 +323,8 @@ export interface OutputDecl {
 export interface ResourceSpec {
   api: string;
   vars: Record<string, unknown>;
-  create: RequestSpec & { idempotencyKey: boolean };
+  /** `locate`: the create's answer is not the object (the parent, an acknowledgement); find it afterwards. */
+  create: RequestSpec & { idempotencyKey: boolean; locate: boolean };
   read?: { path: string };
   find?: FindSpec;
   update?: RequestSpec;
@@ -351,9 +352,10 @@ function parseRequest(v: unknown, param: string, methods: readonly string[], fal
 
 function parseCreate(v: unknown, vars: Record<string, unknown>): ResourceSpec["create"] {
   const r = parseRequest(v, "create", ["POST", "PUT", "PATCH"], "POST", vars, false);
-  const key = (v as Record<string, unknown>).idempotency_key;
+  const { idempotency_key: key, locate } = v as Record<string, unknown>;
   if (key !== undefined && typeof key !== "boolean") throw fail("`create.idempotency_key` must be true or false", "create.idempotency_key");
-  return { ...r, idempotencyKey: key === true };
+  if (locate !== undefined && typeof locate !== "boolean") throw fail("`create.locate` must be true or false", "create.locate");
+  return { ...r, idempotencyKey: key === true, locate: locate === true };
 }
 
 function parseFind(v: unknown, vars: Record<string, unknown>): FindSpec | undefined {
@@ -457,11 +459,18 @@ export function resourceOutputs(line: Record<string, unknown>): Record<string, {
  */
 export type ListShape = "array" | "delimited" | "map";
 
+/**
+ * What a write of the parent sends besides the collection: nothing (`field`), the whole object read just before
+ * (`parent`), or the listed fields of it (names or pointers), for a replace that resets what it is not sent.
+ */
+export type ParentSend = "field" | "parent" | string[];
+
 /** `http.list_item` params, checked. */
 export interface ListItemSpec {
   api: string;
   vars: Record<string, unknown>;
-  parent: { path: string; readPath: string; method: string; send: "field" | "parent"; contentType?: string };
+  /** `itemPath`: where the parent object is in the read answer (`/feature` for `{ feature: {...} }`); default the whole body. */
+  parent: { path: string; readPath: string; method: string; send: ParentSend; itemPath: string; contentType?: string };
   listPath: string;
   shape: ListShape;
   separator: string;
@@ -482,10 +491,21 @@ function parseParent(v: unknown, vars: Record<string, unknown>): ListItemSpec["p
   checkPlaceholders(path, "parent.path", vars, false);
   const readPath = o.read_path === undefined ? path : pathParam(o.read_path, "parent.read_path");
   checkPlaceholders(readPath, "parent.read_path", vars, false);
-  const send = o.send ?? "field";
-  if (send !== "field" && send !== "parent") throw fail("`parent.send` must be `field` (send only the list) or `parent` (send the whole object back)", "parent.send");
   const contentType = contentTypeParam(o.content_type, "parent.content_type");
-  return { path, readPath, method: methodParam(o.method, "parent.method", ["PATCH", "PUT", "POST"], "PATCH"), send, ...(contentType ? { contentType } : {}) };
+  return {
+    path,
+    readPath,
+    method: methodParam(o.method, "parent.method", ["PATCH", "PUT", "POST"], "PATCH"),
+    send: parseSend(o.send),
+    itemPath: pointerParam(o.item_path, "parent.item_path", ""),
+    ...(contentType ? { contentType } : {}),
+  };
+}
+
+function parseSend(v: unknown): ParentSend {
+  if (v === undefined || v === "field" || v === "parent") return v ?? "field";
+  if (Array.isArray(v) && v.length > 0 && v.every((f) => typeof f === "string" && f !== "")) return v as string[];
+  throw fail("`parent.send` must be `field` (send only the list), `parent` (send the whole object back) or a list of the object's fields to send back with it", "parent.send");
 }
 
 function scalarItem(v: unknown, what: string): unknown {

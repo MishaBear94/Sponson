@@ -21,7 +21,7 @@ import { ABSENT, SENSITIVE, assertNoPending, desiredSide, paramError } from "./c
 import { isObject, type ApiClient } from "./http.js";
 import { failedWith, httpClient, write } from "./http-adapter-client.js";
 import { expandRecipe } from "./recipes.js";
-import { ADAPTER, apiBlock, at, fieldTokens, fillPath, firstMarker, isKeep, parseListItem, pointerTokens, projection, setAt, stateHash, type ListItemSpec, type ListShape } from "./http-adapter-spec.js";
+import { ADAPTER, apiBlock, at, fieldTokens, fillPath, firstMarker, isKeep, parseListItem, pointerTokens, projection, setAt, stateHash, type ListItemSpec, type ListShape, type ParentSend } from "./http-adapter-spec.js";
 
 /** Read-modify-write rounds before giving up on a collection that keeps changing under us. */
 export const MAX_ATTEMPTS = 3;
@@ -31,7 +31,9 @@ interface Locator {
   read: string;
   write: string;
   list: string;
-  send: "field" | "parent";
+  send: ParentSend;
+  /** Where the parent object is in the read answer; absent: the whole body. */
+  item_path?: string;
   shape: ListShape;
   sep?: string;
   key_field?: string;
@@ -71,6 +73,7 @@ function locatorOf(spec: ListItemSpec): Locator | undefined {
     write: `${spec.parent.method} ${path}`,
     list: spec.listPath,
     send: spec.parent.send,
+    ...(spec.parent.itemPath !== "" ? { item_path: spec.parent.itemPath } : {}),
     shape: spec.shape,
     ...(spec.shape === "delimited" ? { sep: spec.separator } : {}),
     ...(spec.keyField !== undefined ? { key_field: spec.keyField } : {}),
@@ -191,13 +194,24 @@ function hasKeep(spec: ListItemSpec): boolean {
 
 /** The parent object and its collection. */
 async function readParent(api: ApiClient, loc: Locator): Promise<{ doc: Record<string, unknown>; entries: Entry[] }> {
-  const doc = await api.get(loc.read);
-  if (!isObject(doc)) throw badShape(loc, "an object");
+  const body = await api.get(loc.read);
+  const doc = loc.item_path ? at(body, pointerTokens(loc.item_path)) : body;
+  if (!isObject(doc)) throw loc.item_path ? new SponsonError("PROVIDER_RESPONSE", `${ADAPTER}: GET ${loc.read}: no object at \`parent.item_path\` ${loc.item_path}`, { adapter: ADAPTER, param: "parent.item_path" }) : badShape(loc, "an object");
   return { doc, entries: decode(at(doc, pointerTokens(loc.list)), loc) };
 }
 
 function clientFor(actx: AdapterContext, loc: Locator): ApiClient {
   return httpClient(actx, loc.content_type ? { contentType: loc.content_type } : {});
+}
+
+/** What a write sends besides the collection: nothing, the parent read just before, or the listed fields of it. */
+function sentAlong(send: ParentSend, doc: Record<string, unknown>): Record<string, unknown> {
+  if (send === "field") return {};
+  if (send === "parent") return doc;
+  return send.reduce<Record<string, unknown>>((body, f) => {
+    const v = at(doc, fieldTokens(f));
+    return v === undefined ? body : setAt(body, fieldTokens(f), v);
+  }, {});
 }
 
 /**
@@ -208,7 +222,7 @@ async function writeChange(api: ApiClient, loc: Locator, doc: Record<string, unk
   const tokens = pointerTokens(loc.list);
   let body: unknown;
   if (loc.shape === "map" && loc.send === "field") body = place({}, tokens, { [String(change.key as string)]: change.value });
-  else body = place(loc.send === "parent" ? doc : {}, tokens, encode(entries, loc));
+  else body = place(sentAlong(loc.send, doc), tokens, encode(entries, loc));
   const space = loc.write.indexOf(" ");
   await write(api, loc.write.slice(0, space), loc.write.slice(space + 1), body, true);
 }
