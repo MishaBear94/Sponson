@@ -180,6 +180,27 @@ class Attempt {
 }
 
 /**
+ * A 2xx response body as `shape` wants it (parsed JSON when there is no shape; undefined for an empty body with no
+ * shape), or what is wrong with it.
+ */
+function decode<T>(text: string, shape: Shape<T> | undefined, redact: (s: string) => string): { value: T } | { problem: string } {
+  if (!text) return shape ? { problem: "empty response body" } : { value: undefined as T };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { problem: `response is not JSON: ${excerptOf(text, redact)}` };
+  }
+  if (!shape) return { value: parsed as T };
+  try {
+    return { value: shape(parsed) };
+  } catch (e) {
+    if (e instanceof ShapeError) return { problem: e.message };
+    throw e;
+  }
+}
+
+/**
  * Build an `ApiClient`. Adapters should call `clientFor(actx, ...)` instead, which wires redaction and the
  * environment.
  */
@@ -237,23 +258,9 @@ export function apiClient(opts: ApiClientOptions): ApiClient {
         const note = r.retryable ? ` (after ${attempt} attempts)` : "";
         throw fail(r.code, method, path, r.message + note, r.status, r.retryable ? { attempts: attempt } : {});
       }
-      if (!r.text) {
-        if (shape) throw fail("PROVIDER_RESPONSE", method, path, "empty response body", r.status);
-        return undefined as T;
-      }
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(r.text);
-      } catch {
-        throw fail("PROVIDER_RESPONSE", method, path, `response is not JSON: ${excerptOf(r.text, opts.redact)}`, r.status);
-      }
-      if (!shape) return parsed as T;
-      try {
-        return shape(parsed);
-      } catch (e) {
-        if (e instanceof ShapeError) throw fail("PROVIDER_RESPONSE", method, path, e.message, r.status);
-        throw e;
-      }
+      const d = decode(r.text, shape, opts.redact);
+      if ("problem" in d) throw fail("PROVIDER_RESPONSE", method, path, d.problem, r.status);
+      return d.value;
     }
   }
 
