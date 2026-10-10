@@ -227,6 +227,7 @@ The base URL override replaces the provider's API base URL (the test suites poin
 | `neon` | [`neon.branch`](#neonbranch) | `NEON_API_KEY` | `NEON_API_URL` |
 | `vercel` | [`vercel.env`](#vercelenv), [`vercel.deploy`](#verceldeploy) | `VERCEL_TOKEN` | `VERCEL_API_URL` |
 | `clerk` | [`clerk.redirect_allow`](#clerkredirect_allow) | `CLERK_SECRET_KEY` | `CLERK_API_URL` |
+| `cloudflare` | [`cloudflare.pages_env`](#cloudflarepages_env) | `CLOUDFLARE_API_TOKEN` | `CLOUDFLARE_API_URL` |
 <!-- generated:adapters:end -->
 
 A missing credential fails the line with `PROVIDER_AUTH`. Every resource has a key that identifies it within the
@@ -293,6 +294,52 @@ One URL on the Clerk instance's redirect allow-list (the instance `CLERK_SECRET_
 A URL that is already on the list is taken over, not duplicated. Destroy removes the URL. For drift and adoption,
 every URL on the instance's list is in scope.
 
+### `cloudflare.pages_env`
+
+Variables of a Cloudflare Pages project's `preview` or `production` deployment configuration. Requires
+`providers.cloudflare.account` (the account id) and `providers.cloudflare.project` (the Pages project name), and an
+API token in `CLOUDFLARE_API_TOKEN` with the account permission "Cloudflare Pages Edit".
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `target` | `preview` \| `production` | `production` when `--env production`, else `preview` | The variable set. It must be the run's environment (`--env`); anything else is `PARAM_INVALID` (see below). `production` requires approval (see [Environments](#environments)). |
+| `vars` | map: NAME → value | `{}` | Plain-text variables (`plain_text`). Each value is a literal, `{ from }`, `{ secret }` or `{ keep: true }`. Diffs show the new value; the old one is shown as sensitive. |
+| `secrets` | map: NAME → value | `{}` | Secret variables (`secret_text`), shown as sensitive. A name may not be in both maps. |
+| `rewrite_secrets` | boolean | `false` | Send every secret on every apply (see "Secrets" below). |
+
+Each variable is a resource with key `env:<target>:<NAME>`. The variables are one map on the project, so `apply`
+reads the project, PATCHes only the keys this line writes (Cloudflare merges the map; a key set to `null` is deleted),
+then reads it again and fails with `PROVIDER_RESPONSE` if a key it sent is not there as sent or a key it did not send
+has disappeared. Keys this line does not declare are never written. Destroy sets this line's keys to `null`; a key or
+project that is already gone is success. For drift and adoption, every variable of the line's environment is in
+scope; `sponson init` adopts them as `{ keep: true }`, plain ones under `vars` and secret ones under `secrets`.
+
+**Preview variables are shared.** Pages has one set of preview variables for every preview deployment of the
+project, whatever the branch; there are no per-branch values. A key is therefore one resource in the `preview`
+environment, not one per pull request. The first scope that writes it owns it; another scope (a second pull request)
+that declares the same key with the same value relies on it unchanged, and one that declares a different value is
+refused with `OWNED_BY_OTHER_SCOPE` until the owner's scope is destroyed. So per-PR values (`${ctx.pr.number}`, a PR's
+database URL) do not belong in Pages preview variables: two open pull requests would conflict. The owner's destroy
+removes a key a second scope relied on. Because ownership is decided among the scopes of one Sponson environment, the
+line's `target` must equal the run's `--env`: a run of any other environment fails the line with `PARAM_INVALID`.
+Two writers outside Sponson race on the same key: Cloudflare offers no precondition (ETag) on the PATCH.
+
+**Secrets.** Cloudflare never returns a `secret_text` value, so a secret is compared by presence and type only:
+
+- a secret that exists as `secret_text` is `unchanged`, whatever value the plan has. A new value in the plan (a
+  rotated `{ secret }`) is not written unless the line sets `rewrite_secrets: true`, which sends every secret of the
+  line on every apply (one PATCH; never reported as drift). Without it, rotate by setting `rewrite_secrets: true` for
+  one apply.
+- a secret's value changed in the dashboard is not detected; deleting it is `missing` drift (recreated), and turning it
+  into plain text, or a plain variable into a secret, is `changed` drift.
+
+Plain variables are compared by type and value: a dashboard edit is `changed` drift, refused until `--reconcile`.
+
+Variables apply to the next deployment; Sponson does not redeploy a Pages project, and this op has no outputs. The
+branch alias URL of a preview (`<alias>.<project>.pages.dev`) is not an output: Cloudflare documents that the alias is
+the branch name lowercased with other characters replaced by `-`, but not how long names are shortened or collisions
+resolved.
+
 ### Outputs
 
 The outputs each built-in op declares. `immediate` outputs exist once the line is applied; `external` ones only after
@@ -309,6 +356,7 @@ the named event. Sensitive outputs are never displayed, logged or written to rec
 | `vercel.deploy` | `preview_url` | immediate | no |
 | `vercel.deploy` | `deployment_id` | immediate | no |
 | `clerk.redirect_allow` | `id` | immediate | no |
+| `cloudflare.pages_env` | (none) | | |
 <!-- generated:outputs:end -->
 
 ## What is checked when

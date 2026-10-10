@@ -39,6 +39,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "deleteIgnoringNotFound", "desiredSide", "diffValue", "dopplerSecretSource", "envSecretSource", "excerptOf", "gcpSecretManagerSource",
     "isObject", "isProviderError", "isTransient", "listAll", "neonAdapter", "obj", "opSecretSource", "optionalEnv", "paramError",
     "records", "requireEnv", "requireProvider", "retryAfterMs", "stringParam", "vercelAdapter", "withQuery", "WriteOptions",
+    "CLOUDFLARE_DEFAULT_API_URL", "cloudflareAdapter",
   ],
   "@sponson/sim": [
     "CHAOS_KEYS", "ChaosAction", "ChaosConfig", "ChaosRequest", "ClerkRedirect", "ClerkSeed", "ClerkState",
@@ -49,6 +50,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "VercelSeed", "VercelState", "WriteLogEntry", "chaosFor", "clerkSim", "connectionUri", "createBranch",
     "createDeployment", "createSimServer", "defaultChaos", "matchesRule", "neonSim", "page", "providerEntries",
     "refreshDeployments", "route", "router", "simEnv", "startSim", "vercelSim",
+    "CloudflarePagesEnv", "CloudflareEnvVar", "CloudflarePagesProject", "CloudflareState", "CloudflareSeedVars", "CloudflareSeed", "cloudflareSim",
   ],
   "sponson": [
     "CtxFacts", "CtxOverrides", "CtxSource", "DEFAULT_CTX_SOURCES", "RunIO", "SponsonPlugin", "bitbucketPipelinesSource",

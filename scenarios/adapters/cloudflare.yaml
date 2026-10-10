@@ -1,0 +1,78 @@
+# The Cloudflare adapter end to end through the CLI against the sim: Pages preview variables.
+# Format: see the top of scenarios/runner.test.ts.
+name: "cloudflare: create, apply twice without writes, drift refused until --reconcile, destroy leaves other keys"
+seed:
+  cloudflare:
+    accounts:
+      acc_demo:
+        demo:
+          preview: { HUMAN: "set in the dashboard" }
+env:
+  PAGES_TOKEN: pages-secret-value-1234
+secrets: [pages-secret-value-1234]
+plan: |
+  version: 1
+  providers:
+    cloudflare: { account: acc_demo, project: demo }
+  changes:
+    - id: pages
+      adapter: cloudflare
+      op: pages_env
+      vars:
+        API_URL: https://api.example.com
+      secrets:
+        API_TOKEN: { secret: "env://PAGES_TOKEN" }
+      environments: [preview]
+steps:
+  - run: plan --json
+    expect:
+      exit: 0
+      plan_lines: { pages: create }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { pages: applied }
+  - sim:
+      write_order: ["PATCH /cloudflare/accounts/acc_demo/pages/projects/demo"]
+      state:
+        "cloudflare.accounts.acc_demo.projects.demo.deployment_configs.preview.env_vars.API_URL": { type: plain_text, value: https://api.example.com }
+        "cloudflare.accounts.acc_demo.projects.demo.deployment_configs.preview.env_vars.API_TOKEN.type": secret_text
+        "cloudflare.accounts.acc_demo.projects.demo.deployment_configs.preview.env_vars.HUMAN": { type: plain_text, value: "set in the dashboard" }
+  - run: apply --json
+    expect:
+      exit: 0
+      writes: 0
+      lines: { pages: unchanged }
+  # A human edits the plain variable in the Cloudflare dashboard: plan reports it, apply refuses it until --reconcile.
+  - chaos:
+      drift: { "cloudflare.pages_env.preview.API_URL": "https://edited.example.com" }
+  - run: plan --json
+    expect:
+      exit: 1
+      drift: [{ kind: changed, line: pages }]
+      plan_lines: { pages: blocked }
+  - run: apply --json
+    expect:
+      exit: 1
+      status: failed
+      lines: { pages: blocked }
+      errors: { pages: "reconcile" }
+  - run: apply --reconcile --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { pages: applied }
+  - sim:
+      state:
+        "cloudflare.accounts.acc_demo.projects.demo.deployment_configs.preview.env_vars.API_URL.value": https://api.example.com
+  - run: apply --destroy --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { pages: destroyed }
+  - sim:
+      state:
+        "cloudflare.accounts.acc_demo.projects.demo.deployment_configs.preview.env_vars.API_URL": absent
+        "cloudflare.accounts.acc_demo.projects.demo.deployment_configs.preview.env_vars.API_TOKEN": absent
+        "cloudflare.accounts.acc_demo.projects.demo.deployment_configs.preview.env_vars.HUMAN": { type: plain_text, value: "set in the dashboard" }

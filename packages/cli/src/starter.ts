@@ -26,28 +26,31 @@ const SCHEMA_LINE = "# yaml-language-server: $schema=https://raw.githubuserconte
 export const VERCEL_PROJECT_HINT =
   "run `vercel link` (it writes .vercel/project.json; then delete this file and run `sponson init` again), or Vercel dashboard → your project → Settings → General → Project ID";
 export const NEON_PROJECT_HINT = "run `neonctl projects list`, or https://console.neon.tech → your project → Settings → General → Project ID";
+export const CLOUDFLARE_ACCOUNT_HINT = "run `wrangler whoami`, or Cloudflare dashboard → Workers & Pages → Account ID (or set CLOUDFLARE_ACCOUNT_ID and run `sponson init` again)";
+export const CLOUDFLARE_PROJECT_HINT = "run `wrangler pages project list`, or Cloudflare dashboard → Workers & Pages → your Pages project's name";
 
 /** Each provider's credential variable, read when Sponson runs (never written into the plan). */
-const CREDENTIALS: Record<string, string> = { vercel: "VERCEL_TOKEN", neon: "NEON_API_KEY", clerk: "CLERK_SECRET_KEY" };
+const CREDENTIALS: Record<string, string> = { vercel: "VERCEL_TOKEN", neon: "NEON_API_KEY", clerk: "CLERK_SECRET_KEY", cloudflare: "CLOUDFLARE_API_TOKEN" };
 
 interface Shape {
   vercel: boolean;
   neon: boolean;
   clerk: boolean;
+  cloudflare: boolean;
   deploy: boolean;
   assumed: boolean;
 }
 
 function shapeOf(d: StackDetection): Shape {
-  const assumed = !has(d, "vercel") && !has(d, "neon");
+  const assumed = !has(d, "vercel") && !has(d, "neon") && !has(d, "cloudflare");
   const vercel = has(d, "vercel") || assumed;
-  return { vercel, neon: has(d, "neon") || assumed, clerk: has(d, "clerk"), deploy: vercel && d.vercelAutoDeployOff, assumed };
+  return { vercel, neon: has(d, "neon") || assumed, clerk: has(d, "clerk"), cloudflare: has(d, "cloudflare"), deploy: vercel && d.vercelAutoDeployOff, assumed };
 }
 
 /** The adapters the starter's lines use, for the "set these credentials" hint. */
 export function credentialsFor(d: StackDetection): string[] {
   const s = shapeOf(d);
-  return (["vercel", "neon", "clerk"] as const).filter((a) => s[a] && (a !== "clerk" || s.vercel)).map((a) => CREDENTIALS[a]!);
+  return (["vercel", "neon", "clerk", "cloudflare"] as const).filter((a) => s[a] && (a !== "clerk" || s.vercel)).map((a) => CREDENTIALS[a]!);
 }
 
 export function composeStarter(d: StackDetection): Starter {
@@ -55,7 +58,7 @@ export function composeStarter(d: StackDetection): Starter {
   const todos: Todo[] = [];
   const out = [...header(d, s), "version: 1", "environments: [preview, production]", ...providers(d, s, todos), "", "changes:"];
   // Never empty: without Vercel or Neon the template assumes both.
-  out.push(...dbLine(s), ...envLine(d, s), ...deployLine(s), ...clerkLine(s), ...orphanNotes(s));
+  out.push(...dbLine(s), ...envLine(d, s), ...deployLine(s), ...clerkLine(s), ...pagesLine(d, s), ...orphanNotes(s));
   const text = out.join("\n").replace(/\n+$/, "") + "\n";
   return { text, todos, assumed: s.assumed };
 }
@@ -92,7 +95,18 @@ function providers(d: StackDetection, s: Shape, todos: Todo[]): string[] {
     const note = d.ids.neonProjectFrom ? `# from ${d.ids.neonProjectFrom}` : todo(todos, "providers.neon.project", project, NEON_PROJECT_HINT);
     out.push(`  neon: { project: ${q(project)} }   ${note}`);
   }
+  if (s.cloudflare) out.push(...cloudflareProvider(d, todos));
   return out.length > 0 ? ["providers:", ...out] : [];
+}
+
+function cloudflareProvider(d: StackDetection, todos: Todo[]): string[] {
+  const account = d.ids.cloudflareAccount ?? "your-account-id";
+  const project = d.ids.cloudflareProject ?? "your-pages-project";
+  const notes = [
+    d.ids.cloudflareAccountFrom ? `account from ${d.ids.cloudflareAccountFrom}` : todo(todos, "providers.cloudflare.account", account, CLOUDFLARE_ACCOUNT_HINT).slice(2),
+    d.ids.cloudflareProjectFrom ? `project from ${d.ids.cloudflareProjectFrom}` : todo(todos, "providers.cloudflare.project", project, CLOUDFLARE_PROJECT_HINT).slice(2),
+  ];
+  return [`  cloudflare: { account: ${q(account)}, project: ${q(project)} }   # ${notes.join("; ")}`];
 }
 
 function todo(todos: Todo[], path: string, placeholder: string, hint: string): string {
@@ -159,10 +173,36 @@ function clerkLine(s: Shape): string[] {
   ];
 }
 
+function pagesLine(d: StackDetection, s: Shape): string[] {
+  if (!s.cloudflare) return [];
+  const worker = d.cloudflareNotPages
+    ? ["  # The Wrangler configuration has no `pages_build_output_dir`: if it describes a Worker, not a Pages project, delete", "  # this line (Workers variables are not managed yet)."]
+    : [];
+  return [
+    "  # Cloudflare Pages preview variables. Pages has ONE set of preview variables, shared by every preview deployment",
+    "  # (there are no per-branch values): only values that are the same for every pull request belong here; a second",
+    "  # pull request that sets another value is refused. Secrets go under `secrets:` as `{ secret: \"env://NAME\" }`.",
+    ...worker,
+    "  - id: pages-env",
+    "    adapter: cloudflare",
+    "    op: pages_env",
+    "    target: preview",
+    "    vars:",
+    `      ${d.publicPrefix}SPONSON_ENV: "\${ctx.env}"   # an example: replace with the variables your previews need`,
+    "    environments: [preview]",
+    "",
+  ];
+}
+
 /** Detected providers that have nothing to connect to, said in the plan instead of silently dropped. */
 function orphanNotes(s: Shape): string[] {
   const out: string[] = [];
-  if (s.neon && !s.vercel) {
+  if (s.neon && !s.vercel && s.cloudflare) {
+    out.push(
+      "  # The branch's connection string (`{ from: db.connection_string }`) differs per pull request, and Pages preview",
+      "  # variables are shared by every preview, so it cannot go there; pass it to your previews another way.",
+    );
+  } else if (s.neon && !s.vercel) {
     out.push("  # The branch's connection string (`{ from: db.connection_string }`) has no deploy target Sponson manages yet;", "  # pass it to yours by hand, or follow ROADMAP.md section 2 for Netlify, Railway and Fly.io.");
   }
   if (s.clerk && !s.vercel) out.push("  # Clerk was detected, but a redirect line needs a preview URL from a deploy target Sponson manages (Vercel).");

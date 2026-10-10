@@ -20,6 +20,15 @@
       "type": "object",
       "additionalProperties": { "type": "object" },
       "properties": {
+        "cloudflare": {
+          "type": "object",
+          "description": "Cloudflare account id and Pages project name.",
+          "required": ["account", "project"],
+          "properties": {
+            "account": { "type": "string", "minLength": 1 },
+            "project": { "type": "string", "minLength": 1 }
+          }
+        },
         "vercel": {
           "type": "object",
           "description": "Vercel project (`prj_…`) and, for team projects, the team id (`team_…`).",
@@ -157,7 +166,7 @@
       "required": ["id", "adapter", "op"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk. Plugins (SPONSON_PLUGINS) add more." },
+        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk, cloudflare. Plugins (SPONSON_PLUGINS) add more." },
         "op": { "type": "string", "minLength": 1 },
         "environments": { "$ref": "#/$defs/nameList", "description": "Environments this line applies to. Absent: all." },
         "depends_on": { "type": "array", "items": { "$ref": "#/$defs/id" }, "description": "Ordering without a data dependency. Prefer `from:` references." }
@@ -179,6 +188,10 @@
         {
           "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "clerk" }, "op": { "const": "redirect_allow" } } },
           "then": { "$ref": "#/$defs/op_clerk_redirect_allow" }
+        },
+        {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "cloudflare" }, "op": { "const": "pages_env" } } },
+          "then": { "$ref": "#/$defs/op_cloudflare_pages_env" }
         }
       ]
     },
@@ -259,6 +272,35 @@
         "environments": true,
         "depends_on": true,
         "url": { "$ref": "#/$defs/stringOrRef", "description": "The URL to allow. Usually `{ from: <vercel.env line>.preview_url }`." }
+      },
+      "additionalProperties": false
+    },
+    "op_cloudflare_pages_env": {
+      "description": "cloudflare.pages_env: plain-text and secret variables of a Cloudflare Pages project's preview or production configuration (preview variables are shared by every preview deployment). No outputs.",
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "target": {
+          "description": "preview or production; must be the run's --env. Default: production when --env production, else preview.",
+          "anyOf": [
+            { "enum": ["preview", "production"] },
+            { "type": "string", "pattern": "\\$\\{ctx\\.[a-z_.]+\\}" }
+          ]
+        },
+        "vars": {
+          "type": "object",
+          "description": "NAME: value, written as plain_text. A value is a literal, `{ from }`, `{ secret }` or `{ keep: true }`.",
+          "additionalProperties": { "$ref": "#/$defs/value" }
+        },
+        "secrets": {
+          "type": "object",
+          "description": "NAME: value, written as secret_text and compared by presence and type only (Cloudflare never returns a secret's value).",
+          "additionalProperties": { "$ref": "#/$defs/value" }
+        },
+        "rewrite_secrets": { "type": "boolean", "description": "Send every secret on every apply, so a changed value is written. Default: false." }
       },
       "additionalProperties": false
     }

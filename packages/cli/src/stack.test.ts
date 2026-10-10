@@ -157,17 +157,55 @@ describe("detectStack", () => {
   it("every unsupported service is reported, never silently ignored", async () => {
     const d = await detectStack(
       repo({
-        "package.json": pkg({ "@planetscale/database": "1", "@auth0/nextjs-auth0": "3", "@launchdarkly/node-server-sdk": "9", "posthog-js": "1", stripe: "16", "@sentry/nextjs": "8", firebase: "10", "@libsql/client": "0.6" }, { wrangler: "3" }),
+        "package.json": pkg({ "@planetscale/database": "1", "@auth0/nextjs-auth0": "3", "@launchdarkly/node-server-sdk": "9", "posthog-js": "1", stripe: "16", "@sentry/nextjs": "8", firebase: "10", "@libsql/client": "0.6" }),
         "netlify.toml": "[build]\n",
         "fly.toml": "app = 'x'\n",
         "railway.json": "{}",
         ".env.example": "DATABASE_URL=mysql://u:p@aws.connect.psdb.cloud/db\n",
       }),
     );
-    expect(unsupportedIds(d)).toEqual(["planetscale", "turso", "auth0", "netlify", "cloudflare", "railway", "fly", "firebase", "launchdarkly", "posthog", "stripe", "sentry"]);
+    expect(unsupportedIds(d)).toEqual(["planetscale", "turso", "auth0", "netlify", "railway", "fly", "firebase", "launchdarkly", "posthog", "stripe", "sentry"]);
     for (const u of d.unsupported) expect(u.pointer, u.id).toMatch(/ROADMAP\.md|issues/);
     const text = expectValidPlan(d, ["db", "env"]);
     for (const u of d.unsupported) expect(text).toContain(`# Not supported yet, so no line below manages it: ${u.name}`);
+  });
+
+  it("Cloudflare Pages: the project name from wrangler.toml, a shared preview-variables line, no Vercel template", async () => {
+    const d = await detectStack(
+      repo({
+        "package.json": pkg({ astro: "5" }, { wrangler: "4" }),
+        "wrangler.toml": 'name = "shop-web"\naccount_id = \'0123abcd\'\npages_build_output_dir = "./dist"\n\n[vars]\nname = "not this one"\n',
+      }),
+    );
+    expect(ids(d)).toEqual(["cloudflare", "astro"]);
+    expect(unsupportedIds(d)).toEqual([]);
+    expect(d.ids).toEqual({ cloudflareProject: "shop-web", cloudflareProjectFrom: "wrangler.toml", cloudflareAccount: "0123abcd", cloudflareAccountFrom: "wrangler.toml" });
+    expect(d.cloudflareNotPages).toBe(false);
+    const { text, todos, assumed } = composeStarter(d);
+    expect(assumed).toBe(false);
+    expect(todos).toEqual([]);
+    expectValidPlan(d, ["pages-env"]);
+    expect(text).toContain('cloudflare: { account: "0123abcd", project: "shop-web" }   # account from wrangler.toml; project from wrangler.toml');
+    expect(text).toContain('PUBLIC_SPONSON_ENV: "${ctx.env}"');
+    expect(text).toContain("shared by every preview deployment");
+    expect(text).not.toContain("Worker");
+    expect(credentialsFor(d)).toEqual(["CLOUDFLARE_API_TOKEN"]);
+  });
+
+  it("Cloudflare from wrangler.jsonc without pages_build_output_dir: TODOs for the ids, the Worker caveat; the account from the environment", async () => {
+    const jsonc = '{\n  // a Worker?\n  "name": "edge-api", /* block */\n  "main": "src/index.ts",\n  "vars": { "URL": "https://x.example.com" },\n}\n';
+    const d = await detectStack(repo({ "wrangler.jsonc": jsonc }), { CLOUDFLARE_ACCOUNT_ID: "acc_env" });
+    expect(d.ids).toEqual({ cloudflareProject: "edge-api", cloudflareProjectFrom: "wrangler.jsonc", cloudflareAccount: "acc_env", cloudflareAccountFrom: "CLOUDFLARE_ACCOUNT_ID" });
+    expect(d.cloudflareNotPages).toBe(true);
+    expect(expectValidPlan(d, ["pages-env"])).toContain("has no `pages_build_output_dir`");
+
+    const bare = await detectStack(repo({ ".env.example": "CLOUDFLARE_API_TOKEN=\n", "package.json": pkg({ "@neondatabase/serverless": "1" }) }));
+    expect(bare.cloudflareNotPages).toBeUndefined();
+    const { text, todos } = composeStarter(bare);
+    expect(todos.map((t) => t.path)).toEqual(["providers.neon.project", "providers.cloudflare.account", "providers.cloudflare.project"]);
+    expect(text).toContain('cloudflare: { account: "your-account-id", project: "your-pages-project" }   # TODO: run `wrangler whoami`');
+    expect(text).toContain("so it cannot go there");
+    expectValidPlan(bare, ["db", "pages-env"]);
   });
 
   it("broken files are no signal rather than a crash", async () => {

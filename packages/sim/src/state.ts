@@ -7,12 +7,13 @@ import type { ProviderSim, SimCore } from "./provider.js";
 import { clerkSim } from "./routes/clerk.js";
 import { neonSim } from "./routes/neon.js";
 import { vercelSim } from "./routes/vercel.js";
+import { cloudflareSim } from "./routes/cloudflare.js";
 
 /**
  * Every simulated provider, by URL prefix (`/<name>/…`), drift prefix (`<name>.…`), seed key and state key.
  * Order matters only for determinism: resets seed providers (and so allocate ids) in this order.
  */
-export const PROVIDERS = { vercel: vercelSim, neon: neonSim, clerk: clerkSim };
+export const PROVIDERS = { vercel: vercelSim, neon: neonSim, clerk: clerkSim, cloudflare: cloudflareSim };
 
 type Providers = typeof PROVIDERS;
 /** A simulated provider's name: its URL prefix, seed key and state key. */
