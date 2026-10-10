@@ -59,7 +59,8 @@
               "reference/errors",
               "reference/cli",
               "reference/examples",
-              "reference/api-verification"
+              "reference/api-verification",
+              "reference/coverage"
             ]
           }
         ]

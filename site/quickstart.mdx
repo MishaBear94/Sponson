@@ -26,6 +26,8 @@ sponson plan          # read-only diff
 sponson apply         # creates the branch, injects the variable, waits for the deploy
 ```
 
+Which providers are covered today, and what is planned, is measured in [docs/coverage.md](/reference/coverage).
+
 Third-party adapters and secret sources load as plugins: `SPONSON_PLUGINS=sponson-adapter-x,./local-adapter.mjs`, each module exporting `register(registry)`.
 
 Credentials come from the providers' own conventions (`VERCEL_TOKEN` for Vercel; every adapter's variable is listed under [built-in ops](/reference/plan-format#built-in-ops)). Sponson has no credential store of its own.
