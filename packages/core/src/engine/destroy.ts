@@ -51,25 +51,32 @@ export async function destroyRun(opts: RunOptions): Promise<ApplyResultSummary> 
  */
 async function destroyGroup(rc: RunContext, prepared: Prepared, receipt: Receipt, group: LedgerEntry[]): Promise<void> {
   const head = group[0]!;
-  const receiptLine: ReceiptLine = receipt.lines[head.line] ?? { id: head.line, adapter: head.adapter, op: head.op, status: "destroyed", createdBy: "sponson", resources: [], outputs: head.outputs ?? {} };
-  receipt.lines[head.line] = receiptLine;
+  const line: ReceiptLine = receipt.lines[head.line] ?? { id: head.line, adapter: head.adapter, op: head.op, status: "destroyed", createdBy: "sponson", resources: [], outputs: head.outputs ?? {} };
+  receipt.lines[head.line] = line;
   const ours = group.filter((e) => e.createdBy === "sponson");
   const adopted = group.filter((e) => e.createdBy === "adopted");
   const unknown = group.filter((e) => e.createdBy === "intent");
+
   for (const e of adopted) rc.ledger.delete(e);
-  if (adopted.length) receiptLine.notes = { ...receiptLine.notes, adoptedKept: adopted.map((e) => e.key) };
+  if (adopted.length) line.notes = { ...line.notes, adoptedKept: adopted.map((e) => e.key) };
   if (unknown.length) {
-    receiptLine.status = "destroy_failed";
-    receiptLine.errorCode = "INTENT_UNRESOLVED";
-    receiptLine.error = `Sponson may have created ${unknown.map((e) => e.key).join(", ")} in an interrupted run but cannot locate it (the line is gone from the plan or its read failed). Check the provider and remove it by hand if it exists.`;
+    line.status = "destroy_failed";
+    line.errorCode = "INTENT_UNRESOLVED";
+    line.error = `Sponson may have created ${unknown.map((e) => e.key).join(", ")} in an interrupted run but cannot locate it (the line is gone from the plan or its read failed). Check the provider and remove it by hand if it exists.`;
   }
   if (ours.length === 0) {
-    if (!unknown.length && receiptLine.status === "destroyed") {
-      receiptLine.status = "skipped";
-      receiptLine.error = adopted.length ? "skipped: adopted resources are never destroyed" : "skipped: nothing created by Sponson";
+    if (line.status === "destroyed") {
+      line.status = "skipped";
+      line.error = adopted.length ? "skipped: adopted resources are never destroyed" : "skipped: nothing created by Sponson";
     }
     return;
   }
+  await deleteOurs(rc, prepared, line, head, ours);
+  line.resources = rc.ledger.all().filter((x) => x.line === head.line).map(toRecord);
+}
+
+/** Delete what Sponson created for one line; a failure is recorded on the line, never thrown. */
+async function deleteOurs(rc: RunContext, prepared: Prepared, line: ReceiptLine, head: LedgerEntry, ours: LedgerEntry[]): Promise<void> {
   try {
     const op = rc.opts.registry.op(head.adapter, head.op);
     const actx = rc.adapterContext(head.adapter, head.provider);
@@ -78,17 +85,20 @@ async function destroyGroup(rc: RunContext, prepared: Prepared, receipt: Receipt
     for (const e of ours) rc.ledger.delete(e);
     const survivors = await stillPresent(rc, prepared, head, ours);
     if (survivors.length) {
-      receiptLine.notes = { ...receiptLine.notes, notSponsons: survivors };
-      const one = survivors.length === 1;
-      rc.warnings.push(`\`${head.line}\`: ${survivors.join(", ")} still exist${one ? "s" : ""} after destroy: ${one ? "it was" : "they were"} replaced outside Sponson, so ${one ? "it is" : "they are"} not Sponson's and ${one ? "was" : "were"} left alone.`);
+      line.notes = { ...line.notes, notSponsons: survivors };
+      rc.warnings.push(survivorWarning(head.line, survivors));
     }
   } catch (e) {
     const err = rc.errorText(e);
-    receiptLine.status = "destroy_failed";
-    receiptLine.error = err.message;
-    receiptLine.errorCode = err.code ?? "DESTROY_FAILED";
+    line.status = "destroy_failed";
+    line.error = err.message;
+    line.errorCode = err.code ?? "DESTROY_FAILED";
   }
-  receiptLine.resources = rc.ledger.all().filter((x) => x.line === head.line).map(toRecord);
+}
+
+function survivorWarning(lineId: string, survivors: string[]): string {
+  const one = survivors.length === 1;
+  return `\`${lineId}\`: ${survivors.join(", ")} still exist${one ? "s" : ""} after destroy: ${one ? "it was" : "they were"} replaced outside Sponson, so ${one ? "it is" : "they are"} not Sponson's and ${one ? "was" : "were"} left alone.`;
 }
 
 /** Consecutive entries of the same line/adapter/op/provider, in ledger (creation) order. */

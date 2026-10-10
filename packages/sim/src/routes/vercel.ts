@@ -237,6 +237,14 @@ function listDeployments(core: SimCore, state: VercelState, url: URL): Reply {
   return new Reply(200, { deployments: items.map((d) => publicDeployment(projectId, d)), pagination: { count: items.length, next: list.length > limit ? (items.at(-1)?.createdAt ?? null) : null, prev: null } });
 }
 
+/** A GitHub `gitSource` naming a ref and the repository, by id or by org and repo. */
+type GitSource = { type: "github"; ref: string; repoId?: unknown; org?: string; repo?: string; sha?: string };
+
+function isGitSource(g: { type?: string; repoId?: unknown; org?: string; repo?: string; ref?: string } | undefined): g is GitSource {
+  if (!g || g.type !== "github" || typeof g.ref !== "string") return false;
+  return g.repoId !== undefined || (typeof g.org === "string" && typeof g.repo === "string");
+}
+
 /** `POST /v13/deployments`: a (re)deployment from a git source of the project's connected repository. */
 function postDeployment(core: SimCore, state: VercelState, body: unknown): Reply {
   const b = (body ?? {}) as { name?: string; project?: string; target?: string; gitSource?: { type?: string; repoId?: unknown; org?: string; repo?: string; sha?: string; ref?: string } };
@@ -246,9 +254,7 @@ function postDeployment(core: SimCore, state: VercelState, body: unknown): Reply
   const p = state.projects[projectId];
   if (!p) return notFound("project");
   const g = b.gitSource;
-  if (!g || g.type !== "github" || typeof g.ref !== "string" || (g.repoId === undefined && (typeof g.org !== "string" || typeof g.repo !== "string"))) {
-    return badRequest("bad_request", "Invalid request: `gitSource` needs `type`, `ref` and `repoId` (or `org` and `repo`)");
-  }
+  if (!isGitSource(g)) return badRequest("bad_request", "Invalid request: `gitSource` needs `type`, `ref` and `repoId` (or `org` and `repo`)");
   if (!p.link || (g.repoId !== undefined && String(g.repoId) !== String(p.link.repoId))) return badRequest("incorrect_git_source_info", "The repository is not connected to this project");
   const d = createDeployment(core, projectId, p, g.sha ?? "unknown", core.chaos.deploy === "fail" ? "ERROR" : "READY", Date.now(), {
     ref: g.ref,

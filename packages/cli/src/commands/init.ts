@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { GitBranchReceiptStore, isKeepRef, planRun, walkParams, type Ctx, type Drift, type Redactor, type Registry } from "@sponson/core";
-import { Document, isMap, isScalar, isSeq, parseDocument, visit } from "yaml";
+import { Document, isMap, isScalar, isSeq, parseDocument, visit, type Pair } from "yaml";
 import { UsageError, planPathFor, toRunOptions, withInvocation, type GlobalOpts, type Invocation, type IO } from "../context.js";
 import { withRedactorWarnings } from "../output.js";
 
@@ -214,52 +214,61 @@ function keepsValues(change: ChangeDoc): boolean {
  */
 export function appendChanges(source: string, changes: ChangeDoc[]): string {
   if (changes.length === 0) return source;
-  const doc = parseDocument(source);
-  const seq = doc.get("changes", true);
-  const block = (indent: number) =>
-    changes
-      .map((c) => {
-        const item = new Document([c]);
-        visit(item, {
-          Pair(_k, pair) {
-            if (isScalar(pair.key) && pair.key.value === "environments" && isSeq(pair.value)) pair.value.flow = true;
-            // Reference forms read as one value: `NAME: { keep: true }`, not a nested block.
-            const only = isMap(pair.value) && pair.value.items.length === 1 ? pair.value.items[0]!.key : undefined;
-            if (isMap(pair.value) && isScalar(only) && ["keep", "secret", "from"].includes(String(only.value))) pair.value.flow = true;
-          },
-        });
-        const text = item.toString({ lineWidth: 0 }).replace(/\n+$/, "");
-        return "\n" + text.split("\n").map((l) => (l === "" ? l : " ".repeat(indent) + l)).join("\n") + "\n";
-      })
-      .join("");
-
-  if (seq === undefined) {
-    // No `changes:` key at all: add the list at the end of the file.
-    const base = source === "" || source.endsWith("\n") ? source : `${source}\n`;
-    return `${base}changes:${block(2)}`;
-  }
-  if (isScalar(seq) && (seq.value === null || seq.value === "")) {
-    // `changes:` with nothing under it: the list goes right after that line.
-    const keyAt = source.search(/^changes:/m);
-    if (keyAt < 0) throw new UsageError("`changes:` must be a top-level key of the plan");
-    const eol = source.indexOf("\n", keyAt);
-    const head = eol < 0 ? source : source.slice(0, eol);
-    return head + block(2).replace(/\n$/, "") + (eol < 0 ? "\n" : source.slice(eol));
-  }
+  const seq = parseDocument(source).get("changes", true);
+  const block = (indent: number) => renderChanges(changes, indent);
+  if (seq === undefined) return addChangesKey(source, block(2));
+  if (isScalar(seq) && (seq.value === null || seq.value === "")) return fillEmptyChanges(source, block(2));
   if (!isSeq(seq) || !seq.range) throw new UsageError("`changes:` in the plan is not a list; fix the plan before adopting");
-
   if (seq.flow) {
     if (seq.items.length > 0) throw new UsageError("`changes:` is written as a flow list (`[...]`) with items; rewrite it as a block list to adopt into it");
-    // `changes: []` → a block list in place of the brackets.
-    const [start, end] = seq.range;
-    const rest = source.slice(end);
-    return source.slice(0, start).replace(/[ \t]+$/, "") + block(2).replace(/\n$/, "") + (rest.startsWith("\n") ? rest : `\n${rest}`);
+    return replaceEmptyFlowList(source, seq.range, block(2));
   }
+  return extendBlockList(source, seq.range, block);
+}
 
-  const start = seq.range[0];
-  const lineStart = source.lastIndexOf("\n", start - 1) + 1;
-  const indent = start - lineStart;
-  const end = seq.range[1];
+/** No `changes:` key at all: add the list at the end of the file. */
+function addChangesKey(source: string, block: string): string {
+  const base = source === "" || source.endsWith("\n") ? source : `${source}\n`;
+  return `${base}changes:${block}`;
+}
+
+/** `changes:` with nothing under it: the list goes right after that line. */
+function fillEmptyChanges(source: string, block: string): string {
+  const keyAt = source.search(/^changes:/m);
+  if (keyAt < 0) throw new UsageError("`changes:` must be a top-level key of the plan");
+  const eol = source.indexOf("\n", keyAt);
+  const head = eol < 0 ? source : source.slice(0, eol);
+  return head + block.replace(/\n$/, "") + (eol < 0 ? "\n" : source.slice(eol));
+}
+
+/** `changes: []`: a block list in place of the brackets. */
+function replaceEmptyFlowList(source: string, [start, end]: [number, number, number], block: string): string {
+  const rest = source.slice(end);
+  return source.slice(0, start).replace(/[ \t]+$/, "") + block.replace(/\n$/, "") + (rest.startsWith("\n") ? rest : `\n${rest}`);
+}
+
+/** A block list: new items go after its last item, at the list's own indentation. */
+function extendBlockList(source: string, [start, end]: [number, number, number], block: (indent: number) => string): string {
+  const indent = start - (source.lastIndexOf("\n", start - 1) + 1);
   const head = source.slice(0, end);
   return (head.endsWith("\n") ? head : `${head}\n`) + block(indent).replace(/\n$/, "") + "\n" + source.slice(end);
+}
+
+/** Each change as a block-list item at `indent`, each preceded by a newline. */
+function renderChanges(changes: ChangeDoc[], indent: number): string {
+  return changes
+    .map((c) => {
+      const item = new Document([c]);
+      visit(item, { Pair: (_k, pair) => compactPair(pair) });
+      const text = item.toString({ lineWidth: 0 }).replace(/\n+$/, "");
+      return "\n" + text.split("\n").map((l) => (l === "" ? l : " ".repeat(indent) + l)).join("\n") + "\n";
+    })
+    .join("");
+}
+
+/** `environments: [preview]` and reference forms read as one value: `NAME: { keep: true }`, not a nested block. */
+function compactPair(pair: Pair<unknown, unknown>): void {
+  if (isScalar(pair.key) && pair.key.value === "environments" && isSeq(pair.value)) pair.value.flow = true;
+  const only = isMap(pair.value) && pair.value.items.length === 1 ? pair.value.items[0]!.key : undefined;
+  if (isMap(pair.value) && isScalar(only) && ["keep", "secret", "from"].includes(String(only.value))) pair.value.flow = true;
 }

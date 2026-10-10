@@ -71,22 +71,23 @@ export function resolveParams(
   const pending: ResolveResult["pending"] = [];
   const secrets: ResolveResult["secrets"] = [];
 
-  const rebuild = (value: unknown, path: string[]): unknown => {
-    if (isFromRef(value)) {
-      const [line, ...rest] = value.from.split(".");
-      const output = rest.join(".");
-      const lo = outputs.get(line!);
-      const spec = lo?.specs[output];
-      const key = path.join(".");
-      if (lo && output in lo.values) {
-        const sensitive = spec?.sensitive === true;
-        inputs[key] = { state: "resolved", value: sensitive ? null : lo.values[output]!, ref: value.from, sensitive, dependsOn: line! };
-        return lo.values[output];
-      }
-      inputs[key] = { state: "pending", value: null, ref: value.from, dependsOn: line!, sensitive: spec?.sensitive === true };
-      pending.push({ path: key, ref: value.from, line: line! });
-      return pendingMarker(value.from);
+  /** An output reference: its value when the line has produced it, else a pending marker. */
+  const fromRef = (ref: string, key: string): unknown => {
+    const [line, ...rest] = ref.split(".") as [string, ...string[]];
+    const output = rest.join(".");
+    const lo = outputs.get(line);
+    const sensitive = lo?.specs[output]?.sensitive === true;
+    if (lo && output in lo.values) {
+      inputs[key] = { state: "resolved", value: sensitive ? null : lo.values[output]!, ref, sensitive, dependsOn: line };
+      return lo.values[output];
     }
+    inputs[key] = { state: "pending", value: null, ref, dependsOn: line, sensitive };
+    pending.push({ path: key, ref, line });
+    return pendingMarker(ref);
+  };
+
+  const rebuild = (value: unknown, path: string[]): unknown => {
+    if (isFromRef(value)) return fromRef(value.from, path.join("."));
     if (isKeepRef(value)) {
       inputs[path.join(".")] = { state: "kept", value: null };
       return KEEP_MARKER;

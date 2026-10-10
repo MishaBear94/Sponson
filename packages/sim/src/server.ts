@@ -46,7 +46,11 @@ async function handle(state: SimState, req: IncomingMessage, res: ServerResponse
   // Any non-empty bearer token is accepted; missing-token bugs must surface as 401.
   const auth = req.headers.authorization ?? "";
   if (!/^Bearer\s+\S+$/.test(auth)) return send(res, 401, { error: "unauthorized" });
+  await serveProvider(state, req, res, { method, url, raw, body });
+}
 
+/** An authenticated provider request: latency, chaos, the write log, then the provider's routes. */
+async function serveProvider(state: SimState, req: IncomingMessage, res: ServerResponse, { method, url, raw, body }: { method: string; url: URL; raw: string; body: unknown }): Promise<void> {
   if (state.chaos.latency_ms > 0) await sleep(state.chaos.latency_ms);
 
   const isWrite = WRITE_METHODS.has(method);
@@ -54,14 +58,11 @@ async function handle(state: SimState, req: IncomingMessage, res: ServerResponse
   // Held: performed (and logged) only once released, like a request stuck in the provider's queue.
   if (action?.kind === "hold") await state.hold();
   const entry = { at: new Date().toISOString(), method, path: url.pathname, bodyHash: sha256(raw) };
-  if (action?.kind === "hang") {
-    // Accepted, never performed, never answered. sim.close() tears the socket down.
+  if (action?.kind === "hang" || action?.kind === "fail") {
+    // Never performed. A hang is accepted and never answered (sim.close() tears the socket down).
     if (isWrite) state.writes.push({ ...entry, failed: true });
+    if (action.kind === "fail") send(res, action.status, { error: "chaos" }, action.headers);
     return;
-  }
-  if (action?.kind === "fail") {
-    if (isWrite) state.writes.push({ ...entry, failed: true });
-    return send(res, action.status, { error: "chaos" }, action.headers);
   }
   const logged: WriteLogEntry = { ...entry };
   if (isWrite) state.writes.push(logged);

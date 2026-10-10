@@ -42,6 +42,20 @@ export const RECEIPT_VERSION = 2;
  * Version 1 receipts are migrated in memory; they are written back as v2 by the next run.
  */
 export function parseReceipt(text: string, where: string): Receipt {
+  const { r, version } = readVersioned(text, where);
+  if (!isRecord(r.lines) || typeof r.scope !== "string" || !r.scope || typeof r.environment !== "string" || !r.environment) {
+    throw new SponsonError("RECEIPT_CORRUPT", `Receipt at ${where} is missing required fields`, { where });
+  }
+  // The checks here are the whole validation; past them the file is trusted to have the shape its version says.
+  if (version === 1) return migrateV1(r as unknown as ReceiptV1);
+  if (!Array.isArray(r.ledger) || !Array.isArray(r.history) || typeof r.hashKey !== "string") {
+    throw new SponsonError("RECEIPT_CORRUPT", `Receipt at ${where} is missing required fields (ledger, history, hashKey)`, { where });
+  }
+  return r as unknown as Receipt;
+}
+
+/** The JSON object in `text` and its format version, which must be one this Sponson reads. */
+function readVersioned(text: string, where: string): { r: Record<string, unknown>; version: number } {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -51,8 +65,7 @@ export function parseReceipt(text: string, where: string): Receipt {
   if (!isRecord(parsed) || typeof parsed.version !== "number") {
     throw new SponsonError("RECEIPT_CORRUPT", `Receipt at ${where} has no version field`, { where });
   }
-  const r = parsed;
-  const version = parsed.version; // narrowed to number by the check above
+  const version = parsed.version;
   if (version > RECEIPT_VERSION) {
     throw new SponsonError(
       "RECEIPT_VERSION",
@@ -63,15 +76,7 @@ export function parseReceipt(text: string, where: string): Receipt {
   if (version < 1 || !Number.isInteger(version)) {
     throw new SponsonError("RECEIPT_CORRUPT", `Receipt at ${where} has an invalid version ${String(version)}`, { where });
   }
-  if (!isRecord(r.lines) || typeof r.scope !== "string" || !r.scope || typeof r.environment !== "string" || !r.environment) {
-    throw new SponsonError("RECEIPT_CORRUPT", `Receipt at ${where} is missing required fields`, { where });
-  }
-  // The checks here are the whole validation; past them the file is trusted to have the shape its version says.
-  if (version === 1) return migrateV1(r as unknown as ReceiptV1);
-  if (!Array.isArray(r.ledger) || !Array.isArray(r.history) || typeof r.hashKey !== "string") {
-    throw new SponsonError("RECEIPT_CORRUPT", `Receipt at ${where} is missing required fields (ledger, history, hashKey)`, { where });
-  }
-  return r as unknown as Receipt;
+  return { r: parsed, version };
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -103,26 +108,31 @@ export function migrateV1(r: ReceiptV1): Receipt {
       const identity = `${line.adapter}\u0000${res.key}`;
       if (seen.has(identity)) continue;
       seen.add(identity);
-      const entry: LedgerEntry = {
-        adapter: line.adapter,
-        op: line.op,
-        provider: {},
-        key: res.key,
-        id: res.id,
-        hash: res.hash,
-        createdBy: res.createdBy ?? line.createdBy ?? "adopted",
-        line: line.id ?? lineId,
-        outputs: { ...(line.outputs ?? {}) },
-      };
-      if (res.label !== undefined) entry.label = res.label;
-      if (line.orphan) entry.orphan = true;
-      ledger.push(entry);
+      ledger.push(ledgerEntryV1(lineId, line, res));
     }
   }
   const at = r.finishedAt || r.startedAt;
   const history = r.ctx?.git?.sha ? [{ sha: r.ctx.git.sha, at }] : [];
   // Lines and ctx are carried over as they were: the next run writes complete ones.
   return { ...r, version: 2, ledger, history, hashKey: "" } as Receipt;
+}
+
+/** One v1 line resource as a v2 ledger entry. */
+function ledgerEntryV1(lineId: string, line: ReceiptLineV1, res: NonNullable<ReceiptLineV1["resources"]>[number]): LedgerEntry {
+  const entry: LedgerEntry = {
+    adapter: line.adapter,
+    op: line.op,
+    provider: {},
+    key: res.key,
+    id: res.id,
+    hash: res.hash,
+    createdBy: res.createdBy ?? line.createdBy ?? "adopted",
+    line: line.id ?? lineId,
+    outputs: { ...(line.outputs ?? {}) },
+  };
+  if (res.label !== undefined) entry.label = res.label;
+  if (line.orphan) entry.orphan = true;
+  return entry;
 }
 
 /** Parse a stored lock; null when it is missing or unreadable (an unreadable lock counts as absent). */

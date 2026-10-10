@@ -77,12 +77,18 @@ export function defaultChaos(): ChaosConfig {
  */
 export function chaosFor(c: ChaosConfig, method: string, path: string): ChaosAction | null {
   if (c.hold_next <= 0 && c.hang_next <= 0 && c.drop_response_next <= 0 && c.fail_next <= 0) return null;
+  return affected(c, method, path) ? consume(c) : null;
+}
+
+/** Whether `fail_on` lets chaos hit this request: writes by default, reads only when a GET rule names them. */
+function affected(c: ChaosConfig, method: string, path: string): boolean {
   const rules = c.fail_on === undefined ? [] : Array.isArray(c.fail_on) ? c.fail_on : [c.fail_on];
-  const isRead = method === "GET" || method === "HEAD";
-  const eligible = isRead
-    ? rules.some((r) => ruleMethod(r) === "GET" && matchesRule(r, "GET", path))
-    : rules.length === 0 || rules.some((r) => matchesRule(r, method, path));
-  if (!eligible) return null;
+  if (method === "GET" || method === "HEAD") return rules.some((r) => ruleMethod(r) === "GET" && matchesRule(r, "GET", path));
+  return rules.length === 0 || rules.some((r) => matchesRule(r, method, path));
+}
+
+/** Use up one pending chaos action, in the order hold, hang, drop, fail. */
+function consume(c: ChaosConfig): ChaosAction | null {
   if (c.hold_next > 0) {
     c.hold_next -= 1;
     return { kind: "hold" };

@@ -39,7 +39,7 @@ export default tseslint.config(
     // (see `judge` in engine/inspect.ts, or the sims' route tables) rather than raising the number.
     files: ["packages/**/*.ts", "scripts/**/*.ts"],
     ignores: ["**/*.test.ts"],
-    rules: { complexity: ["error", 20] },
+    rules: { complexity: ["error", 15] },
   },
   {
     files: ["**/*.test.ts", "scenarios/**/*.ts"],

@@ -177,7 +177,7 @@ If the property suite finds a failing case, turn its counterexample into a scena
 - TypeScript strict, ESM, imports end in `.js`.
 - Comments say why, not what. Error messages say what happened; the CLI adds the remedy from `cliHint`.
 - Nothing that resolves a secret may also format output; secrets go through `Redactor`, and JSON is produced only by `serialize()` in `packages/cli/src/output.ts`.
-- Lint caps a function's cyclomatic complexity at 20. When a change crosses it, split the function into named steps (a pure verdict like `judge` in `packages/core/src/engine/inspect.ts`, or a route table like the sims') rather than raising the cap.
+- Lint caps a function's cyclomatic complexity at 15. When a change crosses it, split the function into named steps (a pure verdict like `judge` in `packages/core/src/engine/inspect.ts`, or a route table like the sims') rather than raising the cap.
 - When a test fails, find the structural reason before adding a branch: v0.2 was produced by regrouping ~100 failing tests into six gaps (ledger, scope boundaries, transport, leases, redaction, output contract) and fixing each gap once.
 - Three CLI commands (`init`, `plan`/`status`, `apply`) plus `mcp`. A fourth needs a design note in the PR explaining why a flag on an existing one is worse.
 

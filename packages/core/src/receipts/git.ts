@@ -506,25 +506,19 @@ export class GitBranchReceiptStore implements ReceiptStore {
       own.add(scope);
       wanted.push({ scope, object: `${local(i)}:${envDir}/${scope}/latest.json` });
     }
+    // Scopes still only on the legacy branch; a scope's own branch wins over its legacy copy.
     if (hasLegacy) {
-      const dirs = (await this.git(["ls-tree", "-d", "--name-only", legacyLocal, "--", `${envDir}/`])).split("\n").filter(Boolean);
-      for (const d of dirs) {
-        const scope = d.slice(envDir.length + 1);
+      for (const scope of await this.legacyScopes(legacyLocal, envDir)) {
         if (!own.has(scope)) wanted.push({ scope, object: `${legacyLocal}:${envDir}/${scope}/latest.json` });
       }
     }
-    const blobs = await this.catFiles(wanted.map((w) => w.object));
-    const out: Array<{ scope: string; receipt: Receipt }> = [];
-    for (const [i, w] of wanted.entries()) {
-      const text = blobs[i];
-      if (text === null || text === undefined) continue;
-      try {
-        out.push({ scope: w.scope, receipt: parseReceipt(text, w.object) });
-      } catch {
-        /* skip scopes without a readable latest */
-      }
-    }
-    return out.sort((a, b) => (a.scope < b.scope ? -1 : a.scope > b.scope ? 1 : 0));
+    return readableReceipts(wanted, await this.catFiles(wanted.map((w) => w.object)));
+  }
+
+  /** The scope directories of one environment on the fetched legacy branch. */
+  private async legacyScopes(legacyLocal: string, envDir: string): Promise<string[]> {
+    const dirs = (await this.git(["ls-tree", "-d", "--name-only", legacyLocal, "--", `${envDir}/`])).split("\n").filter(Boolean);
+    return dirs.map((d) => d.slice(envDir.length + 1));
   }
 
   /** Read many blobs in one `git cat-file --batch`; null for each one that does not exist. */
@@ -663,3 +657,18 @@ Deleting it is safe only when no apply is running for this scope (a running appl
 Deleting it makes Sponson forget what it created in this scope: those resources will then be reported as
 unmanaged, and destroy will no longer remove them. Sponson recreates the branch on the next run.
 `;
+
+/** The receipts among `blobs` (one per `wanted` object) that exist and parse, sorted by scope. */
+function readableReceipts(wanted: Array<{ scope: string; object: string }>, blobs: Array<string | null | undefined>): Array<{ scope: string; receipt: Receipt }> {
+  const out: Array<{ scope: string; receipt: Receipt }> = [];
+  for (const [i, w] of wanted.entries()) {
+    const text = blobs[i];
+    if (text === null || text === undefined) continue;
+    try {
+      out.push({ scope: w.scope, receipt: parseReceipt(text, w.object) });
+    } catch {
+      /* skip scopes without a readable latest */
+    }
+  }
+  return out.sort((a, b) => (a.scope < b.scope ? -1 : a.scope > b.scope ? 1 : 0));
+}

@@ -11,32 +11,31 @@ import type { RunContext } from "./run-context.js";
  * could not be inspected are not judged, so a read error never produces false orphans.
  */
 export async function scopeDrift(rc: RunContext, inspected: Inspection[], uninspected: Set<string>): Promise<Drift[]> {
-  const drift: Drift[] = [];
   const desired = new Set<string>();
   for (const i of inspected) for (const k of i.desired) desired.add(identity(i.change.adapter, i.provider, k));
+  return [...orphans(rc, desired, uninspected), ...(await unmanaged(rc, inspected, desired))];
+}
 
-  for (const e of rc.ledger.all()) {
-    if (e.createdBy !== "sponson" || uninspected.has(e.line)) continue;
-    if (desired.has(identity(e.adapter, e.provider, e.key))) continue;
-    drift.push({
+/** Ledger entries Sponson created that no inspected line declares any more. */
+function orphans(rc: RunContext, desired: Set<string>, uninspected: Set<string>): Drift[] {
+  return rc.ledger
+    .all()
+    .filter((e) => e.createdBy === "sponson" && !uninspected.has(e.line) && !desired.has(identity(e.adapter, e.provider, e.key)))
+    .map((e) => ({
       kind: "orphan",
       adapter: e.adapter,
       line: e.line,
       resource: { key: e.key, id: e.id, label: e.label },
       message: `${e.label ?? e.key} is no longer declared by any line (last: \`${e.line}\`) but still exists. It is left alone; \`sponson apply --destroy\` removes it.`,
-    });
-  }
+    }));
+}
 
+/** What the lines' scope listings show that neither this plan, this ledger nor another scope accounts for. */
+async function unmanaged(rc: RunContext, inspected: Inspection[], desired: Set<string>): Promise<Drift[]> {
+  const drift: Drift[] = [];
   const seen = new Set<string>();
   for (const i of inspected) {
-    if (!i.op.listScope) continue;
-    let listed: ResourceRecord[];
-    try {
-      listed = await i.op.listScope(rc.adapterContext(i.change.adapter, i.provider), i.resolved.params);
-    } catch {
-      continue; // listing is best-effort; it must never block plan
-    }
-    for (const r of listed) {
+    for (const r of await listed(rc, i)) {
       const id = identity(i.change.adapter, i.provider, r.key);
       if (seen.has(id)) continue;
       seen.add(id);
@@ -51,4 +50,14 @@ export async function scopeDrift(rc: RunContext, inspected: Inspection[], uninsp
     }
   }
   return drift;
+}
+
+/** A line's scope listing; empty when its op cannot list or the listing fails (it must never block plan). */
+async function listed(rc: RunContext, i: Inspection): Promise<ResourceRecord[]> {
+  if (!i.op.listScope) return [];
+  try {
+    return await i.op.listScope(rc.adapterContext(i.change.adapter, i.provider), i.resolved.params);
+  } catch {
+    return [];
+  }
 }
