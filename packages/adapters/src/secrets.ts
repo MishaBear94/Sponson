@@ -131,6 +131,53 @@ export function awsSecretsManagerSource(exec: Exec = defaultExec): SecretSource 
   };
 }
 
+const GCP_SM_FORM = "expected gcp-sm://<project>/<secret> or gcp-sm://<project>/<secret>/<version>";
+/** Project ids (including domain-scoped `example.com:proj`) and project numbers; no leading `-`, so never a flag. */
+const GCP_PROJECT = /^[a-z0-9][a-z0-9.:-]*$/;
+/** Secret Manager's own rule for secret ids. */
+const GCP_SECRET = /^[A-Za-z0-9_-]{1,255}$/;
+const GCP_VERSION = /^(latest|[1-9][0-9]*)$/;
+
+/**
+ * `gcp-sm://<project>/<secret>[/<version>]` → `gcloud secrets versions access`, through the `gcloud` CLI so the Google
+ * SDK stays out of the dependency tree. The version defaults to `latest`; credentials come from the CLI's own
+ * conventions (`gcloud auth`, `CLOUDSDK_*`, `GOOGLE_APPLICATION_CREDENTIALS`). The project is part of the reference
+ * so a plan never depends on whichever project the runner's gcloud happens to have configured.
+ */
+export function gcpSecretManagerSource(exec: Exec = defaultExec): SecretSource {
+  return {
+    scheme: "gcp-sm",
+    form: "`gcp-sm://project/secret` or `gcp-sm://project/secret/version`",
+    resolvedBy:
+      "`gcloud secrets versions access version --secret=secret --project=project --format=json` (Google Cloud CLI; credentials from `gcloud auth` and the CLI's other conventions). `version` is a number or `latest` (the default). The payload must be UTF-8 text.",
+    async resolve(ref, env) {
+      const parts = stripScheme(ref, "gcp-sm").split("/");
+      if (parts.length < 2 || parts.length > 3) throw unresolved(ref, GCP_SM_FORM);
+      const [project, secret, version = "latest"] = parts as [string, string, string?];
+      if (!GCP_PROJECT.test(project) || !GCP_SECRET.test(secret) || !GCP_VERSION.test(version)) throw unresolved(ref, GCP_SM_FORM);
+      // JSON, not the default raw output: the payload arrives base64-encoded, so a value ending in a newline survives
+      // and a binary payload is recognised instead of being passed on as mangled text.
+      const out = await runCli(exec, ref, "gcloud", ["secrets", "versions", "access", version, `--secret=${secret}`, `--project=${project}`, "--format=json"], env);
+      const response = parseJson(out);
+      const data = isRecord(response) && isRecord(response.payload) ? response.payload.data : undefined;
+      if (typeof data !== "string") throw unresolved(ref, "gcloud returned no payload");
+      // Never echo the payload (or a fragment of it) in these messages: they end up in the receipt.
+      let value: string;
+      try {
+        value = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(data, "base64"));
+      } catch {
+        throw unresolved(ref, "the secret is not UTF-8 text (binary secrets are not supported)");
+      }
+      if (value === "") throw unresolved(ref, "the secret is empty");
+      return value;
+    },
+  };
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
 function parseJson(text: string): unknown {
   try {
     return JSON.parse(text) as unknown;

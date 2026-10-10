@@ -112,6 +112,7 @@ The schemes that ship with Sponson (`createRegistry()` in `@sponson/adapters`):
 | `doppler` | `doppler://project/config/NAME` | `doppler secrets get NAME --project project --config config --plain` (Doppler CLI) |
 | `op` | `op://vault/item/field` | `op read op://vault/item/field --no-newline` (1Password CLI) |
 | `aws-sm` | `aws-sm://secret-id` or `aws-sm://secret-id#KEY` | `aws secretsmanager get-secret-value --secret-id secret-id --query SecretString --output json` (AWS CLI; region and credentials from `AWS_REGION`, `AWS_PROFILE` and the CLI's other conventions). `secret-id` is a name or an ARN; `#KEY` picks one key of a JSON key/value secret. Binary secrets are not supported. |
+| `gcp-sm` | `gcp-sm://project/secret` or `gcp-sm://project/secret/version` | `gcloud secrets versions access version --secret=secret --project=project --format=json` (Google Cloud CLI; credentials from `gcloud auth` and the CLI's other conventions). `version` is a number or `latest` (the default). The payload must be UTF-8 text. |
 <!-- generated:secret-schemes:end -->
 
 Plugins can add schemes. A `secret:` that is not a URL (`scheme://…`) is `PLAN_INVALID`. Every command (`plan` and

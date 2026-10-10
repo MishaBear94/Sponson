@@ -1,0 +1,33 @@
+name: "gcp-sm:// through a fake gcloud CLI: plan resolves the value only to mask it, apply sends it, and it never appears in any output or receipt"
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values: { STRIPE_KEY: { secret: "gcp-sm://shop-prod/stripe-key" } }
+# The fake `gcloud` checks it was asked the right question, then answers like `--format=json` does: the payload
+# base64-encoded (URL-safe alphabet) inside the AccessSecretVersionResponse.
+bins:
+  gcloud: |
+    [ "$*" = "secrets versions access latest --secret=stripe-key --project=shop-prod --format=json" ] || { echo "unexpected: gcloud $*" >&2; exit 1; }
+    echo '{"name": "projects/123/secrets/stripe-key/versions/3", "payload": {"data": "ZmFrZV90c19nY3BzbV80aDh3MnI", "dataCrc32c": "1"}}'
+secrets: ["fake_ts_gcpsm_4h8w2r"]
+chaos: { fail_on: "POST /vercel/*", fail_next: 1, status: 500 }
+steps:
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { env: create } }
+  - run: plan
+    expect: { exit: 0, stdout: ["(secret)"] }
+  - run: apply --json
+    expect: { exit: 1, status: failed }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { env: applied } }
+  - sim:
+      vercel_env: { preview: { STRIPE_KEY: "fake_ts_gcpsm_4h8w2r" } }
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { env: unchanged } }
