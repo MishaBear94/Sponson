@@ -35,6 +35,13 @@ export default tseslint.config(
     },
   },
   {
+    // A ceiling, not a target: a function past it reads as several decisions at once. Split it into named steps
+    // (see `judge` in engine/inspect.ts, or the sims' route tables) rather than raising the number.
+    files: ["packages/**/*.ts", "scripts/**/*.ts"],
+    ignores: ["**/*.test.ts"],
+    rules: { complexity: ["error", 20] },
+  },
+  {
     files: ["**/*.test.ts", "scenarios/**/*.ts"],
     rules: { "@typescript-eslint/no-explicit-any": "off" },
   },

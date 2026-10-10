@@ -271,28 +271,34 @@ class ApplyRun {
 
   /** Bring the ledger in line with what this line now manages. */
   private record(c: Change, inspection: Inspection, result: ApplyResult): void {
+    const { provider } = inspection;
     const keys = new Set<string>();
     const createdNow = new Set(result.created);
     for (const r of result.resources) {
       keys.add(r.key);
-      const prev = this.rc.ledger.get(c.adapter, inspection.provider, r.key);
-      const replaced = prev && prev.createdBy !== "intent" && prev.id && prev.id !== r.id;
-      const foreign = this.rc.foreignScopeOf({ adapter: c.adapter, provider: inspection.provider, key: r.key });
-      const createdBy: LedgerEntry["createdBy"] =
-        createdNow.has(r.key) || prev?.createdBy === "intent" ? "sponson" : prev?.createdBy === "sponson" && !replaced && !foreign ? "sponson" : "adopted";
-      this.rc.ledger.put({ adapter: c.adapter, op: c.op, provider: inspection.provider, key: r.key, id: r.id, hash: this.rc.ledger.keyed(r.hash), ...(r.label ? { label: r.label } : {}), createdBy, line: c.id });
-      if (createdNow.has(r.key) || prev?.createdBy === "intent") this.markCreated(c, r.key);
+      const prev = this.rc.ledger.get(c.adapter, provider, r.key);
+      // Created by this run: reported by the adapter, or announced by an intent whose create landed.
+      const created = createdNow.has(r.key) || prev?.createdBy === "intent";
+      // Sponson keeps what it already owned, unless it was replaced outside Sponson or another scope manages it.
+      const stillOurs = prev?.createdBy === "sponson" && (!prev.id || prev.id === r.id) && !this.rc.foreignScopeOf({ adapter: c.adapter, provider, key: r.key });
+      const createdBy: LedgerEntry["createdBy"] = created || stillOurs ? "sponson" : "adopted";
+      this.rc.ledger.put({ adapter: c.adapter, op: c.op, provider, key: r.key, id: r.id, hash: this.rc.ledger.keyed(r.hash), ...(r.label ? { label: r.label } : {}), createdBy, line: c.id });
+      if (created) this.markCreated(c, r.key);
     }
-    // Intents this line announced but that did not materialise were never created.
-    for (const k of this.intents.get(c.id) ?? []) {
-      if (keys.has(k)) continue;
-      const e = this.rc.ledger.get(c.adapter, inspection.provider, k);
-      if (e?.createdBy === "intent") this.rc.ledger.delete(e);
-    }
+    this.dropUnmaterialisedIntents(c, provider, keys);
     this.claimed.set(c.id, keys);
     const line = this.receipt.lines[c.id]!;
     line.resources = this.resourcesOf(c.id);
     line.createdBy = line.resources.some((r) => r.createdBy === "sponson") ? "sponson" : "adopted";
+  }
+
+  /** Intents this line announced for keys it does not manage after all were never created: forget them. */
+  private dropUnmaterialisedIntents(c: Change, provider: Record<string, unknown>, managed: Set<string>): void {
+    for (const k of this.intents.get(c.id) ?? []) {
+      if (managed.has(k)) continue;
+      const e = this.rc.ledger.get(c.adapter, provider, k);
+      if (e?.createdBy === "intent") this.rc.ledger.delete(e);
+    }
   }
 
   private setOutputs(c: Change, values: Record<string, unknown>): void {

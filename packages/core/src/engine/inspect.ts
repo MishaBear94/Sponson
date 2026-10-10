@@ -42,32 +42,54 @@ export async function inspectLine(rc: RunContext, change: Change, op: OpSpec, pa
 
   const byKey = new Map<string, ResourceRecord>((live?.resources ?? []).map((r) => [r.key, r]));
   for (const d of diffs) {
-    const where = { adapter: change.adapter, provider, key: d.key };
-    const r = byKey.get(d.key);
-    const foreign = rc.foreignScopeOf(where);
-    // Another scope may rely on what it manages, but never have it changed or recreated under it.
-    if (foreign && d.kind !== "unchanged") {
-      inspection.refusal ??= { code: "OWNED_BY_OTHER_SCOPE", message: `${d.label} is managed by scope \`${foreign}\` in this environment; this scope may not ${r ? "change" : "create"} it.` };
-      continue;
-    }
-    const e = rc.ledger.get(change.adapter, provider, d.key);
-    if (!e || e.createdBy === "intent") continue;
-    const label = e.label ?? d.label;
-    if (!r) {
-      inspection.drift.push({ kind: "missing", adapter: change.adapter, line: change.id, resource: { key: d.key, id: e.id, label }, message: `${label} was applied by Sponson but no longer exists. It will be recreated.` });
-      continue;
-    }
-    if (e.id && r.id !== e.id) {
-      inspection.drift.push({ kind: "changed", replaced: true, adapter: change.adapter, line: change.id, resource: { key: d.key, id: r.id, label }, message: `${label} was deleted and re-created outside Sponson. The new one is not Sponson's; apply refuses this line unless the run reconciles, and then treats it as adopted.` });
-      if (!rc.opts.reconcile) inspection.refusal ??= { code: "DRIFT_CHANGED", message: `${label} was replaced outside Sponson since the last apply. Apply with reconcile to take it over as adopted, or update the plan.` };
-    } else if (e.hash && rc.ledger.keyed(r.hash) !== e.hash) {
-      // A console edit that already matches the plan is accepted silently; one that conflicts is refused.
-      if (d.kind === "unchanged") continue;
-      inspection.drift.push({ kind: "changed", adapter: change.adapter, line: change.id, resource: { key: d.key, id: r.id, label }, message: `${label} was changed outside Sponson since the last apply. Apply refuses this line unless the run reconciles.` });
-      if (!rc.opts.reconcile) inspection.refusal ??= { code: "DRIFT_CHANGED", message: `${label} was changed outside Sponson since the last apply. Apply with reconcile to overwrite it, or update the plan to match.` };
-    }
+    const verdict = judge(rc, change, provider, d, byKey.get(d.key));
+    if (verdict.drift) inspection.drift.push(verdict.drift);
+    // The first refusal is the one reported: it is the earliest line item apply would stop at.
+    if (verdict.refusal) inspection.refusal ??= verdict.refusal;
   }
   return inspection;
+}
+
+/** What one diffed resource means against the ledger: drift to report, and why apply must refuse it. */
+interface Verdict {
+  drift?: Drift;
+  refusal?: Refusal;
+}
+
+/**
+ * Judge one resource of a line: `d` is its diff, `live` what exists now (undefined: nothing does). Pure: reads
+ * the ledger and the run's options, writes nothing.
+ */
+function judge(rc: RunContext, change: Change, provider: Record<string, unknown>, d: ResourceDiff, live: ResourceRecord | undefined): Verdict {
+  // Another scope may rely on what it manages, but never have it changed or recreated under it.
+  const foreign = rc.foreignScopeOf({ adapter: change.adapter, provider, key: d.key });
+  if (foreign && d.kind !== "unchanged") {
+    return { refusal: { code: "OWNED_BY_OTHER_SCOPE", message: `${d.label} is managed by scope \`${foreign}\` in this environment; this scope may not ${live ? "change" : "create"} it.` } };
+  }
+
+  const e = rc.ledger.get(change.adapter, provider, d.key);
+  if (!e || e.createdBy === "intent") return {};
+  const label = e.label ?? d.label;
+  const at = (id: string | undefined) => ({ adapter: change.adapter, line: change.id, resource: { key: d.key, id, label } });
+  const refuse = (message: string): Verdict => (rc.opts.reconcile ? {} : { refusal: { code: "DRIFT_CHANGED", message } });
+
+  if (!live) {
+    return { drift: { kind: "missing", ...at(e.id), message: `${label} was applied by Sponson but no longer exists. It will be recreated.` } };
+  }
+  if (e.id && live.id !== e.id) {
+    return {
+      drift: { kind: "changed", replaced: true, ...at(live.id), message: `${label} was deleted and re-created outside Sponson. The new one is not Sponson's; apply refuses this line unless the run reconciles, and then treats it as adopted.` },
+      ...refuse(`${label} was replaced outside Sponson since the last apply. Apply with reconcile to take it over as adopted, or update the plan.`),
+    };
+  }
+  // A console edit that already matches the plan is accepted silently; one that conflicts is refused.
+  if (e.hash && rc.ledger.keyed(live.hash) !== e.hash && d.kind !== "unchanged") {
+    return {
+      drift: { kind: "changed", ...at(live.id), message: `${label} was changed outside Sponson since the last apply. Apply refuses this line unless the run reconciles.` },
+      ...refuse(`${label} was changed outside Sponson since the last apply. Apply with reconcile to overwrite it, or update the plan to match.`),
+    };
+  }
+  return {};
 }
 
 /**
