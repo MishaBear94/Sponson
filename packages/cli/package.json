@@ -2,6 +2,21 @@
   "name": "sponson",
   "version": "0.3.0",
   "description": "One release, one plan. CLI and MCP server for Sponson.",
+  "keywords": [
+    "sponson",
+    "release",
+    "preview-environments",
+    "deployment",
+    "ci",
+    "vercel",
+    "neon",
+    "clerk",
+    "cli",
+    "mcp",
+    "model-context-protocol",
+    "agents",
+    "github-actions"
+  ],
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -48,7 +63,7 @@
       "sponson": "./dist/bin.js"
     }
   },
-  "homepage": "https://github.com/MishaBear94/Sponson#readme",
+  "homepage": "https://sponson.mintlify.site",
   "bugs": {
     "url": "https://github.com/MishaBear94/Sponson/issues"
   }

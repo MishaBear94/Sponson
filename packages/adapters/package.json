@@ -2,6 +2,18 @@
   "name": "@sponson/adapters",
   "version": "0.3.0",
   "description": "The built-in resource adapters and secret sources for Sponson.",
+  "keywords": [
+    "sponson",
+    "release",
+    "preview-environments",
+    "deployment",
+    "ci",
+    "vercel",
+    "neon",
+    "clerk",
+    "adapters",
+    "secrets"
+  ],
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -43,7 +55,7 @@
       }
     }
   },
-  "homepage": "https://github.com/MishaBear94/Sponson#readme",
+  "homepage": "https://sponson.mintlify.site",
   "bugs": {
     "url": "https://github.com/MishaBear94/Sponson/issues"
   }

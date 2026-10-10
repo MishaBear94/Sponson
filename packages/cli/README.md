@@ -6,4 +6,6 @@ The Sponson CLI and MCP server: `sponson plan`, `sponson apply`, `sponson init` 
 npx sponson plan
 ```
 
-Requires Node.js 20 or later. Documentation, the plan format and the GitHub Action: see the [project README](https://github.com/MishaBear94/Sponson#readme).
+Requires Node.js 22 or later.
+
+Documentation: <https://sponson.mintlify.site> (quickstart, plan format, GitHub Action, agents). Source and issues: [GitHub](https://github.com/MishaBear94/Sponson).

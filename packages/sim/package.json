@@ -2,6 +2,16 @@
   "name": "@sponson/sim",
   "version": "0.3.0",
   "description": "Local fake cloud for Sponson: Vercel, Neon and Clerk API subsets with chaos injection.",
+  "keywords": [
+    "sponson",
+    "fake-cloud",
+    "api-simulator",
+    "chaos-testing",
+    "vercel",
+    "neon",
+    "clerk",
+    "testing"
+  ],
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -44,7 +54,7 @@
       "sponson-sim": "./dist/bin.js"
     }
   },
-  "homepage": "https://github.com/MishaBear94/Sponson#readme",
+  "homepage": "https://sponson.mintlify.site",
   "bugs": {
     "url": "https://github.com/MishaBear94/Sponson/issues"
   }

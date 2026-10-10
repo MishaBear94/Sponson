@@ -45,6 +45,25 @@ describe("repository identity", () => {
     }
   });
 
+  it("every package has the project's homepage and npm keywords", () => {
+    const home = (JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")) as { homepage?: string }).homepage;
+    expect(home, "root package.json homepage").toMatch(/^https:\/\//);
+    for (const p of ["core", "adapters", "sim", "cli"]) {
+      const pkg = JSON.parse(readFileSync(join(REPO, `packages/${p}/package.json`), "utf8")) as { homepage?: string; keywords?: string[] };
+      expect(pkg.homepage, `packages/${p}/package.json homepage`).toBe(home);
+      expect(pkg.keywords?.length, `packages/${p}/package.json keywords (how npm search finds it)`).toBeGreaterThan(0);
+    }
+  });
+
+  it("a package README that names a Node.js version names the one its engines require", () => {
+    for (const p of ["core", "adapters", "sim", "cli"]) {
+      const pkg = JSON.parse(readFileSync(join(REPO, `packages/${p}/package.json`), "utf8")) as { engines?: { node?: string } };
+      const required = /\d+/.exec(pkg.engines?.node ?? "")?.[0];
+      const readme = readFileSync(join(REPO, `packages/${p}/README.md`), "utf8");
+      for (const m of readme.matchAll(/Node\.js (\d+)/g)) expect(m[1], `packages/${p}/README.md says Node.js ${m[1]}; engines.node is ${pkg.engines?.node}`).toBe(required);
+    }
+  });
+
   it("every link to this project uses the canonical owner/name", () => {
     const wrong: string[] = [];
     for (const f of files) {
