@@ -53,6 +53,9 @@ providers:
   `_KEY`, …), so its value is masked in every output whatever the adapter does; the adapter masks it (and a Basic
   credential's encoded form) in its own error text too.
 - Optional `base_url_env` (an override, as every built-in adapter has), static `headers`, `encoding: json | form`.
+  *Amended: `headers` may set `Accept` to a JSON media type (Heroku pins its API version with
+  `application/vnd.heroku+json; version=3` and refuses requests without it); `Authorization` and `Content-Type`
+  stay Sponson's.*
 
 ### Two engine hooks, both optional on `OpSpec`
 

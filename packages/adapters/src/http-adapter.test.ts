@@ -365,6 +365,9 @@ describe("http: malformed specs name the field", () => {
     expect(() => providerFor({ demo: { ...API, auth: { bearer_env: "sk live" } } }, GATE)).toThrow(/NAME of an environment variable/);
     expect(() => providerFor({ demo: { ...API, auth: { token: "x" } } }, GATE)).toThrow(/must be one of/);
     expect(() => providerFor({ demo: { ...API, headers: { Authorization: "x" } } }, GATE)).toThrow(/is set by Sponson/);
+    expect(() => providerFor({ demo: { ...API, headers: { "Content-Type": "text/plain" } } }, GATE)).toThrow(/is set by Sponson/);
+    expect(() => providerFor({ demo: { ...API, headers: { Accept: "text/html" } } }, GATE)).toThrow(/must name a JSON media type/);
+    expect(providerFor({ demo: { ...API, headers: { Accept: "application/vnd.heroku+json; version=3" } } }, GATE)).toMatchObject({ headers: { Accept: "application/vnd.heroku+json; version=3" } });
     expect(() => providerFor({ demo: { ...API, base_url: "api.example.test" } }, GATE)).toThrow(/`base_url` must be an http\(s\) URL/);
     expect(() => providerFor({ demo: { ...API, encoding: "xml" } }, GATE)).toThrow(/`json`/);
     expect(() => providerFor({ demo: { ...API, retries: 3 } }, GATE)).toThrow(/unknown key `retries`/);

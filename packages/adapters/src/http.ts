@@ -60,8 +60,9 @@ export interface ApiClientOptions {
   /** `bearer` sends `Authorization: Bearer <token>`; `header:<name>` sends the token in a custom header. */
   authHeader?: "bearer" | `header:${string}`;
   /**
-   * Extra headers sent with every request (an API version pin). They never replace `accept`, `content-type` or the
-   * credential's header.
+   * Extra headers sent with every request (an API version pin). They never replace `content-type` or the
+   * credential's header; an `accept` here replaces `application/json` (a vendor JSON media type that pins a version,
+   * as Heroku's `application/vnd.heroku+json; version=3`). Answers are read as JSON either way.
    */
   headers?: Record<string, string>;
   /**
@@ -239,7 +240,7 @@ export function apiClient(opts: ApiClientOptions): ApiClient {
   while (base.endsWith("/")) base = base.slice(0, -1);
   const auth = opts.authHeader ?? "bearer";
   const policy = policyFrom(opts.env);
-  const headers: Record<string, string> = { ...extraHeaders(opts.headers ?? {}), accept: "application/json" };
+  const headers: Record<string, string> = { accept: "application/json", ...extraHeaders(opts.headers ?? {}) };
   if (auth === "bearer") headers.authorization = `Bearer ${opts.token}`;
   else headers[auth.slice("header:".length).toLowerCase()] = opts.token;
   const form = opts.encoding === "form";
@@ -322,7 +323,7 @@ export function formEncode(body: unknown): string {
   return new URLSearchParams(pairs).toString();
 }
 
-/** Configured headers, lower-cased (names are case-insensitive) so the client's own headers override them. */
+/** Configured headers, lower-cased (names are case-insensitive) so the credential and content type override them. */
 function extraHeaders(h: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.entries(h).filter(([k]) => k.toLowerCase() !== "content-type").map(([k, v]) => [k.toLowerCase(), v]));
 }

@@ -495,7 +495,7 @@ providers:
 | `base_url` | http(s) URL | Request paths are relative to it. |
 | `base_url_env` | variable name | Optional. When this variable is set, it replaces `base_url` (a staging API; the test suites point it at the local fake cloud). |
 | `auth` | map | `{ bearer_env: NAME }` (`Authorization: Bearer`), `{ header: X-Api-Key, value_env: NAME }` (the value in that header), or `{ basic: { user_env: NAME, password_env: NAME } }`. Always variable NAMES, never values; the credential's name must end in `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `_KEY` or `APIKEY` so that its value is masked in every output. Unset: `PROVIDER_AUTH`. |
-| `headers` | map: header → string | Optional static headers (an API version pin). `Authorization`, `Accept` and `Content-Type` are Sponson's. |
+| `headers` | map: header → string | Optional static headers (an API version pin). `Authorization` and `Content-Type` are Sponson's; `Accept` (default `application/json`) may name a vendor JSON media type that pins the API version, such as `application/vnd.heroku+json; version=3`. |
 | `encoding` | `json` \| `form` | Request bodies as JSON (default) or `application/x-www-form-urlencoded`, nested as `a[b]=c` and `a[0]=c`. Answers are read as JSON either way. |
 
 A malformed block, or a line naming an API that is not configured, is `PLAN_INVALID` before any request is sent;

@@ -212,7 +212,8 @@ function parseHeaders(v: unknown, where: string): Record<string, string> {
   if (!isObject(v)) throw planError("must be a map of header name to string value", where);
   for (const [k, x] of Object.entries(v)) {
     if (!HEADER_NAME.test(k) || typeof x !== "string") throw planError(`\`${k}\` must be a header name with a string value`, where);
-    if (/^(authorization|accept|content-type)$/i.test(k)) throw planError(`\`${k}\` is set by Sponson; configure the credential under \`auth\``, where);
+    if (/^(authorization|content-type)$/i.test(k)) throw planError(`\`${k}\` is set by Sponson; configure the credential under \`auth\``, where);
+    if (/^accept$/i.test(k) && !/json/i.test(x)) throw planError(`\`${k}\` must name a JSON media type (answers are read as JSON), such as application/vnd.heroku+json; version=3`, where);
   }
   return v as Record<string, string>;
 }

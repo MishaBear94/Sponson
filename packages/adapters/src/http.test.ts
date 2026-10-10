@@ -170,6 +170,21 @@ describe("retries", () => {
     ]);
   });
 
+  it("a configured Accept replaces application/json (a vendor media type pinning the version); never the credential", async () => {
+    const got: Array<{ accept: string | undefined; auth: string | undefined }> = [];
+    const url = await serve((req, res) => {
+      got.push({ accept: req.headers.accept, auth: req.headers.authorization });
+      reply(res, 200, "{}");
+    });
+    const heroku = "application/vnd.heroku+json; version=3";
+    await apiClient({ adapter: "acme", baseUrl: url, token: "t", headers: { Accept: heroku, Authorization: "Bearer other" }, redact: (t) => t, env: FAST }).get("/x");
+    await client(url).get("/x");
+    expect(got).toEqual([
+      { accept: heroku, auth: "Bearer t" },
+      { accept: "application/json", auth: "Bearer t" },
+    ]);
+  });
+
   it("gives up after SPONSON_HTTP_RETRIES with PROVIDER_TRANSIENT and the attempt count", async () => {
     const url = await serve((_q, res) => reply(res, 504, "{}"));
     const e = await failure(client(url, { ...FAST, SPONSON_HTTP_RETRIES: "2" }).delete("/x"));
