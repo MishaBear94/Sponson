@@ -202,6 +202,44 @@ They describe a conventional JSON REST API, not one provider; the adapter's test
 | R3 | unknown paths are 404 until seeded or created; client-chosen ids; duplicate `name` → 409 | convention (`exists_status` covers providers that answer otherwise) |
 | R4 | PATCH is a JSON merge patch (RFC 7396); PUT replaces; JSON or form bodies; no preconditions | RFC 7396 for PATCH; the rest convention |
 | R5 | DELETE answers `{ id, deleted }`; unknown is 404 | convention (`gone_status` covers providers that answer otherwise) |
+| R6 | with an `auth` seed, credentials are checked for real: an OAuth2 client-credentials token endpoint, fixed bearer tokens, HTTP Digest, SigV4 | RFC 6749 §4.4, RFC 7616 (its §3.9.1 example is a test vector), AWS SigV4 (its published test suite is a test vector; ../auth.ts is written independently of the client) |
+
+### Authentication forms (`packages/adapters/src/http-adapter-auth.ts`)
+
+Checked on 2026-10-11 against the providers' docs and official clients; the sims and scenarios encode them.
+
+| Provider | Form | Source | Status |
+|---|---|---|---|
+| Auth0 Management API | `POST https://{domain}/oauth/token`, form `grant_type=client_credentials`, `client_id`, `client_secret`, `audience=https://{domain}/api/v2/`; answer `{ access_token, expires_in, token_type: Bearer }` | https://auth0.com/docs/secure/tokens/access-tokens/management-api-access-tokens/get-management-api-access-tokens-for-production | ✅ verified |
+| Kinde Management API | `POST https://{sub}.kinde.com/oauth2/token`, form with `audience=https://{sub}.kinde.com/api` | https://docs.kinde.com/developer-tools/kinde-api/access-token-for-api/ | ✅ verified |
+| Okta | Custom authorization server `/oauth2/default/v1/token` with `client_secret_basic`: ✅. The org server's `okta.*` (management API) scopes accept only `private_key_jwt`, which is not supported | https://developer.okta.com/docs/guides/implement-grant-type/clientcreds/main/, https://developer.okta.com/docs/guides/implement-oauth-for-okta-serviceapp/main/ | ✅ verified; management API ⚠️ not covered |
+| MongoDB Atlas | Admin API v2 `https://cloud.mongodb.com/api/atlas/v2`, `Accept: application/vnd.atlas.2023-01-01+json` (406 without); API keys by HTTP Digest (OpenAPI `DigestAuth`); service accounts by client credentials at `https://cloud.mongodb.com/api/oauth/token` (Basic) | https://github.com/mongodb/openapi (`openapi/v2.json`), https://www.mongodb.com/docs/atlas/api/api-authentication/ | ✅ verified; the challenge's `algorithm=MD5, qop="auth"` ❓ (seen in a third-party report only; both algorithms are supported) |
+| Google Cloud | `gcloud auth print-access-token` as a bearer token; Identity Toolkit `PATCH admin/v2/projects/{p}/config?updateMask=authorizedDomains`; user credentials also need `x-goog-user-project` | https://cloud.google.com/identity-platform/docs/reference/rest/v2/projects/updateConfig, https://cloud.google.com/docs/authentication/troubleshoot-adc | ✅ verified (quota-project header from the troubleshooting page) |
+| Azure | `az account get-access-token --query accessToken -o tsv` | https://learn.microsoft.com/en-us/cli/azure/account#az-account-get-access-token | ✅ verified |
+| AWS | SigV4 header signing; S3 requires `x-amz-content-sha256` | https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv-create-signed-request.html; test vectors from https://github.com/awslabs/aws-c-auth/tree/main/tests/aws-signing-test-suite/v4 (`get-vanilla`, `get-vanilla-query-order-key-case`, `post-vanilla`, `post-x-www-form-urlencoded`) | ✅ verified |
+
+### Sim assumptions (`packages/sim/src/routes/aws.ts`)
+
+| Id | Assumption | Status |
+|---|---|---|
+| A1 | requests signed with SigV4 for the path's service and region; S3 requests carry `x-amz-content-sha256` | ✅ verified (IAM signing guide; S3 common request headers) |
+| A2 | `PUT /?cors` takes 1–100 `CORSRule`s, each with an `AllowedOrigin` and an `AllowedMethod`, requires `Content-MD5` (or an `x-amz-checksum-*`), replaces the whole configuration, answers 200 with no body; empty is `MalformedXML` | ✅ verified (https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketCors.html; botocore `requestChecksumRequired`) |
+| A3 | `GET /?cors` answers the configuration as XML, 404 `NoSuchCORSConfiguration` without one; `DELETE /?cors` answers 204 | ✅ verified for GET and DELETE (API_GetBucketCors, API_DeleteBucketCors); the 404 code ❓ |
+| A4 | Amplify `GetBranch` / `UpdateBranch` (`GET`/`POST /apps/{appId}/branches/{branchName}`) answer `{ branch }`; `environmentVariables` replaces the whole map; errors are JSON with `x-amzn-ErrorType` | ✅ verified (https://docs.aws.amazon.com/amplify/latest/APIReference/API_UpdateBranch.html, API_GetBranch.html; signing name `amplify` from botocore) |
+
+### Sim assumptions (`packages/sim/src/routes/railway.ts`, `packages/sim/src/routes/fly.ts`)
+
+| Id | Assumption | Status |
+|---|---|---|
+| RW1 | one endpoint `https://backboard.railway.com/graphql/v2`; account or workspace tokens as `Authorization: Bearer`, project tokens as `Project-Access-Token` | ✅ verified (https://docs.railway.com/reference/public-api) |
+| RW2 | failures are HTTP 200 with `errors[]`; a refused token is `INTERNAL_SERVER_ERROR` "Not Authorized"; parse and validation errors are 400 | ✅ verified (same page) |
+| RW3 | `variables(projectId, environmentId, serviceId, unrendered)` answers the `EnvironmentVariables` scalar, a flat name → value map | ✅ verified (https://github.com/railwayapp/cli, `src/gql/schema.json`) |
+| RW4 | `variableUpsert(input: VariableUpsertInput!): Boolean!` and `variableDelete(input: VariableDeleteInput!): Boolean!` with `projectId`, `environmentId`, `serviceId`, `name` (and `value`) | ✅ verified (same schema); deleting an absent variable answers `true` ❓ |
+| RW5 | an unknown environment is an error "Environment not found" | ❓ wording |
+| F1 | `Authorization: Bearer <token>`, or `FlyV1 <macaroon>` for tokens from `fly tokens create` | ✅ verified (https://github.com/superfly/fly-go, `tokens/tokens.go`) |
+| F2 | `app(name) { secrets { name digest createdAt } }`; values never returned | ✅ verified (fly-go `resource_secrets.go`, `schema.graphql`) |
+| F3 | `setSecrets(input: { appId, secrets: [{ key, value }], replaceAll })` and `unsetSecrets(input: { appId, keys })` answer `{ app, release }` | ✅ verified (fly-go `schema.graphql`); unsetting an absent key ❓ |
+| F4 | failures are HTTP 200 with `errors[]`; an unknown app is "Could not find App" | ❓ wording. Current flyctl sets secrets through the Machines API (`api.machines.dev/v1/apps/{app}/secrets`, documented only in fly-go's source); the GraphQL mutations are not marked deprecated |
 
 ## Supabase
 
@@ -300,5 +338,8 @@ Deploy Previews cannot be rebuilt through any documented call (the docs describe
 - Netlify: NL2 (`name` is the subdomain), NL3 (PATCH leaves other values and keeps ids), NL5 (status of a
   duplicate key), NL6 (an emptied variable), NL7 (deploy order, `context` values, `review_id`), NL10 (`updated_at`
   on PATCH), NL11 (a build of a branch whose branch deploys are off).
+
+- The generic adapter's authentication forms and GraphQL examples: every ❓ above, and each provider end to end
+  (the examples run against sims, not the live APIs).
 
 Run them with `pnpm test:live`; see the header of `scenarios/contract.test.ts`.

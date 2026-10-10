@@ -20,7 +20,7 @@ import { SponsonError, canonicalJson, type AdapterContext, type DiffSide, type L
 import { ABSENT, SENSITIVE, assertNoPending, desiredSide, paramError } from "./common.js";
 import { isObject, type ApiClient } from "./http.js";
 import { failedWith, httpClient, write } from "./http-adapter-client.js";
-import { ADAPTER, apiBlock, at, fieldTokens, fillPath, firstMarker, isKeep, parseListItem, pointerTokens, projection, setAt, stateHash, type ListItemSpec, type ListShape } from "./http-adapter-spec.js";
+import { ADAPTER, apiBlock, at, fieldTokens, parseApi, fillPath, firstMarker, isKeep, parseListItem, pointerTokens, projection, setAt, stateHash, type ListItemSpec, type ListShape } from "./http-adapter-spec.js";
 
 /** Read-modify-write rounds before giving up on a collection that keeps changing under us. */
 export const MAX_ATTEMPTS = 3;
@@ -30,7 +30,7 @@ interface Locator {
   read: string;
   write: string;
   list: string;
-  send: "field" | "parent";
+  send: "field" | "parent" | "collection";
   shape: ListShape;
   sep?: string;
   key_field?: string;
@@ -38,6 +38,12 @@ interface Locator {
   item: unknown;
   /** `destroy: keep`: left in place when the scope is destroyed. */
   keep?: true;
+  /** `parent.if_missing: empty`: a 404 on the parent reads as an empty collection. */
+  missing_empty?: true;
+  /** `parent.when_empty: delete`: an empty collection is removed with `DELETE <write path>` instead of written. */
+  delete_empty?: true;
+  /** `parent.body_list_path`: where the collection goes in the request body, when not where it is read (`list`). */
+  body_list?: string;
 }
 
 /** One item of the collection: what identifies it, and its value. */
@@ -76,6 +82,9 @@ function locatorOf(spec: ListItemSpec): Locator | undefined {
     ...(spec.parent.contentType ? { content_type: spec.parent.contentType } : {}),
     item,
     ...(spec.destroy === "keep" ? { keep: true as const } : {}),
+    ...(spec.parent.ifMissing === "empty" ? { missing_empty: true as const } : {}),
+    ...(spec.parent.whenEmpty === "delete" ? { delete_empty: true as const } : {}),
+    ...(spec.parent.bodyListPath !== undefined ? { body_list: spec.parent.bodyListPath } : {}),
   };
 }
 
@@ -109,10 +118,14 @@ function arrayKey(e: unknown, keyField: string | undefined): unknown {
   return isObject(e) ? at(e, fieldTokens(keyField)) : undefined;
 }
 
-/** The collection as entries. Absent or null is empty. */
-function decode(raw: unknown, loc: Locator): Entry[] {
-  if (raw === undefined || raw === null) return [];
+/**
+ * The collection as entries. Absent or null is empty. In an XML document a list of one is its element alone (and
+ * an empty element is ""), so for an XML API a lone value is a list of one.
+ */
+function decode(raw: unknown, loc: Locator, xml: boolean): Entry[] {
+  if (raw === undefined || raw === null || (xml && raw === "")) return [];
   if (loc.shape === "array") {
+    if (xml && !Array.isArray(raw)) raw = [raw];
     if (!Array.isArray(raw)) throw badShape(loc, "a list");
     return raw.map((value) => ({ key: arrayKey(value, loc.key_field), value }));
   }
@@ -179,15 +192,27 @@ function hasKeep(spec: ListItemSpec): boolean {
 // Reading and writing the parent
 // ---------------------------------------------------------------------------
 
-/** The parent object and its collection. */
-async function readParent(api: ApiClient, loc: Locator): Promise<{ doc: Record<string, unknown>; entries: Entry[] }> {
-  const doc = await api.get(loc.read);
-  if (!isObject(doc)) throw badShape(loc, "an object");
-  return { doc, entries: decode(at(doc, pointerTokens(loc.list)), loc) };
+/** A client for one locator's parent, and whether the API speaks XML. */
+interface Conn {
+  api: ApiClient;
+  xml: boolean;
 }
 
-function clientFor(actx: AdapterContext, loc: Locator): ApiClient {
-  return httpClient(actx, loc.content_type ? { contentType: loc.content_type } : {});
+/** The parent object and its collection; with `if_missing: empty`, a parent that is not there is empty. */
+async function readParent(conn: Conn, loc: Locator): Promise<{ doc: Record<string, unknown>; entries: Entry[] }> {
+  let doc: unknown;
+  try {
+    doc = await conn.api.get(loc.read);
+  } catch (e) {
+    if (loc.missing_empty && failedWith(e, "PROVIDER_NOT_FOUND", [])) return { doc: {}, entries: [] };
+    throw e;
+  }
+  if (!isObject(doc)) throw badShape(loc, "an object");
+  return { doc, entries: decode(at(doc, pointerTokens(loc.list)), loc, conn.xml) };
+}
+
+function clientFor(actx: AdapterContext, loc: Locator): Conn {
+  return { api: httpClient(actx, loc.content_type ? { contentType: loc.content_type } : {}), xml: parseApi(actx.provider, "providers.http.<api>").encoding === "xml" };
 }
 
 /**
@@ -195,11 +220,20 @@ function clientFor(actx: AdapterContext, loc: Locator): ApiClient {
  * patch of that entry, anything else as the whole collection, alone or in the parent read just before.
  */
 async function writeChange(api: ApiClient, loc: Locator, doc: Record<string, unknown>, entries: Entry[], change: Entry): Promise<void> {
-  const tokens = pointerTokens(loc.list);
+  const tokens = pointerTokens(loc.send === "parent" ? loc.list : (loc.body_list ?? loc.list));
+  const space = loc.write.indexOf(" ");
+  if (loc.delete_empty && entries.length === 0) {
+    // An API that refuses an empty collection (S3 CORS needs at least one rule) removes it instead.
+    try {
+      await write(api, "DELETE", loc.write.slice(space + 1), undefined, true);
+    } catch (e) {
+      if (!failedWith(e, "PROVIDER_NOT_FOUND", [])) throw e;
+    }
+    return;
+  }
   let body: unknown;
   if (loc.shape === "map" && loc.send === "field") body = place({}, tokens, { [String(change.key as string)]: change.value });
   else body = place(loc.send === "parent" ? doc : {}, tokens, encode(entries, loc));
-  const space = loc.write.indexOf(" ");
   await write(api, loc.write.slice(0, space), loc.write.slice(space + 1), body, true);
 }
 
@@ -220,10 +254,10 @@ function isPlanned(spec: ListItemSpec, entry: Entry | undefined): boolean {
  * was absent from the collection it read and wrote).
  */
 async function ensure(actx: AdapterContext, spec: ListItemSpec, loc: Locator, label: string): Promise<boolean> {
-  const api = clientFor(actx, loc);
+  const conn = clientFor(actx, loc);
   let added = false;
   for (let attempt = 0; attempt <= MAX_ATTEMPTS; attempt++) {
-    const { doc, entries } = await readParent(api, loc);
+    const { doc, entries } = await readParent(conn, loc);
     const idx = entries.findIndex((e) => sameKey(e.key, loc.item));
     if (isPlanned(spec, entries[idx])) return added;
     if (attempt === MAX_ATTEMPTS) break;
@@ -235,17 +269,17 @@ async function ensure(actx: AdapterContext, spec: ListItemSpec, loc: Locator, la
     actx.log(`${idx < 0 ? "add" : "update"} ${label}`);
     const change = { key: loc.item, value: nextValue(spec, entries[idx]) };
     const next = idx < 0 ? [...entries, change] : entries.map((e, i) => (i === idx ? change : e));
-    await writeChange(api, loc, doc, next, change);
+    await writeChange(conn.api, loc, doc, next, change);
   }
   throw raced(loc, "the item is still not as planned");
 }
 
 /** Take the item out until a fresh read no longer shows it; a missing parent counts as gone. */
-async function remove(api: ApiClient, loc: Locator): Promise<void> {
+async function remove(conn: Conn, loc: Locator): Promise<void> {
   for (let attempt = 0; attempt <= MAX_ATTEMPTS; attempt++) {
     let parent: { doc: Record<string, unknown>; entries: Entry[] };
     try {
-      parent = await readParent(api, loc);
+      parent = await readParent(conn, loc);
     } catch (e) {
       if (failedWith(e, "PROVIDER_NOT_FOUND", [])) return;
       throw e;
@@ -253,7 +287,7 @@ async function remove(api: ApiClient, loc: Locator): Promise<void> {
     const rest = parent.entries.filter((e) => !sameKey(e.key, loc.item));
     if (rest.length === parent.entries.length) return;
     if (attempt === MAX_ATTEMPTS) break;
-    await writeChange(api, loc, parent.doc, rest, { key: loc.item, value: null });
+    await writeChange(conn.api, loc, parent.doc, rest, { key: loc.item, value: null });
   }
   throw raced(loc, "the item is still there");
 }

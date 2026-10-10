@@ -53,10 +53,10 @@ Columns:
 | Netlify | Env var values per deploy context (`deploy-preview`, `branch` + `context_parameter`); wait for the deploy of the commit, rebuild if it started before the write | REST `POST /api/v1/accounts/{account}/env?site_id=`, `PATCH .../env/{key}`; bearer; object per key, values list per context; deploys only see values set before they started | P (deploy barrier like Vercel) | P0 | **yes** (`netlify.env`) |
 | Cloudflare Pages / Workers | Pages: `deployment_configs.preview.env_vars` (all previews share one set, no per-branch values). Workers: secrets per script / preview version | REST `PATCH /accounts/{a}/pages/projects/{p}`, bearer; **map** merge-patch, `null` deletes; Workers `PUT .../workers/scripts/{s}/secrets` object | Y | P1 | no |
 | Render | Env vars on a preview service / preview environment | REST `PUT /v1/services/{id}/env-vars/{key}`, bearer; object per key; previews created by Render from `render.yaml` | Y | P1 | no |
-| Railway | Variables in a PR environment (Railway creates PR environments natively) | GraphQL `variableUpsert(projectId, environmentId, serviceId, name, value)`, bearer; object per name; deployment status for a barrier | P (GraphQL, env id lookup, barrier) | P1 | no |
-| Fly.io | Per-PR app (the usual pattern is one app per PR) plus its secrets | Machines API `api.machines.dev/v1/apps/{app}/secrets` (secret writes return a version, changed 2025) and GraphQL `setSecrets`; bearer; object; machines must be updated to see new secrets | P (app lifecycle, restart) | P1 | no |
+| Railway | Variables in a PR environment (Railway creates PR environments natively) | GraphQL `variableUpsert(projectId, environmentId, serviceId, name, value)`, bearer; object per name; deployment status for a barrier | P (variables: Y with GraphQL requests, tested example; env id lookup and barrier: no) | P1 | no |
+| Fly.io | Per-PR app (the usual pattern is one app per PR) plus its secrets | Machines API `api.machines.dev/v1/apps/{app}/secrets` (secret writes return a version, changed 2025) and GraphQL `setSecrets`; bearer; object; machines must be updated to see new secrets | P (secrets: Y with GraphQL requests, tested example; app lifecycle, restart: no) | P1 | no |
 | Heroku | Review app per PR; config vars on it | REST `POST /review-apps`, `PATCH /apps/{app}/config-vars`, bearer; **map** merge, `null` deletes; review-app creation async | Y (config vars); P (review app) | P2 | no |
-| AWS Amplify | Branch (per-PR previews built in); env vars per branch | `UpdateBranch` `environmentVariables`, SigV4; **map** full replace | N (SigV4; CLI fallback) | P2 | no |
+| AWS Amplify | Branch (per-PR previews built in); env vars per branch | `UpdateBranch` `environmentVariables`, SigV4; **map** full replace | Y (`aws_sigv4`, map sent whole; tested example) | P2 | no |
 | Google Cloud Run | Tagged revision per PR (`--tag pr-42`), env vars on it | Admin API v2 / `gcloud run deploy --tag --update-env-vars`, Google OAuth; revision = whole service spec | N (part of the deploy, not beside it) | P2 | no |
 | Azure Static Web Apps | Preview environment per PR (built in); app settings | ARM `PUT .../staticSites/{s}/builds/{env}/config/appsettings`, AAD token; **map** full replace | P (AAD token) | P2 | no |
 | DigitalOcean App Platform | No native PR previews; app per PR via its GitHub action; envs in the app spec | REST `PUT /v2/apps/{id}` whole spec, bearer; **list** in spec | P (whole-spec writes) | P2 | no |
@@ -70,7 +70,7 @@ Columns:
 | PlanetScale | Branch per PR; password (credential) per branch; deploy request on merge | REST `POST /v1/organizations/{o}/databases/{d}/branches`, `.../branches/{b}/passwords`; service token header; object; branch `ready` async; password plaintext returned once | P (async, once-only secret) | P1 | **yes** (`planetscale.branch`, `planetscale.password`; deploy requests on merge are not managed) |
 | Turso | Database branched from a parent (`seed: {type: database}`), token per DB | Platform API `POST /v1/organizations/{o}/databases`, `.../databases/{d}/auth/tokens`; bearer; object | Y | P1 | no |
 | Xata | Copy-on-write Postgres branch | REST control plane and `xata branch create --from`; API keys. Endpoint paths not confirmed **(unverified)**; the product was re-platformed onto Postgres in 2025 | P (async; API in flux) | P2 | no |
-| MongoDB Atlas | No branching; per-PR database user and database name on a shared cluster (cluster per PR is slow and costly) | Admin API v2 `POST /api/atlas/v2/groups/{g}/databaseUsers`, digest or service-account OAuth; object | P (digest auth) | P2 | no |
+| MongoDB Atlas | No branching; per-PR database user and database name on a shared cluster (cluster per PR is slow and costly) | Admin API v2 `POST /api/atlas/v2/groups/{g}/databaseUsers`, digest or service-account OAuth; object | Y (`digest` auth and `media_type`; tested against a Digest sim) | P2 | no |
 | CockroachDB Cloud | No branching; per-PR database is SQL (`CREATE DATABASE`), a cluster per PR is infra | Cloud API `/api/v1/clusters` (cluster level only), bearer | N (needs SQL) | P2 | no |
 | Prisma Postgres | Database per PR in a project, connection string per database | Management API `POST /v1/projects/{id}/databases`, `POST /v1/databases/{id}/connections`; service token; object; connection string returned on create | Y | P2 | no |
 
@@ -79,9 +79,9 @@ Columns:
 | Provider | Side effect | API shape | Generic? | Pri | Now |
 |---|---|---|---|---|---|
 | Clerk | Preview URL on the instance's redirect allow-list | Backend API `POST /v1/redirect_urls`, `DELETE /v1/redirect_urls/{id}`, bearer secret key; object | Y | P0 | **yes** (`clerk.redirect_allow`) |
-| Auth0 | Preview URL in an application's `callbacks`, `allowed_logout_urls`, `web_origins`, `allowed_origins` | Management API `PATCH /api/v2/clients/{id}`, bearer from client-credentials; **list** (each array replaced whole); no ETag | Y (list mode, token exchange) | P0 | no |
+| Auth0 | Preview URL in an application's `callbacks`, `allowed_logout_urls`, `web_origins`, `allowed_origins` | Management API `PATCH /api/v2/clients/{id}`, bearer from client-credentials; **list** (each array replaced whole); no ETag | Y (list mode, `oauth2_client_credentials`; tested example) | P0 | no |
 | Supabase Auth | Preview URL in "Additional Redirect URLs" | Management API `PATCH /v1/projects/{ref}/config/auth` with `uri_allow_list`, bearer; **list** encoded as one comma-separated string; send only that field | Y (list mode over a delimited string) | P0 | **yes** (`supabase.auth_redirect`) |
-| Firebase Auth | Preview domain in `authorizedDomains` | Identity Toolkit `PATCH admin/v2/projects/{p}/config?updateMask=authorizedDomains`, Google OAuth; **list** full replace | Y (list mode, Google token) | P1 | no |
+| Firebase Auth | Preview domain in `authorizedDomains` | Identity Toolkit `PATCH admin/v2/projects/{p}/config?updateMask=authorizedDomains`, Google OAuth; **list** full replace | Y (list mode, `command` token from `gcloud`; tested example) | P1 | no |
 | WorkOS | Redirect URI for AuthKit | `POST /user_management/redirect_uris`, list via `GET`; bearer; object. Delete endpoint not confirmed **(unverified)** | Y | P1 | no |
 | Stytch | Redirect URL per environment | PWA `POST /pwa/v3/projects/{p}/environments/{e}/redirect_urls` (+ get/delete by URL), Basic workspace key; object | Y | P2 | no |
 | Okta | `redirect_uris` on an OIDC app; trusted origin for CORS | `PUT /api/v1/apps/{id}` (**list**, whole app object), `POST /api/v1/trustedOrigins` (object); `SSWS` token or OAuth | Y (list mode; trusted origins object) | P2 | no |
@@ -139,7 +139,7 @@ Columns:
 |---|---|---|---|---|---|
 | Supabase | (none) The Data API and Storage have no per-origin allow-list; Edge Functions set CORS in code | n/a, not counted | n/a | n/a | n/a |
 | Firebase Storage (GCS bucket) | Preview origin in the bucket's `cors` | GCS JSON API `PATCH /storage/v1/b/{bucket}?fields=cors`, Google OAuth; **list** full replace; `ifMetagenerationMatch` precondition available | Y (list mode with precondition) | P2 | no |
-| S3 / R2 | Preview origin in the bucket CORS rules | S3 `PutBucketCors` (SigV4, full replace); R2 `PUT /accounts/{a}/r2/buckets/{b}/cors` (bearer, full replace); **list** | P (R2 yes; S3 needs SigV4) | P2 | no |
+| S3 / R2 | Preview origin in the bucket CORS rules | S3 `PutBucketCors` (SigV4, full replace); R2 `PUT /accounts/{a}/r2/buckets/{b}/cors` (bearer, full replace); **list** | Y (R2 bearer; S3 `aws_sigv4` + `encoding: xml`, tested example) | P2 | no |
 
 ### Queues, caches, background jobs
 
@@ -188,8 +188,13 @@ manage). Weights: P0 = 3, P1 = 2, P2 = 1 (9 P0, 16 P1, 31 P2; total weight 90).
 | P0 rows only | 7 of 9 | 78% |
 | Secret sources (separate) | 4 of 9 vendors; weighted 7 of 14 | 44%; 50% |
 
-Rows that the generic `http` adapter could reach are not counted: its example plan is illustrative and its tests run
-against a generic REST sim, not against any one provider's API, so no row has a tested example yet.
+Rows that the generic `http` adapter could reach are not counted. Since the
+[ADR 0017 amendment](adr/0017-generic-http-adapter.md#amendment-run-time-credentials-xml-and-graphql) (OAuth2 client
+credentials, command tokens, SigV4, Digest, XML, GraphQL), these rows have a tested example against a sim built from
+the provider's documentation and official clients (`scenarios/adapters/http-*.yaml`), but none has been run against
+the live API: Auth0 callbacks, Firebase authorized domains, S3 bucket CORS, Amplify branch variables, MongoDB Atlas
+(Digest), Railway variables and Fly.io secrets (GraphQL). They count once a live run confirms them
+([api-verification.md](api-verification.md#the-generic-http-adapter)).
 
 Plainly: Sponson covers the canonical Vercel (or Netlify) + Neon (or PlanetScale, or Supabase) + Clerk (or Supabase Auth) preview stack, plus LaunchDarkly flag targeting, and almost nothing else. Three rows (Google
 OAuth clients, Clerk webhooks, Stripe sandboxes; weight 5) have no usable API, so no adapter can reach them; the
@@ -211,9 +216,9 @@ and the lifecycle is plain CRUD. Rows marked **Y**: 33 rows not covered today, w
 ### What `adapter: http` must support to cover the P0/P1 rows
 
 1. **Provider block with credentials by reference**: base URL, auth as bearer, custom header(s) (`STATSIG-API-KEY`,
-   Algolia's two headers), Basic, a token from an OAuth2 client-credentials exchange (Auth0, Kinde, Okta), or a token
-   from a command (`gcloud auth print-access-token` for Firebase/GCS). Credentials are environment variable names,
-   never values.
+   Algolia's two headers), Basic, a token from an OAuth2 client-credentials exchange (Auth0, Kinde, Okta), a token
+   from a command (`gcloud auth print-access-token` for Firebase/GCS), SigV4 or Digest. Credentials are environment
+   variable names, never values. **Done** (ADR 0017 and its amendment).
 2. **Two write models**: *object* (create, read by id, update, delete) and *list-on-parent* (read the parent, find the
    item in an array, write the parent back). List mode must handle an array at a JSON path, a **delimited string**
    (Supabase `uri_allow_list`), and a **keyed map** with merge-patch delete-by-null (Cloudflare Pages `env_vars`,

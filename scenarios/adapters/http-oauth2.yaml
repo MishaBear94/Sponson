@@ -1,0 +1,73 @@
+name: "http auth oauth2_client_credentials (Auth0 Management API): a token per run from the token endpoint; the client secret and every issued token never leak"
+plan: |
+  version: 1
+  providers:
+    http:
+      auth0:
+        base_url: https://acme.eu.auth0.com/api/v2
+        base_url_env: REST_API_URL
+        auth:
+          oauth2_client_credentials:
+            token_url: https://acme.eu.auth0.com/oauth/token
+            token_url_env: AUTH0_TOKEN_URL
+            client_id_env: AUTH0_CLIENT_ID
+            client_secret_env: AUTH0_CLIENT_SECRET
+            audience: https://acme.eu.auth0.com/api/v2/
+  changes:
+    - id: callback
+      adapter: http
+      op: list_item
+      api: auth0
+      parent: { path: /clients/abc123 }
+      list_path: /callbacks
+      item: "https://${ctx.scope}.preview.example.app/callback"
+    - id: origin
+      adapter: http
+      op: list_item
+      api: auth0
+      parent: { path: /clients/abc123 }
+      list_path: /web_origins
+      item: "https://${ctx.scope}.preview.example.app"
+seed:
+  rest:
+    objects:
+      /clients/abc123: { name: web, callbacks: [https://app.example.com/callback], web_origins: [https://app.example.com] }
+    auth:
+      clients: { m2m-client-0042: auth0_m2m_client_secret_0042 }
+env:
+  AUTH0_TOKEN_URL: "${SIM_URL}/rest/oauth/token"
+  AUTH0_CLIENT_ID: m2m-client-0042
+  AUTH0_CLIENT_SECRET: auth0_m2m_client_secret_0042
+secrets:
+  - auth0_m2m_client_secret_0042
+  - oauth-access-token-1
+  - oauth-access-token-2
+  - oauth-access-token-3
+  - oauth-access-token-4
+  - oauth-access-token-5
+  - oauth-access-token-6
+steps:
+  # The token endpoint is called, but it is not a write: plan stays write-free (I4).
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { callback: create, origin: create } }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { callback: applied, origin: applied } }
+  - sim:
+      state:
+        rest.objects./clients/abc123.callbacks: [https://app.example.com/callback, https://pr-42.preview.example.app/callback]
+        rest.objects./clients/abc123.web_origins: [https://app.example.com, https://pr-42.preview.example.app]
+        # One token per run, whatever the number of lines and requests.
+        rest.auth.issued: { length: 2 }
+  - run: apply --json
+    expect: { exit: 0, writes: 0, lines: { callback: unchanged, origin: unchanged } }
+  # A wrong client secret: the run fails before any write, naming the token endpoint, never the secret.
+  - env: { AUTH0_CLIENT_SECRET: wrong_m2m_client_secret_9999 }
+  - run: plan --json
+    expect: { exit: 1, plan_lines: { callback: error }, errors: { callback: "OAuth2 token request to .*/rest/oauth/token failed: 401" } }
+  - env: { AUTH0_CLIENT_SECRET: auth0_m2m_client_secret_0042 }
+  - run: apply --destroy --json
+    expect: { exit: 0, status: complete, lines: { callback: destroyed, origin: destroyed } }
+  - sim:
+      state:
+        rest.objects./clients/abc123.callbacks: [https://app.example.com/callback]
+        rest.objects./clients/abc123.web_origins: [https://app.example.com]

@@ -1,0 +1,87 @@
+name: "http GraphQL (Railway): variables of a PR environment set with variableUpsert, read from `variables`, removed with variableDelete; a secret value never leaks"
+plan: |
+  version: 1
+  providers:
+    http:
+      railway:
+        base_url: https://backboard.railway.com/graphql/v2
+        base_url_env: RAILWAY_API_URL
+        auth: { bearer_env: RAILWAY_TOKEN }
+  # env-pr-42: the environment Railway created for this pull request (its id, from the `environments` query).
+  changes:
+    - id: api_url
+      adapter: http
+      op: resource
+      api: railway
+      read:
+        graphql:
+          query: "query variables($projectId: String!, $environmentId: String!, $serviceId: String) { variables(projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId) }"
+          variables: { projectId: prj-railway-demo, environmentId: env-pr-42, serviceId: svc-web }
+          data_path: /variables/API_URL
+      create:
+        graphql:
+          query: "mutation variableUpsert($input: VariableUpsertInput!) { variableUpsert(input: $input) }"
+          variables: { input: { projectId: prj-railway-demo, environmentId: env-pr-42, serviceId: svc-web, name: API_URL, value: "https://api-${ctx.scope}.example.app" } }
+      update:
+        graphql:
+          query: "mutation variableUpsert($input: VariableUpsertInput!) { variableUpsert(input: $input) }"
+          variables: { input: { projectId: prj-railway-demo, environmentId: env-pr-42, serviceId: svc-web, name: API_URL, value: "https://api-${ctx.scope}.example.app" } }
+      delete:
+        graphql:
+          query: "mutation variableDelete($input: VariableDeleteInput!) { variableDelete(input: $input) }"
+          variables: { input: { projectId: prj-railway-demo, environmentId: env-pr-42, serviceId: svc-web, name: API_URL } }
+      fields: { value: "https://api-${ctx.scope}.example.app" }
+    - id: stripe_key
+      adapter: http
+      op: resource
+      api: railway
+      read:
+        graphql:
+          query: "query variables($projectId: String!, $environmentId: String!, $serviceId: String) { variables(projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId) }"
+          variables: { projectId: prj-railway-demo, environmentId: env-pr-42, serviceId: svc-web }
+          data_path: /variables/STRIPE_SECRET_KEY
+      create:
+        graphql:
+          query: "mutation variableUpsert($input: VariableUpsertInput!) { variableUpsert(input: $input) }"
+          variables: { input: { projectId: prj-railway-demo, environmentId: env-pr-42, serviceId: svc-web, name: STRIPE_SECRET_KEY, value: { secret: "env://PREVIEW_STRIPE_KEY" } } }
+      update:
+        graphql:
+          query: "mutation variableUpsert($input: VariableUpsertInput!) { variableUpsert(input: $input) }"
+          variables: { input: { projectId: prj-railway-demo, environmentId: env-pr-42, serviceId: svc-web, name: STRIPE_SECRET_KEY, value: { secret: "env://PREVIEW_STRIPE_KEY" } } }
+      delete:
+        graphql:
+          query: "mutation variableDelete($input: VariableDeleteInput!) { variableDelete(input: $input) }"
+          variables: { input: { projectId: prj-railway-demo, environmentId: env-pr-42, serviceId: svc-web, name: STRIPE_SECRET_KEY } }
+      fields: { value: { secret: "env://PREVIEW_STRIPE_KEY" } }
+env:
+  PREVIEW_STRIPE_KEY: sk_test_railway_scenario_0042
+secrets: [sk_test_railway_scenario_0042]
+steps:
+  # Queries are POSTs, but not writes: plan stays write-free.
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { api_url: create, stripe_key: create } }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { api_url: applied, stripe_key: applied } }
+  - sim:
+      state:
+        railway.variables.env-pr-42/svc-web: { API_URL: "https://api-pr-42.example.app", STRIPE_SECRET_KEY: sk_test_railway_scenario_0042 }
+  - run: apply --json
+    expect: { exit: 0, writes: 0, lines: { api_url: unchanged, stripe_key: unchanged } }
+  # Edited in the dashboard: changed drift, refused until --reconcile, which writes the planned value back.
+  - chaos: { drift: { "railway.vars.env-pr-42.svc-web.API_URL": "https://somewhere-else.example" } }
+  - run: plan --json
+    expect: { exit: 1, drift: [{ kind: changed, line: api_url }], plan_lines: { api_url: blocked } }
+  - run: apply --reconcile --json
+    expect: { exit: 0, status: complete, lines: { api_url: applied } }
+  # Deleted in the dashboard: missing, recreated.
+  - chaos: { drift: { "railway.vars.env-pr-42.svc-web.STRIPE_SECRET_KEY": "delete" } }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { stripe_key: applied } }
+  - sim:
+      state:
+        railway.variables.env-pr-42/svc-web: { API_URL: "https://api-pr-42.example.app", STRIPE_SECRET_KEY: sk_test_railway_scenario_0042 }
+  - run: apply --destroy --json
+    expect: { exit: 0, status: complete, lines: { api_url: destroyed, stripe_key: destroyed } }
+  - sim:
+      state:
+        railway.variables.env-pr-42/svc-web: {}

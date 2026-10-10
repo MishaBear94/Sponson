@@ -20,7 +20,7 @@ export default tseslint.config(
           // checked with the root test config, exactly as `pnpm typecheck` does.
           allowDefaultProject: ["packages/*/src/*.test.ts", "packages/*/src/*/*.test.ts", "packages/adapters/src/testing.ts"],
           defaultProject: "tsconfig.test.json",
-          maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 32,
+          maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 64,
         },
         tsconfigRootDir: import.meta.dirname,
       },

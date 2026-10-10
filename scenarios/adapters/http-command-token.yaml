@@ -1,0 +1,50 @@
+name: "http auth command (gcloud auth print-access-token, Firebase authorized domains): the printed token is used, never shown; a failing CLI fails the line"
+plan: |
+  version: 1
+  providers:
+    http:
+      firebase:
+        base_url: https://identitytoolkit.googleapis.com/admin/v2
+        base_url_env: REST_API_URL
+        auth: { command: [gcloud, auth, print-access-token] }
+        headers: { x-goog-user-project: demo-project }
+  changes:
+    - id: domain
+      adapter: http
+      op: list_item
+      api: firebase
+      parent: { path: "/projects/demo-project/config?updateMask=authorizedDomains", read_path: /projects/demo-project/config }
+      list_path: /authorizedDomains
+      item: "${ctx.scope}.preview.example.app"
+seed:
+  rest:
+    objects:
+      /projects/demo-project/config: { authorizedDomains: [localhost, demo-project.firebaseapp.com] }
+    auth:
+      tokens: [ya29.scenario-gcloud-token-0042]
+bins:
+  gcloud: |
+    if [ "$1 $2" != "auth print-access-token" ]; then echo "unexpected: $*" >&2; exit 2; fi
+    if [ -n "$GCLOUD_SIGNED_OUT" ]; then echo "ERROR: (gcloud.auth.print-access-token) You do not currently have an active account selected." >&2; exit 1; fi
+    echo "ya29.scenario-gcloud-token-0042"
+secrets: [ya29.scenario-gcloud-token-0042]
+steps:
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { domain: create } }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { domain: applied } }
+  - sim:
+      state:
+        rest.objects./projects/demo-project/config.authorizedDomains: [localhost, demo-project.firebaseapp.com, pr-42.preview.example.app]
+      write_order: ["PATCH /rest/projects/demo-project/config"]
+  - run: apply --json
+    expect: { exit: 0, writes: 0, lines: { domain: unchanged } }
+  - env: { GCLOUD_SIGNED_OUT: "1" }
+  - run: plan --json
+    expect: { exit: 1, plan_lines: { domain: error }, errors: { domain: "`gcloud auth print-access-token` failed: .*no.* active account|do not currently have an active account" } }
+  - env: { GCLOUD_SIGNED_OUT: null }
+  - run: apply --destroy --json
+    expect: { exit: 0, status: complete, lines: { domain: destroyed } }
+  - sim:
+      state:
+        rest.objects./projects/demo-project/config.authorizedDomains: [localhost, demo-project.firebaseapp.com]

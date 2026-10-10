@@ -8,7 +8,7 @@
 import { createHash } from "node:crypto";
 import { createServer, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
-import { Reply, route, router, type RouteRequest } from "./provider.js";
+import { Reply, route, router, type AuthRequest, type RouteRequest } from "./provider.js";
 import { providerEntries, type SimSeed, type SimState, type WriteLogEntry } from "./state.js";
 
 type Json = Record<string, unknown>;
@@ -35,8 +35,11 @@ async function handle(state: SimState, req: IncomingMessage, res: ServerResponse
   const url = new URL(req.url ?? "/", "http://sim.local");
   const raw = await readBody(req);
   // Control endpoints take JSON whatever the client says: `curl -d '{…}'` labels a JSON body as a form.
-  const form = !url.pathname.startsWith("/_") && (req.headers["content-type"] ?? "").startsWith("application/x-www-form-urlencoded");
-  const parsed = form ? { body: parseForm(raw) } : parseJson(raw);
+  const contentType = req.headers["content-type"] ?? "";
+  const form = !url.pathname.startsWith("/_") && contentType.startsWith("application/x-www-form-urlencoded");
+  // XML bodies reach the provider as text: only it knows the document.
+  const xml = !url.pathname.startsWith("/_") && /^[\w.+-]+\/([\w.-]+\+)?xml\b/.test(contentType);
+  const parsed = xml ? { body: raw } : form ? { body: parseForm(raw) } : parseJson(raw);
   if (!parsed) return send(res, 400, { error: "invalid json" });
   const { body } = parsed;
 
@@ -45,28 +48,45 @@ async function handle(state: SimState, req: IncomingMessage, res: ServerResponse
     return send(res, r.status, r.body);
   }
 
-  // Any non-empty credential is accepted; missing-token bugs must surface as 401.
-  if (!authorized(url, req.headers)) return send(res, 401, { error: "unauthorized" });
+  // Any non-empty credential is accepted unless a provider's seed configures real ones; missing-token bugs must
+  // surface as 401.
+  const verdict = authorized(state, req.headers, { method, url, target: req.url ?? "/", raw });
+  if (verdict instanceof Reply) return send(res, verdict.status, verdict.body, verdict.headers);
+  if (!verdict) return send(res, 401, { error: "unauthorized" });
   await serveProvider(state, req, res, { method, url, raw, body });
 }
 
+/** `/<provider>` → its own say on which POSTs change nothing (a token endpoint, a GraphQL query). */
+const WRITES: Record<string, (req: { method: string; path: string; body: unknown }) => boolean> = Object.fromEntries(
+  providerEntries().flatMap(([name, p]) => (p.isWrite ? [[`/${name}`, (req: { method: string; path: string; body: unknown }) => p.isWrite!(req)]] : [])),
+);
+
+/** Whether a POST, PUT, PATCH or DELETE goes into the write log. */
+function changesState(method: string, url: URL, body: unknown): boolean {
+  const prefix = url.pathname.match(/^\/[^/]+/)?.[0] ?? "";
+  const check = WRITES[prefix];
+  return check ? check({ method, path: url.pathname.slice(prefix.length) || "/", body }) : true;
+}
+
+type AuthCheck = (state: SimState, headers: IncomingHttpHeaders, req: AuthRequest) => boolean | Reply;
+
 /** `/<provider>` → how that provider takes its credential, when not as a bearer token. */
-const AUTH: Record<string, (headers: IncomingHttpHeaders) => boolean> = Object.fromEntries(
-  providerEntries().flatMap(([name, p]) => (p.authorized ? [[`/${name}`, (h: IncomingHttpHeaders) => p.authorized!(h)]] : [])),
+const AUTH: Record<string, AuthCheck> = Object.fromEntries(
+  providerEntries().flatMap(([name, p]): Array<[string, AuthCheck]> => (p.authorized ? [[`/${name}`, (state, h, req) => p.authorized!(h, req, state.provider(name), state)]] : [])),
 );
 
 /** The credential check of the provider the path belongs to; a non-empty bearer token by default. */
-function authorized(url: URL, headers: IncomingHttpHeaders): boolean {
-  const prefix = url.pathname.match(/^\/[^/]+/)?.[0] ?? "";
+function authorized(state: SimState, headers: IncomingHttpHeaders, req: AuthRequest): boolean | Reply {
+  const prefix = req.url.pathname.match(/^\/[^/]+/)?.[0] ?? "";
   const check = AUTH[prefix];
-  return check ? check(headers) : /^Bearer\s+\S+$/.test(headers.authorization ?? "");
+  return check ? check(state, headers, req) : /^Bearer\s+\S+$/.test(headers.authorization ?? "");
 }
 
 /** An authenticated provider request: latency, chaos, the write log, then the provider's routes. */
 async function serveProvider(state: SimState, req: IncomingMessage, res: ServerResponse, { method, url, raw, body }: { method: string; url: URL; raw: string; body: unknown }): Promise<void> {
   if (state.chaos.latency_ms > 0) await sleep(state.chaos.latency_ms);
 
-  const isWrite = WRITE_METHODS.has(method);
+  const isWrite = WRITE_METHODS.has(method) && changesState(method, url, body);
   const action = state.chaosFor(method, url.pathname);
   // Held: performed (and logged) only once released, like a request stuck in the provider's queue.
   if (action?.kind === "hold") await state.hold();
@@ -91,12 +111,12 @@ async function serveProvider(state: SimState, req: IncomingMessage, res: ServerR
   send(res, r.status, r.body, r.headers);
 }
 
-/** `/<provider>/…` → that provider's routes, with the prefix stripped from the path. */
+/** `/<provider>/…` → that provider's routes, with the prefix stripped from the path (`/<provider>` alone is `/`). */
 function dispatch(state: SimState, method: string, url: URL, body: unknown, headers: Record<string, string>): Reply {
-  const prefix = url.pathname.match(/^\/[^/]+(?=\/)/)?.[0];
+  const prefix = url.pathname.match(/^\/[^/]+(?=\/|$)/)?.[0];
   const routes = prefix === undefined ? undefined : ROUTES[prefix];
   if (prefix === undefined || !routes) return new Reply(404, { error: "not found" });
-  return routes(state, { method, url, path: url.pathname.slice(prefix.length), body, headers });
+  return routes(state, { method, url, path: url.pathname.slice(prefix.length) || "/", body, headers });
 }
 
 /** The control endpoints tests and scenarios drive the sim with. */
@@ -175,8 +195,10 @@ function send(res: ServerResponse, status: number, body: unknown, headers: Recor
     res.end();
     return;
   }
-  const text = JSON.stringify(body ?? null);
-  res.writeHead(status, { ...headers, "content-type": "application/json", "content-length": Buffer.byteLength(text) });
+  // A provider that answers in another format (S3's XML) sets its own content type and passes the text.
+  const raw = typeof body === "string" && headers["content-type"] !== undefined;
+  const text = raw ? body : JSON.stringify(body ?? null);
+  res.writeHead(status, { "content-type": "application/json", ...headers, "content-length": Buffer.byteLength(text) });
   res.end(text);
 }
 

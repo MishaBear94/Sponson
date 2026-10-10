@@ -4,9 +4,13 @@
  * a PARAM_INVALID (or PLAN_INVALID for the provider block) naming the field at fault. See ADR 0017 and
  * docs/plan-format.md (`http.resource`, `http.list_item`).
  */
-import { SponsonError, canonicalJson, markerKind, sha256 } from "@sponson/core";
+import { canonicalJson, markerKind, sha256, type SponsonError } from "@sponson/core";
 import { paramError } from "./common.js";
 import { isObject } from "./http.js";
+import { HEADER_NAME, envName, parseAuth, planError, type Auth } from "./http-adapter-auth.js";
+import { parseGraphql, usesId, type GraphqlSpec } from "./http-adapter-graphql.js";
+
+export type { Auth } from "./http-adapter-auth.js";
 
 export const ADAPTER = "http";
 
@@ -156,54 +160,22 @@ export function fillPath(path: string, vars: Record<string, unknown>, id?: strin
 // The provider block: one per API
 // ---------------------------------------------------------------------------
 
-/** How the credential is sent. */
-export type Auth = { kind: "bearer"; env: string } | { kind: "header"; header: string; env: string } | { kind: "basic"; userEnv: string; passwordEnv: string };
-
 /** One API's configuration, from `providers.http.<api>`. */
 export interface ApiConfig {
   baseUrl: string;
   baseUrlEnv?: string;
   auth: Auth;
   headers: Record<string, string>;
-  encoding: "json" | "form";
+  encoding: "json" | "form" | "xml";
+  /** A versioned media type sent as `Accept` and as the `Content-Type` of JSON bodies (Atlas `application/vnd.atlas.2023-01-01+json`). */
+  mediaType?: string;
 }
 
-const API_KEYS = ["base_url", "base_url_env", "auth", "headers", "encoding"];
+const API_KEYS = ["base_url", "base_url_env", "auth", "headers", "encoding", "media_type"];
 
-/**
- * Variable names the engine masks everywhere (packages/core/src/engine/run-context.ts, CREDENTIAL_NAME). A
- * credential under another name would be masked only in this adapter's own error text, so it is refused.
- */
-const CREDENTIAL_NAME = /(TOKEN|SECRET|PASSWORD|PASSWD|_KEY|APIKEY)$/i;
-const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
-
-function planError(message: string, where: string): SponsonError {
-  return new SponsonError("PLAN_INVALID", `${ADAPTER}: ${where}: ${message}`, { adapter: ADAPTER, key: where });
-}
-
-function envName(v: unknown, where: string, credential: boolean): string {
-  if (typeof v !== "string" || !ENV_NAME.test(v)) throw planError("must be the NAME of an environment variable, never a value", where);
-  if (credential && !CREDENTIAL_NAME.test(v)) throw planError(`\`${v}\` must end in TOKEN, SECRET, PASSWORD, PASSWD, _KEY or APIKEY, so that Sponson masks its value in every output`, where);
-  return v;
-}
-
-const AUTH_FORMS = "`{ bearer_env: NAME }`, `{ header: X-Api-Key, value_env: NAME }` or `{ basic: { user_env: NAME, password_env: NAME } }`";
-
-function parseAuth(v: unknown, where: string): Auth {
-  if (!isObject(v)) throw planError(`is required: ${AUTH_FORMS}`, where);
-  if (v.bearer_env !== undefined) return { kind: "bearer", env: envName(v.bearer_env, `${where}.bearer_env`, true) };
-  if (v.basic !== undefined) {
-    if (!isObject(v.basic)) throw planError("must be `{ user_env: NAME, password_env: NAME }`", `${where}.basic`);
-    return { kind: "basic", userEnv: envName(v.basic.user_env, `${where}.basic.user_env`, false), passwordEnv: envName(v.basic.password_env, `${where}.basic.password_env`, true) };
-  }
-  if (typeof v.header !== "string" || !HEADER_NAME.test(v.header)) throw planError(`must be one of ${AUTH_FORMS}`, where);
-  return { kind: "header", header: v.header, env: envName(v.value_env, `${where}.value_env`, true) };
-}
-
-function parseEncoding(v: unknown, where: string): "json" | "form" {
-  if (v === undefined || v === "json" || v === "form") return v ?? "json";
-  throw planError("must be `json` (the default) or `form` (application/x-www-form-urlencoded)", where);
+function parseEncoding(v: unknown, where: string): "json" | "form" | "xml" {
+  if (v === undefined || v === "json" || v === "form" || v === "xml") return v ?? "json";
+  throw planError("must be `json` (the default), `form` (application/x-www-form-urlencoded) or `xml` (S3-style XML documents)", where);
 }
 
 function parseHeaders(v: unknown, where: string): Record<string, string> {
@@ -211,9 +183,16 @@ function parseHeaders(v: unknown, where: string): Record<string, string> {
   if (!isObject(v)) throw planError("must be a map of header name to string value", where);
   for (const [k, x] of Object.entries(v)) {
     if (!HEADER_NAME.test(k) || typeof x !== "string") throw planError(`\`${k}\` must be a header name with a string value`, where);
-    if (/^(authorization|accept|content-type)$/i.test(k)) throw planError(`\`${k}\` is set by Sponson; configure the credential under \`auth\``, where);
+    if (/^(authorization|accept|content-type)$/i.test(k)) throw planError(`\`${k}\` is set by Sponson; configure the credential under \`auth\` and a versioned media type under \`media_type\``, where);
   }
   return v as Record<string, string>;
+}
+
+function parseMediaType(v: unknown, where: string, encoding: string): string | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v !== "string" || !/^[\w.+-]+\/[\w.+-]+(\s*;.*)?$/.test(v)) throw planError("must be a media type such as application/vnd.atlas.2023-01-01+json", where);
+  if (encoding !== "json") throw planError("applies to `encoding: json` only", where);
+  return v;
 }
 
 /** One API block, checked. `where` names it in messages (`providers.http.statsig`). */
@@ -222,11 +201,14 @@ export function parseApi(block: Record<string, unknown>, where: string): ApiConf
   if (typeof base !== "string" || !/^https?:\/\/[^\s]+$/.test(base)) throw planError("`base_url` must be an http(s) URL", where);
   const unknown = Object.keys(block).filter((k) => !API_KEYS.includes(k));
   if (unknown.length) throw planError(`unknown key \`${unknown[0]}\` (known: ${API_KEYS.join(", ")})`, where);
+  const encoding = parseEncoding(block.encoding, `${where}.encoding`);
+  const mediaType = parseMediaType(block.media_type, `${where}.media_type`, encoding);
   const cfg: ApiConfig = {
     baseUrl: base,
     auth: parseAuth(block.auth, `${where}.auth`),
     headers: parseHeaders(block.headers, `${where}.headers`),
-    encoding: parseEncoding(block.encoding, `${where}.encoding`),
+    encoding,
+    ...(mediaType ? { mediaType } : {}),
   };
   if (block.base_url_env !== undefined) cfg.baseUrlEnv = envName(block.base_url_env, `${where}.base_url_env`, false);
   return cfg;
@@ -289,17 +271,23 @@ function noUnknownParams(params: Record<string, unknown>, known: string[], op: s
 // http.resource
 // ---------------------------------------------------------------------------
 
-/** One request of a spec: method and path (placeholders unfilled), the extra body it sends, its media type. */
+/**
+ * One request of a spec: method and path (placeholders unfilled), the extra body it sends, its media type; or a
+ * GraphQL request (`path` is then "", the endpoint being the API's base URL).
+ */
 export interface RequestSpec {
   method: string;
   path: string;
   body: Record<string, unknown>;
   contentType?: string;
+  graphql?: GraphqlSpec;
 }
 
 /** How a resource is located by natural key: a list, the array in it, and the fields that must match. */
 export interface FindSpec {
+  /** "" for a GraphQL find. */
   path: string;
+  graphql?: GraphqlSpec;
   listPath: string;
   match: Record<string, unknown>;
   /** Pointer to the next page's cursor in a list response, and the query parameter that sends it back. */
@@ -317,10 +305,10 @@ export interface ResourceSpec {
   api: string;
   vars: Record<string, unknown>;
   create: RequestSpec & { idempotencyKey: boolean };
-  read?: { path: string };
+  read?: { path: string; graphql?: GraphqlSpec };
   find?: FindSpec;
   update?: RequestSpec;
-  delete: { method: string; path: string };
+  delete: { method: string; path: string; graphql?: GraphqlSpec };
   destroy: DestroyMode;
   itemPath: string;
   idPath: string;
@@ -334,8 +322,18 @@ export interface ResourceSpec {
 
 const RESOURCE_PARAMS = ["api", "vars", "create", "read", "find", "update", "delete", "destroy", "item_path", "id_path", "fields", "outputs", "exists_status", "gone_status"];
 
+/** `{ graphql }` in place of a REST request: nothing else may be next to it. */
+function asGraphql(o: Record<string, unknown>, param: string, idAllowed: boolean): RequestSpec | undefined {
+  if (o.graphql === undefined) return undefined;
+  const extra = Object.keys(o).find((k) => k !== "graphql");
+  if (extra) throw fail(`\`${param}.${extra}\` does not apply to a GraphQL request (the query and its variables say everything)`, `${param}.${extra}`);
+  return { method: "POST", path: "", body: {}, graphql: parseGraphql(o.graphql, `${param}.graphql`, idAllowed) };
+}
+
 function parseRequest(v: unknown, param: string, methods: readonly string[], fallback: string, vars: Record<string, unknown>, idAllowed: boolean, defaultPath?: string): RequestSpec {
   const o = requiredObject(v, param);
+  const gql = asGraphql(o, param, idAllowed);
+  if (gql) return gql;
   const path = o.path === undefined && defaultPath !== undefined ? defaultPath : pathParam(o.path, `${param}.path`);
   checkPlaceholders(path, `${param}.path`, vars, idAllowed);
   const contentType = contentTypeParam(o.content_type, `${param}.content_type`);
@@ -344,6 +342,7 @@ function parseRequest(v: unknown, param: string, methods: readonly string[], fal
 
 function parseCreate(v: unknown, vars: Record<string, unknown>): ResourceSpec["create"] {
   const r = parseRequest(v, "create", ["POST", "PUT", "PATCH"], "POST", vars, false);
+  if (r.graphql) return { ...r, idempotencyKey: false };
   const key = (v as Record<string, unknown>).idempotency_key;
   if (key !== undefined && typeof key !== "boolean") throw fail("`create.idempotency_key` must be true or false", "create.idempotency_key");
   return { ...r, idempotencyKey: key === true };
@@ -352,6 +351,7 @@ function parseCreate(v: unknown, vars: Record<string, unknown>): ResourceSpec["c
 function parseFind(v: unknown, vars: Record<string, unknown>): FindSpec | undefined {
   const o = optionalObject(v, "find");
   if (!o) return undefined;
+  if (o.graphql !== undefined) return parseGraphqlFind(o);
   const path = pathParam(o.path, "find.path");
   checkPlaceholders(path, "find.path", vars, false);
   const match = requiredObject(o.match, "find.match");
@@ -365,11 +365,25 @@ function parseFind(v: unknown, vars: Record<string, unknown>): FindSpec | undefi
   return spec;
 }
 
-function parseRead(v: unknown, vars: Record<string, unknown>, find: FindSpec | undefined): { path: string } | undefined {
+/** A find whose list comes from a GraphQL query: no path, no cursor pages. */
+function parseGraphqlFind(o: Record<string, unknown>): FindSpec {
+  const extra = Object.keys(o).find((k) => !["graphql", "list_path", "match"].includes(k));
+  if (extra) throw fail(`\`find.${extra}\` does not apply to a GraphQL find (known: graphql, list_path, match)`, `find.${extra}`);
+  const match = requiredObject(o.match, "find.match");
+  if (Object.keys(match).length === 0) throw fail("`find.match` must name at least one field", "find.match");
+  return { path: "", graphql: parseGraphql(o.graphql, "find.graphql", false), listPath: pointerParam(o.list_path, "find.list_path", ""), match };
+}
+
+function parseRead(v: unknown, vars: Record<string, unknown>, find: FindSpec | undefined): { path: string; graphql?: GraphqlSpec } | undefined {
   const o = optionalObject(v, "read");
   if (!o) {
-    if (!find) throw fail("needs `read` (a path that names the object) or `find` (a list and the fields that identify it)", "read");
+    if (!find) throw fail("needs `read` (a path or a GraphQL query that names the object) or `find` (a list and the fields that identify it)", "read");
     return undefined;
+  }
+  if (o.graphql !== undefined) {
+    const gql = asGraphql(o, "read", true)!.graphql!;
+    if (usesId(gql.variables) && !find) throw fail('`read.graphql.variables` uses "{id}", so the object can only be located with `find` (the id is not in the plan)', "read.graphql.variables");
+    return { path: "", graphql: gql };
   }
   const path = pathParam(o.path, "read.path");
   if (placeholders(path).includes("id") && !find) throw fail("`read.path` uses `{id}`, so the object can only be located with `find` (the id is not in the plan)", "read.path");
@@ -378,10 +392,10 @@ function parseRead(v: unknown, vars: Record<string, unknown>, find: FindSpec | u
 }
 
 /** Update and delete go to the read path by default: the object's own URL. */
-function parseDelete(v: unknown, vars: Record<string, unknown>, read: { path: string } | undefined): { method: string; path: string } {
-  if (v === undefined && read === undefined) throw fail("`delete` is required: `{ path: /things/{id} }` (no `read.path` to default to)", "delete");
-  const r = parseRequest(v ?? {}, "delete", ["DELETE", "POST"], "DELETE", vars, true, read?.path);
-  return { method: r.method, path: r.path };
+function parseDelete(v: unknown, vars: Record<string, unknown>, read: { path: string; graphql?: GraphqlSpec } | undefined): ResourceSpec["delete"] {
+  if (v === undefined && (read === undefined || read.graphql)) throw fail("`delete` is required: `{ path: /things/{id} }` or `{ graphql: { query: … } }` (no `read.path` to default to)", "delete");
+  const r = parseRequest(v ?? {}, "delete", ["DELETE", "POST"], "DELETE", vars, true, read?.graphql ? undefined : read?.path);
+  return { method: r.method, path: r.path, ...(r.graphql ? { graphql: r.graphql } : {}) };
 }
 
 function parseOutputs(v: unknown): Record<string, OutputDecl> {
@@ -426,8 +440,25 @@ export function parseResource(params: Record<string, unknown>): ResourceSpec {
     existsStatus: statusList(params.exists_status, "exists_status"),
     goneStatus: statusList(params.gone_status, "gone_status"),
   };
-  if (params.update !== undefined) spec.update = parseRequest(params.update, "update", ["PATCH", "PUT", "POST"], "PATCH", vars, true, read?.path);
+  if (params.update !== undefined) spec.update = parseRequest(params.update, "update", ["PATCH", "PUT", "POST"], "PATCH", vars, true, read?.graphql ? undefined : read?.path);
+  noSecretIn(find?.graphql?.variables, "find.graphql.variables");
+  noSecretIn(read?.graphql?.variables, "read.graphql.variables");
+  noSecretIn(spec.delete.graphql?.variables, "delete.graphql.variables");
   return spec;
+}
+
+/**
+ * The variables of a locating or deleting GraphQL request become part of the resource key or the record id, which
+ * receipts keep: a `{ secret }` there is refused (it would be masked, and the key or the delete broken).
+ */
+function noSecretIn(v: unknown, param: string): void {
+  if (v !== undefined && firstSecret(v)) throw fail(`\`${param}\` may not hold a \`{ secret }\`: it becomes part of the resource key or the delete request kept in receipts`, param);
+}
+
+function firstSecret(v: unknown): boolean {
+  if (markerKind(v) === "secret") return true;
+  if (Array.isArray(v)) return v.some(firstSecret);
+  return isObject(v) && Object.values(v).some(firstSecret);
 }
 
 /** The outputs one `http.resource` line declares: always `id`, plus its `outputs`. */
@@ -452,7 +483,7 @@ export type ListShape = "array" | "delimited" | "map";
 export interface ListItemSpec {
   api: string;
   vars: Record<string, unknown>;
-  parent: { path: string; readPath: string; method: string; send: "field" | "parent"; contentType?: string };
+  parent: { path: string; readPath: string; method: string; send: "field" | "parent" | "collection"; contentType?: string; ifMissing: "error" | "empty"; whenEmpty: "write" | "delete"; bodyListPath?: string };
   listPath: string;
   shape: ListShape;
   separator: string;
@@ -473,10 +504,20 @@ function parseParent(v: unknown, vars: Record<string, unknown>): ListItemSpec["p
   checkPlaceholders(path, "parent.path", vars, false);
   const readPath = o.read_path === undefined ? path : pathParam(o.read_path, "parent.read_path");
   checkPlaceholders(readPath, "parent.read_path", vars, false);
-  const send = o.send ?? "field";
-  if (send !== "field" && send !== "parent") throw fail("`parent.send` must be `field` (send only the list) or `parent` (send the whole object back)", "parent.send");
+  const send = oneOf(o.send, ["field", "parent", "collection"] as const, "parent.send", "`field` (the default: send only the list; a map entry as a merge patch), `collection` (send only the list, a map whole) or `parent` (send the whole object back)");
+  const ifMissing = oneOf(o.if_missing, ["error", "empty"] as const, "parent.if_missing", "`error` (the default: a parent that is not there is an error) or `empty` (a 404 reads as an empty collection, S3 CORS)");
+  const whenEmpty = oneOf(o.when_empty, ["write", "delete"] as const, "parent.when_empty", "`write` (the default: write the empty collection) or `delete` (DELETE `parent.path` instead, S3 CORS)");
   const contentType = contentTypeParam(o.content_type, "parent.content_type");
-  return { path, readPath, method: methodParam(o.method, "parent.method", ["PATCH", "PUT", "POST"], "PATCH"), send, ...(contentType ? { contentType } : {}) };
+  const bodyListPath = o.body_list_path === undefined ? undefined : pointerParam(o.body_list_path, "parent.body_list_path", "");
+  if (bodyListPath !== undefined && send === "parent") throw fail("`parent.body_list_path` does not apply to `send: parent` (the whole object goes back as it was read)", "parent.body_list_path");
+  return { path, readPath, method: methodParam(o.method, "parent.method", ["PATCH", "PUT", "POST"], "PATCH"), send, ifMissing, whenEmpty, ...(contentType ? { contentType } : {}), ...(bodyListPath !== undefined ? { bodyListPath } : {}) };
+}
+
+/** One of `allowed` (the first when absent); PARAM_INVALID saying what each means otherwise. */
+function oneOf<T extends string>(v: unknown, allowed: readonly T[], param: string, meaning: string): T {
+  if (v === undefined) return allowed[0]!;
+  if (typeof v === "string" && (allowed as readonly string[]).includes(v)) return v as T;
+  throw fail(`\`${param}\` must be ${meaning}`, param);
 }
 
 function scalarItem(v: unknown, what: string): unknown {

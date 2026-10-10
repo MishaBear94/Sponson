@@ -348,7 +348,7 @@ describe("http: malformed specs name the field", () => {
     expect(() => providerFor({ demo: { ...API, auth: { token: "x" } } }, GATE)).toThrow(/must be one of/);
     expect(() => providerFor({ demo: { ...API, headers: { Authorization: "x" } } }, GATE)).toThrow(/is set by Sponson/);
     expect(() => providerFor({ demo: { ...API, base_url: "api.example.test" } }, GATE)).toThrow(/`base_url` must be an http\(s\) URL/);
-    expect(() => providerFor({ demo: { ...API, encoding: "xml" } }, GATE)).toThrow(/`json`/);
+    expect(() => providerFor({ demo: { ...API, encoding: "yaml" } }, GATE)).toThrow(/`json`/);
     expect(() => providerFor({ demo: { ...API, retries: 3 } }, GATE)).toThrow(/unknown key `retries`/);
     expect(providerFor({ demo: API, other: { base_url: "https://x.test" } }, GATE)).toEqual(API);
     try {

@@ -22,9 +22,16 @@
  *       or form-encoded (`a[b]=c`, every value a string). No write has a precondition (no ETag): the last write
  *       wins.
  *   R5. DELETE answers `{ id, deleted: true }`; anything unknown is 404 `{ error }`.
+ *   R6. With an `auth` seed, credentials are checked for real instead of R1, one scheme or several: bearer tokens
+ *       issued by the OAuth2 client-credentials endpoint `POST /rest/oauth/token` (RFC 6749 §4.4; Basic or form
+ *       client authentication; tokens expire after `token_ttl` seconds and the drift key `auth.revoke_tokens`
+ *       revokes them), fixed bearer tokens (`tokens`, what a CLI prints), HTTP Digest (RFC 7616, qop=auth; a
+ *       request without valid credentials gets a 401 with a fresh challenge), and AWS SigV4 (the signature
+ *       recomputed and compared; see ../auth.ts). Anything else is 401.
  */
 import type { IncomingHttpHeaders } from "node:http";
-import { page, Reply, route, router, type ProviderSim, type SimCore } from "../provider.js";
+import { digestChallenge, digestProblem, issueToken, sigV4Problem, tokenValid, type DigestConfig, type IssuedToken, type SigV4Config } from "../auth.js";
+import { page, Reply, route, router, type AuthRequest, type ProviderSim, type SimCore } from "../provider.js";
 
 /** One object of a collection, as stored and answered: its id and every field a client wrote. */
 export type RestItem = { id: string } & Record<string, unknown>;
@@ -33,12 +40,41 @@ export type RestItem = { id: string } & Record<string, unknown>;
 export interface RestState {
   collections: Record<string, RestItem[]>;
   objects: Record<string, Record<string, unknown>>;
+  /** Present when the seed configures real credentials (R6). */
+  auth?: RestAuthState;
+}
+
+/**
+ * Real credentials for the REST sim (R6). Each key enables one scheme; with none of them, R1 applies (any
+ * non-empty credential).
+ */
+export interface RestAuthSeed {
+  /** OAuth2 clients the token endpoint accepts: client id → client secret. */
+  clients?: Record<string, string>;
+  /** Lifetime of the tokens it issues, in seconds (default 3600). */
+  token_ttl?: number;
+  /** Bearer tokens accepted as they are (the token a CLI such as `gcloud auth print-access-token` prints). */
+  tokens?: string[];
+  /** Digest users (name → password), the algorithm (`MD5` by default) and the realm. */
+  digest?: DigestConfig;
+  /** SigV4 access keys (id → secret) and the region and service requests must be signed for. */
+  sigv4?: Omit<SigV4Config, "now">;
+}
+
+/** The REST sim's credential state: what was seeded, every token issued and every Digest nonce handed out. */
+export interface RestAuthState extends RestAuthSeed {
+  issued: IssuedToken[];
+  nonces: string[];
+  /** Requests answered 401, for assertions ("the expired token was refused once"). */
+  refused: number;
 }
 
 /** Initial REST state, by path: objects per collection (ids assigned when absent), and stand-alone objects. */
 export interface RestSeed {
   collections?: Record<string, Array<Record<string, unknown>>>;
   objects?: Record<string, Record<string, unknown>>;
+  /** Real credentials (R6). */
+  auth?: RestAuthSeed;
 }
 
 /** Simulated generic REST API; see the assumptions at the top of this file. */
@@ -54,7 +90,9 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
     for (const [path, items] of Object.entries(seed?.collections ?? {})) {
       collections[path] = items.map((i) => ({ ...structuredClone(i), id: typeof i.id === "string" ? i.id : core.nextId("it_") }));
     }
-    return { collections, objects: structuredClone(seed?.objects ?? {}) };
+    const state: RestState = { collections, objects: structuredClone(seed?.objects ?? {}) };
+    if (seed?.auth) state.auth = { ...structuredClone(seed.auth), issued: [], nonces: [], refused: 0 };
+    return state;
   },
 
   /**
@@ -65,20 +103,44 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
    */
   drift(core, state, { key, rest, value, only }) {
     if (only !== undefined) return false;
+    if (rest === "auth.revoke_tokens") {
+      if (!state.auth) throw new Error(`drift ${key}: the rest sim has no auth seed`);
+      for (const t of state.auth.issued) t.revoked = true;
+      return true;
+    }
     const [kind, path, b, ...more] = rest.split(".");
     if (kind === "items" && path && b) return driftItem(core, state, path, b, more.join("."), value, key);
     if (kind === "objects" && path && b && more.length === 0) return driftObject(state, path, b, value, key);
     return false;
   },
 
-  authorized(headers) {
-    return authorized(headers);
+  isWrite(req) {
+    return !(req.method === "POST" && req.path === "/oauth/token");
+  },
+
+  authorized(headers, req, state) {
+    if (!state.auth) return authorized(headers);
+    // The token endpoint authenticates the client itself.
+    if (req.method === "POST" && req.url.pathname === "/rest/oauth/token") return true;
+    if (strictlyAuthorized(headers, req, state.auth)) return true;
+    state.auth.refused += 1;
+    return state.auth.digest ? digestChallenge(state.auth.digest, state.auth, state.auth.nonces.length + 1) : false;
   },
 
   routes(core, state, req) {
     return routes(core, state, req);
   },
 };
+
+/** R6: the request carries one of the credentials the seed configures, valid. */
+function strictlyAuthorized(headers: IncomingHttpHeaders, req: AuthRequest, auth: RestAuthState): boolean {
+  const value = headers.authorization ?? "";
+  const bearer = /^Bearer\s+(\S+)$/.exec(value)?.[1];
+  if (bearer !== undefined) return (auth.tokens ?? []).includes(bearer) || tokenValid({ clients: auth.clients ?? {}, ttlSeconds: 0, issued: auth.issued }, bearer);
+  if (/^Digest\s/i.test(value) && auth.digest) return digestProblem(headers, req, auth.digest, auth) === null;
+  if (value.startsWith("AWS4-HMAC-SHA256") && auth.sigv4) return sigV4Problem(headers, req, auth.sigv4) === null;
+  return false;
+}
 
 function authorized(headers: IncomingHttpHeaders): boolean {
   if (/^(Bearer|Basic)\s+\S+$/.test(headers.authorization ?? "")) return true;
@@ -180,6 +242,12 @@ function put(state: RestState, t: Target, body: unknown): Reply {
 
 const routes = router<RestState>(
   [
+    route("POST", "/oauth/token", ({ state, headers, body }) => {
+      if (!state.auth?.clients) return error(404, "no token endpoint: the rest sim's auth seed configures no OAuth2 clients");
+      const issued = { clients: state.auth.clients, ttlSeconds: state.auth.token_ttl ?? 3600, issued: state.auth.issued };
+      return issueToken(issued, headers, body);
+    }),
+
     route("GET", "/*path", ({ core, state, params, url }) => {
       const t = resolve(state, `/${params.path}`);
       if (t.kind === "object") return new Reply(200, t.object);

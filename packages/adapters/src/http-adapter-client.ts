@@ -3,43 +3,64 @@
  * block (`actx.provider` is `providers.http.<api>`, narrowed by `OpSpec.providerFor`), its credential from the
  * environment variable(s) the block names, and writes with the idempotency each method has.
  */
-import { canonicalJson, type AdapterContext, type Literal } from "@sponson/core";
-import { clientFor, optionalEnv, requireEnv } from "./common.js";
+import { canonicalJson, type AdapterContext, type Literal, type OpSpec } from "@sponson/core";
+import { clientFor, optionalEnv } from "./common.js";
 import { isObject, isProviderError, type ApiClient } from "./http.js";
-import { ADAPTER, at, pointerTokens, parseApi, type ApiConfig } from "./http-adapter-spec.js";
+import { DEFAULT_AUTH_DEPS, credentialFor, type AuthDeps } from "./http-adapter-auth.js";
+import { ADAPTER, at, pointerTokens, parseApi } from "./http-adapter-spec.js";
 
 /** Per-request settings on top of the API's: a vendor media type, an `Idempotency-Key`. */
 export interface RequestOptions {
   contentType?: string;
   headers?: Record<string, string>;
+  /** Overrides the API's encoding (GraphQL requests are always JSON). */
+  encoding?: "json";
 }
 
-/** The header value to send and how to send it. Basic credentials are joined and encoded here, never stored. */
-function credential(cfg: ApiConfig, env: NodeJS.ProcessEnv): { token: string; authHeader: "bearer" | `header:${string}`; masks: string[] } {
-  const auth = cfg.auth;
-  if (auth.kind === "bearer") return { token: requireEnv(env, auth.env, ADAPTER), authHeader: "bearer", masks: [] };
-  if (auth.kind === "header") return { token: requireEnv(env, auth.env, ADAPTER), authHeader: `header:${auth.header}`, masks: [] };
-  const encoded = Buffer.from(`${requireEnv(env, auth.userEnv, ADAPTER)}:${requireEnv(env, auth.passwordEnv, ADAPTER)}`).toString("base64");
-  return { token: `Basic ${encoded}`, authHeader: "header:authorization", masks: [encoded] };
+/** The dependencies an op was built with, by the adapter context each of its calls received (see `withDeps`). */
+const DEPS = new WeakMap<AdapterContext, AuthDeps>();
+
+/**
+ * `op` with every call's adapter context carrying `deps` (how `auth.command` runs a CLI, the clock), so the
+ * clients built inside see them. The built-in adapter uses the real ones; tests inject fakes.
+ */
+export function withDeps(op: OpSpec, deps: AuthDeps): OpSpec {
+  const bind = (actx: AdapterContext): AdapterContext => {
+    const bound = { ...actx };
+    DEPS.set(bound, deps);
+    return bound;
+  };
+  return {
+    ...op,
+    read: (actx, params) => op.read(bind(actx), params),
+    apply: (actx, params, live) => op.apply(bind(actx), params, live),
+    destroy: (actx, resources) => op.destroy(bind(actx), resources),
+    ...(op.listScope ? { listScope: (actx: AdapterContext, params: Record<string, unknown>) => op.listScope!(bind(actx), params) } : {}),
+  };
 }
 
 /**
- * The client for the line's API. The credential (and, for Basic, its encoded form) is masked in this client's
- * error text too, whatever the engine already masks.
+ * The client for the line's API. The credential (a static header, or a signer for the forms obtained or computed
+ * per request) comes from http-adapter-auth.ts; everything it holds or obtains is masked in this client's error text
+ * too, whatever the engine already masks.
  */
 export function httpClient(actx: AdapterContext, req: RequestOptions = {}): ApiClient {
   const cfg = parseApi(actx.provider, "providers.http.<api>");
-  const { token, authHeader, masks } = credential(cfg, actx.env);
   const baseUrl = (cfg.baseUrlEnv ? optionalEnv(actx.env, cfg.baseUrlEnv) : undefined) ?? cfg.baseUrl;
-  const hidden = [token, ...masks].filter((s) => s.length >= 4);
-  const redact = (t: string) => hidden.reduce((s, h) => s.split(h).join("****"), actx.redact(t));
+  let hidden: () => string[] = () => [];
+  const redact = (t: string) => hidden().reduce((s, h) => (h.length >= 4 ? s.split(h).join("****") : s), actx.redact(t));
+  const cred = credentialFor(actx, cfg.auth, DEPS.get(actx) ?? DEFAULT_AUTH_DEPS, redact);
+  hidden = () => [cred.token, ...cred.masks()];
+  const contentType = req.contentType ?? cfg.mediaType;
   return clientFor({ ...actx, redact }, ADAPTER, {
     baseUrl,
-    token,
-    authHeader,
+    token: cred.token,
+    authHeader: cred.authHeader,
+    ...(cred.signer ? { signer: cred.signer } : {}),
     headers: { ...cfg.headers, ...(req.headers ?? {}) },
-    encoding: cfg.encoding,
-    ...(req.contentType ? { contentType: req.contentType } : {}),
+    encoding: req.encoding ?? cfg.encoding,
+    ...(contentType ? { contentType } : {}),
+    ...(cfg.mediaType ? { accept: cfg.mediaType } : {}),
   });
 }
 

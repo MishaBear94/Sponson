@@ -1,4 +1,6 @@
 import type { ResourceAdapter } from "@sponson/core";
+import { DEFAULT_AUTH_DEPS, type AuthDeps } from "./http-adapter-auth.js";
+import { withDeps } from "./http-adapter-client.js";
 import { listItem } from "./http-adapter-list.js";
 import { resource } from "./http-adapter-resource.js";
 
@@ -9,10 +11,19 @@ import { resource } from "./http-adapter-resource.js";
 const ABOUT = { credentialEnv: "providers.http.<api>.auth", baseUrlEnv: "providers.http.<api>.base_url_env" } as const;
 
 /**
- * The generic `http` adapter: any JSON REST API described in the plan instead of in TypeScript (ADR 0017). Op
- * `resource` manages one object per item (a feature flag, a webhook endpoint); op `list_item` keeps one value in a
- * list on a parent object (an allowed origin, a callback URL). Each line names an API configured under
- * `providers.http.<api>` (`base_url`, the NAME of the environment variable holding its credential, optional static
+ * The generic adapter with its run-time dependencies (how `auth.command` runs a CLI, the clock for token expiry and
+ * request signatures) replaced: for tests. Everything else uses `httpAdapter`.
+ */
+export function createHttpAdapter(deps: Partial<AuthDeps> = {}): ResourceAdapter {
+  const all = { ...DEFAULT_AUTH_DEPS, ...deps };
+  return { name: "http", ops: { resource: withDeps(resource, all), list_item: withDeps(listItem, all) }, about: ABOUT };
+}
+
+/**
+ * The generic `http` adapter: any JSON (or form, or XML) REST API, or a GraphQL one, described in the plan instead of
+ * in TypeScript (ADR 0017). Op `resource` manages one object per item (a feature flag, a webhook endpoint, a
+ * variable); op `list_item` keeps one value in a list on a parent object (an allowed origin, a callback URL). Each
+ * line names an API configured under `providers.http.<api>` (`base_url`, how it authenticates, optional static
  * headers).
  */
 export const httpAdapter: ResourceAdapter = { name: "http", ops: { resource, list_item: listItem }, about: ABOUT };

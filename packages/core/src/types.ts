@@ -240,6 +240,13 @@ export interface AdapterContext {
   intend(keys: string[]): Promise<void>;
   /** Mask every known secret (in all its encodings). Call it on provider text BEFORE truncating it. */
   redact(text: string): string;
+  /**
+   * Register a credential the adapter obtained at run time (an OAuth access token, a token printed by a CLI), so
+   * that it is masked in every output, receipt and error from now on, exactly like a resolved secret. Optional: a
+   * context without it (an older engine, a test harness) masks nothing more, so adapters also mask such values in
+   * their own error text.
+   */
+  secret?(value: string): void;
 }
 
 /**
