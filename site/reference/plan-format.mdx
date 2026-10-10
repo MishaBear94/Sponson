@@ -255,12 +255,13 @@ Environment variables of one Vercel target and, for `preview`, one git branch. R
 
 Each variable is a resource with key `env:<target>:<branch or *>:<NAME>`. A dashboard variable that one record shares
 between several targets cannot be managed by a line that owns one target; the line fails with `PROVIDER_CONFLICT` and
-asks you to split it. After writing, if the newest deployment of this commit started before the write (and has not
-failed), the adapter triggers a redeploy so the build sees the new values, and the receipt line gets
-`notes.redeployed: true`.
+asks you to split it. After writing, if the newest deployment of this commit for the line's environment (production for
+`target: production`, a preview otherwise) started before the write (and has not failed), the adapter triggers a
+redeploy so the build sees the new values, and the receipt line gets `notes.redeployed: true`.
 
 `preview_url` and `deployment_id` are external outputs: they become available when the newest deployment of the
-current commit is `READY`. A deployment that ends `ERROR`, `CANCELED`, `BLOCKED` or `DELETED` fails the lines waiting on it
+current commit for the line's environment is `READY` — a commit's preview build is never taken for its production
+build, or the other way round. A deployment that ends `ERROR`, `CANCELED`, `BLOCKED` or `DELETED` fails the lines waiting on it
 (`EXTERNAL_FAILED`). Project-wide variables belong to the scope that applied them first and are destroyed with it;
 see [examples/README.md](/reference/examples#vercel-shared-and-branch-vars-plan-yaml).
 
@@ -269,9 +270,10 @@ see [examples/README.md](/reference/examples#vercel-shared-and-branch-vars-plan-
 A deployment of the current commit, started by Sponson through the project's Git connection (GitHub, GitLab or
 Bitbucket: the connected repository at the context's branch and sha; target `production` when `--env production`).
 A project with no Git connection fails with `PROVIDER_INVALID`. Takes no parameters. Requires
-`providers.vercel.project`.
+`providers.vercel.project`. Its resource key is `deployment:<production|preview>:<sha>`: a commit's production and
+preview deployments are different resources.
 
-If a deployment of this commit exists and has not failed, the op watches it instead of starting another. `apply`
+If a deployment of this commit for the run's environment exists and has not failed, the op watches it instead of starting another. `apply`
 waits until it is `READY`, for at most `SPONSON_DEPLOY_TIMEOUT_MS` (default 120000), then fails with `WAIT_TIMEOUT`.
 Its outputs are immediate, so a plan with an explicit deploy line has no external barrier. Destroy leaves deployments
 alone: they are history.

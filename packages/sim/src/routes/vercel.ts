@@ -32,6 +32,10 @@
  *       Pagination schema). The `?until=` page parameter is unverified for the env list, which documents no page
  *       parameter; the adapter drops repeated records, so an API that ignores it costs one extra request.
  *   V7. GET /v9/projects/:id carries `link`, the connected repository (`type`, `repoId`, …); verified.
+ *   V8. GET /v7/deployments accepts `target` (`production` | `preview`) and each item's `target` is `production`,
+ *       a custom environment name such as `staging`, or null for a preview; verified against the spec's
+ *       `/v7/deployments` parameters and item schema. The git integration builds previews; production builds
+ *       of a commit exist separately.
  */
 import { page, Reply, type CreatedBy, type ProviderSim, type SimCore } from "../provider.js";
 
@@ -189,11 +193,14 @@ export const vercelSim: ProviderSim<VercelState, VercelSeed> = {
     if (path === "/v7/deployments" && method === "GET") {
       const projectId = url.searchParams.get("projectId") ?? "";
       const sha = url.searchParams.get("sha") ?? "";
+      // `target`: production → production deployments; preview → deployments whose target is null (previews).
+      const target = url.searchParams.get("target");
+      const inTarget = (d: VercelDeployment) => target === null || (target === "production" ? d.target === "production" : target === "preview" ? d.target === null : false);
       const p = state.projects[projectId];
       if (!p) return notFound("project");
-      if (sha && !p.deployments.some((d) => d.meta.githubCommitSha === sha)) autoDeploy(core, projectId, p, sha);
+      if (sha && !p.deployments.some((d) => d.meta.githubCommitSha === sha && inTarget(d))) autoDeploy(core, projectId, p, sha, target === "production" ? "production" : undefined);
       refreshDeployments(p.deployments);
-      const list = p.deployments.filter((d) => !sha || d.meta.githubCommitSha === sha).sort((a, b) => b.createdAt - a.createdAt);
+      const list = p.deployments.filter((d) => (!sha || d.meta.githubCommitSha === sha) && inTarget(d)).sort((a, b) => b.createdAt - a.createdAt);
       const limit = Number(url.searchParams.get("limit") ?? 20);
       const items = list.slice(0, limit);
       return new Reply(200, { deployments: items.map((d) => publicDeployment(projectId, d)), pagination: { count: items.length, next: list.length > limit ? (items.at(-1)?.createdAt ?? null) : null, prev: null } });
@@ -327,30 +334,32 @@ export function refreshDeployments(list: VercelDeployment[], now = Date.now()): 
 }
 
 /** Stand-in for Vercel's git integration: the first lookup of a sha "triggers" its auto-deploy per the chaos mode. */
-function autoDeploy(core: SimCore, projectId: string, p: VercelProject, sha: string): void {
+function autoDeploy(core: SimCore, projectId: string, p: VercelProject, sha: string, target?: "production"): void {
   const mode = core.chaos.deploy;
   const now = Date.now();
+  // Vercel's git integration builds the production branch for production and every other push as a preview.
+  const opts = target ? { target } : {};
   if (mode === "never") return;
   if (mode === "fail") {
-    createDeployment(core, projectId, p, sha, "ERROR", now);
+    createDeployment(core, projectId, p, sha, "ERROR", now, opts);
     return;
   }
   if (mode === "stale") {
-    createDeployment(core, projectId, p, sha, "READY", now - 60_000);
+    createDeployment(core, projectId, p, sha, "READY", now - 60_000, opts);
     return;
   }
   if (mode === "double") {
-    createDeployment(core, projectId, p, sha, "READY", now - 1_000);
-    createDeployment(core, projectId, p, sha, "READY", now);
+    createDeployment(core, projectId, p, sha, "READY", now - 1_000, opts);
+    createDeployment(core, projectId, p, sha, "READY", now, opts);
     return;
   }
   const delay = mode.match(/^delay:(\d+(?:\.\d+)?)$/);
   if (delay) {
-    const d = createDeployment(core, projectId, p, sha, "BUILDING", now);
+    const d = createDeployment(core, projectId, p, sha, "BUILDING", now, opts);
     d.readyAt = now + Number(delay[1]) * 1000;
     return;
   }
-  createDeployment(core, projectId, p, sha, "READY", now, { buildMs: core.chaos.deploy_ms });
+  createDeployment(core, projectId, p, sha, "READY", now, { ...opts, buildMs: core.chaos.deploy_ms });
 }
 
 function publicEnv(e: VercelEnv) {

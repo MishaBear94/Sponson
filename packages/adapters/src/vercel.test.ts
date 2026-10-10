@@ -198,6 +198,32 @@ describe("vercel env", () => {
     expect(await env.read(actx, p)).toBeNull();
   });
 
+  it("a commit's preview build is never taken for its production build, and vice versa", async () => {
+    const actx = h.actx("vercel");
+    const live = { resources: [], outputs: {} };
+    // The commit already has a preview deployment (the PR's build).
+    const preview = await env.awaitExternal!(actx, params({}), live);
+    expect(preview).toMatchObject({ preview_url: expect.any(String) });
+    const previewId = preview!.deployment_id;
+    // A production line for the same commit must wait for (here: get) the production build, not the preview.
+    const prodParams = env.defaults!({ values: {}, target: "production" }, h.ctx);
+    const prod = await env.awaitExternal!(actx, prodParams, live);
+    expect(prod?.deployment_id).toBeDefined();
+    expect(prod!.deployment_id).not.toBe(previewId);
+    const listed = h.sim.state.vercel.projects.prj_demo!.deployments.find((d) => d.uid === prod!.deployment_id);
+    expect(listed?.target).toBe("production");
+    // And the preview lookup still returns the preview.
+    expect((await env.awaitExternal!(actx, params({}), live))!.deployment_id).toBe(previewId);
+  });
+
+  it("the deploy op keys its deployment by environment and commit", async () => {
+    const prodCtx = { ...h.ctx, env: "production" };
+    const actx = { ...h.actx("vercel"), ctx: prodCtx };
+    const live = await deploy.read(actx, {});
+    expect(live?.resources[0]?.key).toBe(`deployment:production:${SHA}`);
+    expect(h.sim.state.vercel.projects.prj_demo!.deployments.filter((d) => d.target === "production")).toHaveLength(1);
+  });
+
   it("awaitExternal: ok → url, never → null, fail → throws, double → newest, building → null", async () => {
     const actx = h.actx("vercel");
     const live = { resources: [], outputs: {} };
@@ -340,13 +366,13 @@ describe("vercel deploy", () => {
     expect(await deploy.read(actx, {})).toBeNull();
     expect(deploy.diff(null, {})[0]?.kind).toBe("create");
     const r = await deploy.apply(actx, {}, null);
-    expect(r.created).toEqual([`deployment:${SHA}`]);
-    expect(h.intents).toEqual([{ keys: [`deployment:${SHA}`], writesBefore: 0 }]);
+    expect(r.created).toEqual([`deployment:preview:${SHA}`]);
+    expect(h.intents).toEqual([{ keys: [`deployment:preview:${SHA}`], writesBefore: 0 }]);
     expect(writeIndex(h, "POST", DEPLOY)).toBe(0);
     expect(r.outputs).toEqual({ preview_url: "https://prj_demo-abcdef12.vercel.app", deployment_id: expect.stringMatching(/^dpl_/) });
     const live = await deploy.read(actx, {});
     expect(live?.outputs).toEqual(r.outputs);
-    expect(deploy.diff(live, {})).toEqual([{ key: `deployment:${SHA}`, kind: "unchanged", label: `deployment ${r.outputs.deployment_id}` }]);
+    expect(deploy.diff(live, {})).toEqual([{ key: `deployment:preview:${SHA}`, kind: "unchanged", label: `preview deployment ${r.outputs.deployment_id}` }]);
     await deploy.destroy(actx, r.resources);
     expect(await deploy.read(actx, {})).not.toBeNull();
   });

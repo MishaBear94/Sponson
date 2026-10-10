@@ -29,8 +29,20 @@ interface VercelEnv {
 /** `readyState` values (OpenAPI: GET /v7/deployments, GET /v13/deployments/{idOrUrl}). */
 type DeploymentState = "QUEUED" | "INITIALIZING" | "BUILDING" | "READY" | "ERROR" | "CANCELED" | "BLOCKED" | "DELETED";
 
+/**
+ * Which deployments a lookup may return. A deployment's `target` is `production` or null for previews (OpenAPI:
+ * GET /v7/deployments, item `target`); a custom environment (`staging`) is neither, so it never matches.
+ */
+type DeployTarget = "production" | "preview";
+
+/** The deployments that carry a line's values: production for the production target, previews otherwise. */
+function deployTargetFor(target: string): DeployTarget {
+  return target === "production" ? "production" : "preview";
+}
+
 interface Deployment {
   uid: string;
+  target: DeployTarget | "other";
   /** Absent until the deployment's upload is complete (GET /v7/deployments) or in POST's lean answer. */
   url?: string;
   state: DeploymentState;
@@ -109,14 +121,18 @@ function parseDeployments(body: unknown): Deployment[] {
     if (typeof d.createdAt !== "number") throw new ShapeError(`expected deployments[${i}].createdAt to be a number`);
     const state = typeof d.readyState === "string" ? d.readyState : d.state;
     if (typeof state !== "string") throw new ShapeError(`expected deployments[${i}].readyState to be a string`);
-    return { uid: d.uid, ...(typeof d.url === "string" && d.url !== "" ? { url: d.url } : {}), state: state as DeploymentState, createdAt: d.createdAt };
+    return { uid: d.uid, target: targetOf(d.target), ...(typeof d.url === "string" && d.url !== "" ? { url: d.url } : {}), state: state as DeploymentState, createdAt: d.createdAt };
   });
 }
 
 /** POST /v13/deployments and GET /v13/deployments/:id answer `{ id, readyState, url? }` (POST's lean variant has no `url`). */
 function parseDeploymentDetail(body: unknown): Deployment {
   const [d] = records([body], "the deployment", ["id", "readyState"]);
-  return { uid: d!.id, ...(typeof d!.url === "string" && d!.url !== "" ? { url: d!.url } : {}), state: d!.readyState as DeploymentState, createdAt: typeof d!.createdAt === "number" ? d!.createdAt : Date.now() };
+  return { uid: d!.id, target: targetOf(d!.target), ...(typeof d!.url === "string" && d!.url !== "" ? { url: d!.url } : {}), state: d!.readyState as DeploymentState, createdAt: typeof d!.createdAt === "number" ? d!.createdAt : Date.now() };
+}
+
+function targetOf(v: unknown): Deployment["target"] {
+  return v === "production" ? "production" : v === null || v === undefined ? "preview" : "other";
 }
 
 interface UpsertResult {
@@ -163,9 +179,13 @@ async function comparableValue(c: Client, e: VercelEnv): Promise<string> {
   return plaintext(one) ?? "";
 }
 
-/** GET /v7/deployments filtered by commit (`sha` is a documented v7 filter), newest first. */
-async function deploymentsFor(c: Client, sha: string): Promise<Deployment[]> {
-  return c.api.get(`/v7/deployments${query(c, { projectId: c.project, sha, limit: "20" })}`, parseDeployments);
+/**
+ * GET /v7/deployments of one commit in one environment (`sha` and `target` are documented v7 filters). The result is
+ * filtered again by each item's `target`, so a preview build of a commit is never mistaken for its production build.
+ */
+async function deploymentsFor(c: Client, sha: string, target: DeployTarget): Promise<Deployment[]> {
+  const list = await c.api.get(`/v7/deployments${query(c, { projectId: c.project, sha, target, limit: "20" })}`, parseDeployments);
+  return list.filter((d) => d.target === target);
 }
 
 function newest(list: Deployment[]): Deployment | undefined {
@@ -202,12 +222,12 @@ async function gitSourceFor(c: Client, ctx: Ctx): Promise<Record<string, unknown
 }
 
 /** A new build of this commit. `forceNew=1`: Vercel may otherwise answer with an earlier deployment of the same commit. */
-async function triggerDeploy(c: Client, ctx: Ctx): Promise<Deployment> {
+async function triggerDeploy(c: Client, ctx: Ctx, target: DeployTarget): Promise<Deployment> {
   const body = {
     name: c.project,
     project: c.project,
     gitSource: await gitSourceFor(c, ctx),
-    ...(ctx.env === "production" ? { target: "production" } : {}),
+    ...(target === "production" ? { target: "production" } : {}),
   };
   return c.api.post(`/v13/deployments${query(c, { forceNew: "1" })}`, body, parseDeploymentDetail);
 }
@@ -352,10 +372,11 @@ const env: OpSpec = {
       }
 
       // Vercel may have started building this sha before the vars landed; that build would miss them.
-      const d = newest(await deploymentsFor(c, actx.ctx.git.sha));
+      const target = deployTargetFor(scope.target);
+      const d = newest(await deploymentsFor(c, actx.ctx.git.sha, target));
       if (d && d.createdAt < startedAt && !FAILED_STATES.has(d.state)) {
         actx.log(`deployment ${d.uid} predates env write; redeploying`);
-        await triggerDeploy(c, actx.ctx);
+        await triggerDeploy(c, actx.ctx, target);
         notes = { redeployed: true };
       }
     }
@@ -404,11 +425,11 @@ const env: OpSpec = {
     });
   },
 
-  async awaitExternal(actx) {
+  async awaitExternal(actx, params) {
     const c = client(actx);
     let list: Deployment[];
     try {
-      list = await deploymentsFor(c, actx.ctx.git.sha);
+      list = await deploymentsFor(c, actx.ctx.git.sha, deployTargetFor(envScope(params).target));
     } catch (e) {
       // The HTTP layer already retried; a provider that is still unavailable means "not known yet", not "failed".
       if (isTransient(e)) return null;
@@ -426,12 +447,18 @@ const env: OpSpec = {
 // op: deploy
 // ---------------------------------------------------------------------------
 
-function deployKey(sha: string): string {
-  return `deployment:${sha}`;
+/** The `deploy` op builds for the run's environment: production under `--env production`, a preview otherwise. */
+function deployOpTarget(ctx: Ctx): DeployTarget {
+  return ctx.env === "production" ? "production" : "preview";
 }
 
-function deployRecord(sha: string, d: Deployment): ResourceRecord {
-  return { key: deployKey(sha), id: d.uid, hash: sha256(d.uid), label: `deployment ${d.uid}` };
+/** Identity: environment and commit — a commit's production and preview deployments are different resources. */
+function deployKey(sha: string, target: DeployTarget): string {
+  return `deployment:${target}:${sha}`;
+}
+
+function deployRecord(sha: string, target: DeployTarget, d: Deployment): ResourceRecord {
+  return { key: deployKey(sha, target), id: d.uid, hash: sha256(d.uid), label: `${target} deployment ${d.uid}` };
 }
 
 function deployOutputs(d: Deployment): Record<string, Literal> {
@@ -464,15 +491,16 @@ const deploy: OpSpec = {
   },
 
   writesEnvironment(_params, ctx) {
-    return ctx.env === "production" ? "production" : "preview";
+    return deployOpTarget(ctx);
   },
 
   /** The newest deployment of this sha that has not failed, finished or not: a build in progress is not a reason for another. */
   async read(actx) {
     const c = client(actx);
-    const d = newest((await deploymentsFor(c, actx.ctx.git.sha)).filter((x) => !FAILED_STATES.has(x.state)));
+    const target = deployOpTarget(actx.ctx);
+    const d = newest((await deploymentsFor(c, actx.ctx.git.sha, target)).filter((x) => !FAILED_STATES.has(x.state)));
     if (!d) return null;
-    return { resources: [deployRecord(actx.ctx.git.sha, d)], outputs: d.state === "READY" && d.url ? deployOutputs(d) : {} };
+    return { resources: [deployRecord(actx.ctx.git.sha, target, d)], outputs: d.state === "READY" && d.url ? deployOutputs(d) : {} };
   },
 
   diff(live): ResourceDiff[] {
@@ -487,6 +515,7 @@ const deploy: OpSpec = {
     assertNoPending(params, "vercel");
     const c = client(actx);
     const sha = actx.ctx.git.sha;
+    const target = deployOpTarget(actx.ctx);
     const existing = live?.resources[0];
     if (existing && live.outputs.preview_url !== undefined) return { resources: live.resources, outputs: live.outputs, created: [] };
 
@@ -494,15 +523,15 @@ const deploy: OpSpec = {
     const created: string[] = [];
     if (existing) {
       actx.log(`deployment ${existing.id} for ${sha} is in progress; watching it`);
-      start = { uid: existing.id, state: "BUILDING", createdAt: 0 };
+      start = { uid: existing.id, target, state: "BUILDING", createdAt: 0 };
     } else {
-      await actx.intend([deployKey(sha)]);
-      actx.log(`deploy ${sha}`);
-      start = await triggerDeploy(c, actx.ctx);
-      created.push(deployKey(sha));
+      await actx.intend([deployKey(sha, target)]);
+      actx.log(`deploy ${sha} (${target})`);
+      start = await triggerDeploy(c, actx.ctx, target);
+      created.push(deployKey(sha, target));
     }
     const d = await untilReady(c, actx, start);
-    return { resources: [deployRecord(sha, d)], outputs: deployOutputs(d), created };
+    return { resources: [deployRecord(sha, target, d)], outputs: deployOutputs(d), created };
   },
 
   // Deployments are history; Vercel keeps them and so do we.
