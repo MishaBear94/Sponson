@@ -31,7 +31,7 @@ inputs:
     required: false
   version:
     description: >-
-      `source` (default): build and run Sponson from this action's own checkout, so the code that runs is exactly
+      `source` (default): install and run Sponson from this action's own checkout, so the code that runs is exactly
       the action ref you pinned and nothing is fetched from a package registry. Or an npm version of the `sponson`
       package (e.g. `0.3.0`) — only once it is published from this repository.
     default: source
@@ -148,11 +148,13 @@ runs:
         [ -n "$SCOPE_SHA" ] && args+=(--sha "$SCOPE_SHA")
         if [ "$INPUT_VERSION" = "source" ]; then
           # The action's checkout is this repository at the ref the caller pinned: build it, trust no registry.
-          root="$GITHUB_ACTION_PATH/.."
-          if ! ( cd "$root" && corepack enable && pnpm install --frozen-lockfile && pnpm build ) >&2; then
-            echo "::error::building Sponson from the action's checkout failed"; exit 1
+          root="$(cd "$GITHUB_ACTION_PATH/.." && pwd)"
+          if ! ( cd "$root" && corepack enable && pnpm install --frozen-lockfile ) >&2; then
+            echo "::error::installing Sponson from the action's checkout failed"; exit 1
           fi
-          sponson=(node "$root/packages/cli/dist/bin.js")
+          # Run the sources through tsx, the same way the repository's own tests run the CLI. (Inside the
+          # workspace the packages resolve to their TypeScript sources; only published packages point at dist/.)
+          sponson=(node --import "$root/node_modules/tsx/dist/loader.mjs" "$root/packages/cli/src/bin.ts")
         else
           sponson=(npx -y "sponson@$INPUT_VERSION")
         fi
