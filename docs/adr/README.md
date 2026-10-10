@@ -23,6 +23,7 @@ Nygard's format). They explain *why* the code is the way it is; [ARCHITECTURE.md
 | [0015](0015-adapters-describe-themselves.md) | Adapters and secret sources describe themselves | Accepted |
 | [0016](0016-one-receipts-ref-per-scope.md) | One receipts branch per environment and scope | Accepted |
 | [0017](0017-generic-http-adapter.md) | A generic, declarative `http` adapter | Proposed |
+| [0020](0020-recipes.md) | Recipes: verified http specs as one-line building blocks | Proposed |
 
 ## Writing a new record
 

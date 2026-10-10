@@ -1,0 +1,68 @@
+name: "http recipes: a block overriding the recipe's defaults, plan-time param checks naming the param, unknown recipes and ops listing the known ones"
+plan: |
+  version: 1
+  providers:
+    http:
+      supabase: { recipe: supabase, base_url_env: REST_API_URL, auth: { bearer_env: REST_API_TOKEN } }
+  changes:
+    - id: redirect
+      adapter: http
+      op: list_item
+      recipe: supabase.auth_redirect_url
+      project_ref: abcdefghijklmnopqrst
+      url: "https://${ctx.scope}.preview.example.app/**"
+seed:
+  rest:
+    objects:
+      /projects/abcdefghijklmnopqrst/config/auth: { site_url: "https://example.app", uri_allow_list: "https://example.app/**" }
+steps:
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { redirect: create } }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { redirect: applied } }
+  - sim:
+      state:
+        rest.objects./projects/abcdefghijklmnopqrst/config/auth.uri_allow_list: "https://example.app/**,https://pr-42.preview.example.app/**"
+      write_order: ["PATCH /rest/projects/abcdefghijklmnopqrst/config/auth"]
+  - run: apply --json
+    expect: { exit: 0, writes: 0, lines: { redirect: unchanged } }
+  # A mistyped param is refused before any request, naming the param.
+  - plan: |
+      version: 1
+      providers:
+        http:
+          supabase: { recipe: supabase, base_url_env: REST_API_URL, auth: { bearer_env: REST_API_TOKEN } }
+      changes:
+        - { id: redirect, adapter: http, op: list_item, recipe: supabase.auth_redirect_url, project_ref: abcdefghijklmnopqrst, url: 42 }
+  - run: plan --json
+    expect: { exit: 2, error: PARAM_INVALID, stdout: ["`url` must be a string"] }
+  - plan: |
+      version: 1
+      changes:
+        - { id: redirect, adapter: http, op: list_item, recipe: supabase.redirects, project_ref: abcdefghijklmnopqrst, url: "https://x.example.app" }
+  - run: plan --json
+    expect: { exit: 2, error: PARAM_INVALID, stdout: ["has no op `redirects` (known: auth_redirect_url)"] }
+  - plan: |
+      version: 1
+      changes:
+        - { id: redirect, adapter: http, op: resource, recipe: supabase.auth_redirect_url, project_ref: abcdefghijklmnopqrst, url: "https://x.example.app" }
+  - run: plan --json
+    expect: { exit: 2, error: PARAM_INVALID, stdout: ["write `op: list_item`"] }
+  # Back to the applied plan: destroy removes the one item and nothing else.
+  - plan: |
+      version: 1
+      providers:
+        http:
+          supabase: { recipe: supabase, base_url_env: REST_API_URL, auth: { bearer_env: REST_API_TOKEN } }
+      changes:
+        - id: redirect
+          adapter: http
+          op: list_item
+          recipe: supabase.auth_redirect_url
+          project_ref: abcdefghijklmnopqrst
+          url: "https://${ctx.scope}.preview.example.app/**"
+  - run: apply --destroy --json
+    expect: { exit: 0, status: complete, lines: { redirect: destroyed } }
+  - sim:
+      state:
+        rest.objects./projects/abcdefghijklmnopqrst/config/auth.uri_allow_list: "https://example.app/**"

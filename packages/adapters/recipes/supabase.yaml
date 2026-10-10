@@ -1,0 +1,74 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Supabase Management API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: supabase
+title: Supabase
+category: auth
+verified_on: "2026-10-11"
+docs:
+  - title: Management API introduction (base URL, bearer access token)
+    url: https://supabase.com/docs/reference/api/introduction
+  - title: Get auth service config
+    url: https://supabase.com/docs/reference/api/v1-get-auth-service-config
+  - title: Update auth service config
+    url: https://supabase.com/docs/reference/api/v1-update-auth-service-config
+  - title: Redirect URLs (wildcards)
+    url: https://supabase.com/docs/guides/auth/redirect-urls
+  - title: Self-hosted Auth config (GOTRUE_URI_ALLOW_LIST is comma-separated)
+    url: https://supabase.com/docs/guides/self-hosting/auth/config
+api:
+  base_url: https://api.supabase.com/v1
+  base_url_env: SUPABASE_API_URL
+  auth: { bearer_env: SUPABASE_ACCESS_TOKEN }
+assumptions:
+  - id: SB1
+    verified: true
+    text: "The Management API is served from https://api.supabase.com/v1 and takes a personal (or OAuth) access token as `Authorization: Bearer`."
+    source: https://supabase.com/docs/reference/api/introduction
+  - id: SB2
+    verified: true
+    text: "`GET /v1/projects/{ref}/config/auth` returns the project's auth config with `uri_allow_list`, a string."
+    source: https://supabase.com/docs/reference/api/v1-get-auth-service-config
+  - id: SB3
+    verified: true
+    text: "`PATCH /v1/projects/{ref}/config/auth` with only `uri_allow_list` changes the redirect allow-list and leaves the other auth settings alone; the token needs `auth_config_write` and `project_admin_write`."
+    source: https://supabase.com/docs/reference/api/v1-update-auth-service-config
+  - id: SB4
+    verified: false
+    text: "`uri_allow_list` is the comma-separated list of Additional Redirect URLs. Verified for the self-hosted GOTRUE_URI_ALLOW_LIST it maps to; the hosted reference only types it as a string."
+    source: https://supabase.com/docs/guides/self-hosting/auth/config
+  - id: SB5
+    verified: true
+    text: Redirect URLs may use `*` and `**` wildcards, so one entry can allow every path of a preview host.
+    source: https://supabase.com/docs/guides/auth/redirect-urls
+  - id: SB6
+    verified: false
+    text: The API offers no precondition (ETag) on the auth config, so two runs editing the list at the same moment can lose a write; Sponson re-reads after writing and reports what it sees.
+ops:
+  auth_redirect_url:
+    kind: list_item
+    title: Auth redirect URL
+    summary: Adds a URL (usually the preview's, with a `/**` wildcard) to the project's Auth "Additional Redirect URLs", and removes it when the scope is destroyed. Every other entry is left alone.
+    covers: [supabase-auth-redirect]
+    params:
+      project_ref:
+        type: string
+        required: true
+        pattern: "^[a-z0-9]+$"
+        description: The project's ref (the subdomain of its API URL).
+        example: abcdefghijklmnopqrst
+      url:
+        type: string
+        required: true
+        description: The redirect URL to allow; wildcards as Supabase documents them.
+        example: "https://${ctx.scope}.preview.example.app/**"
+    http:
+      parent: { path: "/projects/{project_ref}/config/auth" }
+      list_path: /uri_allow_list
+      shape: delimited
+      separator: ","
+      item: { param: url }
+    sim:
+      objects:
+        "/projects/{project_ref}/config/auth": { site_url: "https://example.app", uri_allow_list: "https://example.app/**,http://localhost:3000/**" }
+    live:
+      params: { project_ref: SPONSON_LIVE_SUPABASE_PROJECT_REF }

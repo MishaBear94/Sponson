@@ -19,6 +19,7 @@ export * from "./neon.js";
 export * from "./vercel.js";
 export * from "./clerk.js";
 export { httpAdapter } from "./http-adapter.js";
+export { RECIPES_DIR, expandRecipe, loadRecipe, loadRecipes, recipeNames, resolveRecipeApi, type Recipe, type RecipeAssumption, type RecipeOp, type RecipeParam, type RecipeParamType, type RecipeSimHints } from "./recipes.js";
 export * from "./secrets.js";
 export * from "./launchdarkly.js";
 

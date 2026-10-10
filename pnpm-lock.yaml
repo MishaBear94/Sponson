@@ -50,6 +50,9 @@ importers:
       '@sponson/core':
         specifier: workspace:*
         version: link:../core
+      yaml:
+        specifier: ^2.8.1
+        version: 2.9.1
     devDependencies:
       '@sponson/sim':
         specifier: workspace:*

@@ -1,0 +1,151 @@
+# 20. Recipes: verified http specs as one-line building blocks
+
+Date: 2026-10-11
+
+## Status
+
+Proposed
+
+## Context
+
+The generic `http` adapter ([ADR 0017](0017-generic-http-adapter.md)) can express most rows of the provider
+coverage matrix ([docs/coverage.md](../coverage.md)): plain CRUD on one object, or one entry in a list on a parent.
+But "expressible" is not coverage. A team that wants a Cloudflare CNAME per preview still has to find the endpoints,
+the response envelope, the id field, the fields that identify a record and the ones worth comparing, and get each
+right; a wrong guess shows up as a duplicate record or drift on every plan. Nothing in the repository says which
+providers have a known-good spec, what it was checked against, or that it still works.
+
+The coverage target (95% of the matrix, with product, docs and tests agreeing) needs dozens of such specs, written by
+several contributors. So the unit of work has to be small, mechanical and checked: one file per provider, nothing
+else to edit, and the tests and docs following from the file.
+
+Two things must not move while this happens: ledger identity ([ADR 0005](0005-receipts-are-a-ledger-with-write-ahead-intents.md),
+[ADR 0016](0016-one-receipts-ref-per-scope.md)) and the plan staying data ([ADR 0001](0001-plan-file-is-yaml-not-a-dsl.md)).
+
+## Decision
+
+### Recipe files
+
+`packages/adapters/recipes/<provider>.yaml`, shipped in the npm package (`files`), validated by
+`schema/recipe.schema.json`:
+
+- **Metadata**: `provider` (the file name), `title`, `category` (a docs/coverage.yaml category), `verified_on`,
+  `docs` (the official pages it was verified against), and numbered `assumptions`, each `verified` with a `source`
+  or marked unverified.
+- **`api`**: the API block defaults, exactly the keys of a `providers.http.<api>` block: `base_url` (left out only
+  for per-account APIs), `base_url_env` (`<PROVIDER>_API_URL`), `auth` naming the provider's conventional credential
+  variable (its CLI's or SDK's), `headers`, `encoding`.
+- **`ops`**: per op, its `kind` (`resource` or `list_item`), `title`, `summary`, the coverage rows it `covers`,
+  typed `params` (`type`, `description`, `required`, `default`, `enum`, `pattern`, `example`) and `http`: the op's
+  params as ADR 0017 defines them, without `api`, `vars` and `destroy`. A value `{ param: <name> }` stands for a
+  param's value (a param without one removes its key); `{<name>}` in a path for its URI-encoded value. Optional
+  `sim` hints (`id_from`, `numeric_ids`, `objects` to seed) and `live.params` (the `SPONSON_LIVE_*` variable that
+  supplies a param in a live run).
+
+There is one template form, whole-value substitution. No string interpolation inside recipe values, no conditionals:
+a recipe is data like a plan.
+
+### Plan syntax: a line of the `http` adapter, not a new adapter
+
+```yaml
+providers:
+  http:
+    supabase: { recipe: supabase }      # optional; override base_url, base_url_env, auth, headers, encoding here
+changes:
+  - id: redirect
+    adapter: http
+    op: list_item                       # the recipe's kind
+    recipe: supabase.auth_redirect_url
+    project_ref: abcdefghijklmnopqrst
+    url: "https://${ctx.scope}.preview.example.app/**"
+```
+
+- `recipe: <provider>.<op>`; `api` defaults to `<provider>`, and a missing `providers.http.<provider>` block means
+  `{ recipe: <provider> }`. A block with `recipe:` takes the recipe's `api` as defaults; its own keys win.
+- Every other key of the line is a recipe param, except `api`, `recipe` and `destroy` (which keeps ADR 0017's
+  meaning). The op's `outputsFor` expands the line during `prepare`, so an unknown recipe or op (listing the known
+  ones), an unknown or missing param, a wrong type, enum or pattern is `PARAM_INVALID` naming the param before any
+  request. References and `${ctx.*}` are left to the engine and checked after it resolves them.
+- `op` must equal the recipe's kind: the line still says which op's lifecycle it gets, and the ledger records it.
+
+A dedicated `adapter: <provider>` per recipe file was considered and rejected; see Alternatives.
+
+### Identity: what the requests resolve to, never the recipe's text
+
+- `providerFor` returns the **resolved** API block (defaults merged with overrides), without the recipe's name. It is
+  what the ledger records and what destroy uses, so destroy needs nothing but the ledger even if a later version drops
+  or renames the recipe.
+- Keys and record ids are the ones the expanded spec produces (ADR 0017: the find path and match values, or the read
+  path; the remove request; a list item's locator).
+- Hence: editing a recipe's docs, assumptions, params, defaults that do not reach a path or a match, or its `fields`
+  re-identifies nothing. A line written by hand with the same values is the same resource, so a team can move from a
+  hand-written line to a recipe (or back) without orphaning anything.
+- A recipe change that does alter identity (base URL, credential variable, headers, encoding, a path, a match field,
+  the remove request) is caught by an identity lock: `packages/adapters/src/recipes-identity.json` pins, per recipe
+  op, the resolved block, key and record id of its example line. Changing it is a deliberate act (an environment
+  variable rewrites it) shipped with a **Breaking:** changeset.
+
+### Validation and testing that follow from the file
+
+- `packages/adapters/src/recipes.test.ts`: every file validates against the schema; metadata is complete (category,
+  sources, unique assumption ids, rows in docs/coverage.yaml that name the op back); path placeholders use only params
+  that always have a value; every param is used; the example expands into a spec ADR 0017's parser accepts, with its
+  outputs and provider block; missing, unknown and mistyped params fail as they should; the identity lock holds.
+- `scenarios/recipes.test.ts`: for every recipe op, the example line runs through the CLI against the generic REST
+  sim, shaped from the recipe itself (the create's collection answers in the recipe's `item_path` and
+  `find.list_path` envelopes with its id field; `sim.objects` seeds a list item's parent): create, re-apply with zero
+  writes, a declared field edited in the console refused until `--reconcile`, the object or item removed by hand and
+  recreated, destroy removing only what Sponson made. The sim gained per-collection styles for this
+  (`packages/sim/src/routes/rest.ts`, assumption R2), not per-provider routes.
+- Live: under `pnpm test:live` the same file runs create, re-apply and destroy against the real API for each op whose
+  credential and `live.params` variables are set, and skips the others.
+
+### Docs and coverage data that follow from the file
+
+- `pnpm docs:gen` writes docs/recipes.md (one section per provider and op: API defaults, sources, assumptions, params
+  table, example line, the expansion) and its site page.
+- docs/coverage.yaml is the source of truth for the coverage matrix: per row its id, category, provider, side
+  effect, API shape, generic fit, priority and `covered_by` (`<adapter>.<op>`, `recipe:<provider>.<op>`, a list,
+  `manual` for rows no API reaches, or null). `pnpm docs:gen` regenerates the matrix tables and every coverage number
+  in docs/coverage.md from it. `scenarios/docs/coverage.test.ts` checks every `covered_by` resolves to a registered op
+  or shipped recipe op, that a recipe's `covers` and the rows naming it agree, that each op is exercised by a scenario
+  (recipe ops by the harness above), and that the numbers in the doc are the data's.
+
+### First recipes
+
+`supabase.auth_redirect_url` (P0, a delimited list on the auth config), `cloudflare.dns_cname` (P1, an object found by
+name and type) and `turso.database_branch` (P1, an object named by the client, with outputs). Stripe's webhook
+endpoint was not chosen: its signing secret exists only in the create response, which ADR 0017 does not support.
+
+## What it deliberately does not do
+
+- **No user-supplied recipe directories** (`SPONSON_RECIPES`): a recipe is useful because it is verified and tested
+  here. A team that needs an unshipped one writes the http line by hand, or contributes the file.
+- **No recipe versions in the plan** (`recipe: supabase.auth_redirect_url@2`): identity already does not depend on the
+  recipe's text, and the lock makes the identity-changing edits explicit.
+- **No schema per recipe in `schema/release.plan.schema.json`**: an editor checks `recipe:`'s form, `sponson plan`
+  checks the params.
+- Everything ADR 0017 leaves out stays out (once-only outputs, polling, OAuth exchanges, SigV4).
+
+## Alternatives considered
+
+- **`adapter: <provider>` resolved through the recipes in the registry.** Shorter lines, but a recipe name would then
+  share the adapter namespace with first-class adapters: shipping a first-class `cloudflare` adapter later would
+  change what `adapter: cloudflare` means for existing plans and re-identify their resources (identity starts with
+  the adapter name). Under `adapter: http`, moving a row from a recipe to a first-class adapter is an explicit plan
+  edit.
+- **Identity from the recipe** (its name and op in the provider block or the key). Stable across base URL changes, but
+  a hand-written line and a recipe line for the same object would be two resources, and destroy would need the recipe
+  file of the version that created the resource.
+- **String templates** (`"pr-{scope}.example.com"` inside recipe values). Recipes would become a small language;
+  the line already has `${ctx.*}` for that.
+- **Plan-file snippets in the docs only.** No validation, no tests, no coverage data: what this replaces.
+
+## Consequences
+
+- Adding a provider operation is one YAML file plus a coverage row's `covered_by`; the schema test, the unit checks,
+  the sim lifecycle, the docs page and the coverage numbers follow (CONTRIBUTING.md, "Adding a recipe").
+- `@sponson/adapters` depends on `yaml` and ships `recipes/`.
+- The rest sim's answers are shaped per collection; the default shape is unchanged.
+- The sim proves a recipe consistent with its own declarations, not with the provider: the verified assumptions and
+  `pnpm test:live` are what tie a recipe to the real API.

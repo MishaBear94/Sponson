@@ -12,7 +12,8 @@
     "neon",
     "clerk",
     "adapters",
-    "secrets"
+    "secrets",
+    "recipes"
   ],
   "license": "Apache-2.0",
   "repository": {
@@ -34,7 +35,8 @@
     "prepack": "tsc -b && node -e \"const fs=require('node:fs');if(!fs.existsSync('./dist/index.js'))throw new Error('prepack: ./dist/index.js missing after build - refusing to pack an empty package');fs.copyFileSync('../../LICENSE','LICENSE')\""
   },
   "dependencies": {
-    "@sponson/core": "workspace:*"
+    "@sponson/core": "workspace:*",
+    "yaml": "^2.8.1"
   },
   "devDependencies": {
     "@sponson/sim": "workspace:*"
@@ -42,6 +44,7 @@
   "files": [
     "dist",
     "!dist/.tsbuildinfo",
+    "recipes",
     "README.md",
     "LICENSE"
   ],
