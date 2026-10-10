@@ -227,6 +227,7 @@ The base URL override replaces the provider's API base URL (the test suites poin
 | `neon` | [`neon.branch`](#neonbranch) | `NEON_API_KEY` | `NEON_API_URL` |
 | `vercel` | [`vercel.env`](#vercelenv), [`vercel.deploy`](#verceldeploy) | `VERCEL_TOKEN` | `VERCEL_API_URL` |
 | `clerk` | [`clerk.redirect_allow`](#clerkredirect_allow) | `CLERK_SECRET_KEY` | `CLERK_API_URL` |
+| `netlify` | [`netlify.env`](#netlifyenv) | `NETLIFY_AUTH_TOKEN` | `NETLIFY_API_URL` |
 <!-- generated:adapters:end -->
 
 A missing credential fails the line with `PROVIDER_AUTH`. Every resource has a key that identifies it within the
@@ -293,6 +294,44 @@ One URL on the Clerk instance's redirect allow-list (the instance `CLERK_SECRET_
 A URL that is already on the list is taken over, not duplicated. Destroy removes the URL. For drift and adoption,
 every URL on the instance's list is in scope.
 
+### `netlify.env`
+
+Environment variable values of one Netlify deploy context. Requires `providers.netlify.site` (the site's Project ID,
+`site_id`); `providers.netlify.account` (the team's slug or id) is optional, and looked up from the site when absent.
+
+Netlify keeps one variable per name with one value per deploy context. A line owns **one context's value** of each
+variable it declares, never the variable: values someone set for other contexts are left alone, and so is the
+variable itself unless the line created it and nothing else holds a value in it.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `context` | `production` \| `deploy-preview` \| `branch-deploy` \| `dev` \| `dev-server` \| `branch` | `production` when `--env production`, else `branch` | The deploy context. `branch` is a value for one branch, which Netlify uses for that branch's Deploy Previews, branch deploys and permalinks, so two pull requests never see each other's values. `deploy-preview` is one value for every Deploy Preview of the site. `production` requires approval (see [Environments](#environments)). One value for all contexts (`all`) cannot be owned by a line. |
+| `branch` | string | the current git branch, for `context: branch` | The branch (Netlify's `context_parameter`; a trailing `*` matches a prefix, e.g. `release/*`). Only valid with `context: branch`. |
+| `values` | map: NAME → value | `{}` | The variables. Each value is a literal, `{ from }`, `{ secret }` or `{ keep: true }`. Values are shown as sensitive in diffs. |
+
+Each value is a resource with key `env:<context>:<branch or *>:<NAME>`; drift compares a hash of the value. A
+variable created by Sponson is not marked secret (its values stay readable to the token, which is what lets
+Sponson see drift). A variable already marked *Contains secret values* can be written, but Netlify never shows its
+values again (except in `dev`), so such a value is written on every apply. A variable that has one value for all
+deploy contexts fails the line with `PROVIDER_CONFLICT`: give it per-context values in the Netlify UI first.
+Destroy deletes the line's values one by one, then deletes a variable only when no value is left in it.
+
+`preview_url`, `deploy_id` and `deploy_preview_url` are external outputs: they become available when the newest
+deploy of the current commit that reads the line's context (production deploys for `production`, Deploy Previews
+for `deploy-preview`, branch deploys for `branch-deploy`, and both for `branch`) is `ready` **and started after the
+line's variables last changed** — a build reads the values set when it started, so an older deploy is never
+reported. `preview_url` is the deploy's permalink, `https://<deploy id>--<site name>.netlify.app`;
+`deploy_preview_url` is the pull request's stable URL, `https://deploy-preview-<n>--<site name>.netlify.app`, for a
+Deploy Preview, and the permalink otherwise. A deploy that ends `error` or `rejected` fails the lines waiting on it
+(`EXTERNAL_FAILED`); `dev` and `dev-server` values belong to no deploy, so reading their `preview_url` is
+`PARAM_INVALID`.
+
+After writing, if a deploy of this commit for the line's context started before the write, the adapter starts a new
+build (`POST /sites/{site_id}/builds`: production for `production`, a branch deploy of the branch otherwise) and the
+receipt line gets `notes.redeployed: true`. Netlify's API cannot rebuild a Deploy Preview, so a `deploy-preview`
+line records `notes.stale_deploy: <deploy id>` instead and waits for a newer deploy: retry the deploy in the
+Netlify UI or push a commit. For drift and adoption, every value of the line's context (and branch) is in scope.
+
 ### Outputs
 
 The outputs each built-in op declares. `immediate` outputs exist once the line is applied; `external` ones only after
@@ -309,6 +348,9 @@ the named event. Sensitive outputs are never displayed, logged or written to rec
 | `vercel.deploy` | `preview_url` | immediate | no |
 | `vercel.deploy` | `deployment_id` | immediate | no |
 | `clerk.redirect_allow` | `id` | immediate | no |
+| `netlify.env` | `preview_url` | external (`deploy`) | no |
+| `netlify.env` | `deploy_id` | external (`deploy`) | no |
+| `netlify.env` | `deploy_preview_url` | external (`deploy`) | no |
 <!-- generated:outputs:end -->
 
 ## What is checked when

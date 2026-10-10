@@ -3,6 +3,7 @@ import { clerkAdapter } from "./clerk.js";
 import { neonAdapter } from "./neon.js";
 import { awsSecretsManagerSource, dopplerSecretSource, envSecretSource, gcpSecretManagerSource, opSecretSource } from "./secrets.js";
 import { vercelAdapter } from "./vercel.js";
+import { netlifyAdapter } from "./netlify.js";
 
 /**
  * The stable adapter authoring API: what templates/adapter (`pnpm new:adapter`) uses, and what an out-of-tree
@@ -17,8 +18,9 @@ export * from "./neon.js";
 export * from "./vercel.js";
 export * from "./clerk.js";
 export * from "./secrets.js";
+export * from "./netlify.js";
 
 /** Every built-in adapter and secret source. The CLI uses this; tests build narrower registries. */
 export function createRegistry(): Registry {
-  return new Registry().addAdapter(neonAdapter).addAdapter(vercelAdapter).addAdapter(clerkAdapter).addSecretSource(envSecretSource).addSecretSource(dopplerSecretSource()).addSecretSource(opSecretSource()).addSecretSource(awsSecretsManagerSource()).addSecretSource(gcpSecretManagerSource());
+  return new Registry().addAdapter(neonAdapter).addAdapter(vercelAdapter).addAdapter(clerkAdapter).addAdapter(netlifyAdapter).addSecretSource(envSecretSource).addSecretSource(dopplerSecretSource()).addSecretSource(opSecretSource()).addSecretSource(awsSecretsManagerSource()).addSecretSource(gcpSecretManagerSource());
 }

@@ -20,6 +20,15 @@
       "type": "object",
       "additionalProperties": { "type": "object" },
       "properties": {
+        "netlify": {
+          "type": "object",
+          "description": "Netlify site (its Project ID, `site_id`) and, optionally, its account (team) slug or id; without it the site's own account is looked up.",
+          "required": ["site"],
+          "properties": {
+            "site": { "type": "string", "minLength": 1 },
+            "account": { "type": "string", "minLength": 1 }
+          }
+        },
         "vercel": {
           "type": "object",
           "description": "Vercel project (`prj_…`) and, for team projects, the team id (`team_…`).",
@@ -157,7 +166,7 @@
       "required": ["id", "adapter", "op"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk. Plugins (SPONSON_PLUGINS) add more." },
+        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk, netlify. Plugins (SPONSON_PLUGINS) add more." },
         "op": { "type": "string", "minLength": 1 },
         "environments": { "$ref": "#/$defs/nameList", "description": "Environments this line applies to. Absent: all." },
         "depends_on": { "type": "array", "items": { "$ref": "#/$defs/id" }, "description": "Ordering without a data dependency. Prefer `from:` references." }
@@ -179,6 +188,10 @@
         {
           "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "clerk" }, "op": { "const": "redirect_allow" } } },
           "then": { "$ref": "#/$defs/op_clerk_redirect_allow" }
+        },
+        {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "netlify" }, "op": { "const": "env" } } },
+          "then": { "$ref": "#/$defs/op_netlify_env" }
         }
       ]
     },
@@ -259,6 +272,33 @@
         "environments": true,
         "depends_on": true,
         "url": { "$ref": "#/$defs/stringOrRef", "description": "The URL to allow. Usually `{ from: <vercel.env line>.preview_url }`." }
+      },
+      "additionalProperties": false
+    },
+    "op_netlify_env": {
+      "description": "netlify.env: environment variable values of one Netlify deploy context (and, for `branch`, one branch). Outputs: preview_url, deploy_id and deploy_preview_url, available after the deploy.",
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "context": {
+          "description": "production, deploy-preview, branch-deploy, dev, dev-server or branch. Default: production when --env production, else branch (the current git branch's value, which its Deploy Previews read).",
+          "anyOf": [
+            { "enum": ["production", "deploy-preview", "branch-deploy", "dev", "dev-server", "branch"] },
+            { "type": "string", "pattern": "\\$\\{ctx\\.[a-z_.]+\\}" }
+          ]
+        },
+        "branch": {
+          "type": "string",
+          "description": "The branch of `context: branch` (Netlify's `context_parameter`; a trailing `*` matches a prefix). Default: the current git branch. Only valid with context branch."
+        },
+        "values": {
+          "type": "object",
+          "description": "NAME: value. A value is a literal, `{ from }`, `{ secret }` or `{ keep: true }`.",
+          "additionalProperties": { "$ref": "#/$defs/value" }
+        }
       },
       "additionalProperties": false
     }

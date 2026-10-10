@@ -130,6 +130,12 @@ function readBody(req: IncomingMessage): Promise<string> {
 }
 
 function send(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
+  if (status === 204) {
+    // No Content: a body (even `null`) is not allowed.
+    res.writeHead(204, headers);
+    res.end();
+    return;
+  }
   const text = JSON.stringify(body ?? null);
   res.writeHead(status, { ...headers, "content-type": "application/json", "content-length": Buffer.byteLength(text) });
   res.end(text);

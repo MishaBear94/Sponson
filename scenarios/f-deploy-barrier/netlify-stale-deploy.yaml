@@ -1,0 +1,38 @@
+name: "netlify: a deploy that started before the values were written is never the preview; the branch is rebuilt"
+plan: |
+  version: 1
+  providers:
+    netlify: { site: site_demo }
+  changes:
+    - id: env
+      adapter: netlify
+      op: env
+      values:
+        API_URL: https://preview.example.com
+      environments: [preview]
+    - id: callback
+      adapter: clerk
+      op: redirect_allow
+      url: { from: env.preview_url }
+      environments: [preview]
+seed:
+  netlify:
+    sites:
+      site_demo:
+        name: demo-site
+        account: acme
+        pushes: [{ sha: "0123456789abcdef0123456789abcdef01234567", branch: feat/x, pr: 42 }]
+chaos: { deploy: stale }
+steps:
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      notes: { env: { redeployed: true } }
+  - sim:
+      write_order: ["POST /netlify/accounts/acct_acme/env", "POST /netlify/sites/site_demo/builds", "POST /clerk/redirect_urls"]
+      state:
+        "netlify.sites.site_demo.deploys": { length: 2 }
+        "netlify.sites.site_demo.deploys.1.context": branch-deploy
+  - run: apply --json
+    expect: { exit: 0, writes: 0 }
