@@ -1,0 +1,75 @@
+# The LaunchDarkly adapter end to end through the CLI against the sim: a flag turned on for the preview URL
+# a Vercel line produces. Format: see the top of scenarios/runner.test.ts.
+name: "launchdarkly: flag on for the preview URL, apply twice without writes, drift refused until --reconcile, destroy"
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    launchdarkly: { project: demo, environment: preview }
+  changes:
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        FEATURE_SOURCE: launchdarkly
+      environments: [preview]
+    - id: flag
+      adapter: launchdarkly
+      op: flag_target
+      flag: new-checkout
+      context_kind: url
+      key: { from: env.preview_url }
+      variation: true
+      environments: [preview]
+steps:
+  - run: plan --json
+    expect:
+      exit: 0
+      plan_lines: { env: create, flag: pending }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { env: applied, flag: applied }
+      outputs: { flag: { variation_name: "on", variation_value: "true" } }
+  - sim:
+      write_order: ["POST /vercel", "PATCH /launchdarkly/flags/demo/new-checkout"]
+      state:
+        "launchdarkly.projects.demo.flags.new-checkout.environments.preview.targets": { length: 1 }
+        "launchdarkly.projects.demo.flags.new-checkout.environments.preview.targets.0": { contextKind: url, key: "https://prj_demo-01234567.vercel.app", variation: 0, createdBy: api }
+        "launchdarkly.projects.demo.flags.new-checkout.environments.production.targets": { length: 0 }
+  - run: apply --json
+    expect:
+      exit: 0
+      writes: 0
+      lines: { env: unchanged, flag: unchanged }
+  # A human serves the preview "off" in the LaunchDarkly console: plan reports it, apply refuses it until --reconcile.
+  - chaos:
+      drift: { "launchdarkly.target.new-checkout/preview/url/https://prj_demo-01234567.vercel.app": "off" }
+  - run: plan --json
+    expect:
+      exit: 1
+      drift: [{ kind: changed, line: flag }]
+      plan_lines: { flag: blocked }
+  - run: apply --json
+    expect:
+      exit: 1
+      status: failed
+      lines: { flag: blocked }
+      errors: { flag: "reconcile" }
+  - run: apply --reconcile --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { flag: applied }
+      outputs: { flag: { variation_name: "on" } }
+  - run: apply --destroy --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { flag: destroyed, env: destroyed }
+  - sim:
+      write_order: ["PATCH /launchdarkly", "PATCH /launchdarkly", "PATCH /launchdarkly"]
+      state:
+        "launchdarkly.projects.demo.flags.new-checkout.environments.preview.targets": { length: 0 }

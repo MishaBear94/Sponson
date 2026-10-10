@@ -88,6 +88,11 @@ pin new ones the same way — Dependabot keeps the pins current, including in `a
 
 ## Adding an adapter
 
+First check whether the provider needs one: the generic `http` adapter
+([docs/plan-format.md](docs/plan-format.md#the-generic-http-adapter)) already manages plain CRUD objects and list
+entries of any JSON REST API from the plan. Write a first-class adapter when the lifecycle needs more than a
+request template can say ([ADR 0017](docs/adr/0017-generic-http-adapter.md)).
+
 An adapter is an object implementing `ResourceAdapter` from `@sponson/core`: a name and a map of ops. Read `packages/core/src/types.ts` (the contract, with the marker rules next to `OpSpec.diff`) and the fake adapter in `packages/core/src/testing/fake.ts` (`@sponson/core/testing`), the smallest complete example.
 
 The quickest start is the scaffold:

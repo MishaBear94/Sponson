@@ -41,13 +41,20 @@ and registers them. The checklist is in CONTRIBUTING.md.
 
 [docs/coverage.md](/reference/coverage) measures which providers' per-environment state is covered today and ranks what to build next.
 
+Many rows need no adapter at all: the generic `http` adapter ([ADR 0017](/contributing/adr/0017-generic-http-adapter),
+[plan format](/reference/plan-format#the-generic-http-adapter)) manages plain CRUD objects and list entries of any JSON
+REST API from the plan. The items below are those whose lifecycle needs more (asynchronous provisioning, a deploy
+barrier, instruction-based updates, an output that exists only once), or that are common enough to deserve a
+tested, documented first-class op. Next for the `http` adapter itself: preconditions (ETag) for list writes,
+polling until ready, an OAuth2 client-credentials token, and pagination by page number or `Link` header.
+
 | Item | Notes | Label |
 |------|-------|-------|
-| **Feature flags: LaunchDarkly** — `flag_target`: turn a flag on for a preview (target the preview URL or a context key), off again on destroy ([#15](https://github.com/MishaBear94/Sponson/issues/15)) | The README's fourth console. Decide the resource key (project + environment + flag + target) | adapter, help wanted |
-| Feature flags: a second provider (Statsig, Unleash, PostHog or GrowthBook) | Reuse whatever shape LaunchDarkly settles on | adapter |
+| Feature flags: LaunchDarkly rules — serve a variation to contexts whose `url` matches (an `addRule` clause), beside the individual targets `launchdarkly.flag_target` manages ([#15](https://github.com/MishaBear94/Sponson/issues/15)) | Rules are ordered and have no client-chosen identity; needs a rule `ref` or description to find ours | adapter |
+| Feature flags: a second provider (Statsig, Unleash, PostHog or GrowthBook) | Reuse `launchdarkly.flag_target`'s shape: key `target:<flag>:<context kind>:<key>` under a provider block naming the project and environment; the hash covers the variation | adapter |
 | Identity callbacks beyond Clerk: Auth0 (allowed callback URLs on an application), Supabase Auth redirect URLs ([#16](https://github.com/MishaBear94/Sponson/issues/16)) | Small, close to `clerk.ts` | adapter, **good first issue** |
 | Database branches: Supabase branching | Close to `neon.ts`; output a connection string marked `sensitive` (PlanetScale shipped as `planetscale.branch` / `planetscale.password`) | adapter |
-| PlanetScale: deploy requests on merge, and PlanetScale Postgres (roles instead of passwords) | `packages/adapters/src/planetscale.ts`; a password-like credential is a [once-only output](/contributing/adr/0017-once-only-outputs) | adapter |
+| PlanetScale: deploy requests on merge, and PlanetScale Postgres (roles instead of passwords) | `packages/adapters/src/planetscale.ts`; a password-like credential is a [once-only output](/contributing/adr/0018-once-only-outputs) | adapter |
 | Deploy-target env vars: Netlify, Railway, Fly.io secrets | Close to `vercel.ts`'s `env` op, without the deploy barrier at first | adapter |
 
 ## 3. More secret sources

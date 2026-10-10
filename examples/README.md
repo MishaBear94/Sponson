@@ -13,9 +13,11 @@ The format is specified in [docs/plan-format.md](../docs/plan-format.md).
 | [nextjs-planetscale-preview.plan.yaml](nextjs-planetscale-preview.plan.yaml) | a PlanetScale branch and password per pull request; a once-only output |
 | [vercel-shared-and-branch-vars.plan.yaml](vercel-shared-and-branch-vars.plan.yaml) | project-wide, per-branch and production variables; `${ctx.*}` |
 | [clerk-preview-callbacks.plan.yaml](clerk-preview-callbacks.plan.yaml) | a value that exists only after the deploy; `partial` runs |
+| [launchdarkly-preview-flags.plan.yaml](launchdarkly-preview-flags.plan.yaml) | flags on for a preview: its URL or the scope as the target; a variation by name |
 | [explicit-deploy.plan.yaml](explicit-deploy.plan.yaml) | Sponson starting the deploy; `depends_on` |
 | [production-with-approval.plan.yaml](production-with-approval.plan.yaml) | preview and production in one file; approval |
 | [adopting-an-existing-project.plan.yaml](adopting-an-existing-project.plan.yaml) | what `sponson init` writes when it adopts; `{ keep: true }` |
+| [http-flags-webhooks-allowlists.plan.yaml](http-flags-webhooks-allowlists.plan.yaml) | APIs with no adapter of their own, through the generic `http` adapter (illustrative) |
 
 ## nextjs-neon-preview.plan.yaml
 
@@ -88,6 +90,15 @@ Exit code 0. Run `sponson apply` again after the deploy (the README's workflow d
 callback is registered. With `--wait`, one `apply` polls until the deploy finishes instead. If the deploy fails, the
 callback is `skipped` with `EXTERNAL_FAILED` and the branch and variables stay.
 
+## launchdarkly-preview-flags.plan.yaml
+
+Two individual targets on flags that already exist in the LaunchDarkly project `acme-web`, environment `preview`.
+`checkout` serves `new-checkout` = `true` to the context of kind `url` whose key is the preview URL, so like the Clerk
+callback above it waits for the deploy; `pricing` serves the variation named `Treatment` of `pricing-page` to the user
+key `pr-42` (the scope) and is applied at once. `apply --destroy` removes exactly these two targets; the flags, their
+rules and everyone else's targets stay. A target moved to another variation in the LaunchDarkly console is `changed`
+drift, refused until `--reconcile`.
+
 ## explicit-deploy.plan.yaml
 
 A `vercel.deploy` line starts the deployment after the variables are written (`depends_on: [env]`), and its
@@ -114,3 +125,15 @@ What `sponson init` appends to an existing plan when it finds resources no scope
 `{ keep: true }`, grouped by target and git branch; an existing Neon branch is adopted by its `name:`. Nothing live
 changes, and adopted resources are never destroyed. Run `sponson init --adopt <key>` to adopt a single resource; the
 keys are listed under `drift` (`kind: unmanaged`) in `sponson plan --json`.
+
+## http-flags-webhooks-allowlists.plan.yaml
+
+**Illustrative.** The generic `http` adapter managing what has no Sponson adapter: a feature gate per pull request
+(`http.resource`, located by name), a test-mode webhook endpoint (form-encoded, with an idempotency key and a
+sensitive output), the preview URL on an application's allowed web origins (`http.list_item`, an item of a JSON
+array), and a callback on a comma-separated redirect allow-list (`shape: delimited`). Each API is a block under
+`providers.http` naming its credential's environment variable. The endpoints follow the providers' published API
+references as we understand them; plan against the real API (`sponson plan` only reads) before the first apply.
+`apply --destroy` removes the gate, the endpoint and the two list items, and leaves every other origin and
+redirect as it was. Reference: [`http.resource`](../docs/plan-format.md#httpresource),
+[`http.list_item`](../docs/plan-format.md#httplist_item).

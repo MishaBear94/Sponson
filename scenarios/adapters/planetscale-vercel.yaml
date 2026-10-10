@@ -1,5 +1,5 @@
 # A PlanetScale password's connection string into a Vercel preview variable, by reference. PlanetScale shows the
-# plaintext only when the password is created (PS8), so the output is `once` (docs/adr/0017-once-only-outputs.md):
+# plaintext only when the password is created (PS8), so the output is `once` (docs/adr/0018-once-only-outputs.md):
 # it reaches `env` in the run that creates the password; later runs keep what `env` holds, write nothing, and never
 # re-create the password to get the value back. Format: see the top of scenarios/runner.test.ts.
 name: "planetscale → vercel: DATABASE_URL by reference; re-apply writes nothing; a lost variable is refused, never rotated"

@@ -28,7 +28,7 @@ export interface Inspection {
  * Secrets were resolved up front, so diffs compare real values (a rotated secret shows as an update).
  */
 export async function inspectLine(rc: RunContext, change: Change, op: OpSpec, params: Record<string, unknown>, outputs: Map<string, LineOutputs>): Promise<Inspection> {
-  const provider = rc.provider(change.adapter);
+  const provider = rc.provider(change);
   const resolved = resolveParams(params, outputs, rc.secrets.values);
   const live = await op.read(rc.adapterContext(change.adapter, provider), resolved.params);
   if (live) rc.guardOutputs(live.outputs, op.outputs);

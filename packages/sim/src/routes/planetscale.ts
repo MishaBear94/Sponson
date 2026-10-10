@@ -84,9 +84,9 @@ export const planetscaleSim: ProviderSim<PlanetscaleState, PlanetscaleSeed> = {
   env: { token: "PLANETSCALE_SERVICE_TOKEN", url: "PLANETSCALE_API_URL", testToken: "tok_planetscale", more: { PLANETSCALE_SERVICE_TOKEN_ID: "tokid_planetscale" } },
   defaultSeed: { organizations: { acme: { app: [{ name: "main", production: true }] } } },
 
-  /** PS1: `<id>:<token>`, no `Bearer`. */
-  authorizes(header) {
-    return /^[^\s:]+:\S+$/.test(header);
+  /** PS1: `Authorization: <id>:<token>`, no `Bearer`. */
+  authorized(headers) {
+    return /^[^\s:]+:\S+$/.test(headers.authorization ?? "");
   },
 
   reset(core, seed) {

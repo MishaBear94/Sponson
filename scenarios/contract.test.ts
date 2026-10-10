@@ -8,14 +8,20 @@
  *   VERCEL_TOKEN=... SPONSON_LIVE_VERCEL_PROJECT=prj_... [SPONSON_LIVE_VERCEL_TEAM=team_...] \
  *   NEON_API_KEY=... SPONSON_LIVE_NEON_PROJECT=... \
  *   CLERK_SECRET_KEY=fake_ts_... \
+ *   [LAUNCHDARKLY_ACCESS_TOKEN=api-... SPONSON_LIVE_LAUNCHDARKLY_PROJECT=... \
+ *    SPONSON_LIVE_LAUNCHDARKLY_ENVIRONMENT=... SPONSON_LIVE_LAUNCHDARKLY_FLAG=<a boolean flag>] \
  *   pnpm test:live
+ *
+ * The LaunchDarkly assumptions run live only when its four variables are set (it is optional, so a live run of
+ * the original three providers needs no LaunchDarkly account); they add and remove one individual target,
+ * `sponson-contract-<random>`, on the given flag and environment. Use a test environment without required approvals.
  *
  * Use throwaway projects: the suite creates a Neon branch, preview env vars on a
  * unique git branch name, and a Clerk redirect URL, and destroys them in `afterAll`
  * even when an assertion fails. It never touches the production target.
  *
  * Each `assumption <id>:` test pins the API assumption with that id, listed at the top of the sim's provider
- * file (packages/sim/src/routes/{vercel,neon,clerk,planetscale}.ts). If one fails live, fix the sim first, then the
+ * file (packages/sim/src/routes/{vercel,neon,clerk,launchdarkly,planetscale}.ts). If one fails live, fix the sim first, then the
  * adapter.
  *
  * PlanetScale has its own block, live only when its credentials are set too (it is skipped in a live run without
@@ -29,7 +35,7 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CLERK_DEFAULT_API_URL, PLANETSCALE_DEFAULT_API_URL, clerkAdapter, neonAdapter, planetscaleAdapter, vercelAdapter } from "@sponson/adapters";
+import { CLERK_DEFAULT_API_URL, LAUNCHDARKLY_DEFAULT_API_URL, PLANETSCALE_DEFAULT_API_URL, clerkAdapter, launchdarklyAdapter, neonAdapter, planetscaleAdapter, vercelAdapter } from "@sponson/adapters";
 import type { AdapterContext, Ctx } from "@sponson/core";
 import { startSim, type SimHandle } from "@sponson/sim";
 import { cliEnv, runCli, workspace, type CliRun, type Workspace } from "./support.js";
@@ -37,6 +43,12 @@ import { cliEnv, runCli, workspace, type CliRun, type Workspace } from "./suppor
 const LIVE = process.env.SPONSON_LIVE === "1";
 const MISSING = ["VERCEL_TOKEN", "SPONSON_LIVE_VERCEL_PROJECT", "NEON_API_KEY", "SPONSON_LIVE_NEON_PROJECT", "CLERK_SECRET_KEY"].filter((k) => !process.env[k]);
 if (LIVE && MISSING.length) throw new Error(`SPONSON_LIVE=1 but missing: ${MISSING.join(", ")}`);
+const LD_VARS = ["LAUNCHDARKLY_ACCESS_TOKEN", "SPONSON_LIVE_LAUNCHDARKLY_PROJECT", "SPONSON_LIVE_LAUNCHDARKLY_ENVIRONMENT", "SPONSON_LIVE_LAUNCHDARKLY_FLAG"];
+/** LaunchDarkly is checked against the sim always, and live only when all of its variables are set. */
+const LD_RUNS = !LIVE || LD_VARS.every((k) => process.env[k]);
+const ld = LIVE
+  ? { project: process.env.SPONSON_LIVE_LAUNCHDARKLY_PROJECT ?? "", environment: process.env.SPONSON_LIVE_LAUNCHDARKLY_ENVIRONMENT ?? "", flag: process.env.SPONSON_LIVE_LAUNCHDARKLY_FLAG ?? "" }
+  : { project: "demo", environment: "preview", flag: "new-checkout" };
 
 const tag = randomBytes(4).toString("hex");
 const pr = 900000 + (parseInt(tag, 16) % 99999); // unique scope per run, never collides with a real PR
@@ -99,9 +111,25 @@ function cli(args: string[]): Promise<CliRun> {
   return runCli([...args, "--json", "--receipts", "local", "--receipts-dir", join(ws.dir, "r"), "--pr", String(pr), "--branch", branch, "--sha", sha], { env, cwd: ws.dir });
 }
 
-function actx(adapter: "vercel" | "neon" | "clerk"): AdapterContext {
+function actx(adapter: "vercel" | "neon" | "clerk" | "launchdarkly"): AdapterContext {
   const ctx: Ctx = { env: "preview", git: { branch, sha, short_sha: sha.slice(0, 7) }, pr: { number: pr }, scope: `pr-${pr}` };
-  return { ctx, provider: adapter === "clerk" ? {} : providers[adapter], env, log: () => {}, intend: async () => {}, redact: (t) => t };
+  const provider = adapter === "clerk" ? {} : adapter === "launchdarkly" ? { project: ld.project, environment: ld.environment } : providers[adapter];
+  return { ctx, provider, env, log: () => {}, intend: async () => {}, redact: (t) => t };
+}
+
+/** LaunchDarkly's REST API, called directly to pin what the adapter relies on (LD1: the token without `Bearer`). */
+async function ldFetch(method: "GET" | "PATCH", path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
+  const headers: Record<string, string> = { authorization: env.LAUNCHDARKLY_ACCESS_TOKEN ?? "" };
+  if (body !== undefined) headers["content-type"] = "application/json; domain-model=launchdarkly.semanticpatch";
+  const res = await fetch(`${env.LAUNCHDARKLY_API_URL ?? LAUNCHDARKLY_DEFAULT_API_URL}${path}`, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+  return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+}
+
+/** The variation index serving `key` (kind user) in the environment, from either target list (LD3); -1 when none. */
+function servedIndex(flag: Record<string, unknown>, key: string): number {
+  const e = (flag.environments as Record<string, Record<string, unknown>>)[ld.environment]!;
+  const all = [...((e.targets as unknown[]) ?? []), ...((e.contextTargets as unknown[]) ?? [])] as Array<{ contextKind?: string; values: string[]; variation: number }>;
+  return all.find((t) => (t.contextKind ?? "user") === "user" && t.values.includes(key))?.variation ?? -1;
 }
 
 describe(`contract (${LIVE ? "@live" : "sim"})`, () => {
@@ -151,6 +179,39 @@ describe(`contract (${LIVE ? "@live" : "sim"})`, () => {
     expect(Array.isArray(body.data)).toBe(true);
     expect(typeof body.total_count).toBe("number");
     expect(body.total_count).toBeGreaterThanOrEqual(1);
+  });
+
+  it.skipIf(!LD_RUNS)("assumption LD5: adding a target its variation already serves succeeds and changes nothing; LD7: visible at once", async () => {
+    const key = `sponson-contract-${tag}`;
+    const path = `/flags/${encodeURIComponent(ld.project)}/${encodeURIComponent(ld.flag)}`;
+    const flag = await ldFetch("GET", `${path}?env=${encodeURIComponent(ld.environment)}`);
+    expect(flag.status).toBe(200);
+    const variationId = (flag.body.variations as Array<{ _id: string }>)[0]!._id;
+    const add = { environmentKey: ld.environment, comment: "sponson contract suite", instructions: [{ kind: "addTargets", contextKind: "user", values: [key], variationId }] };
+    try {
+      expect((await ldFetch("PATCH", path, add)).status).toBe(200);
+      const again = await ldFetch("PATCH", path, add);
+      expect(again.status).toBe(200);
+      expect(servedIndex(again.body, key)).toBe(0);
+      expect(servedIndex((await ldFetch("GET", `${path}?env=${encodeURIComponent(ld.environment)}`)).body, key)).toBe(0);
+    } finally {
+      const remove = { ...add, instructions: [{ ...add.instructions[0], kind: "removeTargets" }] };
+      expect((await ldFetch("PATCH", path, remove)).status).toBe(200);
+    }
+  });
+
+  it.skipIf(!LD_RUNS)("assumption LD7: a flag target applied by the adapter reads back unchanged, and is gone after destroy", async () => {
+    const op = launchdarklyAdapter.ops.flag_target!;
+    const params = op.defaults!({ flag: ld.flag, key: `sponson-contract-${tag}-adapter` }, actx("launchdarkly").ctx);
+    const applied = await op.apply(actx("launchdarkly"), params, null);
+    try {
+      const live = await op.read(actx("launchdarkly"), params);
+      expect(live?.resources).toEqual(applied.resources);
+      expect(op.diff(live, params)[0]!.kind).toBe("unchanged");
+    } finally {
+      await op.destroy(actx("launchdarkly"), applied.resources);
+    }
+    expect(await op.read(actx("launchdarkly"), params)).toBeNull();
   });
 
   it("second apply writes nothing", async () => {

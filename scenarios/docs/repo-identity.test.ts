@@ -15,7 +15,7 @@ const canonical = /github\.com\/([^/]+\/[^/.]+)/.exec(root.repository.url)?.[1] 
 const repoName = canonical.split("/")[1] ?? "";
 
 /** Every text file a contributor would commit (no git needed: the scaffold's test runs this in a plain copy). */
-const SKIP = new Set(["node_modules", "dist", "coverage", ".git", ".sponson", "brainstorm"]);
+const SKIP = new Set(["node_modules", "dist", "coverage", ".git", ".sponson", "brainstorm", ".claude"]);
 function walk(dir: string, rel = ""): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
     if (SKIP.has(e.name)) return [];

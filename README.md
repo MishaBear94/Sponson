@@ -68,7 +68,7 @@ One release, one plan. Three commands.
 
 | Command | What it does | Writes anything? |
 |---|---|---|
-| `sponson init` | Detects your stack from the repository's files (Vercel, Neon, Clerk, the framework and ORM) and writes a plan for it, with the project ids it can find. Run again to adopt resources the plan does not know about. | the plan file only |
+| `sponson init` | Detects your stack from the repository's files (Vercel, Neon, Clerk, LaunchDarkly, the framework and ORM) and writes a plan for it, with the project ids it can find. Run again to adopt resources the plan does not know about. | the plan file only |
 | `sponson plan` | Reads live state, prints the diff and any drift. | no |
 | `sponson apply` | Runs the plan in dependency order. Rolls back what this run created if a line fails. Writes a receipt. | yes |
 
@@ -146,8 +146,9 @@ sponson apply         # creates the branch, injects the variable, waits for the 
 database host such as `*.neon.tech`. It writes a line only for what it found (a Neon branch, or a PlanetScale branch
 and password, the Vercel preview variable that references it under the name your code reads, a Clerk redirect for
 the preview URL), fills in the project ids it can find, and marks each one it cannot with a `TODO` comment saying
-where to look (`vercel link`, `neonctl projects list`). Services Sponson does not manage yet (Supabase, Auth0,
-Netlify, Cloudflare, LaunchDarkly, PostHog, Stripe, Sentry, …) are listed as "not supported yet" with a link to the
+where to look (`vercel link`, `neonctl projects list`). LaunchDarkly gets a commented example line to fill in with a
+flag key and uncomment. Services Sponson does not manage yet (Supabase, Auth0, Netlify, Cloudflare, PostHog, Stripe,
+Sentry, …) are listed as "not supported yet" with a link to the
 [roadmap](ROADMAP.md), never silently dropped. With nothing detected it writes the Vercel + Neon template.
 
 ```
@@ -248,12 +249,12 @@ This repository was built and accepted entirely against a local fake cloud, beca
 
 What the fake cannot prove is that the real APIs behave as assumed. The assumptions are numbered at the top of each provider's routes file in `packages/sim/src/routes/`, each marked verified or unverified.
 
-- **Checked against the published specifications** (Vercel's and Neon's OpenAPI documents, Clerk's Backend API OpenAPI and, for one list envelope, Clerk's own SDKs): every HTTP call the adapters make (path, version, query parameters, request body, response fields read, statuses handled) and every assumption the specifications can settle. The check found and fixed real mismatches, among them Vercel's deployment `gitSource` missing the required repository id and Neon connection strings hard-coded to a new project's database and role names. [docs/api-verification.md](docs/api-verification.md) has the per-call tables, sources and dates.
-- **Still needs a live run**: what no specification states, such as how fast an env write reaches a deployment, which Neon requests answer `423` while a branch is created, whether a Neon branch being deleted still lists, and which status Clerk gives a duplicate redirect URL. `scenarios/contract.test.ts` pins the critical ones: it runs against the sim by default and against the real APIs with `pnpm test:live` (see the file header for the required variables). It has not yet been run against real accounts.
+- **Checked against the published specifications** (Vercel's and Neon's OpenAPI documents, Clerk's Backend API OpenAPI and, for one list envelope, Clerk's own SDKs; LaunchDarkly's REST API reference): every HTTP call the adapters make (path, version, query parameters, request body, response fields read, statuses handled) and every assumption the specifications can settle. The check found and fixed real mismatches, among them Vercel's deployment `gitSource` missing the required repository id and Neon connection strings hard-coded to a new project's database and role names. [docs/api-verification.md](docs/api-verification.md) has the per-call tables, sources and dates.
+- **Still needs a live run**: what no specification states, such as how fast an env write reaches a deployment, which Neon requests answer `423` while a branch is created, whether a Neon branch being deleted still lists, which status Clerk gives a duplicate redirect URL, and whether LaunchDarkly accepts re-adding a target its variation already serves. `scenarios/contract.test.ts` pins the critical ones: it runs against the sim by default and against the real APIs with `pnpm test:live` (see the file header for the required variables). It has not yet been run against real accounts.
 
 ## Status
 
-Format, engine, the [built-in adapters](docs/plan-format.md#built-in-ops) and [secret schemes](docs/plan-format.md#secret-schemes), local and git-branch receipt stores, CLI, MCP server, GitHub Action, [templates](integrations/README.md) for GitLab CI/CD, CircleCI and Bitbucket Pipelines (not yet run on those hosts). Not yet: feature-flag targeting, social-login callbacks beyond Clerk, a hosted approval inbox, garbage collection of scopes whose PR closed without the action running.
+Format, engine, the [built-in adapters](docs/plan-format.md#built-in-ops) and [secret schemes](docs/plan-format.md#secret-schemes), local and git-branch receipt stores, CLI, MCP server, GitHub Action, [templates](integrations/README.md) for GitLab CI/CD, CircleCI and Bitbucket Pipelines (not yet run on those hosts). Not yet: feature-flag rules (LaunchDarkly individual targets are supported) and flag providers other than LaunchDarkly, social-login callbacks beyond Clerk, a hosted approval inbox, garbage collection of scopes whose PR closed without the action running.
 
 ## Documentation
 

@@ -69,8 +69,9 @@ sponson apply         # creates the branch, injects the variable, waits for the 
 database host such as `*.neon.tech`. It writes a line only for what it found (a Neon branch, or a PlanetScale branch
 and password, the Vercel preview variable that references it under the name your code reads, a Clerk redirect for
 the preview URL), fills in the project ids it can find, and marks each one it cannot with a `TODO` comment saying
-where to look (`vercel link`, `neonctl projects list`). Services Sponson does not manage yet (Supabase, Auth0,
-Netlify, Cloudflare, LaunchDarkly, PostHog, Stripe, Sentry, …) are listed as "not supported yet" with a link to the
+where to look (`vercel link`, `neonctl projects list`). LaunchDarkly gets a commented example line to fill in with a
+flag key and uncomment. Services Sponson does not manage yet (Supabase, Auth0, Netlify, Cloudflare, PostHog, Stripe,
+Sentry, …) are listed as "not supported yet" with a link to the
 [roadmap](/contributing/roadmap), never silently dropped. With nothing detected it writes the Vercel + Neon template.
 
 ```

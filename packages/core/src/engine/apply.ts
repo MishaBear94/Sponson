@@ -376,7 +376,7 @@ class ApplyRun {
   private async rollback(): Promise<void> {
     await this.resolveIntents();
     for (const { line: c, keys } of [...this.created].reverse()) {
-      const provider = this.rc.provider(c.adapter);
+      const provider = this.rc.provider(c);
       const entries = [...keys].map((k) => this.rc.ledger.get(c.adapter, provider, k)).filter((e): e is LedgerEntry => !!e);
       const receiptLine = this.receipt.lines[c.id]!;
       try {
@@ -400,7 +400,7 @@ class ApplyRun {
   private async resolveIntents(): Promise<void> {
     for (const [lineId, keys] of this.intents) {
       const c = this.prepared.ordered.find((x) => x.id === lineId)!;
-      const provider = this.rc.provider(c.adapter);
+      const provider = this.rc.provider(c);
       const unresolved = [...keys].filter((k) => this.rc.ledger.get(c.adapter, provider, k)?.createdBy === "intent");
       if (unresolved.length === 0) continue;
       try {

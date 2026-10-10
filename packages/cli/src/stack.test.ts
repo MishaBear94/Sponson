@@ -141,6 +141,31 @@ describe("detectStack", () => {
     expect(text).toContain('SPONSON_SCOPE: "${ctx.scope}"');
   });
 
+  it("LaunchDarkly with Vercel: a commented flag line on the preview URL that, filled in and uncommented, validates", async () => {
+    const d = await detectStack(repo({ "package.json": pkg({ next: "15", "@launchdarkly/node-server-sdk": "9" }), ".vercel/project.json": { projectId: "prj_web" }, ".env.example": "LAUNCHDARKLY_SDK_KEY=\n" }));
+    expect(ids(d)).toEqual(["vercel", "launchdarkly", "next"]);
+    expect(d.found.find((f) => f.id === "launchdarkly")!.evidence).toEqual(["package.json: @launchdarkly/node-server-sdk", "LAUNCHDARKLY_SDK_KEY in .env.example"]);
+    expect(unsupportedIds(d)).toEqual([]);
+    expect(credentialsFor(d)).toEqual(["VERCEL_TOKEN"]); // the flag line is a comment until the user fills it in
+    const text = expectValidPlan(d, ["env"]);
+    expect(text).toContain("#   key: { from: env.preview_url }");
+    expect(text).not.toContain("Not supported yet");
+    const filled = uncommentFlagLine(text);
+    expect(parsePlan(filled).plan.changes.map((c) => [c.id, c.adapter, c.op])).toEqual([["env", "vercel", "env"], ["flag", "launchdarkly", "flag_target"]]);
+    expect(validate(parseYaml(filled)), JSON.stringify(validate.errors)).toBe(true);
+  });
+
+  it("LaunchDarkly without Vercel (the template assumes it); with a deploy line, the key reads the deploy's URL", async () => {
+    const alone = composeStarter(await detectStack(repo({ "package.json": pkg({ "launchdarkly-js-client-sdk": "3" }) }))).text;
+    expect(alone).toContain("#   key: { from: env.preview_url }");
+    const deploy = await detectStack(repo({ "package.json": pkg({ "@launchdarkly/react-client-sdk": "3" }), "vercel.json": { git: { deploymentEnabled: false } } }));
+    expect(expectValidPlan(deploy, ["env", "deploy"])).toContain("#   key: { from: deploy.preview_url }");
+    const neonOnly = await detectStack(repo({ "package.json": pkg({ "@neondatabase/serverless": "1", "@launchdarkly/node-server-sdk": "9" }) }));
+    const text = expectValidPlan(neonOnly, ["db"]);
+    expect(text).toContain("key: defaults to the scope (pr-42)");
+    expect(validate(parseYaml(uncommentFlagLine(text))), JSON.stringify(validate.errors)).toBe(true);
+  });
+
   it("Clerk alone: the template, with the callback line", async () => {
     const d = await detectStack(repo({ ".env.example": "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=\nCLERK_SECRET_KEY=\n" }));
     expect(ids(d)).toEqual(["clerk"]);
@@ -163,7 +188,7 @@ describe("detectStack", () => {
         "railway.json": "{}",
       }),
     );
-    expect(unsupportedIds(d)).toEqual(["turso", "auth0", "netlify", "cloudflare", "railway", "fly", "firebase", "launchdarkly", "posthog", "stripe", "sentry"]);
+    expect(unsupportedIds(d)).toEqual(["turso", "auth0", "netlify", "cloudflare", "railway", "fly", "firebase", "posthog", "stripe", "sentry"]);
     for (const u of d.unsupported) expect(u.pointer, u.id).toMatch(/ROADMAP\.md|issues/);
     const text = expectValidPlan(d, ["db", "env"]);
     for (const u of d.unsupported) expect(text).toContain(`# Not supported yet, so no line below manages it: ${u.name}`);
@@ -218,6 +243,16 @@ describe("detectStack", () => {
     expect(d.vercelAutoDeployOff).toBe(false);
   });
 });
+
+/** The starter's commented LaunchDarkly example, as a user would fill it in: a provider block and the line uncommented. */
+function uncommentFlagLine(text: string): string {
+  const lines = text.split("\n");
+  const start = lines.indexOf("  # - id: flag");
+  expect(start).toBeGreaterThan(0);
+  for (let i = start; lines[i]!.startsWith("  # "); i++) lines[i] = `  ${lines[i]!.slice(4)}`.replace("<flag key>", "new-checkout");
+  const filled = lines.join("\n");
+  return filled.includes("providers:\n") ? filled.replace("providers:\n", "providers:\n  launchdarkly: { project: web, environment: preview }\n") : filled.replace("changes:", "providers:\n  launchdarkly: { project: web, environment: preview }\nchanges:");
+}
 
 describe("scanEnvFile", () => {
   it("returns names, and for a database URL only the provider its host belongs to", () => {
