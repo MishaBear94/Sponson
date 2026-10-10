@@ -252,17 +252,33 @@ changes:
 });
 
 describe("init", () => {
-  it("--json in an empty repo: created, path, added, warnings", async () => {
+  it("--json in an empty repo: created, path, detected, added, warnings", async () => {
     const w = await world(null);
     const r = await w.exec(["init", "--json"], false);
     expect(r.code).toBe(0);
-    expect(r.json).toEqual({ ok: true, command: "init", created: true, path: join(w.cwd, "release.plan.yaml"), added: [], warnings: [] });
+    expect(r.json).toEqual({
+      ok: true,
+      command: "init",
+      created: true,
+      path: join(w.cwd, "release.plan.yaml"),
+      detected: {
+        found: [],
+        unsupported: [],
+        todo: [
+          { path: "providers.vercel.project", placeholder: "prj_xxx", hint: expect.stringContaining("vercel link") },
+          { path: "providers.neon.project", placeholder: "proj_xxx", hint: expect.stringContaining("neonctl projects list") },
+        ],
+        assumed: true,
+      },
+      added: [],
+      warnings: [],
+    });
   });
 
-  it("--json on an existing plan with nothing to adopt", async () => {
+  it("--json on an existing plan with nothing to adopt: detected is null", async () => {
     const w = await world();
     const r = await w.exec(["init", "--json"]);
-    expect(r.json).toMatchObject({ ok: true, command: "init", created: false, added: [] });
+    expect(r.json).toMatchObject({ ok: true, command: "init", created: false, detected: null, added: [] });
   });
 
   it("a broken plan is an error envelope with the plan's code", async () => {

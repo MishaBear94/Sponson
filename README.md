@@ -68,7 +68,7 @@ One release, one plan. Three commands.
 
 | Command | What it does | Writes anything? |
 |---|---|---|
-| `sponson init` | Detects your Vercel and Neon projects and writes a starter plan. Run again to adopt resources the plan does not know about. | the plan file only |
+| `sponson init` | Detects your stack from the repository's files (Vercel, Neon, Clerk, the framework and ORM) and writes a plan for it, with the project ids it can find. Run again to adopt resources the plan does not know about. | the plan file only |
 | `sponson plan` | Reads live state, prints the diff and any drift. | no |
 | `sponson apply` | Runs the plan in dependency order. Rolls back what this run created if a line fails. Writes a receipt. | yes |
 
@@ -134,10 +134,32 @@ alias sponson="node ~/sponson/packages/cli/dist/bin.js"
 Then, in your app's repository:
 
 ```bash
-sponson init          # writes release.plan.yaml, adds .sponson/ to .gitignore
+sponson init          # detects the stack, writes release.plan.yaml, adds .sponson/ to .gitignore
 sponson plan          # read-only diff
 sponson apply         # creates the branch, injects the variable, waits for the deploy
 ```
+
+`sponson init` reads the repository's files only (no network, no credentials): `.vercel/project.json` and
+`vercel.json`, `package.json` dependencies, Prisma and Drizzle configs, `.neon`, and the variable *names* in
+`.env.example`, `.env.local` and the other `.env*` files. It never reads a value out of them, except to recognise a
+database host such as `*.neon.tech`. It writes a line only for what it found (a Neon branch, the Vercel preview
+variable that references it under the name your code reads, a Clerk redirect for the preview URL), fills in the
+project ids it can find, and marks each one it cannot with a `TODO` comment saying where to look
+(`vercel link`, `neonctl projects list`). Services Sponson does not manage yet (Supabase, PlanetScale, Auth0,
+Netlify, Cloudflare, LaunchDarkly, PostHog, Stripe, Sentry, …) are listed as "not supported yet" with a link to the
+[roadmap](ROADMAP.md), never silently dropped. With nothing detected it writes the Vercel + Neon template.
+
+```
+$ sponson init
+Wrote release.plan.yaml
+Detected: Vercel (.vercel/project.json), Neon (package.json: @neondatabase/serverless), Clerk (package.json: @clerk/nextjs), Next.js (package.json: next), Prisma (package.json: @prisma/client)
+To fill in:
+  providers.neon.project (now "proj_xxx"): run `neonctl projects list`, or https://console.neon.tech → your project → Settings → General → Project ID
+Next: set VERCEL_TOKEN, NEON_API_KEY, CLERK_SECRET_KEY in your environment, then run `sponson plan`
+```
+
+`sponson init --json` reports the same under `detected`: `found` and `unsupported` (each with its `evidence`),
+`todo` (each placeholder's `path` and `hint`) and `assumed` (true when it wrote the template).
 
 Which providers are covered today, and what is planned, is measured in [docs/coverage.md](docs/coverage.md).
 
