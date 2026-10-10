@@ -15,6 +15,7 @@ The format is specified in [docs/plan-format.md](../docs/plan-format.md).
 | [explicit-deploy.plan.yaml](explicit-deploy.plan.yaml) | Sponson starting the deploy; `depends_on` |
 | [production-with-approval.plan.yaml](production-with-approval.plan.yaml) | preview and production in one file; approval |
 | [adopting-an-existing-project.plan.yaml](adopting-an-existing-project.plan.yaml) | what `sponson init` writes when it adopts; `{ keep: true }` |
+| [netlify-neon-preview.plan.yaml](netlify-neon-preview.plan.yaml) | Netlify values per deploy context; the Deploy Preview URL |
 
 ## nextjs-neon-preview.plan.yaml
 
@@ -99,3 +100,15 @@ What `sponson init` appends to an existing plan when it finds resources no scope
 `{ keep: true }`, grouped by target and git branch; an existing Neon branch is adopted by its `name:`. Nothing live
 changes, and adopted resources are never destroyed. Run `sponson init --adopt <key>` to adopt a single resource; the
 keys are listed under `drift` (`kind: unmanaged`) in `sponson plan --json`.
+
+## netlify-neon-preview.plan.yaml
+
+The Neon branch per pull request on a Netlify site. Netlify stores one variable per name with one value per deploy
+context; a `netlify.env` line owns one context's value of each variable it declares, so values a human set for other
+contexts are never read, changed or deleted. In previews the line writes the value for the pull request's git branch
+(`context: branch`), which Netlify uses for that branch's Deploy Previews; `context: deploy-preview` would instead
+be one value shared by every pull request.
+
+`callback` reads `env.deploy_preview_url`, the pull request's `https://deploy-preview-<n>--<site>.netlify.app`. Like
+Vercel's `preview_url`, it exists only once the Deploy Preview of this commit is ready, and only a deploy that
+started after the variables were written counts: a build reads the values set when it started.

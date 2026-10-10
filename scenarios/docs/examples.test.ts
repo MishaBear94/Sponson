@@ -37,6 +37,7 @@ function seedFor(file: string, plan: Plan): Partial<SimSeed> {
   const seed: Partial<SimSeed> = {};
   if (plan.providers.vercel) seed.vercel = { projects: { [project(plan, "vercel")]: { envs: [] } } };
   if (plan.providers.neon) seed.neon = { projects: { [project(plan, "neon")]: { branches: [{ name: "main" }] } } };
+  if (plan.providers.netlify) seed.netlify = { sites: { [String(plan.providers.netlify.site)]: { name: "acme-web", account: "acme" } } };
   return { ...seed, ...(SEEDS[file]?.(plan) ?? {}) };
 }
 
