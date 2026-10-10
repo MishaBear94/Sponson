@@ -362,7 +362,8 @@ describe("locks", () => {
       get: (t, k) => (k === "renewLock" ? () => new Promise<void>(() => {}) : typeof t[k as keyof typeof t] === "function" ? (t[k as keyof typeof t] as (...a: unknown[]) => unknown).bind(t) : t[k as keyof typeof t]),
     });
     // Every line is applied well before the holder's deadline; the deadline passes only before the final write.
-    const { receipt } = await applyRun(opts(PLAN, { store: stalled, lockTtlMs: 100, onLineDone: (id) => (id === "c" ? new Promise((r) => setTimeout(r, 120)) : undefined) }));
+    // The TTL is generous so that holds on a slow, instrumented CI runner too: three lines take far less than 800ms.
+    const { receipt } = await applyRun(opts(PLAN, { store: stalled, lockTtlMs: 1000, onLineDone: (id) => (id === "c" ? new Promise((r) => setTimeout(r, 1100)) : undefined) }));
     expect(receipt.status).toBe("complete");
     const stored = await store.read("preview", "pr-42");
     expect(stored?.runId).toBe(receipt.runId);
