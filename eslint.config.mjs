@@ -20,7 +20,9 @@ export default tseslint.config(
           // checked with the root test config, exactly as `pnpm typecheck` does.
           allowDefaultProject: ["packages/*/src/*.test.ts", "packages/*/src/*/*.test.ts", "packages/adapters/src/testing.ts"],
           defaultProject: "tsconfig.test.json",
-          maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 32,
+          // One unit-test file per adapter and per sim provider, and the count grows with every adapter; they share
+          // tsconfig.test.json, so a generous cap costs one program, not one per file.
+          maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 256,
         },
         tsconfigRootDir: import.meta.dirname,
       },

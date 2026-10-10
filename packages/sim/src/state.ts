@@ -12,12 +12,13 @@ import { netlifySim } from "./routes/netlify.js";
 import { planetscaleSim } from "./routes/planetscale.js";
 import { launchdarklySim } from "./routes/launchdarkly.js";
 import { supabaseSim } from "./routes/supabase.js";
+import { cloudflareSim } from "./routes/cloudflare.js";
 
 /**
  * Every simulated provider, by URL prefix (`/<name>/…`), drift prefix (`<name>.…`), seed key and state key.
  * Order matters only for determinism: resets seed providers (and so allocate ids) in this order.
  */
-export const PROVIDERS = { vercel: vercelSim, neon: neonSim, clerk: clerkSim, planetscale: planetscaleSim, launchdarkly: launchdarklySim, rest: restSim, supabase: supabaseSim, netlify: netlifySim };
+export const PROVIDERS = { vercel: vercelSim, neon: neonSim, clerk: clerkSim, planetscale: planetscaleSim, launchdarkly: launchdarklySim, rest: restSim, supabase: supabaseSim, netlify: netlifySim, cloudflare: cloudflareSim };
 
 type Providers = typeof PROVIDERS;
 /** A simulated provider's name: its URL prefix, seed key and state key. */

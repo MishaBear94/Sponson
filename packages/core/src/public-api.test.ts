@@ -44,6 +44,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "LAUNCHDARKLY_DEFAULT_API_URL", "launchdarklyAdapter",
     "RECIPES_DIR", "Recipe", "RecipeAssumption", "RecipeOp", "RecipeParam", "RecipeParamType", "RecipeSimHints", "expandRecipe", "loadRecipe", "loadRecipes", "recipeNames", "resolveRecipeApi",
     "SUPABASE_DEFAULT_API_URL", "supabaseAdapter",
+    "CLOUDFLARE_DEFAULT_API_URL", "cloudflareAdapter",
   ],
   "@sponson/sim": [
     "CHAOS_KEYS", "ChaosAction", "ChaosConfig", "ChaosRequest", "ClerkRedirect", "ClerkSeed", "ClerkState",
@@ -58,6 +59,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "LAUNCHDARKLY_SEMANTIC_PATCH", "LaunchdarklyFlag", "LaunchdarklyFlagEnv", "LaunchdarklyProject", "LaunchdarklySeed", "LaunchdarklyState", "LaunchdarklyTarget", "LaunchdarklyVariation", "launchdarklySim",
     "SupabaseBranch", "SupabaseProject", "SupabaseAuth", "SupabaseState", "SupabaseSeed", "supabaseSim", "SUPABASE_DEMO_PROJECT", "newSupabaseBranch", "supabaseConnectionString", "supabaseAllowList",
     "NetlifyEnvValue", "NetlifyEnvVar", "NetlifyDeploy", "NetlifyPush", "NetlifySite", "NetlifyState", "NetlifySeed", "netlifySim",
+    "CloudflarePagesEnv", "CloudflareEnvVar", "CloudflarePagesProject", "CloudflareState", "CloudflareSeedVars", "CloudflareSeed", "cloudflareSim",
   ],
   "sponson": [
     "CtxFacts", "CtxOverrides", "CtxSource", "DEFAULT_CTX_SOURCES", "RunIO", "SponsonPlugin", "bitbucketPipelinesSource",

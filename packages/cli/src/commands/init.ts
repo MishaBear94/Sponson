@@ -119,8 +119,8 @@ async function adoptUnmanaged(inv: Invocation, existing: string, opts: InitOpts,
 
 /** Detect the stack from the repository's files, write the starter plan composed for it, and summarise. */
 async function writeStarter(planPath: string, io: IO): Promise<{ detected: InitDetected; text: string[] }> {
-  const { VERCEL_PROJECT_ID, VERCEL_ORG_ID, NEON_PROJECT_ID, NETLIFY_SITE_ID } = io.env;
-  const detection = await detectStack(fsReader(io.cwd), { VERCEL_PROJECT_ID, VERCEL_ORG_ID, NEON_PROJECT_ID, NETLIFY_SITE_ID });
+  const { VERCEL_PROJECT_ID, VERCEL_ORG_ID, NEON_PROJECT_ID, NETLIFY_SITE_ID, CLOUDFLARE_ACCOUNT_ID } = io.env;
+  const detection = await detectStack(fsReader(io.cwd), { VERCEL_PROJECT_ID, VERCEL_ORG_ID, NEON_PROJECT_ID, NETLIFY_SITE_ID, CLOUDFLARE_ACCOUNT_ID });
   const starter = composeStarter(detection);
   await writeFile(planPath, starter.text, "utf8");
   const detected: InitDetected = { found: detection.found, unsupported: detection.unsupported, todo: starter.todos, assumed: starter.assumed };

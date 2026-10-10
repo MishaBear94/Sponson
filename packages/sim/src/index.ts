@@ -13,6 +13,7 @@ export * from "./routes/planetscale.js";
 export * from "./routes/launchdarkly.js";
 export * from "./routes/rest.js";
 export * from "./routes/supabase.js";
+export * from "./routes/cloudflare.js";
 export { createSimServer } from "./server.js";
 
 /**

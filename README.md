@@ -149,7 +149,9 @@ password, or a Supabase preview branch, in that order of preference when several
 variable that references it under the name your code reads; a Clerk redirect or a Supabase Auth redirect for the
 preview URL), fills in the project ids it can find, and marks each one it cannot with a `TODO` comment saying where to
 look (`vercel link`, `netlify link`, `neonctl projects list`, `supabase link`). LaunchDarkly gets a commented example line to fill in with a
-flag key and uncomment. Services Sponson does not manage yet (Auth0, Cloudflare, PostHog, Stripe,
+flag key and uncomment. A Wrangler configuration (`wrangler.toml`, `wrangler.json`) gives a Cloudflare Pages
+variables line with the project's `name`; Pages preview variables are shared by every preview, so no per-PR value
+is wired into them. Services Sponson does not manage yet (Auth0, PostHog, Stripe,
 Sentry, …) are listed as "not supported yet" with a link to the
 [roadmap](ROADMAP.md), never silently dropped. With nothing detected it writes the Vercel + Neon template.
 

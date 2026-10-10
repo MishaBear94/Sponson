@@ -20,6 +20,7 @@ The format is specified in [docs/plan-format.md](../docs/plan-format.md).
 | [adopting-an-existing-project.plan.yaml](adopting-an-existing-project.plan.yaml) | what `sponson init` writes when it adopts; `{ keep: true }` |
 | [netlify-neon-preview.plan.yaml](netlify-neon-preview.plan.yaml) | Netlify values per deploy context; the Deploy Preview URL |
 | [http-flags-webhooks-allowlists.plan.yaml](http-flags-webhooks-allowlists.plan.yaml) | APIs with no adapter of their own, through the generic `http` adapter (illustrative) |
+| [cloudflare-pages-vars.plan.yaml](cloudflare-pages-vars.plan.yaml) | Cloudflare Pages preview and production variables; shared preview keys; write-only secrets |
 
 ## nextjs-neon-preview.plan.yaml
 
@@ -163,3 +164,15 @@ references as we understand them; plan against the real API (`sponson plan` only
 `apply --destroy` removes the gate, the endpoint and the two list items, and leaves every other origin and
 redirect as it was. Reference: [`http.resource`](../docs/plan-format.md#httpresource),
 [`http.list_item`](../docs/plan-format.md#httplist_item).
+
+## cloudflare-pages-vars.plan.yaml
+
+A Cloudflare Pages project's variables: plain text under `vars:`, secrets under `secrets:`. Pages has one set of
+preview variables for every preview deployment, so `pages-preview` holds only values that are the same for every pull
+request; apply it from the default branch first (scope `main`), and pull requests then rely on it without owning it.
+A pull request that sets another value for one of these keys is refused with `OWNED_BY_OTHER_SCOPE`. Each line's
+`target` must equal the run's `--env`; the production line requires approval like any other.
+
+Cloudflare never returns a secret's value, so Sponson compares secrets by presence and type: `pages-production` sets
+`rewrite_secrets: true` so that a rotated `STRIPE_LIVE_SECRET_KEY` is written on the next apply. Variables reach the
+next deployment; Sponson does not redeploy a Pages project.

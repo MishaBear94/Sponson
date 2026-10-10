@@ -31,6 +31,8 @@ export const NEON_PROJECT_HINT = "run `neonctl projects list`, or https://consol
 export const PLANETSCALE_IDS_HINT = "the name slugs of your organization and database: run `pscale org list` and `pscale database list`, or see the URL https://app.planetscale.com/<organization>/<database>";
 export const SUPABASE_PROJECT_HINT =
   "run `supabase link` (it writes supabase/.temp/project-ref), or `supabase projects list` (REFERENCE ID), or Supabase dashboard → Project Settings → General → Project ID";
+export const CLOUDFLARE_ACCOUNT_HINT = "run `wrangler whoami`, or Cloudflare dashboard → Workers & Pages → Account ID (or set CLOUDFLARE_ACCOUNT_ID and run `sponson init` again)";
+export const CLOUDFLARE_PROJECT_HINT = "run `wrangler pages project list`, or Cloudflare dashboard → Workers & Pages → your Pages project's name";
 
 /** Each provider's credential variables, read when Sponson runs (never written into the plan). */
 const CREDENTIALS: Record<string, string[]> = {
@@ -40,11 +42,14 @@ const CREDENTIALS: Record<string, string[]> = {
   planetscale: ["PLANETSCALE_SERVICE_TOKEN_ID", "PLANETSCALE_SERVICE_TOKEN"],
   clerk: ["CLERK_SECRET_KEY"],
   supabase: ["SUPABASE_ACCESS_TOKEN"],
+  cloudflare: ["CLOUDFLARE_API_TOKEN"],
 };
 
 interface Shape {
   vercel: boolean;
   netlify: boolean;
+  /** Cloudflare Pages: a third deploy target, whose preview variables are shared by every preview. */
+  cloudflare: boolean;
   neon: boolean;
   /** The database lines use PlanetScale: detected, and Neon (which wins when both are) was not. */
   planetscale: boolean;
@@ -66,27 +71,30 @@ function shapeOf(d: StackDetection): Shape {
   // auth_redirect line is still written whenever Supabase is present and there is a preview URL.
   // Netlify is a deploy target next to Vercel: its line takes the same database value.
   const netlify = has(d, "netlify");
-  const assumed = !has(d, "vercel") && !netlify && !has(d, "neon") && !has(d, "planetscale") && !has(d, "supabase");
+  // Cloudflare Pages is a third deploy target, but its preview variables are shared by every preview, so per-PR
+  // values (a database branch's connection string) are never wired into it.
+  const cloudflare = has(d, "cloudflare");
+  const assumed = !has(d, "vercel") && !netlify && !cloudflare && !has(d, "neon") && !has(d, "planetscale") && !has(d, "supabase");
   const vercel = has(d, "vercel") || assumed;
   const neon = has(d, "neon") || assumed;
   const planetscale = has(d, "planetscale") && !neon;
   const supabaseDb = has(d, "supabase") && !neon && !planetscale;
   const supabaseAuth = has(d, "supabase") && (vercel || netlify);
-  return { vercel, netlify, neon, planetscale, clerk: has(d, "clerk"), launchdarkly: has(d, "launchdarkly"), supabaseDb, supabaseAuth, supabase: supabaseDb || supabaseAuth, deploy: vercel && d.vercelAutoDeployOff, assumed, prisma: has(d, "prisma") };
+  return { vercel, netlify, cloudflare, neon, planetscale, clerk: has(d, "clerk"), launchdarkly: has(d, "launchdarkly"), supabaseDb, supabaseAuth, supabase: supabaseDb || supabaseAuth, deploy: vercel && d.vercelAutoDeployOff, assumed, prisma: has(d, "prisma") };
 }
 
 /** The adapters the starter's lines use, for the "set these credentials" hint. */
 export function credentialsFor(d: StackDetection): string[] {
   const s = shapeOf(d);
-  return (["vercel", "netlify", "neon", "planetscale", "clerk", "supabase"] as const).filter((a) => s[a] && (a !== "clerk" || s.vercel || s.netlify)).flatMap((a) => CREDENTIALS[a]!);
+  return (["vercel", "netlify", "cloudflare", "neon", "planetscale", "clerk", "supabase"] as const).filter((a) => s[a] && (a !== "clerk" || s.vercel || s.netlify)).flatMap((a) => CREDENTIALS[a]!);
 }
 
 export function composeStarter(d: StackDetection): Starter {
   const s = shapeOf(d);
   const todos: Todo[] = [];
   const out = [...header(d, s), "version: 1", "environments: [preview, production]", ...providers(d, s, todos), "", "changes:"];
-  // Never empty: without Vercel, Netlify, Neon, PlanetScale or Supabase the template assumes Vercel and Neon.
-  out.push(...dbLine(s), ...supabaseBranchLine(s), ...envLine(d, s), ...netlifyEnvLine(d, s), ...deployLine(s), ...clerkLine(s), ...supabaseAuthLine(s), ...flagLine(s), ...orphanNotes(s));
+  // Never empty: without Vercel, Netlify, Cloudflare Pages, Neon, PlanetScale or Supabase the template assumes Vercel and Neon.
+  out.push(...dbLine(s), ...supabaseBranchLine(s), ...envLine(d, s), ...netlifyEnvLine(d, s), ...pagesLine(d, s), ...deployLine(s), ...clerkLine(s), ...supabaseAuthLine(s), ...flagLine(s), ...orphanNotes(s));
   const text = out.join("\n").replace(/\n+$/, "") + "\n";
   return { text, todos, assumed: s.assumed };
 }
@@ -96,7 +104,7 @@ function header(d: StackDetection, s: Shape): string[] {
   if (s.assumed) {
     out.push(
       "#",
-      "# Nothing Sponson manages (Vercel, Netlify, Neon, PlanetScale) was detected in this repository's files, so this is the template",
+      "# Nothing Sponson manages (Vercel, Netlify, Cloudflare Pages, Neon, PlanetScale) was detected in this repository's files, so this is the template",
       "# for the most common stack: a Vercel app with a Neon database. Fill in the TODOs, or delete what you do not use.",
     );
   }
@@ -122,6 +130,7 @@ function providers(d: StackDetection, s: Shape, todos: Todo[]): string[] {
     out.push(`  vercel: { project: ${q(project)}${team} }   ${note}`);
   }
   if (s.netlify) out.push(netlifyProvider(d, todos));
+  if (s.cloudflare) out.push(cloudflareProvider(d, todos));
   if (s.neon) {
     const project = d.ids.neonProject ?? "proj_xxx";
     const note = d.ids.neonProjectFrom ? `# from ${d.ids.neonProjectFrom}` : todo(todos, "providers.neon.project", project, NEON_PROJECT_HINT);
@@ -144,6 +153,16 @@ function netlifyProvider(d: StackDetection, todos: Todo[]): string {
   const site = d.ids.netlifySite ?? "your-site-id";
   const note = d.ids.netlifySiteFrom ? `# from ${d.ids.netlifySiteFrom}` : todo(todos, "providers.netlify.site", site, NETLIFY_SITE_HINT);
   return `  netlify: { site: ${q(site)} }   ${note}`;
+}
+
+function cloudflareProvider(d: StackDetection, todos: Todo[]): string {
+  const account = d.ids.cloudflareAccount ?? "your-account-id";
+  const project = d.ids.cloudflareProject ?? "your-pages-project";
+  const notes = [
+    d.ids.cloudflareAccountFrom ? `account from ${d.ids.cloudflareAccountFrom}` : todo(todos, "providers.cloudflare.account", account, CLOUDFLARE_ACCOUNT_HINT).slice(2),
+    d.ids.cloudflareProjectFrom ? `project from ${d.ids.cloudflareProjectFrom}` : todo(todos, "providers.cloudflare.project", project, CLOUDFLARE_PROJECT_HINT).slice(2),
+  ];
+  return `  cloudflare: { account: ${q(account)}, project: ${q(project)} }   # ${notes.join("; ")}`;
 }
 
 function todo(todos: Todo[], path: string, placeholder: string, hint: string): string {
@@ -226,6 +245,31 @@ function netlifyEnvLine(d: StackDetection, s: Shape): string[] {
     "    op: env",
     "    values:",
     ...previewValues(d, s),
+    "    environments: [preview]",
+    "",
+  ];
+}
+
+/**
+ * Cloudflare Pages preview variables. Pages has one set for every preview deployment, so only values that are the
+ * same for every pull request go here; a per-PR database is said in a comment instead (see `orphanNotes`).
+ */
+function pagesLine(d: StackDetection, s: Shape): string[] {
+  if (!s.cloudflare) return [];
+  const worker = d.cloudflareNotPages
+    ? ["  # The Wrangler configuration has no `pages_build_output_dir`: if it describes a Worker, not a Pages project, delete", "  # this line (Workers variables are not managed yet)."]
+    : [];
+  return [
+    "  # Cloudflare Pages preview variables. Pages has ONE set of preview variables, shared by every preview deployment",
+    "  # (there are no per-branch values): only values that are the same for every pull request belong here; a second",
+    "  # pull request that sets another value is refused. Secrets go under `secrets:` as `{ secret: \"env://NAME\" }`.",
+    ...worker,
+    "  - id: pages-env",
+    "    adapter: cloudflare",
+    "    op: pages_env",
+    "    target: preview",
+    "    vars:",
+    `      ${d.publicPrefix}SPONSON_ENV: "\${ctx.env}"   # an example: replace with the variables your previews need`,
     "    environments: [preview]",
     "",
   ];
@@ -323,6 +367,19 @@ function flagLine(s: Shape): string[] {
 function orphanNotes(s: Shape): string[] {
   const out: string[] = [];
   if (s.vercel || s.netlify) return out;
+  if (s.cloudflare && (s.neon || s.planetscale || s.supabaseDb)) {
+    out.push(
+      "  # The database branch's connection string differs per pull request, and Cloudflare Pages preview variables are",
+      "  # shared by every preview, so it cannot go there; pass it to your previews another way.",
+    );
+  } else out.push(...databaseOrphanNotes(s));
+  if (s.clerk) out.push("  # Clerk was detected, but a redirect line needs a preview URL from a deploy target Sponson manages (Vercel, Netlify).");
+  return out;
+}
+
+/** A database line's outputs when no deploy target Sponson manages can take them. */
+function databaseOrphanNotes(s: Shape): string[] {
+  const out: string[] = [];
   if (s.supabaseDb) {
     out.push("  # The branch's outputs (`{ from: db.connection_string }`, `db.api_url`) have no deploy target Sponson manages yet;", "  # pass them to yours by hand, or follow ROADMAP.md section 2 for Railway and Fly.io.");
   }
@@ -335,7 +392,6 @@ function orphanNotes(s: Shape): string[] {
       "  # and PlanetScale shows it only once: follow ROADMAP.md section 2 for Railway and Fly.io.",
     );
   }
-  if (s.clerk) out.push("  # Clerk was detected, but a redirect line needs a preview URL from a deploy target Sponson manages (Vercel, Netlify).");
   return out;
 }
 

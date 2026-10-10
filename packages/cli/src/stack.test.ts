@@ -133,7 +133,7 @@ describe("detectStack", () => {
     expect(s.assumed).toBe(true);
     expect(s.todos.map((t) => t.path)).toEqual(["providers.vercel.project", "providers.neon.project"]);
     const text = expectValidPlan(d, ["db", "env"]);
-    expect(text).toContain("Nothing Sponson manages (Vercel, Netlify, Neon, PlanetScale) was detected");
+    expect(text).toContain("Nothing Sponson manages (Vercel, Netlify, Cloudflare Pages, Neon, PlanetScale) was detected");
     expect(text).toContain("DATABASE_URL: { from: db.connection_string }");
   });
 
@@ -224,15 +224,62 @@ describe("detectStack", () => {
   it("every unsupported service is reported, never silently ignored", async () => {
     const d = await detectStack(
       repo({
-        "package.json": pkg({ "@auth0/nextjs-auth0": "3", "@launchdarkly/node-server-sdk": "9", "posthog-js": "1", stripe: "16", "@sentry/nextjs": "8", firebase: "10", "@libsql/client": "0.6" }, { wrangler: "3" }),
+        "package.json": pkg({ "@auth0/nextjs-auth0": "3", "@launchdarkly/node-server-sdk": "9", "posthog-js": "1", stripe: "16", "@sentry/nextjs": "8", firebase: "10", "@libsql/client": "0.6" }),
         "fly.toml": "app = 'x'\n",
         "railway.json": "{}",
       }),
     );
-    expect(unsupportedIds(d)).toEqual(["turso", "auth0", "cloudflare", "railway", "fly", "firebase", "posthog", "stripe", "sentry"]);
+    expect(unsupportedIds(d)).toEqual(["turso", "auth0", "railway", "fly", "firebase", "posthog", "stripe", "sentry"]);
     for (const u of d.unsupported) expect(u.pointer, u.id).toMatch(/ROADMAP\.md|issues/);
     const text = expectValidPlan(d, ["db", "env"]);
     for (const u of d.unsupported) expect(text).toContain(`# Not supported yet, so no line below manages it: ${u.name}`);
+  });
+
+  it("Cloudflare Pages: the project name from wrangler.toml, a shared preview-variables line, no Vercel template", async () => {
+    const d = await detectStack(
+      repo({
+        "package.json": pkg({ astro: "5" }, { wrangler: "4" }),
+        "wrangler.toml": 'name = "shop-web"\naccount_id = \'0123abcd\'\npages_build_output_dir = "./dist"\n\n[vars]\nname = "not this one"\n',
+      }),
+    );
+    expect(ids(d)).toEqual(["cloudflare", "astro"]);
+    expect(unsupportedIds(d)).toEqual([]);
+    expect(d.ids).toEqual({ cloudflareProject: "shop-web", cloudflareProjectFrom: "wrangler.toml", cloudflareAccount: "0123abcd", cloudflareAccountFrom: "wrangler.toml" });
+    expect(d.cloudflareNotPages).toBe(false);
+    const { text, todos, assumed } = composeStarter(d);
+    expect(assumed).toBe(false);
+    expect(todos).toEqual([]);
+    expectValidPlan(d, ["pages-env"]);
+    expect(text).toContain('cloudflare: { account: "0123abcd", project: "shop-web" }   # account from wrangler.toml; project from wrangler.toml');
+    expect(text).toContain('PUBLIC_SPONSON_ENV: "${ctx.env}"');
+    expect(text).toContain("shared by every preview deployment");
+    expect(text).not.toContain("Worker");
+    expect(credentialsFor(d)).toEqual(["CLOUDFLARE_API_TOKEN"]);
+  });
+
+  it("Cloudflare from wrangler.jsonc without pages_build_output_dir: TODOs for the ids, the Worker caveat; the account from the environment", async () => {
+    const jsonc = '{\n  // a Worker?\n  "name": "edge-api", /* block */\n  "main": "src/index.ts",\n  "vars": { "URL": "https://x.example.com" },\n}\n';
+    const d = await detectStack(repo({ "wrangler.jsonc": jsonc }), { CLOUDFLARE_ACCOUNT_ID: "acc_env" });
+    expect(d.ids).toEqual({ cloudflareProject: "edge-api", cloudflareProjectFrom: "wrangler.jsonc", cloudflareAccount: "acc_env", cloudflareAccountFrom: "CLOUDFLARE_ACCOUNT_ID" });
+    expect(d.cloudflareNotPages).toBe(true);
+    expect(expectValidPlan(d, ["pages-env"])).toContain("has no `pages_build_output_dir`");
+
+    const bare = await detectStack(repo({ ".env.example": "CLOUDFLARE_API_TOKEN=\n", "package.json": pkg({ "@neondatabase/serverless": "1" }) }));
+    expect(bare.cloudflareNotPages).toBeUndefined();
+    const { text, todos } = composeStarter(bare);
+    expect(todos.map((t) => t.path)).toEqual(["providers.cloudflare.account", "providers.cloudflare.project", "providers.neon.project"]);
+    expect(text).toContain('cloudflare: { account: "your-account-id", project: "your-pages-project" }   # TODO: run `wrangler whoami`');
+    expect(text).toContain("so it cannot go there");
+    expectValidPlan(bare, ["db", "pages-env"]);
+  });
+
+  it("Vercel + Cloudflare Pages + Neon: the connection string goes into Vercel's per-branch line, never into the shared Pages preview variables", async () => {
+    const d = await detectStack(repo({ "package.json": pkg({ "@neondatabase/serverless": "1" }, { wrangler: "4" }), "vercel.json": {}, "wrangler.toml": 'name = "web"\npages_build_output_dir = "dist"\n' }));
+    const text = expectValidPlan(d, ["db", "env", "pages-env"]);
+    const pages = text.slice(text.indexOf("- id: pages-env"));
+    expect(pages).not.toContain("db.connection_string");
+    expect(text.slice(text.indexOf("- id: env"), text.indexOf("- id: pages-env"))).toContain("DATABASE_URL: { from: db.connection_string }");
+    expect(credentialsFor(d)).toEqual(["VERCEL_TOKEN", "CLOUDFLARE_API_TOKEN", "NEON_API_KEY"]);
   });
 
   it("Netlify + Neon + Clerk: the site id from .netlify/state.json, a branch-context line, the callback on the Deploy Preview URL", async () => {

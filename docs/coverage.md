@@ -55,7 +55,7 @@ the tables below are generated from it: edit the data, then run `pnpm docs:gen`.
 |---|---|---|---|---|---|
 | Vercel | Env vars per target and git branch; wait for the preview deployment, redeploy if it built before the write | REST `/v10/projects/{id}/env`, bearer; object per variable; deployment barrier | P (barrier, redeploy) | P0 | **yes** (`vercel.env`, `vercel.deploy`) |
 | Netlify | Env var values per deploy context (`deploy-preview`, `branch` + `context_parameter`); wait for the deploy of the commit, rebuild if it started before the write | REST `POST /api/v1/accounts/{account}/env?site_id=`, `PATCH .../env/{key}`; bearer; object per key, values list per context; deploys only see values set before they started | P (deploy barrier like Vercel) | P0 | **yes** (`netlify.env`) |
-| Cloudflare Pages / Workers | Pages: `deployment_configs.preview.env_vars` (all previews share one set, no per-branch values). Workers: secrets per script / preview version | REST `PATCH /accounts/{a}/pages/projects/{p}`, bearer; **map** merge-patch, `null` deletes; Workers `PUT .../workers/scripts/{s}/secrets` object | Y | P1 | no |
+| Cloudflare Pages / Workers | Pages: `deployment_configs.preview.env_vars` (all previews share one set, no per-branch values). Workers: secrets per script / preview version | REST `PATCH /accounts/{a}/pages/projects/{p}`, bearer; **map** merge-patch, `null` deletes; Workers `PUT .../workers/scripts/{s}/secrets` object | Y | P1 | **yes** (`cloudflare.pages_env`: Pages variables; Workers secrets are not covered) |
 | Render | Env vars on a preview service / preview environment | REST `PUT /v1/services/{id}/env-vars/{key}`, bearer; object per key; previews created by Render from `render.yaml` | Y | P1 | no |
 | Railway | Variables in a PR environment (Railway creates PR environments natively) | GraphQL `variableUpsert(projectId, environmentId, serviceId, name, value)`, bearer; object per name; deployment status for a barrier | P (GraphQL, env id lookup, barrier) | P1 | no |
 | Fly.io | Per-PR app (the usual pattern is one app per PR) plus its secrets | Machines API `api.machines.dev/v1/apps/{app}/secrets` (secret writes return a version, changed 2025) and GraphQL `setSecrets`; bearer; object; machines must be updated to see new secrets | P (app lifecycle, restart) | P1 | no |
@@ -193,18 +193,18 @@ Counted over the 56 side-effect rows of the matrix (rows marked `n/a` have nothi
 
 | Measure | Covered | Coverage |
 |---|---|---|
-| Rows | 10 of 56 | **17.9%** |
-| Weighted by priority | 27 of 90 | **30.0%** |
+| Rows | 11 of 56 | **19.6%** |
+| Weighted by priority | 29 of 90 | **32.2%** |
 | P0 rows only | 7 of 9 | 77.8% |
-| Rows an API reaches (all but `manual`) | 10 of 53 | 18.9% |
-| Weighted, rows an API reaches | 27 of 85 | 31.8% |
+| Rows an API reaches (all but `manual`) | 11 of 53 | 20.8% |
+| Weighted, rows an API reaches | 29 of 85 | 34.1% |
 | Secret sources (separate) | 4 of 9 vendors; weighted 7 of 14 | 44.4%; 50.0% |
 
-Covered: Vercel (`vercel.env`, `vercel.deploy`); Netlify (`netlify.env`); Neon (`neon.branch`); Supabase (`supabase.branch`); PlanetScale (`planetscale.branch`, `planetscale.password`); Turso (recipe [`turso.database_branch`](recipes.md#tursodatabase_branch)); Clerk (`clerk.redirect_allow`); Supabase Auth (`supabase.auth_redirect`); LaunchDarkly (`launchdarkly.flag_target`); Cloudflare DNS (recipe [`cloudflare.dns_cname`](recipes.md#cloudflaredns_cname)).
+Covered: Vercel (`vercel.env`, `vercel.deploy`); Netlify (`netlify.env`); Cloudflare Pages / Workers (`cloudflare.pages_env`); Neon (`neon.branch`); Supabase (`supabase.branch`); PlanetScale (`planetscale.branch`, `planetscale.password`); Turso (recipe [`turso.database_branch`](recipes.md#tursodatabase_branch)); Clerk (`clerk.redirect_allow`); Supabase Auth (`supabase.auth_redirect`); LaunchDarkly (`launchdarkly.flag_target`); Cloudflare DNS (recipe [`cloudflare.dns_cname`](recipes.md#cloudflaredns_cname)).
 
 Automated coverage counts only rows an op manages without a person. Rows no API reaches (`manual`, or a `manual.step` line that records the step a person does; weight 5): Google OAuth clients (no public API for standard OAuth web clients); Clerk webhooks (Clerk's API manages the Svix app, not its endpoints); Stripe sandboxes (no public API for account sandboxes). They cap coverage at 53 rows, 85 of 90 weighted (94.4%).
 
-Recipe candidates, rows the generic adapter can express fully (`Y`) that nothing covers yet: 31 (Cloudflare Pages / Workers, Render, Heroku, Prisma Postgres, Auth0, Firebase Auth, WorkOS, Stytch, Okta, Kinde, PostHog, Statsig, GrowthBook, Unleash, Flagsmith, ConfigCat, Split (Harness FME), GitHub, Svix (as a sender), Resend, Postmark, SendGrid, Sentry, Datadog, Honeycomb, Vercel domains, Firebase Storage (GCS bucket), Upstash Redis, Upstash QStash, Inngest, Stripe test-mode objects).
+Recipe candidates, rows the generic adapter can express fully (`Y`) that nothing covers yet: 30 (Render, Heroku, Prisma Postgres, Auth0, Firebase Auth, WorkOS, Stytch, Okta, Kinde, PostHog, Statsig, GrowthBook, Unleash, Flagsmith, ConfigCat, Split (Harness FME), GitHub, Svix (as a sender), Resend, Postmark, SendGrid, Sentry, Datadog, Honeycomb, Vercel domains, Firebase Storage (GCS bucket), Upstash Redis, Upstash QStash, Inngest, Stripe test-mode objects).
 <!-- generated:coverage-numbers:end -->
 
 ## Strategy

@@ -41,7 +41,8 @@ categories:
         api_shape: REST `PATCH /accounts/{a}/pages/projects/{p}`, bearer; **map** merge-patch, `null` deletes; Workers `PUT .../workers/scripts/{s}/secrets` object
         generic: Y
         priority: P1
-        covered_by: null
+        covered_by: cloudflare.pages_env
+        note: Pages variables; Workers secrets are not covered
       - id: render-env
         provider: Render
         side_effect: Env vars on a preview service / preview environment

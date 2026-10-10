@@ -21,13 +21,20 @@
  * unique git branch name, and a Clerk redirect URL, and destroys them in `afterAll`
  * even when an assertion fails. It never touches the production target.
  *
+ * Cloudflare is optional in a live run: its block runs when these are set too, and is skipped otherwise.
+ *
+ *   CLOUDFLARE_API_TOKEN=... SPONSON_LIVE_CLOUDFLARE_ACCOUNT=<account id> SPONSON_LIVE_CLOUDFLARE_PROJECT=<pages project>
+ *
+ * It writes three preview variables named `SPONSON_CONTRACT_<tag>_*` to that Pages project and removes them in
+ * `afterAll`; use a throwaway project, since a preview deployment started meanwhile would see them.
+ *
  * Supabase is optional in a live run, because branching needs a paid plan: with SUPABASE_ACCESS_TOKEN and
  * SPONSON_LIVE_SUPABASE_PROJECT (the parent project's ref, branching enabled) also set, the Supabase block runs
  * live; without them it is skipped under SPONSON_LIVE=1. It creates one preview branch (billed while it exists;
  * it may take minutes to come up) and one Auth redirect URL, and removes both in its `afterAll`.
  *
  * Each `assumption <id>:` test pins the API assumption with that id, listed at the top of the sim's provider
- * file (packages/sim/src/routes/{vercel,neon,clerk,launchdarkly,planetscale,supabase,netlify}.ts). If one fails live, fix the sim first, then the
+ * file (packages/sim/src/routes/{vercel,neon,clerk,launchdarkly,planetscale,supabase,netlify,cloudflare}.ts). If one fails live, fix the sim first, then the
  * adapter.
  *
  * PlanetScale has its own block, live only when its credentials are set too (it is skipped in a live run without
@@ -41,7 +48,7 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CLERK_DEFAULT_API_URL, LAUNCHDARKLY_DEFAULT_API_URL, NETLIFY_DEFAULT_API_URL, PLANETSCALE_DEFAULT_API_URL, SUPABASE_DEFAULT_API_URL, clerkAdapter, launchdarklyAdapter, neonAdapter, netlifyAdapter, planetscaleAdapter, supabaseAdapter, vercelAdapter } from "@sponson/adapters";
+import { CLERK_DEFAULT_API_URL, CLOUDFLARE_DEFAULT_API_URL, LAUNCHDARKLY_DEFAULT_API_URL, NETLIFY_DEFAULT_API_URL, PLANETSCALE_DEFAULT_API_URL, SUPABASE_DEFAULT_API_URL, clerkAdapter, cloudflareAdapter, launchdarklyAdapter, neonAdapter, netlifyAdapter, planetscaleAdapter, supabaseAdapter, vercelAdapter } from "@sponson/adapters";
 import type { AdapterContext, Ctx } from "@sponson/core";
 import { SUPABASE_DEMO_PROJECT, simEnv, startSim, type SimHandle } from "@sponson/sim";
 import { cliEnv, runCli, workspace, type CliRun, type Workspace } from "./support.js";
@@ -116,6 +123,8 @@ afterAll(async () => {
 function cli(args: string[]): Promise<CliRun> {
   return runCli([...args, "--json", "--receipts", "local", "--receipts-dir", join(ws.dir, "r"), "--pr", String(pr), "--branch", branch, "--sha", sha], { env, cwd: ws.dir });
 }
+
+const CF_LIVE = ["CLOUDFLARE_API_TOKEN", "SPONSON_LIVE_CLOUDFLARE_ACCOUNT", "SPONSON_LIVE_CLOUDFLARE_PROJECT"].every((k) => process.env[k]);
 
 function actx(adapter: "vercel" | "neon" | "clerk" | "launchdarkly"): AdapterContext {
   const ctx: Ctx = { env: "preview", git: { branch, sha, short_sha: sha.slice(0, 7) }, pr: { number: pr }, scope: `pr-${pr}` };
@@ -237,6 +246,58 @@ describe(`contract (${LIVE ? "@live" : "sim"})`, () => {
     const clerk = clerkAdapter.ops.redirect_allow!;
     expect(await clerk.read(actx("clerk"), { url: callbackUrl })).toBeNull();
   }, 120_000);
+});
+
+/**
+ * Cloudflare Pages variables (`cloudflare.pages_env`), against the adapter and the raw API. Live only with the
+ * Cloudflare variables of the header; always against the sim.
+ */
+describe.skipIf(LIVE && !CF_LIVE)(`contract: cloudflare (${LIVE ? "@live" : "sim"})`, () => {
+  const name = (suffix: string) => `SPONSON_CONTRACT_${tag.toUpperCase()}_${suffix}`;
+  const [PLAIN, SECRET_VAR, OTHER] = [name("PLAIN"), name("SECRET"), name("OTHER")];
+  const op = cloudflareAdapter.ops.pages_env!;
+  const cf = () => (LIVE ? { account: process.env.SPONSON_LIVE_CLOUDFLARE_ACCOUNT!, project: process.env.SPONSON_LIVE_CLOUDFLARE_PROJECT! } : { account: "acc_demo", project: "demo" });
+  const cfActx = (): AdapterContext => {
+    const ctx: Ctx = { env: "preview", git: { branch, sha, short_sha: sha.slice(0, 7) }, pr: { number: pr }, scope: `pr-${pr}` };
+    return { ctx, provider: cf(), env, log: () => {}, intend: async () => {}, redact: (t) => t };
+  };
+  const params = { target: "preview", vars: { [PLAIN]: "plain-1" }, secrets: { [SECRET_VAR]: SECRET } };
+  const url = () => `${env.CLOUDFLARE_API_URL ?? CLOUDFLARE_DEFAULT_API_URL}/accounts/${cf().account}/pages/projects/${cf().project}`;
+  const call = async (method: "GET" | "PATCH", body?: unknown) => {
+    const res = await fetch(url(), { method, headers: { authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`, "content-type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    return { status: res.status, body: (await res.json()) as { result?: { deployment_configs?: { preview?: { env_vars?: Record<string, { type: string; value?: unknown } | null> | null } } } } };
+  };
+  const previewVars = async () => (await call("GET")).body.result?.deployment_configs?.preview?.env_vars ?? {};
+
+  afterAll(async () => {
+    await call("PATCH", { deployment_configs: { preview: { env_vars: { [PLAIN]: null, [SECRET_VAR]: null, [OTHER]: null } } } }).catch(() => {});
+  });
+
+  it("assumption CF4/CF7: a PATCH merges the map (an unnamed key survives) and is readable at once", async () => {
+    expect((await call("PATCH", { deployment_configs: { preview: { env_vars: { [OTHER]: { type: "plain_text", value: "other" } } } } })).status).toBe(200);
+    const r = await op.apply(cfActx(), params, null);
+    expect(r.resources.map((x) => x.key)).toEqual([`env:preview:${PLAIN}`, `env:preview:${SECRET_VAR}`]);
+    const vars = await previewVars();
+    expect(vars[OTHER]).toEqual({ type: "plain_text", value: "other" });
+    expect(vars[PLAIN]).toEqual({ type: "plain_text", value: "plain-1" });
+    const live = await op.read(cfActx(), params);
+    expect(op.diff(live, params).map((d) => d.kind)).toEqual(["unchanged", "unchanged"]);
+  });
+
+  it("assumption CF3: a secret's value is never returned; its type is", async () => {
+    const v = (await previewVars())[SECRET_VAR];
+    expect(v?.type).toBe("secret_text");
+    expect(v?.value === undefined || v?.value === null || v?.value === "").toBe(true);
+  });
+
+  it("assumption CF4: a key set to null is deleted, and the others stay", async () => {
+    const live = await op.read(cfActx(), params);
+    await op.destroy(cfActx(), live!.resources);
+    const vars = await previewVars();
+    expect(vars[PLAIN] ?? null).toBeNull();
+    expect(vars[SECRET_VAR] ?? null).toBeNull();
+    expect(vars[OTHER]).toEqual({ type: "plain_text", value: "other" });
+  });
 });
 
 const SUPABASE_LIVE = LIVE && Boolean(process.env.SUPABASE_ACCESS_TOKEN && process.env.SPONSON_LIVE_SUPABASE_PROJECT);

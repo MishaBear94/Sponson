@@ -66,6 +66,7 @@ function seedFor(file: string, plan: Plan): Partial<SimSeed> {
   if (ps) seed.planetscale = { organizations: { [String(ps.organization)]: { [String(ps.database)]: [{ name: "main", production: true }] } } };
   if (plan.providers.launchdarkly) seed.launchdarkly = { projects: { [project(plan, "launchdarkly")]: launchdarklyProject(plan) } };
   if (plan.providers.supabase) seed.supabase = { projects: { [project(plan, "supabase")]: {} } };
+  if (plan.providers.cloudflare) seed.cloudflare = { accounts: { [String(plan.providers.cloudflare.account)]: { [project(plan, "cloudflare")]: {} } } };
   return { ...seed, ...(SEEDS[file]?.(plan) ?? {}) };
 }
 

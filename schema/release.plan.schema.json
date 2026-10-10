@@ -38,6 +38,15 @@
             "account": { "type": "string", "minLength": 1 }
           }
         },
+        "cloudflare": {
+          "type": "object",
+          "description": "Cloudflare account id and Pages project name. Credential: CLOUDFLARE_API_TOKEN in the environment.",
+          "required": ["account", "project"],
+          "properties": {
+            "account": { "type": "string", "minLength": 1 },
+            "project": { "type": "string", "minLength": 1 }
+          }
+        },
         "supabase": {
           "type": "object",
           "description": "Supabase project ref (20 lowercase letters) of the parent project: its preview branches and its Auth redirect allow-list.",
@@ -195,7 +204,7 @@
       "required": ["id", "adapter", "op"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk, planetscale, launchdarkly, supabase, netlify, and http (any JSON REST API described in the plan). Plugins (SPONSON_PLUGINS) add more." },
+        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk, planetscale, launchdarkly, supabase, netlify, cloudflare, and http (any JSON REST API described in the plan). Plugins (SPONSON_PLUGINS) add more." },
         "op": { "type": "string", "minLength": 1 },
         "environments": { "$ref": "#/$defs/nameList", "description": "Environments this line applies to. Absent: all." },
         "depends_on": { "type": "array", "items": { "$ref": "#/$defs/id" }, "description": "Ordering without a data dependency. Prefer `from:` references." }
@@ -253,6 +262,10 @@
         {
           "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "netlify" }, "op": { "const": "env" } } },
           "then": { "$ref": "#/$defs/op_netlify_env" }
+        },
+        {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "cloudflare" }, "op": { "const": "pages_env" } } },
+          "then": { "$ref": "#/$defs/op_cloudflare_pages_env" }
         }
       ]
     },
@@ -580,6 +593,35 @@
           "description": "NAME: value. A value is a literal, `{ from }`, `{ secret }` or `{ keep: true }`.",
           "additionalProperties": { "$ref": "#/$defs/value" }
         }
+      },
+      "additionalProperties": false
+    },
+    "op_cloudflare_pages_env": {
+      "description": "cloudflare.pages_env: plain-text and secret variables of a Cloudflare Pages project's preview or production configuration (preview variables are shared by every preview deployment). No outputs.",
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "target": {
+          "description": "preview or production; must be the run's --env. Default: production when --env production, else preview.",
+          "anyOf": [
+            { "enum": ["preview", "production"] },
+            { "type": "string", "pattern": "\\$\\{ctx\\.[a-z_.]+\\}" }
+          ]
+        },
+        "vars": {
+          "type": "object",
+          "description": "NAME: value, written as plain_text. A value is a literal, `{ from }`, `{ secret }` or `{ keep: true }`.",
+          "additionalProperties": { "$ref": "#/$defs/value" }
+        },
+        "secrets": {
+          "type": "object",
+          "description": "NAME: value, written as secret_text and compared by presence and type only (Cloudflare never returns a secret's value).",
+          "additionalProperties": { "$ref": "#/$defs/value" }
+        },
+        "rewrite_secrets": { "type": "boolean", "description": "Send every secret on every apply, so a changed value is written. Default: false." }
       },
       "additionalProperties": false
     }

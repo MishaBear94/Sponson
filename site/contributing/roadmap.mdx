@@ -56,6 +56,7 @@ polling until ready, an OAuth2 client-credentials token, and pagination by page 
 | PlanetScale: deploy requests on merge, and PlanetScale Postgres (roles instead of passwords) | `packages/adapters/src/planetscale.ts`; a password-like credential is a [once-only output](/contributing/adr/0018-once-only-outputs) | adapter |
 | Supabase follow-ups: a branch's API keys (`GET /v1/projects/{ref}/api-keys`) and pooler connection string (`/config/database/pooler`, IPv4) as outputs; `git_branch` and `with_data` on create | `supabase.branch` outputs only the direct (IPv6) connection string and the API URL today | adapter, **good first issue** |
 | Deploy-target env vars: Railway, Fly.io secrets | Close to `vercel.ts`'s and `netlify.ts`'s `env` ops, without the deploy barrier at first | adapter |
+| Cloudflare, after `pages_env`: Workers secrets per script, a Pages deployment op (redeploy after a variable write, and the branch alias URL from the deployment's `aliases` as an output), DNS records for preview hostnames | Pages variables shipped as `cloudflare.pages_env`; the alias URL is not computed from the branch name because Cloudflare does not document how long names are shortened | adapter |
 
 ## 3. More secret sources
 
