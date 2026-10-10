@@ -1,5 +1,21 @@
 # sponson
 
+## 0.4.0
+
+### Patch Changes
+
+- 9b6c97a: Internal: scope drift, destroy, receipt parsing and listing, `init`'s plan editing, the sims' chaos selection and request handling are split into named steps; behaviour is unchanged. Lint caps cyclomatic complexity at 15.
+- 53e7446: npm metadata: every package has keywords and its homepage is the documentation site (https://sponson.mintlify.site); the package READMEs link to it, and the CLI's README states the Node.js 22 requirement its `engines` already declared.
+- Updated dependencies [78eef8a]
+- Updated dependencies [b028881]
+- Updated dependencies [eec4766]
+- Updated dependencies [510ebe8]
+- Updated dependencies [8f1b9c2]
+- Updated dependencies [9b6c97a]
+- Updated dependencies [53e7446]
+  - @sponson/adapters@0.4.0
+  - @sponson/core@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes
