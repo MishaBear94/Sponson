@@ -497,6 +497,7 @@ providers:
 | `auth` | map | `{ bearer_env: NAME }` (`Authorization: Bearer`), `{ header: X-Api-Key, value_env: NAME }` (the value in that header), or `{ basic: { user_env: NAME, password_env: NAME } }`. Always variable NAMES, never values; the credential's name must end in `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `_KEY` or `APIKEY` so that its value is masked in every output. Unset: `PROVIDER_AUTH`. |
 | `headers` | map: header → string | Optional static headers (an API version pin). `Authorization`, `Accept` and `Content-Type` are Sponson's. |
 | `encoding` | `json` \| `form` | Request bodies as JSON (default) or `application/x-www-form-urlencoded`, nested as `a[b]=c` and `a[0]=c`. Answers are read as JSON either way. |
+| `refuse_credential` | `{ prefixes, unless_env }` | Optional. A credential whose value starts with one of `prefixes` (Stripe's `sk_live_`, `rk_live_`) is refused with `PROVIDER_AUTH` before any request (plan, apply and destroy alike), unless the variable `unless_env` is `1` or `true`. A recipe's refusal cannot be overridden by the block. |
 
 A malformed block, or a line naming an API that is not configured, is `PLAN_INVALID` before any request is sent;
 a malformed line is `PARAM_INVALID` naming the field. Paths take `{id}` (the object's id, once known) and
@@ -516,12 +517,12 @@ One object per item: a feature flag, a webhook endpoint, a DNS record.
 | `read` | `{ path }` | — | GET the object. With `find`, the path takes `{id}` and fetches the found object's detail; without `find`, it must be a path that names the object (a client-chosen id or key). One of `find` and `read` is required. 404 means it does not exist. |
 | `create` | `{ method?, path, body?, content_type?, idempotency_key? }` | (required) | `POST` (or `PUT`, `PATCH`) to create. The body is `match`, then `fields`, then `body` merged. `idempotency_key: true` sends an `Idempotency-Key` derived from the resource key, the commit and the body, and lets a create whose connection dropped be sent again. |
 | `update` | `{ method?, path?, body?, content_type? }` | none | `PATCH` (or `PUT`, `POST`) when `fields` differ from live; path defaults to `read.path`. `PATCH` and `POST` send the declared fields; `PUT` sends the whole declared state (`match`, `fields`, kept values). Without `update`, a difference is `PARAM_INVALID`. |
-| `delete` | `{ method?, path? }` | `DELETE read.path` | How the object is removed (`DELETE` or `POST`). |
+| `delete` | `{ method?, path?, body? }` | `DELETE read.path` | How the object is removed (`DELETE` or `POST`). A `POST` with a `body` of literal values archives instead (`{ active: false }`, for objects a provider never deletes); the body is part of the record id. |
 | `destroy` | `delete` \| `keep` | `delete` | `keep` leaves the object in place when the scope is destroyed. |
 | `item_path` | JSON pointer | `""` | Where the object is in read, create and update answers (`/data` for a `{ data: {...} }` envelope). |
 | `id_path` | JSON pointer | `/id` | Where the id is in the object. |
 | `fields` | map: field → value | `{}` | The desired state, compared for drift and sent on create and update. Values are literals, `{ from }`, `{ secret }` or `{ keep: true }`. |
-| `outputs` | map: name → pointer, or `{ path, sensitive: true }` | `{}` | Outputs read from the object, besides `id` (always there). A sensitive one is never shown or written to a receipt. |
+| `outputs` | map: name → pointer, or `{ path, sensitive: true, once?: true }` | `{}` | Outputs read from the object, besides `id` (always there). A sensitive one is never shown or written to a receipt. `once: true` (with `sensitive`) is a value the provider shows only in the create's answer, such as a webhook signing secret: it is taken from that answer only and reaches dependent lines in that run; later runs keep what dependents hold, as for [once-only outputs](adr/0018-once-only-outputs.md), and `apply --recreate <line>` rotates it. |
 | `exists_status` | list of statuses | `[]` | Besides 409, the statuses a create answers when the object exists already: it is then found and taken over, not created. |
 | `gone_status` | list of statuses | `[]` | Besides 404, the statuses that mean "gone" on read and delete. |
 

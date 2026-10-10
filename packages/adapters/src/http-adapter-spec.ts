@@ -4,7 +4,7 @@
  * a PARAM_INVALID (or PLAN_INVALID for the provider block) naming the field at fault. See ADR 0017 and
  * docs/plan-format.md (`http.resource`, `http.list_item`).
  */
-import { SponsonError, canonicalJson, markerKind, sha256 } from "@sponson/core";
+import { SponsonError, canonicalJson, markerKind, sha256, type OutputSpec } from "@sponson/core";
 import { paramError } from "./common.js";
 import { isObject } from "./http.js";
 import { expandRecipe, lineApi, resolveRecipeApi } from "./recipes.js";
@@ -167,9 +167,14 @@ export interface ApiConfig {
   auth: Auth;
   headers: Record<string, string>;
   encoding: "json" | "form";
+  /**
+   * Credentials this API refuses: a value starting with one of `prefixes` (Stripe's `sk_live_`) is PROVIDER_AUTH
+   * before any request, unless the variable `unlessEnv` is `1` or `true`.
+   */
+  refuse?: { prefixes: string[]; unlessEnv: string };
 }
 
-const API_KEYS = ["base_url", "base_url_env", "auth", "headers", "encoding"];
+const API_KEYS = ["base_url", "base_url_env", "auth", "headers", "encoding", "refuse_credential"];
 
 /**
  * Variable names the engine masks everywhere (packages/core/src/engine/run-context.ts, CREDENTIAL_NAME). A
@@ -230,7 +235,18 @@ export function parseApi(block: Record<string, unknown>, where: string): ApiConf
     encoding: parseEncoding(block.encoding, `${where}.encoding`),
   };
   if (block.base_url_env !== undefined) cfg.baseUrlEnv = envName(block.base_url_env, `${where}.base_url_env`, false);
+  if (block.refuse_credential !== undefined) cfg.refuse = parseRefuse(block.refuse_credential, `${where}.refuse_credential`);
   return cfg;
+}
+
+function parseRefuse(v: unknown, where: string): { prefixes: string[]; unlessEnv: string } {
+  const prefixes = isObject(v) ? v.prefixes : undefined;
+  if (!isObject(v) || !Array.isArray(prefixes) || prefixes.length === 0 || !prefixes.every((p) => typeof p === "string" && p.length >= 3)) {
+    throw planError("must be `{ prefixes: [sk_live_, …], unless_env: NAME }`: credential prefixes to refuse, and the variable that allows them", where);
+  }
+  const extra = Object.keys(v).find((k) => k !== "prefixes" && k !== "unless_env");
+  if (extra) throw planError(`unknown key \`${extra}\` (known: prefixes, unless_env)`, where);
+  return { prefixes: prefixes as string[], unlessEnv: envName(v.unless_env, `${where}.unless_env`, false) };
 }
 
 /**
@@ -250,6 +266,10 @@ export function apiBlock(block: Record<string, unknown>, params: Record<string, 
   }
   const cfg = resolveRecipeApi(raw, where);
   if (raw.recipe !== undefined && recipe !== undefined && recipe !== raw.recipe) throw planError(`uses recipe \`${String(raw.recipe)}\`, but the line's recipe is \`${String(params.recipe)}\``, where);
+  if (raw.recipe !== undefined && raw.refuse_credential !== undefined) {
+    // A recipe's refusal is a safety rule (Stripe: never live keys from a preview), not a default to tune per plan.
+    throw planError("`refuse_credential` comes from the recipe and cannot be overridden; its `unless_env` variable is the opt-out", `${where}.refuse_credential`);
+  }
   if (raw.recipe !== undefined && cfg.base_url === undefined) throw planError(`recipe \`${String(raw.recipe)}\` has no default \`base_url\` (each account has its own): set \`base_url\` in this block`, where);
   parseApi(cfg, where);
   return cfg;
@@ -313,10 +333,14 @@ export interface FindSpec {
   next?: { path: string; param: string };
 }
 
-/** Declared output: a pointer into the object, and whether it must never be shown. */
+/**
+ * Declared output: a pointer into the object, whether it must never be shown, and whether the provider reveals it
+ * only in the answer that creates the object (`once`, ADR 0018: a webhook endpoint's signing secret).
+ */
 export interface OutputDecl {
   path: string;
   sensitive: boolean;
+  once: boolean;
 }
 
 /** `http.resource` params, checked. Values may still be markers. */
@@ -327,7 +351,11 @@ export interface ResourceSpec {
   read?: { path: string };
   find?: FindSpec;
   update?: RequestSpec;
-  delete: { method: string; path: string };
+  /**
+   * How the object is removed. A `POST` with a `body` archives instead of deleting (Stripe prices cannot be deleted,
+   * only set `active: false`); the body is part of the record id, so destroy needs nothing but the ledger.
+   */
+  delete: { method: string; path: string; body?: Record<string, unknown> };
   destroy: DestroyMode;
   itemPath: string;
   idPath: string;
@@ -385,10 +413,14 @@ function parseRead(v: unknown, vars: Record<string, unknown>, find: FindSpec | u
 }
 
 /** Update and delete go to the read path by default: the object's own URL. */
-function parseDelete(v: unknown, vars: Record<string, unknown>, read: { path: string } | undefined): { method: string; path: string } {
+function parseDelete(v: unknown, vars: Record<string, unknown>, read: { path: string } | undefined): ResourceSpec["delete"] {
   if (v === undefined && read === undefined) throw fail("`delete` is required: `{ path: /things/{id} }` (no `read.path` to default to)", "delete");
   const r = parseRequest(v ?? {}, "delete", ["DELETE", "POST"], "DELETE", vars, true, read?.path);
-  return { method: r.method, path: r.path };
+  if (Object.keys(r.body).length === 0) return { method: r.method, path: r.path };
+  if (r.method !== "POST") throw fail("`delete.body` needs `method: POST` (an archive request such as `{ active: false }`)", "delete.body");
+  // The body travels in the record id, which the ledger keeps: plain values only, never a reference or a secret.
+  if (firstMarker(r.body) !== undefined || JSON.stringify(r.body).includes("${")) throw fail("`delete.body` must hold literal values only", "delete.body");
+  return { method: r.method, path: r.path, body: r.body };
 }
 
 function parseOutputs(v: unknown): Record<string, OutputDecl> {
@@ -398,11 +430,20 @@ function parseOutputs(v: unknown): Record<string, OutputDecl> {
     const param = `outputs.${name}`;
     if (name === "id") throw fail("`outputs.id` is reserved: the object's id is always the output `id`", param);
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw fail(`output name \`${name}\` must be letters, digits and _`, param);
-    if (typeof decl === "string") out[name] = { path: pointerParam(decl, param, ""), sensitive: false };
-    else if (isObject(decl)) out[name] = { path: pointerParam(decl.path, `${param}.path`, ""), sensitive: decl.sensitive === true };
-    else throw fail(`\`${param}\` must be a JSON pointer, or \`{ path, sensitive: true }\``, param);
+    if (typeof decl === "string") out[name] = { path: pointerParam(decl, param, ""), sensitive: false, once: false };
+    else if (isObject(decl)) out[name] = outputDecl(decl, param);
+    else throw fail(`\`${param}\` must be a JSON pointer, or \`{ path, sensitive: true, once: true }\``, param);
   }
   return out;
+}
+
+function outputDecl(decl: Record<string, unknown>, param: string): OutputDecl {
+  for (const flag of ["sensitive", "once"]) {
+    if (decl[flag] !== undefined && typeof decl[flag] !== "boolean") throw fail(`\`${param}.${flag}\` must be true or false`, `${param}.${flag}`);
+  }
+  // A value shown only once is a credential by nature: it must never reach output, a receipt or a log (ADR 0018).
+  if (decl.once === true && decl.sensitive !== true) throw fail(`\`${param}\` is \`once: true\`, so it must be \`sensitive: true\` too`, `${param}.sensitive`);
+  return { path: pointerParam(decl.path, `${param}.path`, ""), sensitive: decl.sensitive === true, once: decl.once === true };
 }
 
 function parseFields(v: unknown, param: string): Record<string, unknown> {
@@ -439,10 +480,12 @@ export function parseResource(line: Record<string, unknown>): ResourceSpec {
 }
 
 /** The outputs one `http.resource` line declares: always `id`, plus its `outputs`. */
-export function resourceOutputs(line: Record<string, unknown>): Record<string, { available: "immediate"; sensitive?: boolean }> {
+export function resourceOutputs(line: Record<string, unknown>): Record<string, OutputSpec> {
   const params = expandRecipe(line, "resource");
-  const out: Record<string, { available: "immediate"; sensitive?: boolean }> = { id: { available: "immediate" } };
-  for (const [name, d] of Object.entries(parseOutputs(params.outputs))) out[name] = d.sensitive ? { available: "immediate", sensitive: true } : { available: "immediate" };
+  const out: Record<string, OutputSpec> = { id: { available: "immediate" } };
+  for (const [name, d] of Object.entries(parseOutputs(params.outputs))) {
+    out[name] = { available: "immediate", ...(d.sensitive ? { sensitive: true } : {}), ...(d.once ? { once: true } : {}) };
+  }
   return out;
 }
 

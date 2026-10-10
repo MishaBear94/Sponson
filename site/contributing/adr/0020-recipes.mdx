@@ -157,3 +157,24 @@ chosen: its signing secret exists only in the create response, which the `http` 
 - The rest sim's answers are shaped per collection; the default shape is unchanged.
 - The sim proves a recipe consistent with its own declarations, not with the provider: the verified assumptions and
   `pnpm test:live` are what tie a recipe to the real API.
+
+## Amendment: `{ join }`, refused credentials, and the Stripe webhook (2026-10-11)
+
+The Stripe webhook endpoint row (P0) needed two things this record left out: a once-only output, which the `http`
+adapter now declares (`outputs.<name>.once`, [ADR 0017](/contributing/adr/0017-generic-http-adapter), amendment), and a URL made of
+the preview URL plus a path, since `{ from: web.preview_url }` is a whole value in a plan.
+
+- **`{ join: [<part>, …] }`** is a second template form: literal strings and numbers and `{ param: <name> }` parts,
+  concatenated into one string. It is not interpolation (no parsing of strings, no expressions): a part that is not
+  known yet (a pending reference) makes the whole value that part, so the line shows as pending; a part without a
+  value removes the value. This keeps recipes data, as ADR 0001 wants, while letting a recipe take `url` and `path`
+  as two params.
+- **`api.refuse_credential`** may be declared by a recipe (Stripe: `sk_live_`, `rk_live_`, opt-out
+  `SPONSON_STRIPE_ALLOW_LIVE`) and cannot be overridden by a plan's block.
+- **`sim` hints** gained `list_suffix` and `item_query` for providers that list a collection under a suffix
+  (`…/redirect_urls/all`) and key objects by a value in the query string (`…/redirect_urls?url=…`), as Stytch does.
+  The recipe harness also derives the sim's `form_types` (typed form values) from `encoding: form`, its once fields
+  from `once` outputs, and checks an archiving destroy (`delete.body`) by the archive fields instead of absence.
+
+"Stripe's webhook endpoint was not chosen" (under *First recipes*) is superseded: `stripe.webhook_endpoint` ships with
+the catalog ops `stripe.product`, `stripe.price` and `stripe.coupon`.

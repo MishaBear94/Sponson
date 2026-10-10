@@ -174,3 +174,22 @@ Adapters that do not define them behave exactly as before.
   The plan line remains the only description of a real API, so a wrong line is found by `sponson plan` against the
   real provider, not by the sim.
 - `destroy: keep` is an explicit, per-line exception to "after a destroy nothing Sponson created survives".
+
+## Amendment: once-only outputs, archive deletes, refused credentials (2026-10-11)
+
+Three gaps above stood between the adapter and Stripe's webhook endpoints and catalog objects. Each is closed with the
+smallest declaration that says what the provider does, and none changes an existing line's identity:
+
+- **`outputs.<name>.once: true`** (with `sensitive: true`, which it requires). The op declares the output `once`
+  ([ADR 0018](0018-once-only-outputs.md)), takes it only from the answer to the create that made the object, and never
+  from `read`, an update or an existing object a create found. The engine's fingerprints, refusals and `--recreate`
+  then apply unchanged. "Create-only outputs … there is no declaration" under *What it deliberately does not do* no
+  longer holds.
+- **`delete.body`** with `method: POST`: the archive request for objects a provider never deletes (a Stripe price is
+  only ever `active: false`). The body (literals only) is appended to the record id as ` body=<canonical JSON>`, so
+  destroy still needs nothing but the ledger; record ids without a body are unchanged.
+- **`refuse_credential: { prefixes, unless_env }`** on an API block: a credential starting with one of the prefixes is
+  `PROVIDER_AUTH` before any request, in plan, apply and destroy alike, unless the named variable is `1` or `true`.
+  Stripe's `sk_live_`/`rk_live_` keys must never create objects for a preview. It is part of the block, hence of
+  ledger identity, like `headers`; a recipe's refusal cannot be overridden by the plan (the variable is the opt-out),
+  so it changes only if the recipe does, behind the identity lock.

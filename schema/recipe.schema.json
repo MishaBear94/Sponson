@@ -44,7 +44,17 @@
           ]
         },
         "headers": { "type": "object", "additionalProperties": { "type": "string" } },
-        "encoding": { "enum": ["json", "form"] }
+        "encoding": { "enum": ["json", "form"] },
+        "refuse_credential": {
+          "type": "object",
+          "description": "Credentials the API refuses before any request (Stripe's live-mode keys): values starting with one of `prefixes`, unless the variable `unless_env` is 1 or true. A plan cannot override it.",
+          "required": ["prefixes", "unless_env"],
+          "additionalProperties": false,
+          "properties": {
+            "prefixes": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 3 } },
+            "unless_env": { "type": "string", "pattern": "^SPONSON_[A-Z0-9_]+$" }
+          }
+        }
       }
     },
     "assumptions": {
@@ -117,6 +127,8 @@
           "properties": {
             "id_from": { "type": "string", "description": "The body field a create chooses the id with." },
             "numeric_ids": { "type": "boolean" },
+            "list_suffix": { "type": "string", "pattern": "^/\\S+$", "description": "The path suffix the provider lists the collection under (`/all`)." },
+            "item_query": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "The query parameter that names one object, when the provider keys objects by a value (`url`)." },
             "objects": { "type": "object", "additionalProperties": { "type": "object" }, "description": "Objects to seed, by path (placeholders filled from the examples)." }
           }
         },

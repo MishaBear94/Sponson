@@ -58,7 +58,7 @@ function token(pointer: unknown, fallback: string): string {
 }
 
 /** The sim, shaped like the provider: the create's collection (envelopes, id field) and the seeded parents. */
-function simSeed(op: RecipeOp, spec: Record<string, unknown>) {
+function simSeed(r: Recipe, op: RecipeOp, spec: Record<string, unknown>) {
   const vars = spec.vars as Record<string, unknown>;
   const collections: Record<string, Array<Record<string, unknown>>> = {};
   const styles: Record<string, RestStyle> = {};
@@ -66,6 +66,8 @@ function simSeed(op: RecipeOp, spec: Record<string, unknown>) {
   if (op.kind === "resource" && create?.path) {
     const find = spec.find as { list_path?: string; next?: string } | undefined;
     const coll = fill(create.path, vars);
+    // Outputs the provider shows only in the create's answer (a signing secret): the sim generates them there only.
+    const once = Object.values((spec.outputs as Record<string, unknown> | undefined) ?? {}).flatMap((d) => (typeof d === "object" && d !== null && (d as { once?: boolean }).once ? [token((d as { path: string }).path, "")] : []));
     collections[coll] = [];
     styles[coll] = {
       list_path: find?.list_path ?? "",
@@ -74,6 +76,10 @@ function simSeed(op: RecipeOp, spec: Record<string, unknown>) {
       id_field: token(spec.id_path, "id"),
       ...(op.sim?.id_from ? { id_from: op.sim.id_from } : {}),
       ...(op.sim?.numeric_ids ? { numeric_ids: true } : {}),
+      ...(op.sim?.list_suffix ? { list_suffix: op.sim.list_suffix } : {}),
+      ...(op.sim?.item_query ? { item_query: op.sim.item_query } : {}),
+      ...(r.api.encoding === "form" ? { form_types: true } : {}),
+      ...(once.length ? { once_fields: once } : {}),
     };
   }
   const objects = Object.fromEntries(Object.entries(op.sim?.objects ?? {}).map(([p, o]) => [fill(p, vars), structuredClone(o)]));
@@ -142,7 +148,7 @@ function parentList(sim: SimHandle, spec: Record<string, unknown>): { parent: Re
 async function lifecycleInSim(r: Recipe, name: string, op: RecipeOp): Promise<void> {
   const params = exampleParams(op);
   const spec = expandRecipe({ recipe: `${r.provider}.${name}`, ...interpolate(params, "pr-42") }, op.kind);
-  const sim = await startSim({ seed: simSeed(op, spec) });
+  const sim = await startSim({ seed: simSeed(r, op, spec) });
   const ws = await workspace("recipe", { plan: planText(r, name, op, params) });
   const env = cliEnv(sim, { [String(r.api.base_url_env)]: `${sim.url}/rest`, ...Object.fromEntries(credentialVars(r).map((v) => [v, TOKEN])) });
   const run = new Run(ws, env, ["--env", "preview", "--pr", "42", "--branch", "feat/x", "--sha", SHA]);
@@ -169,12 +175,20 @@ async function lifecycleInSim(r: Recipe, name: string, op: RecipeOp): Promise<vo
     res = await run.cli("apply --destroy --json", sim);
     expect(res.code, `destroy${diag(res)}`).toBe(0);
     expect(lineOf(res).status).toBe("destroyed");
-    if (op.kind === "resource") expect(simItems(sim, spec)).toEqual([]);
+    if (op.kind === "resource") expectDestroyed(sim, spec);
     else expect(sim.state.rest.objects, "destroy left every other item as seeded").toEqual(seededObjects);
   } finally {
     await sim.close();
     await ws.cleanup();
   }
+}
+
+/** Gone, or for a recipe whose destroy archives (a POST with a body), still there with the archive fields set. */
+function expectDestroyed(sim: SimHandle, spec: Record<string, unknown>): void {
+  const archive = (spec.delete as { body?: Record<string, unknown> } | undefined)?.body;
+  if (!archive) return void expect(simItems(sim, spec)).toEqual([]);
+  expect(simItems(sim, spec).length, "the archived object stays").toBeGreaterThan(0);
+  for (const item of simItems(sim, spec)) expect(item, "every object Sponson made is archived").toMatchObject(archive);
 }
 
 async function resourceDrift(run: Run, sim: SimHandle, spec: Record<string, unknown>): Promise<void> {

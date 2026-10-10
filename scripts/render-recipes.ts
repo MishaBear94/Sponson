@@ -76,13 +76,18 @@ function opSection(r: Recipe, name: string, op: RecipeOp): string[] {
     exampleLine(r, name, op),
     "```",
     "",
-    `What the line expands into: the [\`http.${op.kind}\`](plan-format.md#http${op.kind}) params, \`{ param: <name> }\` standing for a param's value and \`{<name>}\` in a path for its URI-encoded value.`,
+    `What the line expands into: the [\`http.${op.kind}\`](plan-format.md#http${op.kind}) params, \`{ param: <name> }\` standing for a param's value${JSON.stringify(op.http).includes('"join":') ? ", `{ join: [...] }` for its parts joined into one string," : ""} and \`{<name>}\` in a path for its URI-encoded value.`,
     "",
     "```yaml",
     templateYaml(op.http),
     "```",
     "",
   ];
+}
+
+/** A recipe's credential refusal, as a table cell. */
+function refused(r: { prefixes: string[]; unless_env: string }): string {
+  return `credentials starting ${r.prefixes.map((p) => `\`${p}\``).join(" or ")} are refused (\`PROVIDER_AUTH\`) unless \`${r.unless_env}=1\`; a plan cannot override this`;
 }
 
 function providerSection(r: Recipe): string[] {
@@ -101,6 +106,7 @@ function providerSection(r: Recipe): string[] {
     `| Credential | ${credential(api)} |`,
     ...(api.headers ? [`| \`headers\` | ${cell(JSON.stringify(api.headers))} |`] : []),
     ...(api.encoding ? [`| \`encoding\` | \`${String(api.encoding)}\` |`] : []),
+    ...(api.refuse_credential ? [`| \`refuse_credential\` | ${refused(api.refuse_credential as { prefixes: string[]; unless_env: string })} |`] : []),
     "",
     "Assumptions:",
     "",

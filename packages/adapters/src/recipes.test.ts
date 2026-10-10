@@ -138,6 +138,12 @@ describe("recipe errors", () => {
     const eu = apiBlock({ eu: { recipe: "cloudflare", base_url: "https://eu.example.test/v4", auth: { bearer_env: "EU_CLOUDFLARE_TOKEN" } } }, { api: "eu", recipe: ref });
     expect(eu).toEqual({ ...loadRecipe("cloudflare").api, base_url: "https://eu.example.test/v4", auth: { bearer_env: "EU_CLOUDFLARE_TOKEN" } });
     expect(codeOf(() => apiBlock({ x: { recipe: "cloudflare", nope: 1 } }, { api: "x", recipe: ref }))).toMatch(/^PLAN_INVALID: .*unknown key `nope`/);
+    // A recipe's credential refusal is a safety rule: a block cannot override it.
+    const guarded = loadRecipes().find((x) => x.api.refuse_credential !== undefined);
+    if (guarded) {
+      const gref = `${guarded.provider}.${Object.keys(guarded.ops)[0]!}`;
+      expect(codeOf(() => apiBlock({ [guarded.provider]: { recipe: guarded.provider, refuse_credential: null } }, { recipe: gref }))).toMatch(/^PLAN_INVALID: .*`refuse_credential` comes from the recipe and cannot be overridden/);
+    }
     // A hand-written line may use a recipe's API defaults too.
     expect(apiBlock({ cf: { recipe: "cloudflare" } }, { api: "cf" })).toEqual(loadRecipe("cloudflare").api);
     expect(resolveRecipeApi({ base_url: "https://x.test" }, "w")).toEqual({ base_url: "https://x.test" });
@@ -157,6 +163,13 @@ describe("recipe errors", () => {
 
   it("substitutes whole values, drops absent optional ones, and leaves lines without `recipe` alone", () => {
     expect(substitute({ a: { param: "x" }, b: [{ param: "y" }, 1], c: { d: { param: "x" } } }, { x: "X" })).toEqual({ a: "X", b: [1], c: { d: "X" } });
+    // `{ join }` concatenates whole values; a value not known yet stands for the whole, a missing one removes it.
+    const tpl = { url: { join: [{ param: "base" }, { param: "path" }] }, n: { join: ["v", { param: "n" }] } };
+    expect(substitute(tpl, { base: "https://pr-42.example.app", path: "/api/hooks", n: 2 })).toEqual({ url: "https://pr-42.example.app/api/hooks", n: "v2" });
+    const pending = resolveParams({ x: { from: "web.preview_url" } }, new Map(), new Map()).params.x;
+    expect(substitute(tpl, { base: pending, path: "/api/hooks", n: 1 })).toEqual({ url: pending, n: "v1" });
+    expect(substitute(tpl, { base: { from: "web.preview_url" }, path: "/p" })).toEqual({ url: { from: "web.preview_url" } });
+    expect(substitute(tpl, { base: "https://${ctx.scope}.example.app", path: "/p", n: 0 })).toEqual({ url: "https://${ctx.scope}.example.app/p", n: "v0" });
     const plain = { api: "a", create: { path: "/x" } };
     expect(expandRecipe(plain, "resource")).toBe(plain);
   });

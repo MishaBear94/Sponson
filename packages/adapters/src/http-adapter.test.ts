@@ -293,6 +293,51 @@ describe("http.resource", () => {
     expect(h.sim.state.writes.map((w) => `${w.method} ${w.path}`)).toEqual(["POST /rest/gates", "POST /rest/apps/demo"]);
   });
 
+  it("a POST delete with a body archives: the body is in the record id and sent by destroy from the ledger alone", async () => {
+    const actx = h.actx("http", API);
+    const archived = { ...GATE, delete: { method: "POST", path: "/gates/{id}", body: { enabled: false, archived: true } } };
+    const r = await resource.apply(actx, archived, null);
+    const id = String(r.outputs.id);
+    expect(r.resources[0]!.id).toBe(`POST /gates/${id} body={"archived":true,"enabled":false}`);
+    await resource.destroy(actx, r.resources);
+    expect(h.sim.state.rest.collections["/gates"]![0]).toMatchObject({ id, enabled: false, archived: true });
+    expect(h.sim.state.writes.map((w) => `${w.method} ${w.path}`)).toEqual(["POST /rest/gates", `POST /rest/gates/${id}`]);
+    // With gone statuses too, both survive the round trip through the record id.
+    const gone = await resource.apply(actx, { ...archived, find: { ...GATE.find, match: { name: "other" } }, gone_status: [410] }, null);
+    expect(gone.resources[0]!.id).toMatch(/^POST \/gates\/it_\d+ gone=410 body=\{"archived":true,"enabled":false\}$/);
+    await resource.destroy(actx, gone.resources);
+  });
+
+  it("once outputs: returned by the create that made the object only, never by read, a found existing object or an update", async () => {
+    h.sim.state.rest.styles["/hooks"] = { once_fields: ["secret"] };
+    const actx = h.actx("http", API);
+    const hook = {
+      api: "demo",
+      find: { path: "/hooks", list_path: "/data", match: { name: "hook-pr-42" } },
+      create: { path: "/hooks" },
+      update: { method: "POST", path: "/hooks/{id}" },
+      delete: { path: "/hooks/{id}" },
+      item_path: "/data",
+      fields: { url: "https://pr-42.example.app/hook" },
+      outputs: { secret: { path: "/secret", sensitive: true, once: true } },
+    };
+    expect(resource.outputsFor!(hook).secret).toEqual({ available: "immediate", sensitive: true, once: true });
+    const r = await resource.apply(actx, hook, null);
+    expect(r.outputs.secret).toMatch(/^secret_sim_/);
+    expect(h.sim.state.rest.collections["/hooks"]![0]).not.toHaveProperty("secret");
+    const live = await resource.read(actx, hook);
+    expect(live!.outputs).toEqual({ id: r.outputs.id });
+    // A changed field is an update (POST to the object, as Stripe does): the secret is not touched, nor returned.
+    const moved = { ...hook, fields: { url: "https://pr-42-b.example.app/hook" } };
+    const u = await readApply(h, resource, moved);
+    expect(u.result.outputs).toEqual({ id: r.outputs.id });
+    expect(h.sim.state.rest.collections["/hooks"]![0]).toMatchObject({ url: "https://pr-42-b.example.app/hook" });
+    // A create the provider refuses as existing returns the found object, without the value.
+    const again = await resource.apply(actx, moved, null);
+    expect(again).toMatchObject({ created: [], outputs: { id: r.outputs.id } });
+    expect(again.outputs).not.toHaveProperty("secret");
+  });
+
   it("works with the sim's X-Api-Key credential end to end", async () => {
     const r = await resource.apply(h.actx("http", { ...API, auth: { header: "X-Api-Key", value_env: "REST_API_TOKEN" } }), GATE, null);
     expect(r.created).toEqual([GATE_KEY]);
@@ -355,6 +400,45 @@ describe("http: malformed specs name the field", () => {
       providerFor({ demo: API }, { ...GATE, api: "nope" });
     } catch (e) {
       expect(e).toMatchObject({ code: "PLAN_INVALID" });
+    }
+  });
+
+  it("once outputs must be sensitive; a delete body needs POST and literal values", () => {
+    const code = (f: () => unknown) => {
+      try {
+        f();
+      } catch (e) {
+        return `${(e as { code: string }).code}: ${(e as Error).message}`;
+      }
+      return "(no error)";
+    };
+    expect(code(() => resource.outputsFor!({ ...GATE, outputs: { s: { path: "/secret", once: true } } }))).toMatch(/^PARAM_INVALID: .*`outputs.s` is `once: true`, so it must be `sensitive: true`/);
+    expect(code(() => resource.outputsFor!({ ...GATE, outputs: { s: { path: "/secret", once: "yes" } } }))).toMatch(/`outputs.s.once` must be true or false/);
+    expect(code(() => resource.diff(null, { ...GATE, delete: { path: "/gates/{id}", body: { active: false } } }))).toMatch(/`delete.body` needs `method: POST`/);
+    const marker = resolved({ x: { from: "other.value" } }).x;
+    expect(code(() => resource.diff(null, { ...GATE, delete: { method: "POST", path: "/gates/{id}", body: { active: marker } } }))).toMatch(/`delete.body` must hold literal values only/);
+  });
+
+  it("refuse_credential: a refused credential prefix is PROVIDER_AUTH before any request, unless its variable opts in", async () => {
+    const h = await harness();
+    try {
+      const guarded = { ...API, refuse_credential: { prefixes: ["sk_live_", "rk_live_"], unless_env: "SPONSON_ALLOW_LIVE" } };
+      h.env.REST_API_TOKEN = "sk_live_not_a_real_key_0042";
+      const actx = h.actx("http", guarded);
+      const err = await resource.read(actx, GATE).catch((e: unknown) => e);
+      expect(err).toMatchObject({ code: "PROVIDER_AUTH", message: expect.stringMatching(/REST_API_TOKEN holds a `sk_live_…` credential.*SPONSON_ALLOW_LIVE=1/) });
+      expect(String((err as Error).message)).not.toContain("not_a_real_key");
+      expect(h.sim.state.writes).toEqual([]);
+      await expect(resource.destroy(actx, [{ key: GATE_KEY, id: "DELETE /gates/it_1", hash: "" }])).rejects.toMatchObject({ code: "PROVIDER_AUTH" });
+      h.env.SPONSON_ALLOW_LIVE = "1";
+      expect(await resource.read(actx, GATE)).toBeNull();
+      h.env.REST_API_TOKEN = "sk_test_fine_0042";
+      delete h.env.SPONSON_ALLOW_LIVE;
+      expect(await resource.read(actx, GATE)).toBeNull();
+      expect(() => resource.providerFor!({ demo: { ...API, refuse_credential: { prefixes: [] } } }, GATE)).toThrow(/prefixes/);
+      expect(() => resource.providerFor!({ demo: { ...API, refuse_credential: { prefixes: ["sk_live_"], unless_env: "X", more: 1 } } }, GATE)).toThrow(/unknown key `more`/);
+    } finally {
+      await h.close();
     }
   });
 

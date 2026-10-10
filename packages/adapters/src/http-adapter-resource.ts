@@ -39,11 +39,15 @@ function label(spec: ResourceSpec, key: string): string {
   return `${spec.api} ${key}`;
 }
 
-/** The record id: the request that removes the object (or `KEEP`), and the statuses that mean it is gone. */
+/**
+ * The record id: the request that removes the object (or `KEEP`), the statuses that mean it is gone, and the body
+ * of an archiving `POST` (canonical JSON, last).
+ */
 function locator(spec: ResourceSpec, id: string): string {
   const method = spec.destroy === "keep" ? "KEEP" : spec.delete.method;
   const gone = spec.goneStatus.length ? ` gone=${spec.goneStatus.join(",")}` : "";
-  return `${method} ${fillPath(spec.delete.path, spec.vars, id)}${gone}`;
+  const body = spec.delete.body ? ` body=${canonicalJson(spec.delete.body)}` : "";
+  return `${method} ${fillPath(spec.delete.path, spec.vars, id)}${gone}${body}`;
 }
 
 /**
@@ -55,9 +59,16 @@ export function resourceIdentity(spec: ResourceSpec, id: string): { key: string 
 }
 
 /** The request a record id names. */
-function parseLocator(id: string): { method: string; path: string; gone: number[] } | null {
-  const m = /^(DELETE|POST|KEEP) (\/\S*)(?: gone=([\d,]+))?$/.exec(id);
-  return m ? { method: m[1]!, path: m[2]!, gone: m[3] ? m[3].split(",").map(Number) : [] } : null;
+function parseLocator(id: string): { method: string; path: string; gone: number[]; body: Record<string, unknown> } | null {
+  const m = /^(DELETE|POST|KEEP) (\/\S*)(?: gone=([\d,]+))?(?: body=(\{.*\}))?$/.exec(id);
+  if (!m) return null;
+  let body: unknown = {};
+  try {
+    body = m[4] ? JSON.parse(m[4]) : {};
+  } catch {
+    return null;
+  }
+  return isObject(body) ? { method: m[1]!, path: m[2]!, gone: m[3] ? m[3].split(",").map(Number) : [], body } : null;
 }
 
 function fieldNames(spec: ResourceSpec): string[] {
@@ -73,9 +84,15 @@ function record(spec: ResourceSpec, key: string, l: Located): ResourceRecord {
   return { key, id: locator(spec, l.id), hash: stateHash(projection(l.item, fieldNames(spec))), label: label(spec, key) };
 }
 
-function outputsOf(spec: ResourceSpec, item: Record<string, unknown> | undefined, id: string): Record<string, Literal> {
+/**
+ * The line's outputs read from `item`. A `once` output is taken only from the answer to the create that made the
+ * object (`created`): anywhere else a value would be a guess, and the engine would fingerprint it as a new one
+ * (ADR 0018).
+ */
+function outputsOf(spec: ResourceSpec, item: Record<string, unknown> | undefined, id: string, created = false): Record<string, Literal> {
   const out: Record<string, Literal> = { id };
   for (const [name, d] of Object.entries(spec.outputs)) {
+    if (d.once && !created) continue;
     const v = literalOf(at(item, pointerTokens(d.path)));
     if (v !== undefined) out[name] = v;
   }
@@ -200,14 +217,15 @@ async function create(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, 
   }
   let item = itemOf(sent.response, spec.itemPath);
   let id = idOf(item, spec.idPath);
+  const answered = id !== undefined;
   if (id === undefined) {
-    // Some APIs answer a create with no body (201, 204): find what was created.
+    // Some APIs answer a create with no body (201, 204): find what was created. A `once` output is then lost.
     const l = await locate(api, spec);
     if (!l) throw noId(spec, `the answer to ${spec.create.method} ${path}`);
     ({ id, item } = l);
   }
   const resource = { key, id: locator(spec, id), hash: stateHash(desiredState(spec, undefined)), label: label(spec, key) };
-  return { resources: [resource], outputs: outputsOf(spec, item, id), created: [key] };
+  return { resources: [resource], outputs: outputsOf(spec, item, id, answered), created: [key] };
 }
 
 async function update(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, key: string, current: ResourceRecord, live: LiveState): Promise<ApplyResult> {
@@ -273,7 +291,7 @@ export const resource: OpSpec = {
       if (!req) throw new SponsonError("INTERNAL", `${ADAPTER}: ${r.key}: record id \`${r.id}\` is not a delete request`, { adapter: ADAPTER, key: r.key });
       if (req.method === "KEEP") continue; // `destroy: keep`: left in place on purpose
       try {
-        await write(api, req.method, req.path, req.method === "POST" ? {} : undefined, true);
+        await write(api, req.method, req.path, req.method === "POST" ? req.body : undefined, true);
       } catch (e) {
         if (!failedWith(e, "PROVIDER_NOT_FOUND", req.gone)) throw e;
       }
