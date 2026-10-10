@@ -12,6 +12,8 @@ add or rename a label in GitHub, update it here (or create them all with the `gh
 | `adapter` | `5319e7` | A new provider adapter, secret source or receipt store, or a change to one. |
 | `documentation` | `0075ca` | Docs only. |
 | `security` | `b60205` | Hardening with no live vulnerability. Vulnerabilities go through SECURITY.md, never an issue. |
+| `security-contact` | `b60205` | A reporter asks for a private channel (issue form; no details). Reply privately, then close. |
+| `question` | `d876e3` | A usage question (issue form). Answer, and improve the docs if the answer was hard to find. |
 | `dependencies` | `0366d6` | Dependency updates (Dependabot applies it). |
 
 ## Contributor experience
@@ -55,6 +57,8 @@ gh label create needs-repro        --color fbca04 --description "Needs a reprodu
 gh label create needs-adr          --color fbca04 --description "Needs an ADR in docs/adr" --force
 gh label create blocked            --color 000000 --description "Waiting on something else" --force
 gh label create security           --color b60205 --description "Hardening (vulnerabilities: SECURITY.md)" --force
+gh label create security-contact   --color b60205 --description "Private channel requested; no details" --force
+gh label create question           --color d876e3 --description "Usage question" --force
 gh label create dependencies       --color 0366d6 --description "Dependency updates" --force
 for a in core receipts redaction adapters sim cli mcp action tests ci docs; do
   gh label create "area/$a" --color c5def5 --force

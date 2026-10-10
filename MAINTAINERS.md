@@ -14,7 +14,7 @@ Emeritus maintainers are listed here when they step back; they keep their credit
 
 ## Roles
 
-- **Contributor** — anyone who opens an issue, a discussion or a pull request.
+- **Contributor** — anyone who opens an issue or a pull request.
 - **Reviewer** — a regular contributor trusted to review one area (an adapter, the sim, the Action). Reviewers'
   approvals count toward the review rule below for their area. Listed in `.github/CODEOWNERS`.
 - **Maintainer** — merges, releases, triages, and owns the decisions below. Listed above.

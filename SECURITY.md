@@ -17,12 +17,16 @@ The GitHub Action (`action/`) follows the version of the `sponson` package it ru
 
 ## Reporting a vulnerability
 
-**Do not open a public issue, discussion or pull request.**
+**Never put vulnerability details in a public issue or pull request.**
 
-Use GitHub's private vulnerability reporting: on the repository, go to **Security → Advisories → Report a
-vulnerability** (`https://github.com/MishaBear94/Sponson/security/advisories/new`). If that is unavailable to you,
-contact a maintainer listed in [MAINTAINERS.md](MAINTAINERS.md) and ask for a private channel; do not include
-details in the first message.
+1. Open an issue with the **Security contact request** form (or titled "Security contact request") and **no
+   details** — only that you have something to report. A maintainer ([MAINTAINERS.md](MAINTAINERS.md)) will reply
+   with a private channel, normally within two working days.
+2. Send the details there.
+
+If the repository's **Security → Advisories → Report a vulnerability** button is available to you, use it instead:
+it is private from the first message. (It appears only when the maintainers have enabled private vulnerability
+reporting.)
 
 Please include:
 

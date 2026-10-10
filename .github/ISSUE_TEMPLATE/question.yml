@@ -1,0 +1,23 @@
+name: Question
+description: Ask how to do something with Sponson, or check whether a behaviour is intended.
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before asking: [README](https://github.com/MishaBear94/Sponson#readme), [plan format](https://github.com/MishaBear94/Sponson/blob/main/docs/plan-format.md),
+        [errors](https://github.com/MishaBear94/Sponson/blob/main/docs/errors.md) and [examples](https://github.com/MishaBear94/Sponson/tree/main/examples) answer most questions.
+        Remove secret values from anything you paste.
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: What you are trying to do, and what you tried.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Plan snippet or output (optional)
+      description: The relevant lines of release.plan.yaml or `--json` output, with secrets removed.
+      render: yaml
