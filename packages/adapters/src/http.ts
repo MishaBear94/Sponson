@@ -90,13 +90,25 @@ export class ShapeError extends Error {
 export interface ApiClient {
   readonly adapter: string;
   get<T = unknown>(path: string, shape?: Shape<T>): Promise<T>;
-  post<T = unknown>(path: string, body?: unknown, shape?: Shape<T>): Promise<T>;
-  patch<T = unknown>(path: string, body?: unknown, shape?: Shape<T>): Promise<T>;
+  post<T = unknown>(path: string, body?: unknown, shape?: Shape<T>, opts?: WriteOptions): Promise<T>;
+  /** PUT replaces the target, so it is retried after a 502/503/504 or a dropped connection like GET. */
+  put<T = unknown>(path: string, body?: unknown, shape?: Shape<T>): Promise<T>;
+  patch<T = unknown>(path: string, body?: unknown, shape?: Shape<T>, opts?: WriteOptions): Promise<T>;
   delete<T = unknown>(path: string, shape?: Shape<T>): Promise<T>;
 }
 
+/** Options for a POST or PATCH. Stable authoring API. */
+export interface WriteOptions {
+  /**
+   * The request may safely be sent twice: it sets state rather than adding to it (a PATCH that replaces a whole
+   * list, a POST with an idempotency key). Then a 502/503/504 or a dropped connection is retried as for GET;
+   * otherwise only refusals (429, 423) are, since the first attempt may have taken effect.
+   */
+  idempotent?: boolean;
+}
+
 /** Methods whose repetition is harmless, so 5xx and network errors are retried. */
-const IDEMPOTENT = new Set(["GET", "HEAD", "DELETE"]);
+const IDEMPOTENT = new Set(["GET", "HEAD", "DELETE", "PUT"]);
 /** Retried for any method: the provider refused before doing anything (rate limit, Neon's "operation running"). */
 const REFUSED_STATUSES = new Set([429, 423]);
 /** Retried only for idempotent methods: the request may or may not have been executed. */
@@ -222,7 +234,7 @@ export function apiClient(opts: ApiClientOptions): ApiClient {
       ...extra,
     });
 
-  async function once(method: string, path: string, body: unknown): Promise<{ status: number; text: string } | Attempt> {
+  async function once(method: string, path: string, body: unknown, idempotent: boolean): Promise<{ status: number; text: string } | Attempt> {
     const controller = new AbortController();
     const init: RequestInit =
       body === undefined
@@ -234,22 +246,23 @@ export function apiClient(opts: ApiClientOptions): ApiClient {
       const text = await res.text(); // the timer also bounds a body that never finishes
       if (res.ok) return { status: res.status, text };
       const code = classifyStatus(res.status, text);
-      const retryable = REFUSED_STATUSES.has(res.status) || (IDEMPOTENT.has(method) && UNAVAILABLE_STATUSES.has(res.status));
+      const retryable = REFUSED_STATUSES.has(res.status) || (idempotent && UNAVAILABLE_STATUSES.has(res.status));
       return new Attempt(code, retryable, excerptOf(text, opts.redact), res.status, retryAfterMs(res.headers.get("retry-after")));
     } catch (e) {
       if (controller.signal.aborted) return new Attempt("PROVIDER_TIMEOUT", false, `no response within ${policy.timeoutMs}ms (SPONSON_HTTP_TIMEOUT_MS)`);
       // `fetch failed` alone says nothing; the cause (ECONNREFUSED, ECONNRESET, ENOTFOUND) does.
       const cause = (e as Error & { cause?: Error }).cause?.message ?? (e as Error).message;
       // A write whose connection dropped may have happened; only idempotent requests are repeated.
-      return new Attempt("PROVIDER_TRANSIENT", IDEMPOTENT.has(method), `${base}${path}: ${opts.redact(cause)}`);
+      return new Attempt("PROVIDER_TRANSIENT", idempotent, `${base}${path}: ${opts.redact(cause)}`);
     } finally {
       clearTimeout(timer);
     }
   }
 
-  async function call<T>(method: string, path: string, body: unknown, shape?: Shape<T>): Promise<T> {
+  async function call<T>(method: string, path: string, body: unknown, shape?: Shape<T>, write?: WriteOptions): Promise<T> {
+    const idempotent = write?.idempotent ?? IDEMPOTENT.has(method);
     for (let attempt = 1; ; attempt++) {
-      const r = await once(method, path, body);
+      const r = await once(method, path, body, idempotent);
       if (r instanceof Attempt) {
         if (r.retryable && attempt <= policy.retries) {
           await sleep(Math.min(MAX_RETRY_WAIT_MS, r.waitMs ?? backoffMs(attempt, policy.baseMs)));
@@ -267,8 +280,9 @@ export function apiClient(opts: ApiClientOptions): ApiClient {
   return {
     adapter: opts.adapter,
     get: (path, shape) => call("GET", path, undefined, shape),
-    post: (path, body, shape) => call("POST", path, body, shape),
-    patch: (path, body, shape) => call("PATCH", path, body, shape),
+    post: (path, body, shape, write) => call("POST", path, body, shape, write),
+    put: (path, body, shape) => call("PUT", path, body, shape),
+    patch: (path, body, shape, write) => call("PATCH", path, body, shape, write),
     delete: (path, shape) => call("DELETE", path, undefined, shape),
   };
 }

@@ -132,6 +132,20 @@ describe("retries", () => {
     expect(seen.map((s) => s.method)).toEqual(["POST", "POST", "POST"]);
   });
 
+  it("repeats a PATCH on 5xx only when the adapter says it is idempotent; a PUT always", async () => {
+    let url = await serve((_q, res) => reply(res, 503, "{}"));
+    expect((await failure(client(url).patch("/x", { list: [] }))).code).toBe("PROVIDER_TRANSIENT");
+    expect(seen.map((s) => s.method)).toEqual(["PATCH"]);
+    server!.close();
+    for (const send of [(c: ApiClient) => c.patch("/x", { list: [] }, undefined, { idempotent: true }), (c: ApiClient) => c.put("/x", { list: [] })]) {
+      seen = [];
+      url = await serve((_q, res, n) => (n === 1 ? reply(res, 503, "{}") : reply(res, 200, '{"ok":true}')));
+      expect(await send(client(url))).toEqual({ ok: true });
+      expect(seen).toHaveLength(2);
+      server!.close();
+    }
+  });
+
   it("gives up after SPONSON_HTTP_RETRIES with PROVIDER_TRANSIENT and the attempt count", async () => {
     const url = await serve((_q, res) => reply(res, 504, "{}"));
     const e = await failure(client(url, { ...FAST, SPONSON_HTTP_RETRIES: "2" }).delete("/x"));

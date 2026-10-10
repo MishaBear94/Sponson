@@ -127,7 +127,8 @@ Where the template's shape does not fit, change it:
 - **No fixed base URL** (a per-tenant API such as Auth0's `https://<domain>/api/v2`): build the URL from the provider
   block, and delete the template's `<NAME>_DEFAULT_API_URL` export and its entry in `PUBLIC_API`.
 - **No object per item** (a list stored on a parent object, such as an application's callback URLs): `apply` becomes
-  read-modify-write of the whole list. Re-read after writing, and say in your assumptions whether the provider offers
+  read-modify-write of the whole list. Send the replacement with `put()`, or `patch(…, { idempotent: true })`, so a
+  dropped connection is retried. Re-read after writing, and say in your assumptions whether the provider offers
   a precondition (ETag, version). Scope locks do not serialise two scopes writing the same parent object; see
   ROADMAP.md, section 4.
 
@@ -135,7 +136,7 @@ The **stable authoring API** — everything the template uses, exported from `@s
 compatible across minor releases, so an out-of-tree plugin can copy the template and import the same names from
 the package: `clientFor`, `requireEnv`, `optionalEnv`, `requireProvider`, `stringParam`, `paramError`,
 `diffValue`, `desiredSide`, `assertNoPending`, `deleteIgnoringNotFound` (common.ts) and `ApiClient`, `Page`,
-`Shape`, `ShapeError`, `isObject`, `obj`, `records`, `listAll`, `withQuery`, `isProviderError` (http.ts). Other
+`Shape`, `ShapeError`, `WriteOptions`, `isObject`, `obj`, `records`, `listAll`, `withQuery`, `isProviderError` (http.ts). Other
 exports are for the built-in adapters and may change. The template imports nothing else from the package, and
 the scaffold test fails if it ever does.
 

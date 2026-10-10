@@ -38,7 +38,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "assertNoPending", "awsSecretsManagerSource", "backoffMs", "classifyStatus", "clerkAdapter", "clientFor", "createRegistry", "defaultExec",
     "deleteIgnoringNotFound", "desiredSide", "diffValue", "dopplerSecretSource", "envSecretSource", "excerptOf", "gcpSecretManagerSource",
     "isObject", "isProviderError", "isTransient", "listAll", "neonAdapter", "obj", "opSecretSource", "optionalEnv", "paramError",
-    "records", "requireEnv", "requireProvider", "retryAfterMs", "stringParam", "vercelAdapter", "withQuery",
+    "records", "requireEnv", "requireProvider", "retryAfterMs", "stringParam", "vercelAdapter", "withQuery", "WriteOptions",
   ],
   "@sponson/sim": [
     "CHAOS_KEYS", "ChaosAction", "ChaosConfig", "ChaosRequest", "ClerkRedirect", "ClerkSeed", "ClerkState",
