@@ -24,6 +24,9 @@ steps:
       outputs: { item: { value: hello } }
   - sim:
       write_order: ["POST /__name__/projects/demo/items"]
+      # Any provider's sim state, by dotted path (see the header of scenarios/runner.test.ts).
+      state:
+        "__name__.projects.demo.items": { includes: { value: hello } }
   - run: apply --json
     expect:
       exit: 0
@@ -56,3 +59,5 @@ steps:
       lines: { item: destroyed }
   - sim:
       write_order: ["POST /__name__", "PATCH /__name__", "DELETE /__name__/projects/demo/items/"]
+      state:
+        "__name__.projects.demo.items": { length: 0 }

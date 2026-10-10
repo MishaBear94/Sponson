@@ -100,8 +100,9 @@ It writes the four files below from `templates/adapter/` — a complete example 
 scope, with read/diff/apply/destroy/listScope/adopt) built on the helpers, unit tests against the sim, a `ProviderSim`
 with numbered assumptions, and a scenario covering create, idempotent re-apply, drift and destroy — makes the
 registrations in steps 2 and 3, adds the names the new files export to the public-API list
-(`packages/core/src/public-api.test.ts`), starts the docs of step 5 (a section for the example op in
-`docs/plan-format.md`), and runs `pnpm docs:gen`, which reads the adapter's `about` (credential and base-URL
+(`packages/core/src/public-api.test.ts`), starts the docs and schema of step 5 (a section for the example op in
+`docs/plan-format.md`; the provider block, op params and rule in `schema/release.plan.schema.json`, with TODOs), puts
+the scenario in `scenarios/adapters/<name>.yaml`, and runs `pnpm docs:gen`, which reads the adapter's `about` (credential and base-URL
 variables) from the registry. It prints each edit; re-running it is safe;
 `--dry-run` shows what it would do and `--help` how to call it. Right after it, `pnpm typecheck && pnpm lint &&
 pnpm test` passes with no manual edit — `scenarios/tooling/new-adapter.test.ts` scaffolds a copy of the
@@ -112,12 +113,23 @@ The checklist, in full:
 
 1. **The adapter file**, `packages/adapters/src/<name>.ts`, built only with the stable authoring API of `@sponson/adapters` (below). Implement `adopt()` on each op that `sponson init` should be able to adopt, and `writesEnvironment()` when the op targets a deployment environment. Every export carries a doc comment and is listed in `PUBLIC_API` (`packages/core/src/public-api.test.ts`); the scaffold does this for the names the template exports, so only renamed or new exports need adding by hand.
 2. **Register it**: in-tree, add it to `createRegistry()` in `packages/adapters/src/index.ts`; out of tree, publish a module exporting `register(registry)` and load it with `SPONSON_PLUGINS=<module>`.
-3. **Sim routes**: `packages/sim/src/routes/<name>.ts` implementing `ProviderSim` (seed, reset, drift, routes, and its `env` token/URL variable names), plus one entry in `PROVIDERS` in `packages/sim/src/state.ts`. Routes are a table: one `route(method, path, handler)` per endpoint, with `:name` path segments arriving in `params`, served by `router(…)`. Write the API assumptions your routes encode at the top of that file, numbered.
+3. **Sim routes**: `packages/sim/src/routes/<name>.ts` implementing `ProviderSim` (seed, reset, drift, routes, and its `env` token/URL variable names), plus one entry in `PROVIDERS` in `packages/sim/src/state.ts`. Routes are a table: one `route(method, path, handler)` per endpoint, with `:name` path segments arriving in `params`, served by `router(…)`. Write the API assumptions your routes encode at the top of that file, numbered, each marked verified (cite the provider's docs or OpenAPI spec) or unverified; add a section for them to `docs/api-verification.md`. Pin the ones a wrong guess would break in `scenarios/contract.test.ts` (`assumption <id>: …`) so `pnpm test:live` can check them.
 4. **One scenario** under `scenarios/`, and an adapter unit test against the sim (`packages/adapters/src/testing.ts`).
-5. **Docs and schema**: run `pnpm docs:gen` (it rewrites every generated part of the docs from the registry), then write what it does not generate: each op's section under "Built-in ops" in `docs/plan-format.md` (params, resource keys, what counts as drift; the scaffold's section describes the example op), and in `schema/release.plan.schema.json` the `providers.<name>` block and each op's params definition, wherever they are not generated. `scenarios/docs/` fails when a generated part is stale, an op has no section, or the schema disagrees with the parser.
+5. **Docs and schema**: run `pnpm docs:gen` (it rewrites every generated part of the docs and the site from the registry), then write what it does not generate: each op's section under "Built-in ops" in `docs/plan-format.md` (params, resource keys, what counts as drift; the scaffold's section describes the example op), and in `schema/release.plan.schema.json` the `providers.<name>` block and an `op_<name>_<op>` params definition per op, with its rule and the adapter's name in the `adapter` field's description (the scaffold writes these for the example op). `scenarios/docs/` fails when a generated part is stale, an op has no section, an adapter or op is missing from the schema, or the schema disagrees with the parser.
 6. **A changeset** (`pnpm changeset`), then `pnpm typecheck && pnpm lint && pnpm test`.
 
-Harnesses pick up the new provider's environment from `simEnv(sim)`; nothing else needs editing.
+Harnesses pick up the new provider's environment from `simEnv(sim)`, and a scenario asserts any provider's sim
+state with `sim: { state: { "<name>.<path>": … } }` (see the header of `scenarios/runner.test.ts`); nothing else
+needs editing.
+
+Where the template's shape does not fit, change it:
+
+- **No fixed base URL** (a per-tenant API such as Auth0's `https://<domain>/api/v2`): build the URL from the provider
+  block, and delete the template's `<NAME>_DEFAULT_API_URL` export and its entry in `PUBLIC_API`.
+- **No object per item** (a list stored on a parent object, such as an application's callback URLs): `apply` becomes
+  read-modify-write of the whole list. Re-read after writing, and say in your assumptions whether the provider offers
+  a precondition (ETag, version). Scope locks do not serialise two scopes writing the same parent object; see
+  ROADMAP.md, section 4.
 
 The **stable authoring API** — everything the template uses, exported from `@sponson/adapters` and kept
 compatible across minor releases, so an out-of-tree plugin can copy the template and import the same names from
@@ -138,6 +150,8 @@ Rules the engine relies on:
 - One diff per resource, however many fields it has: its `key` is the resource's `ResourceRecord.key`, which is the ledger key, and it is `update` when any field differs.
 - A resource's `hash` covers every field the plan controls, in one canonical form (`sha256(canonicalJson({ … }))`, as `branchHash` in `packages/adapters/src/neon.ts` does); `diff` compares through the same form. Drift is detected only through the hash, so a field left out can be changed in the console unnoticed.
 - Changing what a hash covers is a breaking change: existing ledger entries stop matching, and the first apply that changes such a resource reports `changed` drift and refuses without `--reconcile`. Say so in a `**Breaking:**` changeset and tell users to run `sponson apply` once with an unchanged plan after upgrading (unchanged lines re-record their hashes) before editing those lines.
+- The ledger identifies a resource by adapter, provider block and key, so the key need not repeat what the provider block already says (the project, the application).
+- `missing` drift (Sponson created it, it is gone) never blocks: the next apply recreates it. `changed` drift (the hash differs) is refused until `--reconcile`.
 - `destroy` treats "already gone" as success.
 - Outputs marked `sensitive` may be returned, but never logged by the adapter; the engine redacts them.
 - Throw `SponsonError` with a code from `ERROR_CODES`; adding a code means adding it there, with its exit code and, if the CLI has a remedy, a `cliHint`.

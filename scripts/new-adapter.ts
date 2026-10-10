@@ -177,11 +177,72 @@ function edits(name: string, api: Map<string, string[]>, opDoc: string): Edit[] 
         return t.replace(m[0], `export const PROVIDERS = {${next}}`);
       },
     },
+    ...schemaEdits(name),
     {
       file: SIM_INDEX,
       change: exportSim,
       present: (t) => t.includes(exportSim),
       apply: (t) => afterLast(t, /^export \* from "\.\/routes\/[\w-]+\.js";$/, exportSim, "the export", SIM_INDEX),
+    },
+  ];
+}
+
+const SCHEMA_FILE = "schema/release.plan.schema.json";
+
+/**
+ * The hand-written plan schema's entries for the template's op (`<name>.item`): the provider block, the op's params,
+ * the rule that applies them, and the adapter's name in the `adapter` field's description. Text edits, not a JSON
+ * round trip, so the file's hand formatting survives; scenarios/docs/schema.test.ts checks the result.
+ */
+function schemaEdits(name: string): Edit[] {
+  const def = `op_${name}_item`;
+  const fail = (what: string) => new Error(`${SCHEMA_FILE}: cannot find ${what}; add the ${name} entries by hand (see the clerk ones)`);
+  return [
+    {
+      file: SCHEMA_FILE,
+      change: `providers.${name}`,
+      present: (t) => t.includes(`"${name}": {\n          "type": "object"`),
+      apply: (t) => {
+        const providers = t.indexOf('"providers": {');
+        const props = providers < 0 ? -1 : t.indexOf('"properties": {', providers);
+        if (props < 0) throw fail("the providers block");
+        const at = props + '"properties": {'.length;
+        const entry = `\n        "${name}": {\n          "type": "object",\n          "description": "TODO: what providers.${name} configures.",\n          "required": ["project"],\n          "properties": { "project": { "type": "string", "minLength": 1 } }\n        },`;
+        return t.slice(0, at) + entry + t.slice(at);
+      },
+    },
+    {
+      file: SCHEMA_FILE,
+      change: `change rule: ${name}.item → $defs.${def}`,
+      present: (t) => t.includes(`"#/$defs/${def}"`),
+      apply: (t) => {
+        const last = t.lastIndexOf('"then": { "$ref": "#/$defs/op_');
+        const close = last < 0 ? -1 : t.indexOf("\n        }", last);
+        if (close < 0) throw fail("the per-op rules (`\"then\": { \"$ref\": \"#/$defs/op_…\" }`)");
+        const at = close + "\n        }".length;
+        const rule = `,\n        {\n          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "${name}" }, "op": { "const": "item" } } },\n          "then": { "$ref": "#/$defs/${def}" }\n        }`;
+        return t.slice(0, at) + rule + t.slice(at);
+      },
+    },
+    {
+      file: SCHEMA_FILE,
+      change: `$defs.${def}`,
+      present: (t) => t.includes(`"${def}": {`),
+      apply: (t) => {
+        const end = t.lastIndexOf("\n  }\n}");
+        if (end < 0) throw fail("the end of $defs");
+        const body = `,\n    "${def}": {\n      "description": "${name}.item: TODO: one line on what the op manages. Outputs: id, value.",\n      "required": ["value"],\n      "properties": {\n        "id": true,\n        "adapter": true,\n        "op": true,\n        "environments": true,\n        "depends_on": true,\n        "name": { "$ref": "#/$defs/stringOrRef", "description": "Defaults to sponson-<env>-<scope>." },\n        "value": { "$ref": "#/$defs/stringOrRef" }\n      },\n      "additionalProperties": false\n    }`;
+        return t.slice(0, end) + body + t.slice(end);
+      },
+    },
+    {
+      file: SCHEMA_FILE,
+      change: `adapter description: + ${name}`,
+      present: (t) => new RegExp(`Built in: [^.]*\\b${name}\\b`).test(t),
+      apply: (t) => {
+        if (!/Built in: [^.]*\./.test(t)) throw fail('"Built in: …." in the adapter field\'s description');
+        return t.replace(/Built in: ([^.]*)\./, (_m, list: string) => `Built in: ${list}, ${name}.`);
+      },
     },
   ];
 }

@@ -36,3 +36,5 @@ steps:
       warnings: ["expired lock"]
   - sim:
       clerk_redirects: { "https://prj_demo-01234567.vercel.app": exists }
+      state:
+        clerk.redirect_urls: { includes: { url: "https://prj_demo-01234567.vercel.app" } }

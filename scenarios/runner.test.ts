@@ -7,7 +7,7 @@
  *
  *   name: human title
  *   plan: |                      release.plan.yaml contents (providers default to prj_demo / proj_demo)
- *   seed: { vercel, neon, clerk } SimSeed; default seed when absent
+ *   seed: { <provider>: ... }   SimSeed: one entry per simulated provider; its default seed when absent
  *   chaos: { ... }               initial POST /_chaos body
  *   ctx: { env, pr, branch, sha } defaults: preview / 42 / feat/x / <fixed sha>
  *   env: { NAME: value }         extra process env (secrets, tokens)
@@ -32,6 +32,10 @@
  *     - plan: |                  replace the plan file
  *     - env: { ... }             set/unset process env
  *     - sim:                     assertions on sim state
+ *         state:                 any provider, by dotted path into the sim's state (GET /_state):
+ *           "<provider>.<path>": exists | absent | { includes: <partial> } | { excludes: <partial> }
+ *                                | { length: <n> } | <value>       (includes/excludes: an array element that
+ *                                has every field of <partial>; <value>: deep equality)
  *         vercel_env: { <target>: { KEY: exists | absent | "<value>" } }
  *         neon_branches: { <name>: exists | absent }
  *         clerk_redirects: { <url>: exists | absent }
@@ -77,6 +81,7 @@ interface Expect {
 
 interface SimExpect {
   write_order?: string[];
+  state?: Record<string, unknown>;
   vercel_env?: Record<string, Record<string, string>>;
   neon_branches?: Record<string, "exists" | "absent">;
   clerk_redirects?: Record<string, "exists" | "absent">;
@@ -275,6 +280,7 @@ class Harness {
       const found = st.clerk.redirect_urls.find((r) => r.url === url);
       expect(Boolean(found), `${where}: clerk redirect ${url} ${want}`).toBe(want === "exists");
     }
+    for (const [path, want] of Object.entries(s.state ?? {})) assertStatePath(st.snapshot(), path, want, where);
     if (s.write_order) {
       const log = st.writes.map((w) => `${w.method} ${w.path}`);
       let from = 0;
@@ -365,4 +371,28 @@ async function listFiles(dir: string): Promise<string[]> {
     else out.push(p);
   }
   return out;
+}
+
+/** One `state:` assertion: `path` is dotted into the sim snapshot (`auth0.clients.c1.callbacks`). */
+function assertStatePath(snapshot: unknown, path: string, want: unknown, where: string): void {
+  const at = `${where}: state ${path}`;
+  const value = path.split(".").reduce<unknown>((v, k) => (v !== null && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined), snapshot);
+  if (want === "exists") return void expect(value, `${at} should exist`).not.toBeUndefined();
+  if (want === "absent") return void expect(value, `${at} should be absent`).toBeUndefined();
+  const op = want !== null && typeof want === "object" && !Array.isArray(want) ? (want as Record<string, unknown>) : undefined;
+  if (op && Object.keys(op).length === 1 && ("includes" in op || "excludes" in op || "length" in op)) {
+    expect(Array.isArray(value), `${at} should be a list, got ${JSON.stringify(value)}`).toBe(true);
+    const list = value as unknown[];
+    if ("length" in op) return void expect(list.length, at).toBe(op.length);
+    const hit = list.some((item) => partialMatch(item, "includes" in op ? op.includes : op.excludes));
+    return void expect(hit, `${at} ${"includes" in op ? "should include" : "should not include"} ${JSON.stringify(op.includes ?? op.excludes)} in ${JSON.stringify(list)}`).toBe("includes" in op);
+  }
+  expect(value, at).toEqual(want);
+}
+
+/** True when `item` equals `partial`, or is an object having every field of `partial` (recursively). */
+function partialMatch(item: unknown, partial: unknown): boolean {
+  if (partial === null || typeof partial !== "object" || Array.isArray(partial)) return JSON.stringify(item) === JSON.stringify(partial);
+  if (item === null || typeof item !== "object") return false;
+  return Object.entries(partial).every(([k, v]) => partialMatch((item as Record<string, unknown>)[k], v));
 }

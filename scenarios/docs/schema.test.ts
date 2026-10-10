@@ -138,3 +138,28 @@ function parserMessage(source: string): string {
     return (e as Error).message;
   }
 }
+
+/**
+ * The schema is hand-written, so nothing else notices when a new adapter skips it: every built-in adapter needs its
+ * `providers.<name>` block, an `op_<adapter>_<op>` definition per op that the change rules reference, and its name in
+ * the `adapter` field's description (what an editor shows).
+ */
+describe("schema covers every built-in adapter (CONTRIBUTING, adapter checklist step 5)", async () => {
+  const { createRegistry } = await import("@sponson/adapters");
+  const registry = createRegistry();
+  const text = JSON.stringify(schema);
+  const s = schema as { properties: { providers: { properties: Record<string, unknown> } }; $defs: Record<string, unknown> };
+  const adapterDescription = /"adapter":\{[^}]*"description":"([^"]*)"/.exec(text)?.[1] ?? "";
+
+  for (const name of registry.adapterNames()) {
+    it(`${name}: providers block, op definitions, and named in the adapter description`, () => {
+      expect(s.properties.providers.properties[name], `schema: add properties.providers.properties.${name}`).toBeDefined();
+      for (const op of Object.keys(registry.adapter(name).ops)) {
+        const def = `op_${name}_${op}`;
+        expect(s.$defs[def], `schema: add $defs.${def} (the params of ${name}.${op})`).toBeDefined();
+        expect(text.includes(`"#/$defs/${def}"`), `schema: reference $defs.${def} from the change rules`).toBe(true);
+      }
+      expect(adapterDescription, `schema: list ${name} in the adapter field's description`).toMatch(new RegExp(`\\b${name}\\b`));
+    });
+  }
+});
