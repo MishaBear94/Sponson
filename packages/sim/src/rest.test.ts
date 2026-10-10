@@ -58,6 +58,16 @@ describe("rest sim styles", () => {
     expect(sim.state.rest.collections["/projects/p/databases"]).toEqual([]);
   });
 
+  it("stores header_fields from a create's headers, and upserts by chosen id on a POST to <collection>/<suffix>", async () => {
+    sim = await startSim({ seed: { rest: { collections: { "/schedules": [] }, styles: { "/schedules": { item_path: "", list_path: "", next_path: null, id_field: "scheduleId", header_fields: { "X-Cron": "cron", "x-schedule-id": "scheduleId" }, suffix_field: "destination" } } } } });
+    const h = { ...headers, "x-cron": "*/5 * * * *", "x-schedule-id": "s1" };
+    expect((await call("POST", "/schedules/https://a.example/api", { ping: 1 }, h)).body).toEqual({ ping: 1, cron: "*/5 * * * *", scheduleId: "s1", destination: "https://a.example/api" });
+    await call("POST", "/schedules/https://b.example/api", {}, { ...h, "x-cron": "0 * * * *" });
+    expect(sim.state.rest.collections["/schedules"]).toEqual([{ ping: 1, cron: "0 * * * *", scheduleId: "s1", destination: "https://b.example/api" }]);
+    expect((await call("GET", "/schedules/s1")).body).toMatchObject({ cron: "0 * * * *" });
+    expect((await call("POST", "/schedules", { name: "plain" }, { ...headers, "x-cron": "1 * * * *" })).body).toMatchObject({ name: "plain", cron: "1 * * * *" });
+  });
+
   it("accepts a credential in any *-Key or *-Token header", async () => {
     sim = await startSim();
     expect((await call("GET", "/gates", undefined, { "x-auth-token": "t" })).status).toBe(200);

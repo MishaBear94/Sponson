@@ -15,7 +15,7 @@ import { SponsonError, canonicalJson, sha256, type AdapterContext, type ApplyRes
 import { ABSENT, SENSITIVE, assertNoPending, desiredSide, paramError } from "./common.js";
 import { isObject, isProviderError, listAll, type ApiClient } from "./http.js";
 import { failedWith, httpClient, idOf, itemOf, literalOf, write } from "./http-adapter-client.js";
-import { ADAPTER, apiBlock, at, bodyOf, deepMerge, fieldTokens, fillPath, firstMarker, isKeep, parseResource, pointerTokens, projection, resourceOutputs, stateHash, type FindSpec, type ResourceSpec } from "./http-adapter-spec.js";
+import { ADAPTER, apiBlock, at, bodyOf, deepMerge, fieldTokens, fillPath, firstMarker, isKeep, parseResource, pointerTokens, projection, requestHeaders, resourceOutputs, stateHash, type FindSpec, type ResourceSpec } from "./http-adapter-spec.js";
 
 /** An object as found: its provider id and its body. */
 interface Located {
@@ -179,7 +179,8 @@ function idempotencyKey(actx: AdapterContext, key: string, body: unknown): strin
 /** Send the create; null when the provider says it exists already (a conflict, or a declared `exists_status`). */
 async function sendCreate(actx: AdapterContext, spec: ResourceSpec, key: string, path: string, body: Record<string, unknown>): Promise<{ response: unknown } | null> {
   const { method, idempotencyKey: withKey, contentType } = spec.create;
-  const api = httpClient(actx, { ...(contentType ? { contentType } : {}), ...(withKey ? { headers: { "Idempotency-Key": idempotencyKey(actx, key, body) } } : {}) });
+  const headers = { ...requestHeaders(spec.create, "create"), ...(withKey ? { "Idempotency-Key": idempotencyKey(actx, key, body) } : {}) };
+  const api = httpClient(actx, { ...(contentType ? { contentType } : {}), headers });
   try {
     // With an idempotency key, a create whose answer was lost can be sent again: the provider answers it once.
     return { response: await write(api, method, path, body, method === "PUT" || withKey) };
@@ -192,7 +193,8 @@ async function sendCreate(actx: AdapterContext, spec: ResourceSpec, key: string,
 async function create(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, key: string): Promise<ApplyResult> {
   if (Object.values(spec.fields).some(isKeep)) throw keepWithoutObject(spec, key);
   const path = fillPath(spec.create.path, spec.vars)!;
-  const body = deepMerge(deepMerge(bodyOf(spec.find?.match ?? {}), bodyOf(spec.fields)), spec.create.body);
+  const declared = spec.create.sendFields ? deepMerge(bodyOf(spec.find?.match ?? {}), bodyOf(spec.fields)) : {};
+  const body = deepMerge(declared, spec.create.body);
   await actx.intend([key]);
   actx.log(`create ${label(spec, key)}`);
   const sent = await sendCreate(actx, spec, key, path, body);
@@ -222,13 +224,15 @@ async function update(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, 
   const desired = desiredState(spec, l.item);
   if (stateHash(desired) === current.hash) return { resources: [current], outputs: live.outputs, created: [] };
   if (!spec.update) throw noUpdate(spec, key);
-  const { method, contentType } = spec.update;
+  const { method, contentType, sendFields } = spec.update;
   // PUT replaces the object, so the identifying fields and kept fields are sent back as they are; PATCH and POST
   // send only what the plan sets.
-  const fields = method === "PUT" ? deepMerge(bodyOf(spec.find?.match ?? {}), bodyOf(desired)) : bodyOf(spec.fields, isKeep);
+  const fields = !sendFields ? {} : method === "PUT" ? deepMerge(bodyOf(spec.find?.match ?? {}), bodyOf(desired)) : bodyOf(spec.fields, isKeep);
   const path = fillPath(spec.update.path, spec.vars, l.id)!;
+  const headers = requestHeaders(spec.update, "update");
   actx.log(`update ${label(spec, key)}`);
-  const response = await write(contentType ? httpClient(actx, { contentType }) : api, method, path, deepMerge(fields, spec.update.body), true);
+  const client = contentType || Object.keys(headers).length ? httpClient(actx, { ...(contentType ? { contentType } : {}), headers }) : api;
+  const response = await write(client, method, path, deepMerge(fields, spec.update.body), true);
   const resource = { key, id: locator(spec, l.id), hash: stateHash(desired), label: label(spec, key) };
   return { resources: [resource], outputs: { ...live.outputs, ...outputsOf(spec, itemOf(response, spec.itemPath), l.id) }, created: [] };
 }

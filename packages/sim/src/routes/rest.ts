@@ -22,7 +22,10 @@
  *   R3. A path is known once seeded or created: a POST to an unknown path creates the collection; a GET of an
  *       unknown path is 404. A create may choose the id (the id field, or the style's `id_from` field, in the
  *       body, like a flag key or a database name); otherwise the sim assigns `it_<n>` (the next integer with
- *       `numeric_ids`). A create whose `name` (or chosen id) already exists in the collection answers 409. A PUT to
+ *       `numeric_ids`). A create whose `name` (or chosen id) already exists in the collection answers 409. With the style's `header_fields`, a
+ *       create also stores those request headers as fields; with its `suffix_field`, a POST to
+ *       `<collection>/<suffix>` creates the object with the suffix in that field, or updates the one whose id the
+ *       request chooses (QStash's schedule upsert). A PUT to
  *       `<collection>/<id>` that does not exist creates the object with that id (an upsert at a client-chosen key,
  *       such as an environment variable by name), answering 200. Query parameters other than `cursor` are ignored:
  *       a filtered list answers the whole collection.
@@ -60,6 +63,16 @@ export interface RestStyle {
    * `/projects/p/databases` and reads at `/databases/<id>`, or lists at `/redis/databases`.
    */
   also_at?: string[];
+  /**
+   * Request headers (lower-case names) whose values a create or update stores as fields, for an API that takes an
+   * object's settings in headers (QStash: `upstash-cron` → `cron`, `upstash-schedule-id` → `scheduleId`).
+   */
+  header_fields?: Record<string, string>;
+  /**
+   * A POST to `<collection>/<suffix>` creates the object with the suffix (a URL, kept as written) in this field, or
+   * updates the one whose id the request chooses (an upsert): QStash's `POST /v2/schedules/<destination>`.
+   */
+  suffix_field?: string;
 }
 
 /** Simulated REST API state, by path: collections of objects, objects that are not in a collection, and styles. */
@@ -122,7 +135,7 @@ function authorized(headers: IncomingHttpHeaders): boolean {
   return Object.entries(headers).some(([name, v]) => /(^|-)(api-key|key|token)$/.test(name) && typeof v === "string" && v.trim() !== "");
 }
 
-type FullStyle = Required<Omit<RestStyle, "next_path" | "also_at">> & { next_path: string | null };
+type FullStyle = Required<Omit<RestStyle, "next_path" | "also_at" | "header_fields" | "suffix_field">> & { next_path: string | null };
 
 /** The style of the collection at `path`, every default filled in. */
 function styleOf(state: RestState, path: string): FullStyle {
@@ -234,8 +247,35 @@ function resolve(state: RestState, raw: string): Target {
 
 const notFound = (): Reply => error(404, "not found");
 
-function create(core: SimCore, state: RestState, path: string, body: unknown): Reply {
+/** The fields the request's headers set, by the collection's `header_fields`. */
+function headerFields(state: RestState, collection: string, headers: Record<string, string>): Record<string, unknown> {
+  const map = state.styles[collection]?.header_fields ?? {};
+  return Object.fromEntries(Object.entries(map).flatMap(([h, f]) => (headers[h.toLowerCase()] === undefined ? [] : [[f, headers[h.toLowerCase()]]])));
+}
+
+/** The collection with a `suffix_field` that `path` is under, and the suffix. */
+function suffixTarget(state: RestState, path: string): { collection: string; suffix: string } | undefined {
+  const collection = Object.keys(state.collections).find((c) => state.styles[c]?.suffix_field !== undefined && path.startsWith(`${c}/`));
+  return collection === undefined ? undefined : { collection, suffix: path.slice(collection.length + 1) };
+}
+
+/** POST `<collection>/<suffix>`: create, or update the object whose id the request chooses (R3, `suffix_field`). */
+function upsertAt(core: SimCore, state: RestState, at: { collection: string; suffix: string }, body: unknown, headers: Record<string, string>): Reply {
   if (!isRecord(body)) return error(400, "body must be a JSON object");
+  const style = styleOf(state, at.collection);
+  const fields = { ...structuredClone(body), ...headerFields(state, at.collection, headers), [state.styles[at.collection]!.suffix_field!]: at.suffix };
+  const list = state.collections[at.collection]!;
+  const chosen = isId(fields[style.id_from]) ? fields[style.id_from] : undefined;
+  const index = chosen === undefined ? -1 : list.findIndex((i) => i[style.id_field] === chosen);
+  const item: RestItem = { ...(index >= 0 ? list[index] : {}), ...fields, [style.id_field]: chosen ?? newId(core, state, at.collection) };
+  if (index >= 0) list[index] = item;
+  else list.push(item);
+  return new Reply(200, envelope(style.item_path, item));
+}
+
+function create(core: SimCore, state: RestState, path: string, raw: unknown, headers: Record<string, string> = {}): Reply {
+  if (!isRecord(raw)) return error(400, "body must be a JSON object");
+  const body = { ...raw, ...headerFields(state, path, headers) };
   const list = (state.collections[path] ??= []);
   const style = styleOf(state, path);
   const chosen = isId(body[style.id_from]) ? body[style.id_from] : undefined;
@@ -304,11 +344,13 @@ const routes = router<RestState>(
       return list(core, state, t, url.searchParams.get("cursor"));
     }),
 
-    route("POST", "/*path", ({ core, state, params, body }) => {
+    route("POST", "/*path", ({ core, state, params, body, headers }) => {
       const t = resolve(state, `/${params.path}`);
       if (t.kind === "object") return patch(state, t, body);
+      const suffix = t.kind === "none" ? suffixTarget(state, `/${params.path}`) : undefined;
+      if (suffix) return upsertAt(core, state, suffix, body, headers);
       if (t.kind === "item") return error(405, "cannot POST to an object of a collection");
-      return create(core, state, t.kind === "collection" ? t.path : `/${params.path}`, body);
+      return create(core, state, t.kind === "collection" ? t.path : `/${params.path}`, body, headers);
     }),
 
     route("PATCH", "/*path", ({ state, params, body }) => patch(state, resolve(state, `/${params.path}`), body)),

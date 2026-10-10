@@ -422,7 +422,7 @@
         "encoding": { "enum": ["json", "form"], "description": "Request bodies as JSON (default) or application/x-www-form-urlencoded (`a[b]=c`)." }
       }
     },
-    "httpPath": { "type": "string", "pattern": "^/", "description": "A path relative to the API's base_url. `{id}` is the object's id; `{name}` is `vars.name`." },
+    "httpPath": { "type": "string", "pattern": "^/", "description": "A path relative to the API's base_url. `{id}` is the object's id; `{name}` is `vars.name`, URI-encoded as one segment; `{+name}` writes it as it is (a URL), escaping only ? and #." },
     "jsonPointer": { "type": "string", "pattern": "^(/.*)?$", "description": "A JSON pointer: \"\" for the whole body, \"/data/id\" for a field." },
     "httpStatuses": { "type": "array", "items": { "type": "integer", "minimum": 400, "maximum": 599 } },
     "httpDestroy": { "enum": ["delete", "keep"], "description": "What destroying the scope does: delete (default) or keep (leave it in place)." },
@@ -434,7 +434,9 @@
         "path": { "$ref": "#/$defs/httpPath" },
         "body": { "type": "object", "description": "Extra body fields sent with this request only (not compared)." },
         "content_type": { "type": "string", "description": "A media type other than the API's encoding, e.g. application/merge-patch+json." },
-        "idempotency_key": { "type": "boolean", "description": "Create only: send an Idempotency-Key so a create whose answer was lost can be retried." }
+        "idempotency_key": { "type": "boolean", "description": "Create only: send an Idempotency-Key so a create whose answer was lost can be retried." },
+        "headers": { "type": "object", "additionalProperties": true, "description": "Create and update: headers sent with this request only (values may be references), e.g. Upstash-Cron. Not Authorization, Accept, Content-Type or Idempotency-Key." },
+        "send_fields": { "type": "boolean", "description": "Create and update: false when the request carries the declared fields elsewhere (in headers), so they are compared but not put in its body. Default true." }
       }
     },
     "op_http_resource": {

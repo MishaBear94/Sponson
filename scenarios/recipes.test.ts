@@ -44,7 +44,7 @@ function exampleParams(op: RecipeOp, env: NodeJS.ProcessEnv = {}): Record<string
 
 /** `{name}` placeholders of a sim path filled from values (the expanded line's `vars`). */
 function fill(path: string, vars: Record<string, unknown>): string {
-  return path.split("?")[0]!.replace(/\{([A-Za-z_]\w*)\}/g, (_m, n: string) => encodeURIComponent(String(vars[n])));
+  return path.split("?")[0]!.replace(/\{(\+?)([A-Za-z_]\w*)\}/g, (_m, plus: string, n: string) => (plus ? encodeURI(String(vars[n])) : encodeURIComponent(String(vars[n]))));
 }
 
 function planText(r: Recipe, name: string, op: RecipeOp, params: Record<string, unknown>): string {
@@ -63,6 +63,9 @@ function token(pointer: unknown, fallback: string): string {
  */
 function collectionOf(spec: Record<string, unknown>): string {
   const create = spec.create as { path: string; method?: string };
+  // A create that ends in a URL written as it is (`/v2/schedules/{+destination}`) posts under its collection.
+  const suffix = /\/\{\+[A-Za-z_]\w*\}$/.exec(create.path.split("?")[0]!);
+  if (suffix) return fill(create.path.slice(0, suffix.index), spec.vars as Record<string, unknown>);
   const path = fill(create.path, spec.vars as Record<string, unknown>);
   return create.method?.toUpperCase() === "PUT" ? path.slice(0, path.lastIndexOf("/")) : path;
 }
@@ -100,6 +103,8 @@ function simSeed(op: RecipeOp, spec: Record<string, unknown>) {
       id_field: token(spec.id_path, "id"),
       ...(op.sim?.id_from ? { id_from: op.sim.id_from } : {}),
       ...(op.sim?.numeric_ids ? { numeric_ids: true } : {}),
+      ...(op.sim?.header_fields ? { header_fields: op.sim.header_fields } : {}),
+      ...(op.sim?.suffix_field ? { suffix_field: op.sim.suffix_field } : {}),
       also_at: otherPaths(spec, coll),
     };
   }

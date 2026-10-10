@@ -117,7 +117,9 @@
           "properties": {
             "id_from": { "type": "string", "description": "The body field a create chooses the id with." },
             "numeric_ids": { "type": "boolean" },
-            "objects": { "type": "object", "additionalProperties": { "type": "object" }, "description": "Objects to seed, by path (placeholders filled from the examples)." }
+            "objects": { "type": "object", "additionalProperties": { "type": "object" }, "description": "Objects to seed, by path (placeholders filled from the examples)." },
+            "header_fields": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Request headers a create or update stores as fields (header → field), for an API that takes settings in headers." },
+            "suffix_field": { "type": "string", "description": "For a create at `<collection>/{+param}`: the field the sim stores that path suffix in; the POST is an upsert by the chosen id." }
           }
         },
         "live": {

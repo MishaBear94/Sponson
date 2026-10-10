@@ -176,6 +176,29 @@ describe("http.resource", () => {
     }
   });
 
+  it("request headers carry declared fields (send_fields: false), and {+name} writes a URL into the path as it is", async () => {
+    await h.close();
+    const style = { item_path: "", list_path: "", next_path: null, id_field: "scheduleId", header_fields: { "x-cron": "cron", "x-schedule-id": "scheduleId" }, suffix_field: "destination" };
+    h = await harness({ rest: { collections: { "/schedules": [] }, styles: { "/schedules": style } } });
+    const request = { method: "POST", path: "/schedules/{+dest}", headers: { "X-Cron": "*/5 * * * *", "X-Schedule-Id": "s1" }, send_fields: false, body: { ping: true } };
+    const sched = { api: "demo", vars: { sid: "s1", dest: "https://pr-42.example.app/api/cron?x=1" }, read: { path: "/schedules/{sid}" }, create: request, update: request, id_path: "/scheduleId", fields: { cron: "*/5 * * * *", destination: "https://pr-42.example.app/api/cron?x=1" } };
+    const actx = h.actx("http", API);
+    const r = await resource.apply(actx, sched, null);
+    expect(r.created).toEqual(["/schedules/s1"]);
+    // The fields went in the headers and the path, not the body; `?` is escaped so it stays part of the path.
+    expect(h.sim.state.rest.collections["/schedules"]).toEqual([{ ping: true, cron: "*/5 * * * *", scheduleId: "s1", destination: "https://pr-42.example.app/api/cron%3Fx=1" }]);
+    expect(h.sim.state.writes.map((w) => `${w.method} ${w.path}`)).toEqual(["POST /rest/schedules/https://pr-42.example.app/api/cron%3Fx=1"]);
+    h.sim.state.rest.collections["/schedules"]![0]!.destination = "https://pr-42.example.app/api/cron?x=1";
+    const changed = { ...sched, fields: { ...sched.fields, cron: "0 * * * *" }, update: { ...request, headers: { ...request.headers, "X-Cron": "0 * * * *" } } };
+    const { diffs, result } = await readApply(h, resource, changed);
+    expect(diffs[0]!.kind).toBe("update");
+    expect(result.created).toEqual([]);
+    expect(h.sim.state.rest.collections["/schedules"]![0]).toMatchObject({ cron: "0 * * * *", ping: true });
+    expect(() => resource.diff(null, { ...sched, create: { ...request, headers: { Authorization: "x" } } })).toThrow(/`create.headers.Authorization` is set by Sponson/);
+    expect(() => resource.diff(null, { ...sched, create: { ...request, send_fields: "no" } })).toThrow(/`create.send_fields` must be true or false/);
+    await expect(resource.apply(actx, { ...sched, vars: { sid: "s2", dest: "https://x.example" }, create: { ...request, headers: { "X-Cron": { a: 1 } } } }, null)).rejects.toThrow(/`create.headers.X-Cron` must be a string/);
+  });
+
   it("destroy: keep leaves the object in place", async () => {
     const actx = h.actx("http", API);
     const r = await resource.apply(actx, { ...GATE, destroy: "keep" }, null);
