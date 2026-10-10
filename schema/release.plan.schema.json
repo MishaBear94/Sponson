@@ -20,6 +20,12 @@
       "type": "object",
       "additionalProperties": { "type": "object" },
       "properties": {
+        "supabase": {
+          "type": "object",
+          "description": "TODO: what providers.supabase configures.",
+          "required": ["project"],
+          "properties": { "project": { "type": "string", "minLength": 1 } }
+        },
         "vercel": {
           "type": "object",
           "description": "Vercel project (`prj_…`) and, for team projects, the team id (`team_…`).",
@@ -157,7 +163,7 @@
       "required": ["id", "adapter", "op"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk. Plugins (SPONSON_PLUGINS) add more." },
+        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk, supabase. Plugins (SPONSON_PLUGINS) add more." },
         "op": { "type": "string", "minLength": 1 },
         "environments": { "$ref": "#/$defs/nameList", "description": "Environments this line applies to. Absent: all." },
         "depends_on": { "type": "array", "items": { "$ref": "#/$defs/id" }, "description": "Ordering without a data dependency. Prefer `from:` references." }
@@ -179,6 +185,10 @@
         {
           "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "clerk" }, "op": { "const": "redirect_allow" } } },
           "then": { "$ref": "#/$defs/op_clerk_redirect_allow" }
+        },
+        {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "supabase" }, "op": { "const": "item" } } },
+          "then": { "$ref": "#/$defs/op_supabase_item" }
         }
       ]
     },
@@ -259,6 +269,20 @@
         "environments": true,
         "depends_on": true,
         "url": { "$ref": "#/$defs/stringOrRef", "description": "The URL to allow. Usually `{ from: <vercel.env line>.preview_url }`." }
+      },
+      "additionalProperties": false
+    },
+    "op_supabase_item": {
+      "description": "supabase.item: TODO: one line on what the op manages. Outputs: id, value.",
+      "required": ["value"],
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "name": { "$ref": "#/$defs/stringOrRef", "description": "Defaults to sponson-<env>-<scope>." },
+        "value": { "$ref": "#/$defs/stringOrRef" }
       },
       "additionalProperties": false
     }
