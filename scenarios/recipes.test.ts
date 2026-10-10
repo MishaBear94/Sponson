@@ -57,6 +57,16 @@ function token(pointer: unknown, fallback: string): string {
   return typeof pointer === "string" && pointer !== "" ? pointer.slice(1) : fallback;
 }
 
+/**
+ * The collection a resource op's objects live in: where its create posts, or, for a PUT to the object's own path (an
+ * upsert at a client-chosen key), the path above it.
+ */
+function collectionOf(spec: Record<string, unknown>): string {
+  const create = spec.create as { path: string; method?: string };
+  const path = fill(create.path, spec.vars as Record<string, unknown>);
+  return create.method?.toUpperCase() === "PUT" ? path.slice(0, path.lastIndexOf("/")) : path;
+}
+
 /** The sim, shaped like the provider: the create's collection (envelopes, id field) and the seeded parents. */
 function simSeed(op: RecipeOp, spec: Record<string, unknown>) {
   const vars = spec.vars as Record<string, unknown>;
@@ -65,7 +75,7 @@ function simSeed(op: RecipeOp, spec: Record<string, unknown>) {
   const create = spec.create as { path?: string; method?: string } | undefined;
   if (op.kind === "resource" && create?.path) {
     const find = spec.find as { list_path?: string; next?: string } | undefined;
-    const coll = fill(create.path, vars);
+    const coll = collectionOf(spec);
     collections[coll] = [];
     styles[coll] = {
       list_path: find?.list_path ?? "",
@@ -103,8 +113,7 @@ const diag = (r: CliRun) => `\n--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.
 
 /** The object a resource op made, in the sim. */
 function simItems(sim: SimHandle, spec: Record<string, unknown>): Array<Record<string, unknown>> {
-  const create = spec.create as { path: string };
-  return sim.state.rest.collections[fill(create.path, spec.vars as Record<string, unknown>)] ?? [];
+  return sim.state.rest.collections[collectionOf(spec)] ?? [];
 }
 
 /** A value different from `v` of the same type. */
@@ -188,7 +197,7 @@ async function resourceDrift(run: Run, sim: SimHandle, spec: Record<string, unkn
     expect(res.code, `reconcile${diag(res)}`).toBe(0);
     expect(simItems(sim, spec)[0]![f]).toEqual(v);
   }
-  sim.state.rest.collections[fill((spec.create as { path: string }).path, spec.vars as Record<string, unknown>)] = [];
+  sim.state.rest.collections[collectionOf(spec)] = [];
   let res = await run.cli("plan --json", sim);
   expect({ code: res.code, status: lineOf(res).status, drift: (res.json?.drift as Array<{ kind: string }>).map((d) => d.kind) }, `missing drift${diag(res)}`).toEqual({ code: 0, status: "create", drift: ["missing"] });
   res = await run.cli("apply --json", sim);

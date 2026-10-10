@@ -38,6 +38,15 @@ describe("rest sim styles", () => {
     expect(((await call("GET", "/hooks")).body as unknown as unknown[]).length).toBe(2);
   });
 
+  it("creates an object with a PUT at a client-chosen key in a known collection; elsewhere a PUT to nothing is 404", async () => {
+    sim = await startSim({ seed: { rest: { collections: { "/services/srv-1/env-vars": [] }, styles: { "/services/srv-1/env-vars": { item_path: "", list_path: "", next_path: null, id_field: "key" } } } } });
+    expect(await call("PUT", "/services/srv-1/env-vars/API_URL", { value: "https://a" })).toEqual({ status: 200, body: { value: "https://a", key: "API_URL" } });
+    expect((await call("PUT", "/services/srv-1/env-vars/API_URL", { value: "https://b" })).body).toEqual({ value: "https://b", key: "API_URL" });
+    expect((await call("GET", "/services/srv-1/env-vars/API_URL")).body).toEqual({ value: "https://b", key: "API_URL" });
+    expect(sim.state.rest.collections["/services/srv-1/env-vars"]).toHaveLength(1);
+    expect((await call("PUT", "/services/srv-2/env-vars/API_URL", { value: "x" })).status).toBe(404);
+  });
+
   it("accepts a credential in any *-Key or *-Token header", async () => {
     sim = await startSim();
     expect((await call("GET", "/gates", undefined, { "x-auth-token": "t" })).status).toBe(200);

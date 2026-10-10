@@ -21,8 +21,10 @@
  *   R3. A path is known once seeded or created: a POST to an unknown path creates the collection; a GET of an
  *       unknown path is 404. A create may choose the id (the id field, or the style's `id_from` field, in the
  *       body, like a flag key or a database name); otherwise the sim assigns `it_<n>` (the next integer with
- *       `numeric_ids`). A create whose `name` (or chosen id) already exists in the collection answers 409. Query
- *       parameters other than `cursor` are ignored: a filtered list answers the whole collection.
+ *       `numeric_ids`). A create whose `name` (or chosen id) already exists in the collection answers 409. A PUT to
+ *       `<collection>/<id>` that does not exist creates the object with that id (an upsert at a client-chosen key,
+ *       such as an environment variable by name), answering 200. Query parameters other than `cursor` are ignored:
+ *       a filtered list answers the whole collection.
  *   R4. PATCH (and POST to an object) is a JSON merge patch (RFC 7396: maps merge recursively, `null` deletes a
  *       field, lists are replaced whole); PUT replaces everything but a collection object's id. Bodies may be JSON
  *       or form-encoded (`a[b]=c`, every value a string). No write has a precondition (no ETag): the last write
@@ -246,8 +248,22 @@ function patch(state: RestState, t: Target, body: unknown): Reply {
   return new Reply(200, envelope(style.item_path, t.item));
 }
 
-function put(state: RestState, t: Target, body: unknown): Reply {
+/** A PUT to `<collection>/<id>` that names no item: an upsert at a client-chosen key creates it (R3). */
+function putNew(state: RestState, raw: string, body: Record<string, unknown>): Reply {
+  const path = raw.length > 1 && raw.endsWith("/") ? raw.slice(0, -1) : raw;
+  const cut = path.lastIndexOf("/");
+  const list = state.collections[path.slice(0, cut)];
+  if (!list || cut < 0) return notFound();
+  const style = styleOf(state, path.slice(0, cut));
+  const id = decodeURIComponent(path.slice(cut + 1));
+  const item: RestItem = { ...structuredClone(body), [style.id_field]: style.numeric_ids && /^\d+$/.test(id) ? Number(id) : id };
+  list.push(item);
+  return new Reply(200, envelope(style.item_path, item));
+}
+
+function put(state: RestState, t: Target, body: unknown, raw: string): Reply {
   if (!isRecord(body)) return error(400, "body must be a JSON object");
+  if (t.kind === "none") return putNew(state, raw, body);
   if (t.kind === "object") {
     state.objects[t.path] = structuredClone(body);
     return new Reply(200, state.objects[t.path]);
@@ -284,7 +300,7 @@ const routes = router<RestState>(
 
     route("PATCH", "/*path", ({ state, params, body }) => patch(state, resolve(state, `/${params.path}`), body)),
 
-    route("PUT", "/*path", ({ state, params, body }) => put(state, resolve(state, `/${params.path}`), body)),
+    route("PUT", "/*path", ({ state, params, body }) => put(state, resolve(state, `/${params.path}`), body, `/${params.path}`)),
 
     route("DELETE", "/*path", ({ state, params }) => {
       const t = resolve(state, `/${params.path}`);
