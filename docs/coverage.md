@@ -257,7 +257,7 @@ yet are listed under [Current coverage](#current-coverage).
 11. **Once-only outputs**: an output that is only in the create response must be declared as such, so the engine
     feeds it to dependent lines in the same run and refuses a later run that needs it (instead of reading an empty
     value). Needed for Stripe webhook secrets, API keys and DB passwords even in first-class adapters. The engine
-    side exists: `OutputSpec.once` ([ADR 0018](adr/0018-once-only-outputs.md)), first used by `planetscale.password`.
+    side exists: `OutputSpec.once` ([ADR 0018](adr/0018-once-only-outputs.md)), first used by `planetscale.password`; the `http` adapter declares one as `outputs.<name>: { path, sensitive: true, once: true }`.
 12. **Sim support**: a generic sim route set driven by the same declaration, so every `http` line gets the chaos and
     drift scenarios the built-in adapters get.
 

@@ -127,7 +127,8 @@ chosen: its signing secret exists only in the create response, which the `http` 
   recipe's text, and the lock makes the identity-changing edits explicit.
 - **No schema per recipe in `schema/release.plan.schema.json`**: an editor checks `recipe:`'s form, `sponson plan`
   checks the params.
-- Everything ADR 0017 leaves out stays out (once-only outputs, polling, OAuth exchanges, SigV4).
+- Everything ADR 0017 leaves out stays out (polling, OAuth exchanges, SigV4). Once-only outputs were added to the
+  `http` adapter later, so recipes declare them too (ADR 0018, "Amendment: once-only outputs of the http adapter").
 
 ## Alternatives considered
 

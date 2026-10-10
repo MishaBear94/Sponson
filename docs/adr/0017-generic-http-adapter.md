@@ -137,7 +137,8 @@ Adapters that do not define them behave exactly as before.
   adapter.
 - **Create-only outputs** (a Stripe webhook signing secret) are returned by the run that creates the object and
   reach dependent lines in that run, but a later run cannot read them again. There is no declaration that makes the
-  engine refuse such a later run.
+  engine refuse such a later run. *Amended (ADR 0018, "Amendment: once-only outputs of the http adapter"):
+  `outputs.<name>: { path, sensitive: true, once: true }` declares one.*
 - **No OAuth2 client-credentials exchange, no command-produced tokens** (`gcloud auth print-access-token`), no
   request signing (SigV4). Not yet: each needs its own credential flow.
 - **No expressions or scripts**, no JSON Patch generation, no GraphQL, no pagination by page number or `Link`

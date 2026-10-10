@@ -521,7 +521,7 @@ One object per item: a feature flag, a webhook endpoint, a DNS record.
 | `item_path` | JSON pointer | `""` | Where the object is in read, create and update answers (`/data` for a `{ data: {...} }` envelope). |
 | `id_path` | JSON pointer | `/id` | Where the id is in the object. |
 | `fields` | map: field → value | `{}` | The desired state, compared for drift and sent on create and update. Values are literals, `{ from }`, `{ secret }` or `{ keep: true }`. |
-| `outputs` | map: name → pointer, or `{ path, sensitive: true }` | `{}` | Outputs read from the object, besides `id` (always there). A sensitive one is never shown or written to a receipt. |
+| `outputs` | map: name → pointer, or `{ path, sensitive: true, once: true }` | `{}` | Outputs read from the object, besides `id` (always there). A sensitive one is never shown or written to a receipt. `once: true` (with `sensitive: true`) is a value the provider shows only in the answer to the create, such as a database's connection string: it is taken from that answer only, never from a read, and later runs treat it as a [once-only output](#once-only-outputs). |
 | `exists_status` | list of statuses | `[]` | Besides 409, the statuses a create answers when the object exists already: it is then found and taken over, not created. |
 | `gone_status` | list of statuses | `[]` | Besides 404, the statuses that mean "gone" on read and delete. |
 

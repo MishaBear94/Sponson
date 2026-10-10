@@ -4,7 +4,7 @@
  * a PARAM_INVALID (or PLAN_INVALID for the provider block) naming the field at fault. See ADR 0017 and
  * docs/plan-format.md (`http.resource`, `http.list_item`).
  */
-import { SponsonError, canonicalJson, markerKind, sha256 } from "@sponson/core";
+import { SponsonError, canonicalJson, markerKind, sha256, type OutputSpec } from "@sponson/core";
 import { paramError } from "./common.js";
 import { isObject } from "./http.js";
 import { expandRecipe, lineApi, resolveRecipeApi } from "./recipes.js";
@@ -313,10 +313,14 @@ export interface FindSpec {
   next?: { path: string; param: string };
 }
 
-/** Declared output: a pointer into the object, and whether it must never be shown. */
+/**
+ * Declared output: a pointer into the object, whether it must never be shown, and whether the provider reveals it
+ * only in the answer to the create (`once`, ADR 0018: a database password or connection string).
+ */
 export interface OutputDecl {
   path: string;
   sensitive: boolean;
+  once?: true;
 }
 
 /** `http.resource` params, checked. Values may still be markers. */
@@ -399,10 +403,20 @@ function parseOutputs(v: unknown): Record<string, OutputDecl> {
     if (name === "id") throw fail("`outputs.id` is reserved: the object's id is always the output `id`", param);
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw fail(`output name \`${name}\` must be letters, digits and _`, param);
     if (typeof decl === "string") out[name] = { path: pointerParam(decl, param, ""), sensitive: false };
-    else if (isObject(decl)) out[name] = { path: pointerParam(decl.path, `${param}.path`, ""), sensitive: decl.sensitive === true };
-    else throw fail(`\`${param}\` must be a JSON pointer, or \`{ path, sensitive: true }\``, param);
+    else if (isObject(decl)) out[name] = outputDecl(decl, param);
+    else throw fail(`\`${param}\` must be a JSON pointer, or \`{ path, sensitive: true, once: true }\``, param);
   }
   return out;
+}
+
+function outputDecl(decl: Record<string, unknown>, param: string): OutputDecl {
+  const unknown = Object.keys(decl).find((k) => !["path", "sensitive", "once"].includes(k));
+  if (unknown) throw fail(`\`${param}.${unknown}\` is not known (known: path, sensitive, once)`, `${param}.${unknown}`);
+  const out: OutputDecl = { path: pointerParam(decl.path, `${param}.path`, ""), sensitive: decl.sensitive === true };
+  if (decl.once === undefined || decl.once === false) return out;
+  // A value shown once must never be shown at all (ADR 0018): the engine keeps only its fingerprint.
+  if (decl.once !== true || !out.sensitive) throw fail(`\`${param}.once: true\` needs \`sensitive: true\`: a value the provider shows only once is a credential`, `${param}.once`);
+  return { ...out, once: true };
 }
 
 function parseFields(v: unknown, param: string): Record<string, unknown> {
@@ -438,11 +452,13 @@ export function parseResource(line: Record<string, unknown>): ResourceSpec {
   return spec;
 }
 
-/** The outputs one `http.resource` line declares: always `id`, plus its `outputs`. */
-export function resourceOutputs(line: Record<string, unknown>): Record<string, { available: "immediate"; sensitive?: boolean }> {
+/** The outputs one `http.resource` line declares: always `id`, plus its `outputs`, with their sensitivity. */
+export function resourceOutputs(line: Record<string, unknown>): Record<string, OutputSpec> {
   const params = expandRecipe(line, "resource");
-  const out: Record<string, { available: "immediate"; sensitive?: boolean }> = { id: { available: "immediate" } };
-  for (const [name, d] of Object.entries(parseOutputs(params.outputs))) out[name] = d.sensitive ? { available: "immediate", sensitive: true } : { available: "immediate" };
+  const out: Record<string, OutputSpec> = { id: { available: "immediate" } };
+  for (const [name, d] of Object.entries(parseOutputs(params.outputs))) {
+    out[name] = { available: "immediate", ...(d.sensitive ? { sensitive: true } : {}), ...(d.once ? { once: true } : {}) };
+  }
   return out;
 }
 

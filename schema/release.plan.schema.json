@@ -471,9 +471,9 @@
         "fields": { "type": "object", "description": "The desired state: field (or /pointer) → value. Compared for drift, sent on create and update." },
         "outputs": {
           "type": "object",
-          "description": "Output name → JSON pointer into the object, or { path, sensitive: true }.",
+          "description": "Output name → JSON pointer into the object, or { path, sensitive: true, once: true }. once: the provider shows the value only in the create answer (ADR 0018); needs sensitive.",
           "additionalProperties": {
-            "anyOf": [{ "$ref": "#/$defs/jsonPointer" }, { "type": "object", "required": ["path"], "additionalProperties": false, "properties": { "path": { "$ref": "#/$defs/jsonPointer" }, "sensitive": { "type": "boolean" } } }]
+            "anyOf": [{ "$ref": "#/$defs/jsonPointer" }, { "type": "object", "required": ["path"], "additionalProperties": false, "properties": { "path": { "$ref": "#/$defs/jsonPointer" }, "sensitive": { "type": "boolean" }, "once": { "type": "boolean" } } }]
           }
         },
         "exists_status": { "$ref": "#/$defs/httpStatuses", "description": "Statuses that mean 'already exists' on create, besides 409." },

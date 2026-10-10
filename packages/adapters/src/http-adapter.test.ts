@@ -207,6 +207,22 @@ describe("http.resource", () => {
     expect(JSON.stringify(await resource.read(h.actx("http", API), hook))).not.toContain(secret);
   });
 
+  it("a once output comes only from the answer to the create this call sent: never from a read, an update or a claimed object", async () => {
+    // The sim echoes the field on every read; a real provider shows it only once. Either way, only the create reports it.
+    const db = { api: "demo", read: { path: "/dbs/{name}" }, vars: { name: "app-pr-42" }, create: { path: "/dbs", body: { id: "app-pr-42", password: "pw_once_123456" } }, item_path: "/data", update: { method: "PATCH" }, fields: { size: 1 }, outputs: { password: { path: "/password", sensitive: true, once: true }, size: "/size" } };
+    const actx = h.actx("http", API);
+    const created = await resource.apply(actx, db, null);
+    expect(created.outputs).toEqual({ id: "app-pr-42", password: "pw_once_123456", size: 1 });
+    const live = await resource.read(actx, db);
+    expect(live!.outputs).toEqual({ id: "app-pr-42", size: 1 });
+    const updated = await resource.apply(actx, { ...db, fields: { size: 2 } }, live);
+    expect(updated.outputs).toEqual({ id: "app-pr-42", size: 2 });
+    // A create answered "exists" (a lost answer, or someone else's) is claimed without the value.
+    const claimed = await resource.apply(actx, db, null);
+    expect(claimed).toMatchObject({ created: [], outputs: { id: "app-pr-42", size: 2 } });
+    expect(claimed.outputs.password).toBeUndefined();
+  });
+
   it("idempotency_key makes a create whose connection dropped safe to retry", async () => {
     const proxy = await recordingProxy(`${h.sim.url}/rest`);
     try {
@@ -311,6 +327,8 @@ describe("http: malformed specs name the field", () => {
     ["undeclared placeholder", { ...GATE, create: { path: "/projects/{project}/gates" } }, /uses `\{project\}`/],
     ["bad pointer", { ...GATE, id_path: "id" }, /`id_path` must be a JSON pointer/],
     ["outputs.id", { ...GATE, outputs: { id: "/id" } }, /`outputs.id` is reserved/],
+    ["once without sensitive", { ...GATE, outputs: { password: { path: "/password", once: true } } }, /`outputs.password.once: true` needs `sensitive: true`/],
+    ["unknown output key", { ...GATE, outputs: { password: { path: "/password", secret: true } } }, /`outputs.password.secret` is not known/],
     ["empty match", { ...GATE, find: { path: "/x", match: {} } }, /`find.match` must name/],
     ["bad destroy", { ...GATE, destroy: "archive" }, /`destroy` must be/],
     ["bad statuses", { ...GATE, gone_status: [200] }, /`gone_status` must be/],
@@ -364,6 +382,7 @@ describe("http: malformed specs name the field", () => {
       gate_name: { available: "immediate" },
       signing_secret: { available: "immediate", sensitive: true },
     });
+    expect(resource.outputsFor!({ ...GATE, outputs: { password: { path: "/password", sensitive: true, once: true } } }).password).toEqual({ available: "immediate", sensitive: true, once: true });
   });
 });
 

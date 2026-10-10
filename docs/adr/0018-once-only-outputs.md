@@ -105,3 +105,13 @@ Consequences of the amendment:
 - A pull request scope that inherits its head branch's ledger (succession) cannot compare fingerprints keyed with the
   other scope's key: its dependents are refused until recreated. Rare (an agent applied locally before the pull
   request existed), and safe.
+
+## Amendment: once-only outputs of the http adapter
+
+The generic `http` adapter ([ADR 0017](0017-generic-http-adapter.md)) and its recipes ([ADR 0020](0020-recipes.md))
+could not declare a once-only output, so a create-only value (a database's connection string, a webhook's signing
+secret) reached dependents in the creating run and was then silently absent. An `http.resource` output now takes
+`once: true` (only with `sensitive: true`, else `PARAM_INVALID`): `outputsFor` declares it `once`, and `apply` takes
+it only from the answer to the create it sent. A `read`, an `update`, or a create answered "exists" and claimed never
+report it, even when the provider echoes something at that pointer, so the engine's fingerprint rules above apply
+unchanged. Scenario: `scenarios/adapters/http-once-output.yaml`.

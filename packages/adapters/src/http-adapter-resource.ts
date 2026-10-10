@@ -73,10 +73,15 @@ function record(spec: ResourceSpec, key: string, l: Located): ResourceRecord {
   return { key, id: locator(spec, l.id), hash: stateHash(projection(l.item, fieldNames(spec))), label: label(spec, key) };
 }
 
-function outputsOf(spec: ResourceSpec, item: Record<string, unknown> | undefined, id: string): Record<string, Literal> {
+/**
+ * The outputs of the object. `once` outputs (ADR 0018) are taken only from `revealed`, the answer to the create
+ * this call sent: a read, an update or a create claimed after a conflict never reports them, even when the provider
+ * happens to echo something at that pointer.
+ */
+function outputsOf(spec: ResourceSpec, item: Record<string, unknown> | undefined, id: string, revealed?: Record<string, unknown>): Record<string, Literal> {
   const out: Record<string, Literal> = { id };
   for (const [name, d] of Object.entries(spec.outputs)) {
-    const v = literalOf(at(item, pointerTokens(d.path)));
+    const v = literalOf(at(d.once ? revealed : item, pointerTokens(d.path)));
     if (v !== undefined) out[name] = v;
   }
   return out;
@@ -198,7 +203,8 @@ async function create(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, 
     if (!existing) throw new SponsonError("PROVIDER_CONFLICT", `${ADAPTER}: ${label(spec, key)}: the provider says it exists, but it cannot be found with the line's \`find\`/\`read\``, { adapter: ADAPTER, key });
     return { resources: [record(spec, key, existing)], outputs: outputsOf(spec, existing.item, existing.id), created: [] };
   }
-  let item = itemOf(sent.response, spec.itemPath);
+  const answer = itemOf(sent.response, spec.itemPath);
+  let item = answer;
   let id = idOf(item, spec.idPath);
   if (id === undefined) {
     // Some APIs answer a create with no body (201, 204): find what was created.
@@ -207,7 +213,7 @@ async function create(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, 
     ({ id, item } = l);
   }
   const resource = { key, id: locator(spec, id), hash: stateHash(desiredState(spec, undefined)), label: label(spec, key) };
-  return { resources: [resource], outputs: outputsOf(spec, item, id), created: [key] };
+  return { resources: [resource], outputs: outputsOf(spec, item, id, answer), created: [key] };
 }
 
 async function update(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, key: string, current: ResourceRecord, live: LiveState): Promise<ApplyResult> {
