@@ -61,7 +61,9 @@
     },
     "bin": {
       "sponson": "./dist/bin.js"
-    }
+    },
+    "access": "public",
+    "provenance": true
   },
   "homepage": "https://sponson.mintlify.site",
   "bugs": {

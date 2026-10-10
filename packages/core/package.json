@@ -57,7 +57,9 @@
         "types": "./dist/testing/fake.d.ts",
         "default": "./dist/testing/fake.js"
       }
-    }
+    },
+    "access": "public",
+    "provenance": true
   },
   "homepage": "https://sponson.mintlify.site",
   "bugs": {

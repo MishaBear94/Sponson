@@ -8,7 +8,7 @@ name: release
 # 2. A maintainer runs this workflow by hand (Actions → release → Run workflow) after merging that PR.
 #    With `dry-run` (the default) it only prints what would be published. Without it, it publishes every
 #    package whose version is not on npm yet with `pnpm publish` (via `changeset publish`: workspace:*
-#    rewritten, publishConfig applied, prepack builds), with npm provenance, and pushes the git tags.
+#    rewritten, publishConfig applied, prepack builds), with npm provenance, and pushes the release tags.
 #
 # Requires: repository secret NPM_TOKEN (an npm automation token), and a GitHub environment `npm`
 # (Settings → Environments) with the maintainers as required reviewers.
@@ -84,7 +84,8 @@ jobs:
         if: ${{ !inputs.dry-run }}
         run: |
           pnpm changeset publish
-          git push --follow-tags
+          # changesets creates lightweight tags, which `--follow-tags` skips; push them by name.
+          git push origin --tags
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"

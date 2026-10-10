@@ -52,6 +52,10 @@ describe("repository identity", () => {
       const pkg = JSON.parse(readFileSync(join(REPO, `packages/${p}/package.json`), "utf8")) as { homepage?: string; keywords?: string[] };
       expect(pkg.homepage, `packages/${p}/package.json homepage`).toBe(home);
       expect(pkg.keywords?.length, `packages/${p}/package.json keywords (how npm search finds it)`).toBeGreaterThan(0);
+      const publish = (pkg as { publishConfig?: { provenance?: boolean; access?: string } }).publishConfig;
+      // The release workflow sets NPM_CONFIG_PROVENANCE, but `changeset publish` runs `pnpm publish`, which ignores it.
+      expect(publish?.provenance, `packages/${p}/package.json publishConfig.provenance (npm provenance on publish)`).toBe(true);
+      expect(publish?.access, `packages/${p}/package.json publishConfig.access`).toBe("public");
     }
   });
 
