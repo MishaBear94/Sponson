@@ -59,6 +59,18 @@ export interface ApiClientOptions {
   token: string;
   /** `bearer` sends `Authorization: Bearer <token>`; `header:<name>` sends the token in a custom header. */
   authHeader?: "bearer" | `header:${string}`;
+  /**
+   * Extra headers sent with every request (an API version pin). They never replace `accept`, `content-type` or the
+   * credential's header.
+   */
+  headers?: Record<string, string>;
+  /**
+   * How request bodies are sent: `json` (the default) or `form` (`application/x-www-form-urlencoded`, nested
+   * fields as `a[b]=c` and list items as `a[0]=c`, as Stripe expects). Responses are JSON either way.
+   */
+  encoding?: "json" | "form";
+  /** The request `Content-Type`, when it is not the encoding's own (a vendor media type for a patch). */
+  contentType?: string;
   /** Masks known secrets; applied to provider text before it is truncated into an error message. */
   redact: (text: string) => string;
   /** Source of SPONSON_HTTP_TIMEOUT_MS / SPONSON_HTTP_RETRIES / SPONSON_HTTP_RETRY_BASE_MS. */
@@ -221,9 +233,11 @@ export function apiClient(opts: ApiClientOptions): ApiClient {
   while (base.endsWith("/")) base = base.slice(0, -1);
   const auth = opts.authHeader ?? "bearer";
   const policy = policyFrom(opts.env);
-  const headers: Record<string, string> = { accept: "application/json" };
+  const headers: Record<string, string> = { ...extraHeaders(opts.headers ?? {}), accept: "application/json" };
   if (auth === "bearer") headers.authorization = `Bearer ${opts.token}`;
-  else headers[auth.slice("header:".length)] = opts.token;
+  else headers[auth.slice("header:".length).toLowerCase()] = opts.token;
+  const form = opts.encoding === "form";
+  const contentType = opts.contentType ?? (form ? "application/x-www-form-urlencoded" : "application/json");
 
   const fail = (code: ProviderErrorCode, method: string, path: string, detail: string, status?: number, extra: Record<string, unknown> = {}): SponsonError =>
     new SponsonError(code, `${opts.adapter}: ${method} ${path} → ${status ?? DESCRIBE[code]}${detail ? `: ${detail}` : ""}`, {
@@ -239,7 +253,7 @@ export function apiClient(opts: ApiClientOptions): ApiClient {
     const init: RequestInit =
       body === undefined
         ? { method, headers: { ...headers }, signal: controller.signal }
-        : { method, headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify(body), signal: controller.signal };
+        : { method, headers: { ...headers, "content-type": contentType }, body: form ? formEncode(body) : JSON.stringify(body), signal: controller.signal };
     const timer = setTimeout(() => controller.abort(), policy.timeoutMs);
     try {
       const res = await fetch(base + path, init);
@@ -285,6 +299,26 @@ export function apiClient(opts: ApiClientOptions): ApiClient {
     patch: (path, body, shape, write) => call("PATCH", path, body, shape, write),
     delete: (path, shape) => call("DELETE", path, undefined, shape),
   };
+}
+
+/**
+ * A body as `application/x-www-form-urlencoded`, bracket-nested: `{ a: { b: 1 }, c: [x, y] }` is
+ * `a[b]=1&c[0]=x&c[1]=y`. Null sends an empty value (how such APIs clear a field).
+ */
+export function formEncode(body: unknown): string {
+  const pairs: Array<[string, string]> = [];
+  const walk = (v: unknown, name: string): void => {
+    if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${name}[${i}]`));
+    else if (isObject(v)) for (const [k, x] of Object.entries(v)) walk(x, name ? `${name}[${k}]` : k);
+    else if (name) pairs.push([name, v === null || v === undefined ? "" : String(v as string | number | boolean)]);
+  };
+  walk(body, "");
+  return new URLSearchParams(pairs).toString();
+}
+
+/** Configured headers, lower-cased (names are case-insensitive) so the client's own headers override them. */
+function extraHeaders(h: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(h).filter(([k]) => k.toLowerCase() !== "content-type").map(([k, v]) => [k.toLowerCase(), v]));
 }
 
 // ---------------------------------------------------------------------------

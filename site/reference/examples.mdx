@@ -20,6 +20,7 @@ The format is specified in [docs/plan-format.md](/reference/plan-format).
 | [explicit-deploy.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/explicit-deploy.plan.yaml) | Sponson starting the deploy; `depends_on` |
 | [production-with-approval.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/production-with-approval.plan.yaml) | preview and production in one file; approval |
 | [adopting-an-existing-project.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/adopting-an-existing-project.plan.yaml) | what `sponson init` writes when it adopts; `{ keep: true }` |
+| [http-flags-webhooks-allowlists.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/http-flags-webhooks-allowlists.plan.yaml) | APIs with no adapter of their own, through the generic `http` adapter (illustrative) |
 
 ## nextjs-neon-preview.plan.yaml
 
@@ -341,4 +342,109 @@ changes:
 
   # To let Sponson manage a value, replace `{ keep: true }` with a literal or a reference,
   # for example `SENTRY_DSN: { secret: "env://SENTRY_DSN" }`.
+```
+
+## http-flags-webhooks-allowlists.plan.yaml
+
+**Illustrative.** The generic `http` adapter managing what has no Sponson adapter: a feature gate per pull request
+(`http.resource`, located by name), a test-mode webhook endpoint (form-encoded, with an idempotency key and a
+sensitive output), the preview URL on an application's allowed web origins (`http.list_item`, an item of a JSON
+array), and a callback on a comma-separated redirect allow-list (`shape: delimited`). Each API is a block under
+`providers.http` naming its credential's environment variable. The endpoints follow the providers' published API
+references as we understand them; plan against the real API (`sponson plan` only reads) before the first apply.
+`apply --destroy` removes the gate, the endpoint and the two list items, and leaves every other origin and
+redirect as it was. Reference: [`http.resource`](/reference/plan-format#http-resource),
+[`http.list_item`](/reference/plan-format#http-list_item).
+
+```yaml http-flags-webhooks-allowlists.plan.yaml
+# yaml-language-server: $schema=../schema/release.plan.schema.json
+#
+# ILLUSTRATIVE. The generic `http` adapter driving four SaaS APIs that have no Sponson adapter of their own. The
+# endpoints, envelopes and credential headers follow each provider's published API reference as we understand it;
+# check them against the current docs before relying on this plan, and run `sponson plan` first: it only reads.
+# The ids (Auth0 client, Supabase project ref, tenant domain) are placeholders.
+#
+# Each `base_url_env` is an optional override of `base_url` (a staging API; the test suite points them at the
+# local fake cloud). Credentials are environment variable NAMES; Sponson never stores or prints their values.
+version: 1
+environments: [preview]
+providers:
+  vercel: { project: prj_acme_web }
+  http:
+    statsig:
+      base_url: https://statsigapi.net/console/v1
+      base_url_env: STATSIG_API_URL
+      auth: { header: STATSIG-API-KEY, value_env: STATSIG_CONSOLE_KEY }
+    stripe:
+      base_url: https://api.stripe.com/v1
+      base_url_env: STRIPE_API_URL
+      auth: { bearer_env: STRIPE_TEST_SECRET_KEY }
+      encoding: form
+    auth0:
+      base_url: https://acme.us.auth0.com/api/v2
+      base_url_env: AUTH0_API_URL
+      auth: { bearer_env: AUTH0_MANAGEMENT_TOKEN }
+    supabase:
+      base_url: https://api.supabase.com/v1
+      base_url_env: SUPABASE_API_URL
+      auth: { bearer_env: SUPABASE_ACCESS_TOKEN }
+changes:
+  # The preview deployment; its URL exists once Vercel's build of this commit is ready.
+  - id: web
+    adapter: vercel
+    op: env
+    target: preview
+    values:
+      NEXT_PUBLIC_CHECKOUT_GATE: "checkout_${ctx.scope}"
+
+  # A Statsig feature gate per pull request, on for the preview. Located by name in GET /gates.
+  - id: gate
+    adapter: http
+    op: resource
+    api: statsig
+    find: { path: /gates, list_path: /data, match: { name: "checkout_${ctx.scope}" } }
+    read: { path: "/gates/{id}" }
+    create: { path: /gates }
+    update: { method: PATCH }
+    item_path: /data
+    fields:
+      description: "New checkout, preview of ${ctx.scope}"
+      isEnabled: true
+
+  # A Stripe test-mode webhook endpoint for the preview. Stripe takes form-encoded bodies, updates with POST, and
+  # honours Idempotency-Key. Its signing secret is in the create answer only: a sensitive output, available to the
+  # run that creates the endpoint (see ADR 0017 for why a later run cannot read it again).
+  - id: stripe_hook
+    adapter: http
+    op: resource
+    api: stripe
+    find: { path: "/webhook_endpoints?limit=100", list_path: /data, match: { url: "https://${ctx.scope}.preview.acme.dev/api/webhooks/stripe" } }
+    read: { path: "/webhook_endpoints/{id}" }
+    create: { path: /webhook_endpoints, idempotency_key: true }
+    update: { method: POST }
+    fields:
+      enabled_events: [checkout.session.completed, invoice.paid]
+      description: "Preview ${ctx.scope}"
+    outputs:
+      signing_secret: { path: /secret, sensitive: true }
+
+  # The preview URL on an Auth0 application's allowed web origins: one item of a list on the client object.
+  - id: auth0_origin
+    adapter: http
+    op: list_item
+    api: auth0
+    vars: { client: aBcD1234eFgH5678 }
+    parent: { path: "/clients/{client}", read_path: "/clients/{client}?fields=web_origins" }
+    list_path: /web_origins
+    item: { from: web.preview_url }
+
+  # The preview's auth callback on Supabase's redirect allow-list, which is one comma-separated string.
+  - id: supabase_redirect
+    adapter: http
+    op: list_item
+    api: supabase
+    parent: { path: /projects/abcdefghijklmnopqrst/config/auth }
+    list_path: /uri_allow_list
+    shape: delimited
+    item: "https://${ctx.scope}.preview.acme.dev/**"
 ```

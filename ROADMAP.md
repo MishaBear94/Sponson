@@ -33,6 +33,13 @@ first, then the adapter.
 Every adapter is one file, one sim routes file and one scenario; `pnpm new:adapter <name>` generates all three
 and registers them. The checklist is in CONTRIBUTING.md.
 
+Many rows need no adapter at all: the generic `http` adapter ([ADR 0017](docs/adr/0017-generic-http-adapter.md),
+[plan format](docs/plan-format.md#the-generic-http-adapter)) manages plain CRUD objects and list entries of any JSON
+REST API from the plan. The items below are those whose lifecycle needs more (asynchronous provisioning, a deploy
+barrier, instruction-based updates, an output that exists only once), or that are common enough to deserve a
+tested, documented first-class op. Next for the `http` adapter itself: preconditions (ETag) for list writes,
+polling until ready, an OAuth2 client-credentials token, and pagination by page number or `Link` header.
+
 | Item | Notes | Label |
 |------|-------|-------|
 | **Feature flags: LaunchDarkly** — `flag_target`: turn a flag on for a preview (target the preview URL or a context key), off again on destroy ([#15](https://github.com/MishaBear94/Sponson/issues/15)) | The README's fourth console. Decide the resource key (project + environment + flag + target) | adapter, help wanted |

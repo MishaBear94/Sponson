@@ -107,6 +107,24 @@ methods, which is more cautious than needed but not wrong.
 | C2 | bare array; with `paginated=true`, `{ data, total_count }` by `offset`/`limit` | array and parameters verified; envelope from the SDK sources (pinned by the contract suite) |
 | C3 | `RedirectURL` and `DeletedObject` shapes | verified |
 
+## The generic `http` adapter
+
+The `http` adapter makes the calls a plan line declares, so there is no provider to verify it against: a line is
+checked by running `sponson plan` (it only reads) against the real API before the first `apply`. The plans in
+[examples/](/reference/examples) that use it are illustrative and say so.
+
+### Sim assumptions (`packages/sim/src/routes/rest.ts`)
+
+They describe a conventional JSON REST API, not one provider; the adapter's tests and scenarios run against them.
+
+| Id | Assumption | Status |
+|---|---|---|
+| R1 | credentials as `Authorization: Bearer`, `Authorization: Basic` or a `*-Api-Key` header | convention |
+| R2 | `{ data }` envelopes for collection objects and lists, cursor in `next_cursor`; other objects bare | convention (the plan line names its own envelope with `item_path`, `list_path`, `find.next`) |
+| R3 | unknown paths are 404 until seeded or created; client-chosen ids; duplicate `name` → 409 | convention (`exists_status` covers providers that answer otherwise) |
+| R4 | PATCH is a JSON merge patch (RFC 7396); PUT replaces; JSON or form bodies; no preconditions | RFC 7396 for PATCH; the rest convention |
+| R5 | DELETE answers `{ id, deleted }`; unknown is 404 | convention (`gone_status` covers providers that answer otherwise) |
+
 ## What still needs a live account
 
 - Vercel: V1 (propagation of env writes), the deployment list's order, whether `decrypt=true` still decrypts,
