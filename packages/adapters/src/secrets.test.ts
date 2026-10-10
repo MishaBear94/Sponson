@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { awsSecretsManagerSource, dopplerSecretSource, envSecretSource, opSecretSource, type Exec } from "./secrets.js";
+import { awsSecretsManagerSource, dopplerSecretSource, envSecretSource, gcpSecretManagerSource, opSecretSource, type Exec } from "./secrets.js";
 
 describe("env secret source", () => {
   it("resolves from the environment", async () => {
@@ -117,11 +117,64 @@ describe("aws-sm secret source", () => {
   });
 });
 
+describe("gcp-sm secret source", () => {
+  const ARGS = (version: string, secret: string, project: string) => ["secrets", "versions", "access", version, `--secret=${secret}`, `--project=${project}`, "--format=json"];
+  /** What `gcloud secrets versions access --format=json` prints: the payload base64-encoded (URL-safe alphabet). */
+  const response = (value: string | Buffer) =>
+    `${JSON.stringify({ name: "projects/123/secrets/s/versions/4", payload: { data: Buffer.from(value).toString("base64url"), dataCrc32c: "1" } }, null, 2)}\n`;
+
+  it("asks gcloud for the latest version as JSON, decodes the payload exactly, and passes the env through", async () => {
+    const exec = vi.fn<Exec>(async () => response("s3cret\nline2\n"));
+    const env = { CLOUDSDK_CONFIG: "/tmp/gcloud" };
+    // The trailing newline is part of the secret: the JSON form keeps it, where raw output could not tell.
+    expect(await gcpSecretManagerSource(exec).resolve("gcp-sm://my-proj/stripe-key", env)).toBe("s3cret\nline2\n");
+    expect(exec).toHaveBeenCalledWith("gcloud", ARGS("latest", "stripe-key", "my-proj"), env);
+  });
+
+  it("accepts an explicit version and a domain-scoped project, and decodes the URL-safe base64 alphabet", async () => {
+    const exec = vi.fn<Exec>(async () => response("fake_ts_??>>~~"));
+    expect(await gcpSecretManagerSource(exec).resolve("gcp-sm://example.com:proj/STRIPE_KEY/7", {})).toBe("fake_ts_??>>~~");
+    expect(exec).toHaveBeenCalledWith("gcloud", ARGS("7", "STRIPE_KEY", "example.com:proj"), {});
+  });
+
+  it("a binary, empty or missing payload is SECRET_UNRESOLVED, and the message never contains the value", async () => {
+    for (const [out, why] of [
+      [response(Buffer.from([0x66, 0x61, 0x6b, 0x65, 0xff, 0xfe])), /not UTF-8/],
+      [response(""), /empty/],
+      ['{"name":"projects/1/secrets/s/versions/1"}', /no payload/],
+      ["not json fake_ts_garbage", /no payload/],
+    ] as const) {
+      const err = await gcpSecretManagerSource(async () => out).resolve("gcp-sm://p1/s", {}).then(
+        () => null,
+        (e: Error) => e,
+      );
+      expect(err).toMatchObject({ code: "SECRET_UNRESOLVED", message: expect.stringMatching(why), details: { ref: "gcp-sm://p1/s" } });
+      expect(err!.message).not.toMatch(/fake/);
+    }
+  });
+
+  it("rejects malformed references before running anything, including segments gcloud would read as flags", async () => {
+    const exec = vi.fn<Exec>(async () => response("x"));
+    for (const ref of ["gcp-sm://", "gcp-sm://only-secret", "gcp-sm://p//", "gcp-sm://p/s/v/extra", "gcp-sm://-p/s", "gcp-sm://p/--impersonate-service-account=x", "gcp-sm://p/s/0", "gcp-sm://p/s/latest-1"]) {
+      await expect(gcpSecretManagerSource(exec).resolve(ref, {})).rejects.toMatchObject({ code: "SECRET_UNRESOLVED", message: expect.stringMatching(/gcp-sm:\/\/<project>\/<secret>/) });
+    }
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("a CLI failure (not authenticated, unknown secret) is SECRET_UNRESOLVED naming the reference", async () => {
+    const src = gcpSecretManagerSource(async () => {
+      throw new Error("gcloud secrets failed: ERROR: (gcloud.secrets.versions.access) NOT_FOUND: Secret [projects/1/secrets/nope] not found");
+    });
+    await expect(src.resolve("gcp-sm://p1/nope", {})).rejects.toMatchObject({ code: "SECRET_UNRESOLVED", message: expect.stringMatching(/NOT_FOUND/), details: { ref: "gcp-sm://p1/nope" } });
+  });
+});
+
 describe("CLI-backed sources share one message shape", () => {
   const sources = [
     ["doppler", dopplerSecretSource(), "doppler://p/c/K"],
     ["op", opSecretSource(), "op://v/i/f"],
     ["aws", awsSecretsManagerSource(), "aws-sm://prod/app#K"],
+    ["gcloud", gcpSecretManagerSource(), "gcp-sm://my-proj/K"],
   ] as const;
 
   it.each(sources)("a missing `%s` binary says so, without repeating the ref or leaking ENOENT", async (bin, src, ref) => {

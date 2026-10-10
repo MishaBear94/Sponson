@@ -48,7 +48,7 @@ body:
         - neon
         - vercel
         - clerk
-        - secret source (env / doppler / op / aws-sm)
+        - secret source (env / doppler / op / aws-sm / gcp-sm)
         - a third-party plugin
         - none / not sure
   - type: textarea

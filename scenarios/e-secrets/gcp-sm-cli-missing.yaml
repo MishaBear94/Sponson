@@ -1,0 +1,26 @@
+name: "gcp-sm:// without the gcloud CLI: the line is blocked naming the reference, nothing is written"
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values: { STRIPE_KEY: { secret: "gcp-sm://shop-prod/stripe-key" } }
+env: { PATH: "/sponson-scenario-no-such-dir" }
+steps:
+  - run: plan --json
+    expect:
+      exit: 1
+      plan_lines: { env: blocked }
+      errors: { env: "^gcp-sm://shop-prod/stripe-key: the `gcloud` CLI is not installed or not on PATH$" }
+  - run: apply --json
+    expect:
+      exit: 1
+      status: failed
+      lines: { env: blocked }
+      errors: { env: "gcp-sm://shop-prod/stripe-key" }
+      writes: 0
