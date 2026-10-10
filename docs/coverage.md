@@ -80,7 +80,7 @@ Columns:
 |---|---|---|---|---|---|
 | Clerk | Preview URL on the instance's redirect allow-list | Backend API `POST /v1/redirect_urls`, `DELETE /v1/redirect_urls/{id}`, bearer secret key; object | Y | P0 | **yes** (`clerk.redirect_allow`) |
 | Auth0 | Preview URL in an application's `callbacks`, `allowed_logout_urls`, `web_origins`, `allowed_origins` | Management API `PATCH /api/v2/clients/{id}`, bearer from client-credentials; **list** (each array replaced whole); no ETag | Y (list mode, token exchange) | P0 | no |
-| Supabase Auth | Preview URL in "Additional Redirect URLs" | Management API `PATCH /v1/projects/{ref}/config/auth` with `uri_allow_list`, bearer; **list** encoded as one comma-separated string; send only that field | Y (list mode over a delimited string) | P0 | **yes** (`supabase.auth_redirect`) |
+| Supabase Auth | Preview URL in "Additional Redirect URLs" | Management API `PATCH /v1/projects/{ref}/config/auth` with `uri_allow_list`, bearer; **list** encoded as one comma-separated string; send only that field; no precondition, so the op locks the list (`lockOn`) | Y (list mode over a delimited string) | P0 | **yes** (`supabase.auth_redirect`) |
 | Firebase Auth | Preview domain in `authorizedDomains` | Identity Toolkit `PATCH admin/v2/projects/{p}/config?updateMask=authorizedDomains`, Google OAuth; **list** full replace | Y (list mode, Google token) | P1 | no |
 | WorkOS | Redirect URI for AuthKit | `POST /user_management/redirect_uris`, list via `GET`; bearer; object. Delete endpoint not confirmed **(unverified)** | Y | P1 | no |
 | Stytch | Redirect URL per environment | PWA `POST /pwa/v3/projects/{p}/environments/{e}/redirect_urls` (+ get/delete by URL), Basic workspace key; object | Y | P2 | no |
@@ -231,6 +231,7 @@ and the lifecycle is plain CRUD. Rows marked **Y**: 33 rows not covered today, w
    `If-Match`, GCS `ifMetagenerationMatch`), re-read after write to confirm the item landed, and declare the parent
    object (`lockOn`) so the engine's per-object lock serialises Sponson's writers
    ([ADR 0019](adr/0019-parent-object-locks.md)). Without this, two PRs editing one Auth0 application lose writes.
+   Done: `http.list_item` locks its parent object, `supabase.auth_redirect` its project's allow-list.
 7. **Status classification overrides**: which statuses mean "already exists" (re-read and claim), "gone" (success on
    delete), "busy" (retry), on top of `packages/adapters/src/http.ts`'s defaults; plus pagination styles (cursor,
    `next` link, page number).

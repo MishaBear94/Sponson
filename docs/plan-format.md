@@ -412,9 +412,11 @@ comma-separated string, `uri_allow_list`.
 | `project` | string | `providers.supabase.project` | The ref of the project whose allow-list to edit. A preview branch is a project with its own Auth config, so a preview that talks to its branch sets `project: { from: db.project_ref }`. When set, it is part of the key (`redirect:<project>:<url>`). |
 
 `apply` reads the list, appends the URL and writes the whole field back (a `PATCH` carrying only `uri_allow_list`),
-then reads it again to confirm. The API offers no precondition, so a concurrent edit can overwrite the write; the
-re-read notices and the round is repeated (three times, then `PROVIDER_CONFLICT`). A URL already on the list is taken
-over, not duplicated. Destroy removes exactly that entry and leaves every other entry in place; when the project is
+then reads it again to confirm. The API offers no precondition, so every pull request and environment adding a URL
+to one project's list writes it holding a lock on that list, `supabase:<project ref>:auth-uri-allow-list`
+([ADR 0019](adr/0019-parent-object-locks.md)): Sponson's writers never lose each other's entries. An edit made in the
+dashboard at the same moment can still overwrite the write; the re-read notices and the round is repeated (three
+times, then `PROVIDER_CONFLICT`). A URL already on the list is taken over, not duplicated. Destroy removes exactly that entry and leaves every other entry in place; when the project is
 already gone (a branch deleted first), there is nothing to remove. For drift and adoption, every URL on the list of
 `providers.supabase.project` is in scope.
 
@@ -509,9 +511,12 @@ once the item is there as planned (written again, up to three times, if another 
 Key: `<parent.path>#<list_path>=<item>`. **Drift**: the item missing from the collection is `missing`; for map items
 and keyed entries, a declared field or value edited in the console is `changed`. Items no line declares are left
 exactly as they are, and are reported as `unmanaged`. Writes replace the whole collection (except keyed maps sent
-as `field`), so they are sent as idempotent and retried after a dropped connection. There is no precondition: two
-runs editing the same parent at the same moment can still lose one write, which the re-read reports as
-`PROVIDER_CONFLICT` when it happens to see it ([ADR 0017](adr/0017-generic-http-adapter.md)).
+as `field`), so they are sent as idempotent and retried after a dropped connection. There is no precondition, so
+every write holds a lock on the parent object ([ADR 0019](adr/0019-parent-object-locks.md)), named
+`http:<base_url><parent.path>` (the block's `base_url` without user info, query or fragment, and the filled path;
+never a credential): runs in other pull requests and environments that edit the same parent wait for each other
+and never lose an item. A writer outside Sponson editing the parent at the same moment can still drop one; the
+re-read puts it back, or reports `PROVIDER_CONFLICT` after three rounds.
 
 ### Outputs
 

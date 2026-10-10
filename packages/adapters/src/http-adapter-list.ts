@@ -13,10 +13,11 @@
  * - Writes replace the whole collection (`PUT`, or `PATCH`/`POST` sent as idempotent, so a dropped connection is
  *   retried), except a keyed map with `send: field`, which is sent as a merge patch of the one entry (`null`
  *   deletes it). Then the parent is read again: the write counts only once the item is seen as planned. A
- *   collection that loses the item to a concurrent writer is written again, up to MAX_ATTEMPTS times. There is no
- *   precondition (ETag): two writers can still interleave between a read and a write; see the ADR.
+ *   collection that loses the item to a concurrent writer is written again, up to MAX_ATTEMPTS times.
+ * - Lock: the parent object (`lockOn`, ADR 0019), so Sponson's writers in other scopes and environments never
+ *   interleave between a read and a write. There is no precondition (ETag): only a writer outside Sponson can.
  */
-import { SponsonError, canonicalJson, type AdapterContext, type DiffSide, type LiveState, type OpSpec, type ResourceDiff, type ResourceRecord } from "@sponson/core";
+import { SponsonError, canonicalJson, type AdapterContext, type DiffSide, type LiveState, type OpSpec, type ResolvedParams, type ResourceDiff, type ResourceRecord } from "@sponson/core";
 import { ABSENT, SENSITIVE, assertNoPending, desiredSide, paramError } from "./common.js";
 import { isObject, type ApiClient } from "./http.js";
 import { failedWith, httpClient, write } from "./http-adapter-client.js";
@@ -289,10 +290,25 @@ function diffExisting(spec: ListItemSpec, key: string, label: string, current: R
   return { key, kind: "update", label, before, after: side(desired) };
 }
 
+/**
+ * The parent object's identity for its lock (ADR 0019): `http:<base URL><parent path>`. The base URL is the API
+ * block's `base_url` (not its `base_url_env` override, so every runner names the object alike) without user info,
+ * query or fragment: an identity is written to receipts, so it never carries a credential. Every collection of
+ * one parent shares the lock, since `send: parent` writes them all back.
+ */
+function parentLock(params: ResolvedParams, provider: Record<string, unknown>): string | null {
+  const spec = parseListItem(params);
+  const path = fillPath(spec.parent.path, spec.vars);
+  if (path === undefined || typeof provider.base_url !== "string") return null;
+  const base = new URL(provider.base_url);
+  return `${ADAPTER}:${base.protocol}//${base.host}${base.pathname.replace(/\/+$/, "")}${path}`;
+}
+
 /** `http.list_item`: one value kept in a collection on a parent object, by read-modify-write. */
 export const listItem: OpSpec = {
   outputs: {},
   providerFor: apiBlock,
+  lockOn: parentLock,
 
   async read(actx, params) {
     const spec = parseListItem(params);

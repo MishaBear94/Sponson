@@ -377,6 +377,17 @@ describe("http.list_item", () => {
   const ORIGIN = { api: "demo", parent: { path: "/apps/demo" }, list_path: "/allowed_origins", item: "https://pr-42.example.app" };
   const ORIGIN_KEY = "/apps/demo#/allowed_origins=https://pr-42.example.app";
 
+  it("locks the parent object (ADR 0019), named by the base URL without credentials and the filled parent path", () => {
+    const lockOn = listItem.lockOn!;
+    expect(lockOn(ORIGIN, API)).toBe("http:https://api.example.test/v1/apps/demo");
+    // Every collection of one parent shares its lock; the read path does not name another object.
+    expect(lockOn({ ...ORIGIN, list_path: "/callbacks", parent: { path: "/apps/demo", read_path: "/apps/demo?fields=all" } }, API)).toBe("http:https://api.example.test/v1/apps/demo");
+    const withVars = { ...ORIGIN, parent: { path: "/clients/{client}" }, vars: { client: "abc 123" } };
+    expect(lockOn(withVars, { ...API, base_url: "https://user:pa55word@tenant.example.test/api/v2/?x=1#f" })).toBe("http:https://tenant.example.test/api/v2/clients/abc%20123");
+    expect(lockOn({ ...withVars, vars: { client: resolved({ c: { from: "app.id" } }).c } }, API)).toBeNull();
+    expect(resource.lockOn).toBeUndefined();
+  });
+
   it("adds by read-modify-write after the intent, is idempotent, removes, and removing twice writes nothing", async () => {
     await h.chaos({ drift: { "rest.objects./apps/demo.allowed_origins": "add:https://prod.example.app" } });
     const actx = h.actx("http", API);
