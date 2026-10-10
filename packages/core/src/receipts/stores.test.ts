@@ -278,21 +278,37 @@ describe("git-branch store", () => {
     for (const r of results) if (r.status === "rejected") expect((r.reason as LockHeldError).lock.holder).toBe(won[0]);
   });
 
-  it("instances without a workdir get their own working clone (per process and per instance)", async () => {
+  it("lists scopes whose names differ only by case, even on a case-insensitive filesystem", async () => {
+    // A reftable remote can hold refs that differ only by case on any filesystem, as GitHub does.
+    const remote = await tmp("remote-reftable");
+    const supported = await exec("git", ["init", "--bare", "-q", "--initial-branch=main", "--ref-format=reftable", remote]).then(() => true, () => false);
+    if (!supported) return; // git older than 2.45: nothing to check
+    for (const scope of ["branch-Feature", "branch-feature", "pr-2"]) {
+      const w = await gitStore(remote);
+      await w.write(receipt(scope, `run-${scope}`));
+      await w.close();
+    }
+    const listed = (await (await gitStore(remote)).list("preview")).map((s) => s.scope).sort();
+    expect(listed).toEqual(["branch-Feature", "branch-feature", "pr-2"]);
+  });
+
+  it("instances without a workdir get their own owner-only working clone, created on first use with mkdtemp", async () => {
     const remote = await bareRemote();
     const a = new GitBranchReceiptStore({ remote, fallbackDir: await tmp("kept") });
     const b = new GitBranchReceiptStore({ remote, fallbackDir: await tmp("kept") });
-    expect(a.workingClone).not.toBe(b.workingClone);
-    expect(a.workingClone).toContain(join(tmpdir(), "sponson-receipts"));
-    expect(a.workingClone).toContain(`-${process.pid}-`);
-    await expect(stat(a.workingClone)).rejects.toThrow(); // created lazily
+    expect(a.workingClone).toBe(""); // nothing exists before first use
     await Promise.all([a.write(receipt("pr-1", "r1")), b.write(receipt("pr-2", "r2"))]);
+    expect(a.workingClone).not.toBe(b.workingClone);
+    expect(a.workingClone.startsWith(join(tmpdir(), "sponson-receipts-"))).toBe(true);
+    if (process.platform !== "win32") expect((await stat(a.workingClone)).mode & 0o077).toBe(0); // owner-only
     expect((await a.list("preview")).map((s) => s.scope).sort()).toEqual(["pr-1", "pr-2"]);
+    const [firstA, firstB] = [a.workingClone, b.workingClone];
     await Promise.all([a.close(), b.close()]);
-    await expect(stat(a.workingClone)).rejects.toThrow();
-    await expect(stat(b.workingClone)).rejects.toThrow();
-    // A closed store is still usable: it starts a fresh clone.
+    await expect(stat(firstA)).rejects.toThrow();
+    await expect(stat(firstB)).rejects.toThrow();
+    // A closed store is still usable: it starts a fresh, differently named clone.
     expect((await a.read("preview", "pr-1"))?.runId).toBe("r1");
+    expect(a.workingClone).not.toBe(firstA);
     await a.close();
   });
 
@@ -402,6 +418,21 @@ describe("git-branch store: the legacy shared branch (ADR 0016)", () => {
     return remote;
   }
   const legacyHead = async (remote: string) => (await exec("git", ["--git-dir", remote, "rev-parse", "refs/heads/sponson/receipts"])).stdout.trim();
+
+  it("respects a live lock an older Sponson holds on the legacy branch: no takeover, no migration", async () => {
+    const live = { holder: "run-old", acquiredAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 3_600_000).toISOString() };
+    const variants: Array<Record<string, string>> = [
+      { "preview/pr-1/latest.json": serialize(receipt("pr-1", "old-1")), "preview/pr-1/lock.json": serialize(live) },
+      { "preview/pr-1/lock.json": serialize(live) }, // its first run: a lock and no receipt yet
+    ];
+    for (const files of variants) {
+      const remote = await legacyRemote(files);
+      const store = await gitStore(remote);
+      expect((await store.readLock("preview", "pr-1"))?.holder).toBe("run-old");
+      await expect(store.acquireLock("preview", "pr-1", "run-new", 60_000)).rejects.toBeInstanceOf(LockHeldError);
+      expect(await refs(remote)).toEqual(["refs/heads/sponson/receipts"]); // the scope was not migrated under it
+    }
+  });
 
   it("reads a scope that has no branch of its own from the legacy branch, and the first write migrates it", async () => {
     const remote = await legacyRemote({

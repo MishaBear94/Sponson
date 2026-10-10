@@ -357,6 +357,18 @@ describe("locks", () => {
     expect(Object.values(r?.lines ?? {}).some((l) => l.errorCode === "LOCK_LOST")).toBe(true);
   });
 
+  it("records the final receipt when renewals lagged but nobody took the lock (receipts are fenced by the store)", async () => {
+    const stalled = new Proxy(store, {
+      get: (t, k) => (k === "renewLock" ? () => new Promise<void>(() => {}) : typeof t[k as keyof typeof t] === "function" ? (t[k as keyof typeof t] as (...a: unknown[]) => unknown).bind(t) : t[k as keyof typeof t]),
+    });
+    // Every line is applied well before the holder's deadline; the deadline passes only before the final write.
+    const { receipt } = await applyRun(opts(PLAN, { store: stalled, lockTtlMs: 100, onLineDone: (id) => (id === "c" ? new Promise((r) => setTimeout(r, 120)) : undefined) }));
+    expect(receipt.status).toBe("complete");
+    const stored = await store.read("preview", "pr-42");
+    expect(stored?.runId).toBe(receipt.runId);
+    expect(stored?.ledger.every((e) => e.createdBy === "sponson" && e.id !== "")).toBe(true);
+  });
+
   it("never has two renewals in flight, however slow the store is", async () => {
     let inFlight = 0;
     let maxInFlight = 0;

@@ -85,3 +85,10 @@ Migration from the shared branch is automatic and per scope:
   which is older. Delete the legacy branch once migration is done.
 - `GitBranchStoreOptions.branch` is replaced by `refPrefix` (default `sponson-receipts`) and `legacyBranch`
   (default `sponson/receipts`).
+
+## Addendum: locks during migration
+
+A scope migrates on its first write, but an older Sponson may be mid-apply on the legacy branch at that moment.
+A *live* legacy `lock.json` is therefore carried into the scope's new working tree, so acquiring and reading the lock
+behave exactly as on the scope's own branch: the new run is refused (`LOCK_HELD`) and nothing is migrated until the
+old run releases or its lock expires. Only an expired or unreadable legacy lock is dropped.

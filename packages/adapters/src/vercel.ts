@@ -35,9 +35,12 @@ type DeploymentState = "QUEUED" | "INITIALIZING" | "BUILDING" | "READY" | "ERROR
  */
 type DeployTarget = "production" | "preview";
 
-/** The deployments that carry a line's values: production for the production target, previews otherwise. */
-function deployTargetFor(target: string): DeployTarget {
-  return target === "production" ? "production" : "preview";
+/**
+ * The deployments that carry a line's values: production builds for `production`, previews for `preview`, and
+ * none for `development` — development variables are pulled by `vercel env pull`, never built into a deployment.
+ */
+function deployTargetFor(target: string): DeployTarget | null {
+  return target === "production" ? "production" : target === "preview" ? "preview" : null;
 }
 
 interface Deployment {
@@ -373,8 +376,8 @@ const env: OpSpec = {
 
       // Vercel may have started building this sha before the vars landed; that build would miss them.
       const target = deployTargetFor(scope.target);
-      const d = newest(await deploymentsFor(c, actx.ctx.git.sha, target));
-      if (d && d.createdAt < startedAt && !FAILED_STATES.has(d.state)) {
+      const d = target ? newest(await deploymentsFor(c, actx.ctx.git.sha, target)) : undefined;
+      if (target && d && d.createdAt < startedAt && !FAILED_STATES.has(d.state)) {
         actx.log(`deployment ${d.uid} predates env write; redeploying`);
         await triggerDeploy(c, actx.ctx, target);
         notes = { redeployed: true };
@@ -429,7 +432,11 @@ const env: OpSpec = {
     const c = client(actx);
     let list: Deployment[];
     try {
-      list = await deploymentsFor(c, actx.ctx.git.sha, deployTargetFor(envScope(params).target));
+      const target = deployTargetFor(envScope(params).target);
+      if (!target) {
+        throw new SponsonError("PARAM_INVALID", "vercel: `target: development` variables are not part of any deployment, so this line has no `preview_url` or `deployment_id`", { adapter: "vercel", target: "development" });
+      }
+      list = await deploymentsFor(c, actx.ctx.git.sha, target);
     } catch (e) {
       // The HTTP layer already retried; a provider that is still unavailable means "not known yet", not "failed".
       if (isTransient(e)) return null;

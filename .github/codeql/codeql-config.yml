@@ -1,0 +1,6 @@
+# CodeQL configuration (used by .github/workflows/codeql.yml).
+query-filters:
+  # Sponson's plan format interpolates `${ctx.pr.number}`-style variables inside ordinary strings, so this query
+  # reports every place that writes or tests that syntax. It is a property of the format, not a mistake.
+  - exclude:
+      id: js/template-syntax-in-string-literal

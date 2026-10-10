@@ -34,9 +34,9 @@ const EXIT_MEANING: Record<number, string> = {
   3: "the scope's lock is held by another run, or this run lost it: wait and re-plan, never force",
 };
 
-/** Markdown table cells cannot contain a raw `|` or a newline. */
+/** Markdown table cells cannot contain a raw `|` or a newline; backslashes are escaped first so `\|` survives. */
 function cell(s: string | undefined): string {
-  return (s ?? "").replace(/\|/g, "\\|").replace(/\n/g, " ");
+  return (s ?? "").replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\n/g, " ");
 }
 
 export function renderErrors(): string {

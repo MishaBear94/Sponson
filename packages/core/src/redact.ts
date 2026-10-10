@@ -198,7 +198,7 @@ function base64Forms(s: string): string[] {
   const out = new Set<string>();
   const full = bytes.toString("base64");
   out.add(full);
-  out.add(full.replace(/=+$/, ""));
+  out.add(full.replace(/={1,2}$/, "")); // base64 pads with at most two `=`
   for (let shift = 0; shift < 3; shift++) {
     const enc = Buffer.concat([Buffer.alloc(shift), bytes]).toString("base64");
     const start = Math.ceil((shift * 8) / 6);

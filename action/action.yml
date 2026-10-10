@@ -124,26 +124,34 @@ runs:
         SCOPE_PR: ${{ steps.scope.outputs.pr }}
         SCOPE_BRANCH: ${{ steps.scope.outputs.branch }}
         SCOPE_SHA: ${{ steps.scope.outputs.sha }}
+        # Inputs reach the script only as environment variables, never spliced into its text: a value containing
+        # quotes or $(…) stays data (GitHub's guidance on script injection).
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_ENV: ${{ inputs.env }}
+        INPUT_PLAN: ${{ inputs.plan }}
+        INPUT_VERSION: ${{ inputs.version }}
       run: |
         set +e
-        case "${{ inputs.command }}" in
+        case "$INPUT_COMMAND" in
           plan)    cmd=(plan) ;;
           apply)   cmd=(apply) ;;
           destroy) cmd=(apply --destroy) ;;
-          *) echo "::error::unknown command '${{ inputs.command }}' (plan | apply | destroy)"; exit 2 ;;
+          *) echo "::error::unknown command '$INPUT_COMMAND' (plan | apply | destroy)"; exit 2 ;;
         esac
-        args=(--json --env "${{ inputs.env }}")
-        [ -n "${{ inputs.plan }}" ] && args+=(--plan "${{ inputs.plan }}")
+        args=(--json --env "$INPUT_ENV")
+        [ -n "$INPUT_PLAN" ] && args+=(--plan "$INPUT_PLAN")
         [ -n "$SCOPE_PR" ] && args+=(--pr "$SCOPE_PR")
         [ -n "$SCOPE_BRANCH" ] && args+=(--branch "$SCOPE_BRANCH")
         [ -n "$SCOPE_SHA" ] && args+=(--sha "$SCOPE_SHA")
-        npx -y "sponson@${{ inputs.version }}" "${cmd[@]}" "${args[@]}" > "$RUNNER_TEMP/sponson-result.json"
+        npx -y "sponson@$INPUT_VERSION" "${cmd[@]}" "${args[@]}" > "$RUNNER_TEMP/sponson-result.json"
         code=$?
         cat "$RUNNER_TEMP/sponson-result.json"
+        # A random delimiter: output that happened to contain a fixed one could forge further step outputs.
+        eof="SPONSON_$(openssl rand -hex 16)"
         {
-          echo "result<<SPONSON_EOF"
+          echo "result<<$eof"
           cat "$RUNNER_TEMP/sponson-result.json"
-          echo "SPONSON_EOF"
+          echo "$eof"
           echo "exit=$code"
           echo "status=$(node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(r.receipt?(r.receipt.stale?"stale":r.receipt.status):(r.ok?"ok":"error"))' "$RUNNER_TEMP/sponson-result.json" 2>/dev/null || echo error)"
         } >> "$GITHUB_OUTPUT"
@@ -233,5 +241,6 @@ runs:
       shell: bash
       env:
         SPONSON_EXIT: ${{ steps.run.outputs.exit }}
+        INPUT_COMMAND: ${{ inputs.command }}
       run: |
-        if [ "$SPONSON_EXIT" != "0" ]; then echo "::error::sponson ${{ inputs.command }} exited with $SPONSON_EXIT"; exit "$SPONSON_EXIT"; fi
+        if [ "$SPONSON_EXIT" != "0" ]; then echo "::error::sponson $INPUT_COMMAND exited with $SPONSON_EXIT"; exit "$SPONSON_EXIT"; fi

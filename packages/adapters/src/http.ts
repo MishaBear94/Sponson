@@ -184,7 +184,8 @@ class Attempt {
  * environment.
  */
 export function apiClient(opts: ApiClientOptions): ApiClient {
-  const base = opts.baseUrl.replace(/\/+$/, "");
+  let base = opts.baseUrl;
+  while (base.endsWith("/")) base = base.slice(0, -1);
   const auth = opts.authHeader ?? "bearer";
   const policy = policyFrom(opts.env);
   const headers: Record<string, string> = { accept: "application/json" };

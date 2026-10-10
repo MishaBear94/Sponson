@@ -178,10 +178,11 @@ and refuses newer versions (`RECEIPT_VERSION`).
   scheduled after the previous one finishes. Every receipt write passes the holder, and the store checks it in the
   same atomic step (fencing). A run that lost its lease stops with `LOCK_LOST` before writing again. An expired lock
   is taken over and the receipt records `lockPreempted`.
-- **The holder's own deadline**: fencing protects receipts, but providers cannot be fenced. So the holder also tracks
-  when its lease runs out, measured from when each acquire/renew was *sent*, and stops itself (`LOCK_LOST`) once less
-  than TTL/5 is left — before another run could legitimately take the lock. On the way out it tries one fenced
-  receipt write so whatever it already created stays in its ledger.
+- **The holder's own deadline**: providers cannot be fenced, so before every write to a provider the holder checks
+  its own view of when the lease runs out (measured from when each acquire/renew was *sent*) and stops itself
+  (`LOCK_LOST`) once less than TTL/5 is left — before another run could legitimately take the lock. Receipt writes
+  do not use that guess: the store fences them atomically, so a run whose renewals lagged but whose lock nobody took
+  still records everything it did.
 - **Succession**: when a pull request scope runs and the head branch's own scope (`branch-<name>`) has a ledger
   (an agent applied locally before the PR existed), the PR scope inherits those entries. After a successful apply it
   rewrites the predecessor's receipt without them and with `supersededBy`, so exactly one scope owns each resource.

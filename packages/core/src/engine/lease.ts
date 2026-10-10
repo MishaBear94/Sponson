@@ -76,7 +76,10 @@ export class Lease {
     tick();
   }
 
-  /** Throw LOCK_LOST when another run took the scope, or soon may; called before every write to a provider. */
+  /**
+   * Guard for writes to PROVIDERS, which cannot be fenced: throw LOCK_LOST when another run took the scope, or
+   * could have by now because our renewals stopped getting through (the holder's own deadline).
+   */
   assertHeld(): void {
     if (this.lost) throw lockLost(this.lost);
     const margin = this.ttl / 5;
@@ -85,9 +88,13 @@ export class Lease {
     }
   }
 
-  /** Write the receipt only if we still hold the lock at that instant. */
+  /**
+   * Write the receipt. Receipts ARE fenced: the store checks atomically that we still hold the lock, which is the
+   * authoritative answer — so the holder's local deadline (a guess, for unfenceable provider writes) does not apply
+   * here. A run whose renewals lagged but whose lock nobody took still records everything it did.
+   */
   async write(receipt: Receipt): Promise<void> {
-    this.assertHeld();
+    if (this.lost) throw lockLost(this.lost);
     try {
       await this.opts.store.write(receipt, { holder: this.holder });
     } catch (e) {
@@ -96,13 +103,10 @@ export class Lease {
     }
   }
 
-  /**
-   * Last-chance write after this run stopped itself: skips the local deadline but keeps the
-   * store's fencing, so it lands only if nobody has taken the lock in the meantime.
-   */
+  /** `write` for a run that is already stopping: never throws, reports whether the receipt landed. */
   async writeIfStillHeld(receipt: Receipt): Promise<boolean> {
     try {
-      await this.opts.store.write(receipt, { holder: this.holder });
+      await this.write(receipt);
       return true;
     } catch {
       return false;

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
-import { mkdir, readFile, readdir, rm, rmdir, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, readdir, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -99,7 +99,8 @@ export class GitBranchReceiptStore implements ReceiptStore {
   readonly kind = "git-branch";
   private readonly refPrefix: string;
   private readonly legacyBranch: string | null;
-  private readonly workdir: string;
+  /** The working clone. When this store owns it, it is created on first use with mkdtemp (owner-only, unpredictable). */
+  private workdir: string;
   private readonly ownsWorkdir: boolean;
   private readonly budgetMs: number;
   private readonly fallbackDir: string;
@@ -119,14 +120,11 @@ export class GitBranchReceiptStore implements ReceiptStore {
     this.fallbackDir = options.fallbackDir ?? join(process.cwd(), ".sponson", "unpushed");
     this.remoteForMessages = stripCredentials(options.remote);
     this.ownsWorkdir = options.workdir === undefined;
-    this.workdir =
-      options.workdir ??
-      join(
-        tmpdir(),
-        "sponson-receipts",
-        `${createHash("sha256").update(options.remote).digest("hex").slice(0, 12)}-${process.pid}-${randomBytes(4).toString("hex")}`,
-      );
+    this.workdir = options.workdir ?? "";
+    this.workdirPrefix = `sponson-receipts-${createHash("sha256").update(options.remote).digest("hex").slice(0, 12)}-`;
   }
+
+  private readonly workdirPrefix: string;
 
   /** How many pushes of this instance lost a race for their ref and were retried (for diagnostics and tests). */
   get refRaceCount(): number {
@@ -279,7 +277,10 @@ export class GitBranchReceiptStore implements ReceiptStore {
    */
   async close(): Promise<void> {
     return this.exclusive(async () => {
-      if (this.ownsWorkdir) await rm(this.workdir, { recursive: true, force: true });
+      if (this.ownsWorkdir && this.workdir) {
+        await rm(this.workdir, { recursive: true, force: true });
+        this.workdir = ""; // the next use makes a fresh mkdtemp directory, never a recreated, known path
+      }
       this.initialized = false;
     });
   }
@@ -388,6 +389,9 @@ export class GitBranchReceiptStore implements ReceiptStore {
 
   private async init(): Promise<void> {
     if (this.initialized) return;
+    // A directory under the shared temp dir with a predictable name could be pre-created (or symlinked) by another
+    // user; mkdtemp makes a fresh, owner-only directory with an unguessable name.
+    if (this.ownsWorkdir && !this.workdir) this.workdir = await mkdtemp(join(tmpdir(), this.workdirPrefix));
     await mkdir(this.workdir, { recursive: true });
     const isRepo = await stat(join(this.workdir, ".git")).then(() => true, () => false);
     if (!isRepo) {
@@ -438,7 +442,11 @@ export class GitBranchReceiptStore implements ReceiptStore {
     await this.git(["commit", "-qm", migrated ? `Start receipts for ${environment}/${scope} (from ${this.legacyBranch})` : `Start receipts for ${environment}/${scope}`]);
   }
 
-  /** Copy `<env>/<scope>/` (without `lock.json`) from the legacy branch into the working tree; false when there is none. */
+  /**
+   * Copy `<env>/<scope>/` from the legacy branch into the working tree; false when there is nothing. A live legacy
+   * lock is carried over, so acquire/read see it exactly like a lock on the scope's own branch (an older Sponson may
+   * be mid-apply at upgrade time); only an expired or unreadable one is dropped.
+   */
   private async seedFromLegacy(environment: string, scope: string): Promise<boolean> {
     if (this.legacyBranch === null) return false;
     try {
@@ -449,11 +457,17 @@ export class GitBranchReceiptStore implements ReceiptStore {
       throw this.classifyRemoteError(msg, this.legacyBranch);
     }
     const dir = receiptDir(environment, scope);
+    const lockFile = lockPath(environment, scope);
     const files = (await this.git(["ls-tree", "-r", "--name-only", "FETCH_HEAD", "--", `${dir}/`])).split("\n").filter(Boolean);
-    if (!files.some((f) => f !== lockPath(environment, scope))) return false;
+    if (files.length === 0) return false;
+    const legacyLock = files.includes(lockFile) ? parseLock(await this.git(["show", `FETCH_HEAD:${lockFile}`])) : null;
+    const liveLock = legacyLock !== null && !lockExpired(legacyLock);
+    if (!liveLock && !files.some((f) => f !== lockFile)) return false;
     await this.git(["checkout", "-q", "FETCH_HEAD", "--", `${dir}/`]);
-    await this.git(["rm", "-q", "--cached", "--ignore-unmatch", "--", lockPath(environment, scope)]);
-    await rm(join(this.workdir, lockPath(environment, scope)), { force: true });
+    if (!liveLock) {
+      await this.git(["rm", "-q", "--cached", "--ignore-unmatch", "--", lockFile]);
+      await rm(join(this.workdir, lockFile), { force: true });
+    }
     this.source = this.legacyBranch;
     return true;
   }
@@ -470,19 +484,24 @@ export class GitBranchReceiptStore implements ReceiptStore {
     const hasLegacy = legacyRef !== null && advertised.includes(legacyRef);
     if (scopeRefs.length === 0 && !hasLegacy) return [];
 
-    const local = `refs/sponson-list/${envSeg}`;
+    // Local names are by position, not by scope name: on a case-insensitive filesystem (macOS, Windows) the loose
+    // refs `…/branch-Feature` and `…/branch-feature` would be one file, and one scope would silently vanish.
+    const local = (i: number) => `refs/sponson-list/${envSeg}/${i}`;
     const legacyLocal = "refs/sponson-list-legacy";
-    const refspecs = [...(scopeRefs.length ? [`+${prefix}*:${local}/*`] : []), ...(hasLegacy ? [`+${legacyRef}:${legacyLocal}`] : [])];
-    await this.git(["fetch", "-q", "--prune", "--depth=1", "origin", ...refspecs]);
+    await this.git(["update-ref", "-d", legacyLocal]).catch(() => undefined);
+    for (const ref of (await this.git(["for-each-ref", "--format=%(refname)", `refs/sponson-list/${envSeg}/`])).split("\n").filter(Boolean)) {
+      await this.git(["update-ref", "-d", ref]);
+    }
+    const refspecs = [...scopeRefs.map((r, i) => `+${r}:${local(i)}`), ...(hasLegacy ? [`+${legacyRef}:${legacyLocal}`] : [])];
+    await this.git(["fetch", "-q", "--depth=1", "origin", ...refspecs]);
 
     const envDir = safeSegment(environment);
     const wanted: Array<{ scope: string; object: string }> = [];
     const own = new Set<string>();
-    for (const ref of scopeRefs) {
-      const seg = ref.slice(prefix.length);
-      const scope = fromRefSegment(seg);
+    for (const [i, ref] of scopeRefs.entries()) {
+      const scope = fromRefSegment(ref.slice(prefix.length));
       own.add(scope);
-      wanted.push({ scope, object: `${local}/${seg}:${envDir}/${scope}/latest.json` });
+      wanted.push({ scope, object: `${local(i)}:${envDir}/${scope}/latest.json` });
     }
     if (hasLegacy) {
       const dirs = (await this.git(["ls-tree", "-d", "--name-only", legacyLocal, "--", `${envDir}/`])).split("\n").filter(Boolean);
@@ -569,7 +588,7 @@ export class GitBranchReceiptStore implements ReceiptStore {
       if (/remote rejected|hook declined|\[rejected\]|rejected/i.test(msg)) {
         const said = msg
           .split("\n")
-          .filter((l) => /^remote:|remote rejected/.test(l.trim()))
+          .filter((l) => l.trim().startsWith("remote:") || l.includes("remote rejected"))
           .map((l) => l.trim())
           .join("; ")
           .slice(0, 300);

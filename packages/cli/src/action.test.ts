@@ -286,3 +286,21 @@ describe("action/README.md example workflow", () => {
     expect(apply.with).toMatchObject({ command: "apply", env: "production", "approved-by": "${{ steps.approval.outputs.by }}" });
   });
 });
+
+describe("action.yml script injection", () => {
+  it("never splices ${{ … }} into a shell script or github-script body; values arrive through env", async () => {
+    const { steps } = await action();
+    const spliced = steps.flatMap((s, i) => {
+      const bodies = [s.run ?? "", s.with?.script ?? ""];
+      return bodies.filter((b) => b.includes("${{")).map(() => `step ${i}${s.id ? ` (${s.id})` : ""}`);
+    });
+    expect(spliced, "move these expressions into `env:` and reference them as $VAR / process.env.VAR").toEqual([]);
+  });
+
+  it("writes multi-line step outputs with a random delimiter", async () => {
+    const { steps } = await action();
+    const run = steps.map((s) => s.run ?? "").join("\n");
+    expect(run).not.toMatch(/<<\s*[A-Z_]+EOF\b/);
+    expect(run).toMatch(/eof="SPONSON_\$\(openssl rand -hex 16\)"/);
+  });
+});

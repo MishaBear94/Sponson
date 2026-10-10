@@ -138,7 +138,7 @@ export async function remoteFile(remote: string, path: string, branch = branchOf
 /** A human's own clone of one scope's receipts branch, for tampering. */
 export async function humanClone(remote: string, branch: string): Promise<string> {
   const dir = await tmp("human");
-  await exec("git", ["clone", "-q", "--branch", branch, remote, dir]);
+  await exec("git", ["clone", "-q", "--branch", branch, "--", remote, dir]); // `--`: a path or branch is never an option
   return dir;
 }
 

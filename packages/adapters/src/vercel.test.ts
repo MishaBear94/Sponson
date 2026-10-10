@@ -198,6 +198,16 @@ describe("vercel env", () => {
     expect(await env.read(actx, p)).toBeNull();
   });
 
+  it("development variables never trigger or wait on a deployment", async () => {
+    await h.chaos({ deploy: "stale" }); // a preview build that predates the write would trigger a redeploy for preview
+    const actx = h.actx("vercel");
+    const p = env.defaults!({ values: { DEV_ONLY: "1" }, target: "development" }, h.ctx);
+    const r = await env.apply(actx, p, await env.read(actx, p));
+    expect(r.notes?.redeployed).toBeUndefined();
+    expect(writeIndex(h, "POST", DEPLOY)).toBe(-1);
+    await expect(env.awaitExternal!(actx, p, { resources: [], outputs: {} })).rejects.toMatchObject({ code: "PARAM_INVALID" });
+  });
+
   it("a commit's preview build is never taken for its production build, and vice versa", async () => {
     const actx = h.actx("vercel");
     const live = { resources: [], outputs: {} };

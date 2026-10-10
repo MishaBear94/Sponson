@@ -260,7 +260,8 @@ redeploy so the build sees the new values, and the receipt line gets `notes.rede
 
 `preview_url` and `deployment_id` are external outputs: they become available when the newest deployment of the
 current commit for the line's environment is `READY` — a commit's preview build is never taken for its production
-build, or the other way round. A deployment that ends `ERROR`, `CANCELED`, `BLOCKED` or `DELETED` fails the lines waiting on it
+build, or the other way round. `target: development` variables belong to no deployment: writing them never
+triggers a redeploy, and a line that reads their `preview_url` fails with `PARAM_INVALID`. A deployment that ends `ERROR`, `CANCELED`, `BLOCKED` or `DELETED` fails the lines waiting on it
 (`EXTERNAL_FAILED`). Project-wide variables belong to the scope that applied them first and are destroyed with it;
 see [examples/README.md](../examples/README.md#vercel-shared-and-branch-varsplanyaml).
 

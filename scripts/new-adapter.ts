@@ -232,7 +232,8 @@ export async function scaffold(name: string, opts: { root: string; templates?: s
     result.created.push(f.target);
     if (opts.dryRun) continue;
     await mkdir(dirname(target), { recursive: true });
-    await writeFile(target, rendered.get(f.target)!);
+    // `wx`: fail instead of overwriting if the file appeared since the existence check above.
+    await writeFile(target, rendered.get(f.target)!, { flag: "wx" });
   }
   if (!opts.dryRun) {
     for (const [path, text] of texts) {

@@ -57,25 +57,25 @@ describe("lifecycle journeys: one PR, many pushes", () => {
     let r = await push("p1-open", teamPlan({ previewValues: { FEATURE_SEARCH: "on" } }));
     log.check("p1", st(r.ds!) === "complete", `deployment_status run ${st(r.ds!)}`);
     // 2 add a key and a secret
-    r = await push("p2-add", teamPlan({ previewValues: { FEATURE_SEARCH: "on", SEARCH_INDEX: "products_v1" }, extra: "" }).replace('      SEARCH_INDEX: "products_v1"\n', '      SEARCH_INDEX: "products_v1"\n      STRIPE_KEY: { secret: "env://STRIPE_TEST_KEY" }\n'));
+    await push("p2-add", teamPlan({ previewValues: { FEATURE_SEARCH: "on", SEARCH_INDEX: "products_v1" }, extra: "" }).replace('      SEARCH_INDEX: "products_v1"\n', '      SEARCH_INDEX: "products_v1"\n      STRIPE_KEY: { secret: "env://STRIPE_TEST_KEY" }\n'));
     log.check("p2", team.vercelEnv("preview", "STRIPE_KEY", "feat/search")[0]?.value === "fake_ts_first_51Habc", "STRIPE_KEY not injected");
     // 3 change a value
     const withSecret = (v: Record<string, string>, id?: string, extra = "") =>
       teamPlan({ previewValues: v, envId: id, extra }).replace("      DATABASE_URL: { from: db.connection_string }\n", '      DATABASE_URL: { from: db.connection_string }\n      STRIPE_KEY: { secret: "env://STRIPE_TEST_KEY" }\n');
-    r = await push("p3-change", withSecret({ FEATURE_SEARCH: "on", SEARCH_INDEX: "products_v2" }));
+    await push("p3-change", withSecret({ FEATURE_SEARCH: "on", SEARCH_INDEX: "products_v2" }));
     log.check("p3", team.vercelEnv("preview", "SEARCH_INDEX", "feat/search")[0]?.value === "products_v2", "SEARCH_INDEX not updated");
     // 4 rename the env line `env` -> `vars` (callback follows)
-    r = await push("p4-rename", withSecret({ FEATURE_SEARCH: "on", SEARCH_INDEX: "products_v2" }, "vars"));
+    await push("p4-rename", withSecret({ FEATURE_SEARCH: "on", SEARCH_INDEX: "products_v2" }, "vars"));
     log.check("p4", team.vercelEnv("preview", "SEARCH_INDEX").length === 1 && team.apiResources().neon.length === 1, "rename duplicated resources");
     const p4 = await team.receipt("preview", "pr-42");
     log.check("p4", (p4?.lines.vars?.resources ?? []).every((x) => x.createdBy === "sponson"), `after rename, receipt calls Sponson-created vars ${JSON.stringify(p4?.lines.vars?.resources.map((x) => `${x.key}:${x.createdBy}`))}`);
     // 5 add a flags line, then move it to production
-    r = await push("p5-flags", withSecret({ FEATURE_SEARCH: "on", SEARCH_INDEX: "products_v2" }, "vars", flags("[preview]", "preview")));
+    await push("p5-flags", withSecret({ FEATURE_SEARCH: "on", SEARCH_INDEX: "products_v2" }, "vars", flags("[preview]", "preview")));
     log.check("p5", team.vercelEnv("preview", "BETA_BANNER", "feat/search").length === 1, "BETA_BANNER not created");
-    r = await push("p6-move", withSecret({ FEATURE_SEARCH: "on", SEARCH_INDEX: "products_v2" }, "vars", flags("[production]", "production")));
+    await push("p6-move", withSecret({ FEATURE_SEARCH: "on", SEARCH_INDEX: "products_v2" }, "vars", flags("[production]", "production")));
     log.check("p6", team.vercelEnv("production", "BETA_BANNER").length === 0, "a preview run wrote the production flag");
     // 7 remove a key
-    r = await push("p7-remove", withSecret({ FEATURE_SEARCH: "on" }, "vars", flags("[production]", "production")));
+    await push("p7-remove", withSecret({ FEATURE_SEARCH: "on" }, "vars", flags("[production]", "production")));
     // 8 the test Stripe key is rotated in the secret store; the next push picks it up
     team.baseEnv.STRIPE_TEST_KEY = "fake_ts_second_51Hxyz";
     r = await push("p8-rotate", withSecret({ FEATURE_SEARCH: "on" }, "vars", flags("[production]", "production")));
