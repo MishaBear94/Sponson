@@ -58,8 +58,13 @@ function paramsTable(op: RecipeOp): string[] {
 
 function outputsOf(op: RecipeOp): string {
   if (op.kind === "list_item") return "none";
-  const outputs = Object.keys((op.http.outputs as Record<string, unknown> | undefined) ?? {});
-  return ["id", ...outputs].map((o) => `\`${o}\``).join(", ");
+  const outputs = Object.entries((op.http.outputs as Record<string, unknown> | undefined) ?? {});
+  const marks = (d: unknown) => {
+    const decl = typeof d === "object" && d !== null ? (d as { sensitive?: boolean; once?: boolean }) : {};
+    const tags = [decl.sensitive ? "sensitive" : "", decl.once ? "once-only: only in the run that creates it" : ""].filter(Boolean);
+    return tags.length ? ` (${tags.join(", ")})` : "";
+  };
+  return ["`id`", ...outputs.map(([o, d]) => `\`${o}\`${marks(d)}`)].join(", ");
 }
 
 function opSection(r: Recipe, name: string, op: RecipeOp): string[] {

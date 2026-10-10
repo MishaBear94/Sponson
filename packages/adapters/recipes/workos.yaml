@@ -1,0 +1,63 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# WorkOS API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: workos
+title: WorkOS
+category: auth
+verified_on: "2026-10-11"
+docs:
+  - title: AuthKit API reference, Redirect URI
+    url: https://workos.com/docs/reference/authkit/redirect-uri
+  - title: AuthKit, redirect URIs in the Dashboard
+    url: https://workos.com/docs/user-management/integrating-with-authkit
+api:
+  base_url: https://api.workos.com
+  base_url_env: WORKOS_API_URL
+  auth: { bearer_env: WORKOS_API_KEY }
+assumptions:
+  - id: WO1
+    verified: true
+    text: "`POST /user_management/redirect_uris` with `{ uri }` creates a redirect URI for the environment the API key (`Authorization: Bearer sk_…`) belongs to, and answers the `redirect_uri` object (`id`, `uri`, `default`)."
+    source: https://workos.com/docs/reference/authkit/redirect-uri
+  - id: WO2
+    verified: true
+    text: "`GET /user_management/redirect_uris` (`limit` 1–100, cursors `before`/`after`) answers `{ data: [...], list_metadata: { before, after } }`."
+    source: https://workos.com/docs/reference/authkit/redirect-uri
+  - id: WO3
+    verified: true
+    text: "`DELETE /user_management/redirect_uris/{id}` removes one and answers an empty body. There is no GET or update by id: a URI is found in the list, and nothing about it is changed in place."
+    source: https://workos.com/docs/reference/authkit/redirect-uri
+  - id: WO4
+    verified: true
+    text: "Redirect URIs may contain wildcards, except the default one."
+    source: https://workos.com/docs/user-management/integrating-with-authkit
+  - id: WO5
+    verified: false
+    text: "Each URI is its own object (no shared list to rewrite), so concurrent previews need no lock; a URI is returned exactly as it was created, so `uri` identifies it."
+  - id: WO6
+    verified: false
+    text: "Creating a URI that already exists is refused as a conflict (409) rather than duplicated; the line then finds the existing one."
+  - id: WO7
+    verified: false
+    text: "The first redirect URI of an environment becomes its default; a preview's URI is never the first in an environment that has a production URI."
+ops:
+  redirect_uri:
+    kind: resource
+    title: AuthKit redirect URI
+    summary: "One redirect URI on the WorkOS environment the API key belongs to, such as the preview's `/callback`: usually `{ from: <vercel.env line>.preview_url }` joined in the app. Found by its URI in the list (following `list_metadata.after`); removed by id on destroy. A URI has nothing else to edit, so the only drift is a URI deleted in the Dashboard, which the next apply creates again."
+    covers: [workos-redirect]
+    params:
+      uri:
+        type: string
+        required: true
+        pattern: "^https?://\\S+$"
+        description: "The redirect URI, exactly as AuthKit will receive it (`https://pr-42.preview.example.com/callback`)."
+        example: "https://${ctx.scope}.preview.example.com/callback"
+    http:
+      find:
+        path: /user_management/redirect_uris?limit=100
+        list_path: /data
+        match: { uri: { param: uri } }
+        next: /list_metadata/after
+        cursor_param: after
+      create: { path: /user_management/redirect_uris }
+      delete: { path: "/user_management/redirect_uris/{id}" }

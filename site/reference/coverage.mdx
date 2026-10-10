@@ -90,8 +90,8 @@ the tables below are generated from it: edit the data, then run `pnpm docs:gen`.
 | Auth0 | Preview URL in an application's `callbacks`, `allowed_logout_urls`, `web_origins`, `allowed_origins` | Management API `PATCH /api/v2/clients/{id}`, bearer from client-credentials; **list** (each array replaced whole); no ETag | Y (list mode, token exchange) | P0 | no |
 | Supabase Auth | Preview URL in "Additional Redirect URLs" | Management API `PATCH /v1/projects/{ref}/config/auth` with `uri_allow_list`, bearer; **list** encoded as one comma-separated string; send only that field | Y (list mode over a delimited string) | P0 | **yes** (`supabase.auth_redirect`) |
 | Firebase Auth | Preview domain in `authorizedDomains` | Identity Toolkit `PATCH admin/v2/projects/{p}/config?updateMask=authorizedDomains`, Google OAuth; **list** full replace | Y (list mode, Google token) | P1 | no |
-| WorkOS | Redirect URI for AuthKit | `POST /user_management/redirect_uris`, list via `GET`; bearer; object. Delete endpoint not confirmed **(unverified)** | Y | P1 | no |
-| Stytch | Redirect URL per environment | PWA `POST /pwa/v3/projects/{p}/environments/{e}/redirect_urls` (+ get/delete by URL), Basic workspace key; object | Y | P2 | no |
+| WorkOS | Redirect URI for AuthKit | `POST /user_management/redirect_uris`, list via `GET` (cursor `list_metadata.after`), `DELETE /user_management/redirect_uris/{id}`; bearer; object | Y | P1 | **yes** (recipe [`workos.redirect_uri`](/reference/recipes#workos-redirect_uri)) |
+| Stytch | Redirect URL per environment | PWA `POST /pwa/v3/projects/{p}/environments/{e}/redirect_urls`, `GET …/redirect_urls/all`, get/update/delete by `?url=`; Basic workspace key; object keyed by its URL | Y | P2 | **yes** (recipe [`stytch.redirect_url`](/reference/recipes#stytch-redirect_url)) |
 | Okta | `redirect_uris` on an OIDC app; trusted origin for CORS | `PUT /api/v1/apps/{id}` (**list**, whole app object), `POST /api/v1/trustedOrigins` (object); `SSWS` token or OAuth | Y (list mode; trusted origins object) | P2 | no |
 | Kinde | Callback and logout URLs on an application | Management API `POST`/`PUT /api/v1/applications/{id}/auth_redirect_urls` (add / replace); M2M client-credentials token. Path from SDK docs, not the reference **(unverified)** | Y (token exchange) | P2 | no |
 | Google OAuth clients | Preview URL in a web client's authorized redirect URIs | **No public API** for standard OAuth web clients (Console only); only IAM workforce OAuth clients and IAP are programmable | N | P1 | no (no API) |
@@ -113,7 +113,7 @@ the tables below are generated from it: edit the data, then run `pnpm docs:gen`.
 
 | Provider | Side effect | API shape | Generic? | Pri | Now |
 |---|---|---|---|---|---|
-| Stripe | Test-mode webhook endpoint pointing at the preview URL; its signing secret into the app's env | `POST /v1/webhook_endpoints` (form-encoded), `DELETE /v1/webhook_endpoints/{id}`; bearer; object; `Idempotency-Key`; **`secret` returned only on create** | P (once-only secret must flow into an env line in the same run) | P0 | no |
+| Stripe | Test-mode webhook endpoint pointing at the preview URL; its signing secret into the app's env | `POST /v1/webhook_endpoints` (form-encoded), `DELETE /v1/webhook_endpoints/{id}`; bearer; object; `Idempotency-Key`; **`secret` returned only on create** | Y (the secret is a `once` output, flowing into an env line in the same run; ADR 0018) | P0 | **yes** (recipe [`stripe.webhook_endpoint`](/reference/recipes#stripe-webhook_endpoint)) |
 | GitHub | Repository webhook to the preview URL | `POST /repos/{o}/{r}/hooks`, `DELETE .../hooks/{id}`; bearer; object; secret write-only (caller supplies it) | Y | P2 | no |
 | Svix (as a sender) | Endpoint per environment on an application | `POST /api/v1/app/{app}/endpoint` with caller-chosen `uid`; bearer; object, idempotent by `uid`; secret readable via `GET .../secret` | Y | P2 | no |
 | Clerk webhooks | Preview URL as a webhook endpoint | Clerk's Backend API only creates/deletes the Svix app and a dashboard link; **no endpoint API** through Clerk | N | P1 | no (no API) |
@@ -162,7 +162,7 @@ the tables below are generated from it: edit the data, then run `pnpm docs:gen`.
 | Provider | Side effect | API shape | Generic? | Pri | Now |
 |---|---|---|---|---|---|
 | Algolia | Index per environment, copied from a template index | `POST /1/indexes/{src}/operation` `{operation: copy, destination}`, `DELETE /1/indexes/{name}`; `X-Algolia-Application-Id` + `X-Algolia-API-Key`; async task to poll | P (async task) | P2 | no |
-| Stripe test-mode objects | Products / prices / coupons the preview's code expects | `POST /v1/products`, `/v1/prices` (form-encoded, `lookup_key` as identity, `Idempotency-Key`); prices cannot be deleted, only `active=false` | Y (destroy = archive) | P2 | no |
+| Stripe test-mode objects | Products / prices / coupons the preview's code expects | `POST /v1/products`, `/v1/prices` (form-encoded, `lookup_key` as identity, `Idempotency-Key`); prices cannot be deleted, only `active=false` | Y (destroy = archive) | P2 | **yes** (recipe [`stripe.product`](/reference/recipes#stripe-product), recipe [`stripe.price`](/reference/recipes#stripe-price), recipe [`stripe.coupon`](/reference/recipes#stripe-coupon)) |
 | Stripe sandboxes | A sandbox per PR | No public API for account sandboxes; anonymous "claimable" sandboxes are private preview | N | P2 | no (no API) |
 
 ### Secret managers (read side: secret sources, not side effects)
@@ -193,18 +193,18 @@ Counted over the 56 side-effect rows of the matrix (rows marked `n/a` have nothi
 
 | Measure | Covered | Coverage |
 |---|---|---|
-| Rows | 11 of 56 | **19.6%** |
-| Weighted by priority | 29 of 90 | **32.2%** |
-| P0 rows only | 7 of 9 | 77.8% |
-| Rows an API reaches (all but `manual`) | 11 of 53 | 20.8% |
-| Weighted, rows an API reaches | 29 of 85 | 34.1% |
+| Rows | 15 of 56 | **26.8%** |
+| Weighted by priority | 36 of 90 | **40.0%** |
+| P0 rows only | 8 of 9 | 88.9% |
+| Rows an API reaches (all but `manual`) | 15 of 53 | 28.3% |
+| Weighted, rows an API reaches | 36 of 85 | 42.4% |
 | Secret sources (separate) | 4 of 9 vendors; weighted 7 of 14 | 44.4%; 50.0% |
 
-Covered: Vercel (`vercel.env`, `vercel.deploy`); Netlify (`netlify.env`); Cloudflare Pages / Workers (`cloudflare.pages_env`); Neon (`neon.branch`); Supabase (`supabase.branch`); PlanetScale (`planetscale.branch`, `planetscale.password`); Turso (recipe [`turso.database_branch`](/reference/recipes#turso-database_branch)); Clerk (`clerk.redirect_allow`); Supabase Auth (`supabase.auth_redirect`); LaunchDarkly (`launchdarkly.flag_target`); Cloudflare DNS (recipe [`cloudflare.dns_cname`](/reference/recipes#cloudflare-dns_cname)).
+Covered: Vercel (`vercel.env`, `vercel.deploy`); Netlify (`netlify.env`); Cloudflare Pages / Workers (`cloudflare.pages_env`); Neon (`neon.branch`); Supabase (`supabase.branch`); PlanetScale (`planetscale.branch`, `planetscale.password`); Turso (recipe [`turso.database_branch`](/reference/recipes#turso-database_branch)); Clerk (`clerk.redirect_allow`); Supabase Auth (`supabase.auth_redirect`); WorkOS (recipe [`workos.redirect_uri`](/reference/recipes#workos-redirect_uri)); Stytch (recipe [`stytch.redirect_url`](/reference/recipes#stytch-redirect_url)); LaunchDarkly (`launchdarkly.flag_target`); Stripe (recipe [`stripe.webhook_endpoint`](/reference/recipes#stripe-webhook_endpoint)); Cloudflare DNS (recipe [`cloudflare.dns_cname`](/reference/recipes#cloudflare-dns_cname)); Stripe test-mode objects (recipe [`stripe.product`](/reference/recipes#stripe-product), recipe [`stripe.price`](/reference/recipes#stripe-price), recipe [`stripe.coupon`](/reference/recipes#stripe-coupon)).
 
 Automated coverage counts only rows an op manages without a person. Rows no API reaches (`manual`, or a `manual.step` line that records the step a person does; weight 5): Google OAuth clients (no public API for standard OAuth web clients); Clerk webhooks (Clerk's API manages the Svix app, not its endpoints); Stripe sandboxes (no public API for account sandboxes). They cap coverage at 53 rows, 85 of 90 weighted (94.4%).
 
-Recipe candidates, rows the generic adapter can express fully (`Y`) that nothing covers yet: 30 (Render, Heroku, Prisma Postgres, Auth0, Firebase Auth, WorkOS, Stytch, Okta, Kinde, PostHog, Statsig, GrowthBook, Unleash, Flagsmith, ConfigCat, Split (Harness FME), GitHub, Svix (as a sender), Resend, Postmark, SendGrid, Sentry, Datadog, Honeycomb, Vercel domains, Firebase Storage (GCS bucket), Upstash Redis, Upstash QStash, Inngest, Stripe test-mode objects).
+Recipe candidates, rows the generic adapter can express fully (`Y`) that nothing covers yet: 27 (Render, Heroku, Prisma Postgres, Auth0, Firebase Auth, Okta, Kinde, PostHog, Statsig, GrowthBook, Unleash, Flagsmith, ConfigCat, Split (Harness FME), GitHub, Svix (as a sender), Resend, Postmark, SendGrid, Sentry, Datadog, Honeycomb, Vercel domains, Firebase Storage (GCS bucket), Upstash Redis, Upstash QStash, Inngest).
 
 ## Strategy
 
@@ -212,8 +212,8 @@ Two kinds of adapter close the gap.
 
 **First-class adapters** (TypeScript, one sim routes file, scenarios) for rows whose lifecycle is more than
 create/read/delete: asynchronous provisioning (branches, Supabase previews), an external event barrier (Netlify and
-Railway deploys, like `vercel.env`), outputs that exist only once (Stripe webhook secret, PlanetScale password),
-instruction-based diffs (LaunchDarkly), GraphQL, or non-bearer signing (SigV4).
+Railway deploys, like `vercel.env`), outputs that exist only once behind a multi-step lifecycle (PlanetScale
+password; a once-only output of a plain object, such as Stripe's webhook secret, is a recipe), instruction-based diffs (LaunchDarkly), GraphQL, or non-bearer signing (SigV4).
 
 **The generic HTTP adapter and its recipes** (`adapter: http`, [ADR 0017](/contributing/adr/0017-generic-http-adapter) and
 [ADR 0020](/contributing/adr/0020-recipes)) for the long tail where each item is a URL, a rule or a record and the lifecycle is
@@ -256,7 +256,9 @@ yet are listed under [Current coverage](/reference/coverage#current-coverage).
 11. **Once-only outputs**: an output that is only in the create response must be declared as such, so the engine
     feeds it to dependent lines in the same run and refuses a later run that needs it (instead of reading an empty
     value). Needed for Stripe webhook secrets, API keys and DB passwords even in first-class adapters. The engine
-    side exists: `OutputSpec.once` ([ADR 0018](/contributing/adr/0018-once-only-outputs)), first used by `planetscale.password`.
+    side exists: `OutputSpec.once` ([ADR 0018](/contributing/adr/0018-once-only-outputs)), first used by `planetscale.password`;
+    `http.resource` declares it with `outputs.<name>.once` (`stripe.webhook_endpoint`). Archiving destroys (item 8)
+    are `delete: { method: POST, body: … }` (`stripe.price`).
 12. **Sim support**: a generic sim route set driven by the same declaration, so every `http` line gets the chaos and
     drift scenarios the built-in adapters get.
 
