@@ -1,0 +1,64 @@
+# Sponson on Bitbucket Pipelines. Copy into bitbucket-pipelines.yml (or merge the pipelines into yours).
+# integrations/bitbucket/README.md lists the repository variables to set and how receipts are pushed.
+#
+#   pull request created or updated   sponson plan, sponson apply, sponson finish (waits for the deploy)
+#   pull request merged or declined   Bitbucket has no such trigger: run the custom pipeline sponson-destroy
+#                                     (Run pipeline in the UI, or the API) with the PR's id and branch
+#   push to main                      sponson production: a manual step on the Production deployment environment
+#
+# Replace 0.4.0 everywhere with the Sponson version you have reviewed. The flags are explicit so the template works
+# with any version; Sponson releases after 0.4.0 also read the same variables by themselves.
+
+image: node:22
+
+clone:
+  # Full history: lets Sponson recognise a late build of an older commit.
+  depth: full
+
+pipelines:
+  pull-requests:
+    "**":
+      - step:
+          name: sponson plan
+          script:
+            # Receipts are pushed to orphan branches sponson-receipts/<env>/<scope>. SPONSON_GIT_TOKEN is a repository
+            # access token with write access (README.md): the pipeline's own clone credentials do not reach the
+            # separate clone Sponson pushes from. The anchor is reused by every step below.
+            - &receipts-remote export SPONSON_RECEIPTS_REMOTE="https://x-token-auth:${SPONSON_GIT_TOKEN}@bitbucket.org/${BITBUCKET_REPO_FULL_NAME}.git"
+            - npx -y sponson@0.4.0 plan --env preview --pr "$BITBUCKET_PR_ID" --branch "$BITBUCKET_BRANCH" --sha "$BITBUCKET_COMMIT"
+      - step:
+          name: sponson apply
+          script:
+            - *receipts-remote
+            - npx -y sponson@0.4.0 apply --env preview --pr "$BITBUCKET_PR_ID" --branch "$BITBUCKET_BRANCH" --sha "$BITBUCKET_COMMIT"
+      # Your own deploy steps go here, if Bitbucket Pipelines deploys the app.
+      - step:
+          name: sponson finish
+          max-time: 20
+          script:
+            - *receipts-remote
+            # Waits for the preview deployment of this commit, then applies the lines that needed its URL.
+            - npx -y sponson@0.4.0 apply --wait --wait-timeout 900 --env preview --pr "$BITBUCKET_PR_ID" --branch "$BITBUCKET_BRANCH" --sha "$BITBUCKET_COMMIT"
+
+  branches:
+    main:
+      - step:
+          name: sponson production
+          # Whoever starts this manual step is the approver. Restrict who may deploy to Production in the
+          # deployment environment's settings, and keep the production tokens in its variables (README.md).
+          deployment: production
+          trigger: manual
+          script:
+            - *receipts-remote
+            - npx -y sponson@0.4.0 apply --env production --pr "" --branch "$BITBUCKET_BRANCH" --sha "$BITBUCKET_COMMIT" --approved-by "$BITBUCKET_STEP_TRIGGERER_UUID"
+
+  custom:
+    sponson-destroy:
+      - variables:
+          - name: SPONSON_PR_ID
+          - name: SPONSON_PR_BRANCH
+      - step:
+          name: sponson destroy
+          script:
+            - *receipts-remote
+            - npx -y sponson@0.4.0 apply --destroy --env preview --pr "$SPONSON_PR_ID" --branch "$SPONSON_PR_BRANCH" --sha "$BITBUCKET_COMMIT"

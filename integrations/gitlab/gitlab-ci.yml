@@ -1,0 +1,102 @@
+# Sponson on GitLab CI/CD, with merge request pipelines. Copy into .gitlab-ci.yml and merge `stages:` with yours.
+# integrations/gitlab/README.md lists the CI/CD variables to set and how receipts are pushed.
+#
+#   MR opened or updated          sponson:plan, sponson:apply (stops at the deploy barrier with status partial),
+#                                 your deploy jobs, then sponson:finish (waits for the deploy, finishes the lines)
+#   MR merged or closed           GitLab stops the review environment, which runs sponson:destroy
+#   pipeline on the default branch   sponson:production, a manual job a human starts (the approver)
+#
+# Replace 0.4.0 everywhere with the Sponson version you have reviewed. The flags are explicit so the template works
+# with any version; Sponson releases after 0.4.0 also read the same variables by themselves.
+
+workflow:
+  rules:
+    # Merge request pipelines for MRs, branch pipelines otherwise, never both for the same push.
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+
+stages:
+  - sponson-plan
+  - sponson-apply
+  - deploy            # your own deploy jobs, if GitLab deploys the app; leave it empty when the host deploys on push
+  - sponson-finish
+
+.sponson:
+  image: node:22
+  variables:
+    # Full history: lets Sponson recognise a late build of an older commit.
+    GIT_DEPTH: "0"
+  before_script:
+    # Receipts are pushed to orphan branches sponson-receipts/<env>/<scope> of this project. CI_JOB_TOKEN cannot
+    # push, so SPONSON_GITLAB_TOKEN is a project access token with write_repository (README.md).
+    - export SPONSON_RECEIPTS_REMOTE="${CI_SERVER_PROTOCOL}://oauth2:${SPONSON_GITLAB_TOKEN}@${CI_SERVER_HOST}:${CI_SERVER_PORT}/${CI_PROJECT_PATH}.git"
+
+.sponson-mr:
+  extends: .sponson
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+sponson:plan:
+  extends: .sponson-mr
+  stage: sponson-plan
+  interruptible: true
+  # `prepare` gives the job the environment's scoped variables (the preview tokens) without recording a deployment.
+  environment:
+    name: review/mr-$CI_MERGE_REQUEST_IID
+    action: prepare
+  script:
+    - npx -y sponson@0.4.0 plan --env preview --pr "$CI_MERGE_REQUEST_IID" --branch "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" --sha "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}"
+
+sponson:apply:
+  extends: .sponson-mr
+  stage: sponson-apply
+  # Never cancel an apply half way: Sponson rolls back a failed run, not a killed one (the next run resumes it).
+  interruptible: false
+  environment:
+    name: review/mr-$CI_MERGE_REQUEST_IID
+    on_stop: sponson:destroy
+  script:
+    - npx -y sponson@0.4.0 apply --env preview --pr "$CI_MERGE_REQUEST_IID" --branch "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" --sha "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}"
+
+sponson:finish:
+  extends: .sponson-mr
+  stage: sponson-finish
+  interruptible: false
+  environment:
+    name: review/mr-$CI_MERGE_REQUEST_IID
+    on_stop: sponson:destroy
+  script:
+    # Waits for the preview deployment of this commit, then applies the lines that needed its URL.
+    - npx -y sponson@0.4.0 apply --wait --wait-timeout 900 --env preview --pr "$CI_MERGE_REQUEST_IID" --branch "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" --sha "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}"
+
+sponson:destroy:
+  extends: .sponson
+  stage: sponson-finish
+  interruptible: false
+  # Run by GitLab when the MR is merged or closed (it stops the environment), or by hand from the environment page.
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: manual
+      allow_failure: true
+  environment:
+    name: review/mr-$CI_MERGE_REQUEST_IID
+    action: stop
+  script:
+    - npx -y sponson@0.4.0 apply --destroy --env preview --pr "$CI_MERGE_REQUEST_IID" --branch "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" --sha "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}"
+
+sponson:production:
+  extends: .sponson
+  stage: sponson-apply
+  interruptible: false
+  # A manual job: whoever starts it is the approver. Protect the `production` environment so only the people
+  # allowed to deploy can start it, and scope the production tokens to it (README.md).
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+  environment:
+    name: production
+    deployment_tier: production
+  script:
+    - npx -y sponson@0.4.0 apply --env production --pr "" --branch "$CI_COMMIT_BRANCH" --sha "$CI_COMMIT_SHA" --approved-by "$GITLAB_USER_LOGIN"

@@ -67,7 +67,7 @@ Root-level suites (`scenarios/`, `property/`) import the packages by name; `vite
 2. **Invocation.** `commands/plan.ts` → `buildInvocation()` in `context.ts`:
    - `loadPlan()` / `parsePlan()` (`packages/core/src/plan.ts`): YAML → zod schema → semantic checks (unique ids,
      declared environments, `depends_on` and `from:` ids exist, secret-looking literals, pasted display text).
-   - `detectCtx()` (`packages/cli/src/detect.ts`): flags, then `SPONSON_CTX_*`, then GitHub Actions, then local git
+   - `detectCtx()` (`packages/cli/src/detect.ts`): flags, then `SPONSON_CTX_*`, then the CI host (GitHub Actions, GitLab CI/CD, CircleCI or Bitbucket Pipelines), then local git
      and `gh`. The scope is derived from branch and pull request by `scopeFor()` in `packages/core/src/ctx.ts`.
    - `selectStore()`: the git-branch store when there is a remote, otherwise the local one.
    - the registry: built-in adapters plus plugins (`packages/cli/src/registry.ts`).

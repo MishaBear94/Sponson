@@ -1,0 +1,33 @@
+# Integrations
+
+Copy-paste setups for running Sponson from CI systems other than GitHub Actions, and from agent tools.
+
+| Where | Setup | Destroy on close |
+|---|---|---|
+| GitHub Actions | [the action](../action/README.md), PR comments, production approvals | `pull_request: closed` |
+| GitLab CI/CD | [the template](gitlab/README.md): merge request pipelines | the review environment's `on_stop` job, run by GitLab |
+| CircleCI | [the template](circleci/README.md) | a pipeline started through the API with parameters |
+| Bitbucket Pipelines | [the template](bitbucket/README.md) | a custom pipeline you run |
+| Claude Code, Cursor, Codex CLI, Windsurf, VS Code | [MCP configurations](agents/README.md) and where SKILL.md goes | |
+
+Every CI template follows the same life of a preview environment as the GitHub Action: `apply` when the pull request
+opens or changes (it stops with status `partial` at the deploy barrier), `apply --wait` once the preview is deploying
+(it finishes the lines that needed the preview URL), `apply --destroy` when the pull request closes, and production as
+a step a human starts, recorded with `--approved-by`.
+
+What every CI needs, whichever it is:
+
+- **`npx -y sponson@<version>`**, pinned to the version you reviewed, on Node.js 22 or later.
+- **The scope flags** `--pr`, `--branch` and `--sha`, filled from the CI's predefined variables. Each template passes
+  them explicitly; Sponson releases after 0.4.0 also read GitLab's, CircleCI's and Bitbucket's variables themselves
+  (as they read GitHub Actions'), see [the run context](../docs/plan-format.md#context-interpolation-ctx).
+- **Provider tokens** as the CI's secret variables, in every job that runs Sponson, destroy included.
+- **A token that can push receipts.** The git-branch receipt store pushes orphan branches
+  `sponson-receipts/<env>/<scope>` from a clone of its own, so the CI's read-only checkout credentials are not
+  enough. Each template sets `SPONSON_RECEIPTS_REMOTE` to an HTTPS URL carrying a write token; its README says which
+  token to create. Sponson strips credentials from every git error it prints.
+
+**How the templates are checked.** `scenarios/docs/integrations.test.ts` parses every template, checks the GitLab
+template's structure (stages, jobs, rules, environments and their `on_stop` job), and runs every Sponson command line
+in them through the CLI's own argument parser. The templates have not yet been run on GitLab, CircleCI or Bitbucket
+themselves; each README's notes say which behaviour of the host they rely on.

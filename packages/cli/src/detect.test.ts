@@ -47,6 +47,90 @@ describe("detectCtx", () => {
     await expect(detectCtx({}, {}, await notARepo())).rejects.toMatchObject({ code: "CTX_NULL", message: expect.stringMatching(/--branch and --sha/) });
   });
 
+  describe("GitLab CI/CD", () => {
+    const MR_HEAD = "fedcba9876543210fedcba9876543210fedcba98";
+
+    it("a merge request pipeline is scope pr-<iid> on the source branch", async () => {
+      const c = await detectCtx({}, { GITLAB_CI: "true", CI_PIPELINE_SOURCE: "merge_request_event", CI_MERGE_REQUEST_IID: "12", CI_MERGE_REQUEST_SOURCE_BRANCH_NAME: "feat/x", CI_COMMIT_REF_NAME: "feat/x", CI_COMMIT_SHA: SHA, CI_DEFAULT_BRANCH: "main" }, await notARepo());
+      expect(c).toMatchObject({ scope: "pr-12", git: { branch: "feat/x", sha: SHA }, pr: { number: 12 } });
+    });
+
+    it("a merged-results pipeline uses the source branch head, not the synthetic merge commit", async () => {
+      const c = await detectCtx({}, { GITLAB_CI: "true", CI_MERGE_REQUEST_IID: "3", CI_MERGE_REQUEST_SOURCE_BRANCH_NAME: "feat/y", CI_MERGE_REQUEST_SOURCE_BRANCH_SHA: MR_HEAD, CI_COMMIT_SHA: SHA }, await notARepo());
+      expect(c.git.sha).toBe(MR_HEAD);
+    });
+
+    it("a branch pipeline on the default branch is scope main, and knows there is no MR", async () => {
+      const c = await detectCtx({ env: "production" }, { GITLAB_CI: "true", CI_COMMIT_BRANCH: "trunk", CI_COMMIT_REF_NAME: "trunk", CI_COMMIT_SHA: SHA, CI_DEFAULT_BRANCH: "trunk", CI_MERGE_REQUEST_IID: "" }, await notARepo());
+      expect(c).toMatchObject({ env: "production", scope: "main", git: { branch: "trunk" }, pr: { number: null } });
+    });
+
+    it("a tag pipeline falls back to CI_COMMIT_REF_NAME", async () => {
+      const c = await detectCtx({}, { GITLAB_CI: "true", CI_COMMIT_REF_NAME: "v1.2.0", CI_COMMIT_TAG: "v1.2.0", CI_COMMIT_SHA: SHA }, await notARepo());
+      expect(c).toMatchObject({ scope: "branch-v1.2.0", pr: { number: null } });
+    });
+
+    it("CI_* variables outside GitLab (no GITLAB_CI) are not read", async () => {
+      const c = await detectCtx({ branch: "b", sha: SHA, pr: null }, { CI_MERGE_REQUEST_IID: "12", CI_COMMIT_SHA: "x" }, await notARepo());
+      expect(c).toMatchObject({ scope: "branch-b", git: { sha: SHA } });
+    });
+
+    it("flags win over GitLab's variables", async () => {
+      const c = await detectCtx({ pr: 99, branch: "flag" }, { GITLAB_CI: "true", CI_MERGE_REQUEST_IID: "12", CI_COMMIT_REF_NAME: "feat/x", CI_COMMIT_SHA: SHA }, await notARepo());
+      expect(c).toMatchObject({ scope: "pr-99", git: { branch: "flag", sha: SHA } });
+    });
+  });
+
+  describe("CircleCI", () => {
+    it("takes the PR number from the end of CIRCLE_PULL_REQUEST", async () => {
+      const c = await detectCtx({}, { CIRCLECI: "true", CIRCLE_PULL_REQUEST: "https://github.com/acme/app/pull/42", CIRCLE_BRANCH: "feat/c", CIRCLE_SHA1: SHA }, await notARepo());
+      expect(c).toMatchObject({ scope: "pr-42", git: { branch: "feat/c", sha: SHA } });
+    });
+
+    it("understands Bitbucket-style PR URLs and a trailing slash", async () => {
+      const c = await detectCtx({}, { CIRCLECI: "true", CIRCLE_PULL_REQUEST: "https://bitbucket.org/acme/app/pull-requests/8/", CIRCLE_BRANCH: "b", CIRCLE_SHA1: SHA }, await notARepo());
+      expect(c.pr.number).toBe(8);
+    });
+
+    it("falls back to CIRCLE_PR_NUMBER (forked pull requests)", async () => {
+      const c = await detectCtx({}, { CIRCLECI: "true", CIRCLE_PR_NUMBER: "5", CIRCLE_BRANCH: "pull/5", CIRCLE_SHA1: SHA }, await notARepo());
+      expect(c.scope).toBe("pr-5");
+    });
+
+    it("a branch build without a pull request is the branch scope, and main is main", async () => {
+      const dir = await notARepo();
+      expect(await detectCtx({}, { CIRCLECI: "true", CIRCLE_PULL_REQUEST: "", CIRCLE_BRANCH: "feat/d", CIRCLE_SHA1: SHA }, dir)).toMatchObject({ scope: "branch-feat-d", pr: { number: null } });
+      expect((await detectCtx({}, { CIRCLECI: "true", CIRCLE_BRANCH: "main", CIRCLE_SHA1: SHA }, dir)).scope).toBe("main");
+    });
+
+    it("a PR URL that does not end in a number is not a PR", async () => {
+      const c = await detectCtx({}, { CIRCLECI: "true", CIRCLE_PULL_REQUEST: "https://github.com/acme/app/pull/abc", CIRCLE_BRANCH: "b", CIRCLE_SHA1: SHA }, await notARepo());
+      expect(c.pr.number).toBeNull();
+    });
+  });
+
+  describe("Bitbucket Pipelines", () => {
+    it("a pull-requests pipeline is scope pr-<id>", async () => {
+      const c = await detectCtx({}, { BITBUCKET_BUILD_NUMBER: "17", BITBUCKET_PR_ID: "4", BITBUCKET_BRANCH: "feat/e", BITBUCKET_COMMIT: SHA }, await notARepo());
+      expect(c).toMatchObject({ scope: "pr-4", git: { branch: "feat/e", sha: SHA }, pr: { number: 4 } });
+    });
+
+    it("a branch pipeline has no pull request", async () => {
+      const c = await detectCtx({}, { BITBUCKET_BUILD_NUMBER: "18", BITBUCKET_BRANCH: "main", BITBUCKET_COMMIT: SHA }, await notARepo());
+      expect(c).toMatchObject({ scope: "main", pr: { number: null } });
+    });
+
+    it("an invalid BITBUCKET_PR_ID is no pull request, never NaN", async () => {
+      const c = await detectCtx({}, { BITBUCKET_BUILD_NUMBER: "19", BITBUCKET_PR_ID: "0", BITBUCKET_BRANCH: "x", BITBUCKET_COMMIT: SHA }, await notARepo());
+      expect(c.pr.number).toBeNull();
+    });
+  });
+
+  it("SPONSON_CTX_* wins over any CI host", async () => {
+    const c = await detectCtx({}, { SPONSON_CTX_PR: "", SPONSON_CTX_BRANCH: "env-b", BITBUCKET_BUILD_NUMBER: "1", BITBUCKET_PR_ID: "4", BITBUCKET_BRANCH: "feat/e", BITBUCKET_COMMIT: SHA }, await notARepo());
+    expect(c).toMatchObject({ scope: "branch-env-b", git: { branch: "env-b", sha: SHA }, pr: { number: null } });
+  });
+
   it("another CI host plugs in as a source; earlier sources win field by field", async () => {
     const ci: CtxSource = { name: "other-ci", detect: async () => ({ branch: "from-ci", sha: SHA, pr: 9, defaultBranch: "trunk" }) };
     const c = await detectCtx({}, { SPONSON_CTX_BRANCH: "from-env", SPONSON_CTX_PR: "" }, await notARepo(), [sponsonEnvSource, ci, localGitSource]);

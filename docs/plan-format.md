@@ -169,7 +169,10 @@ An unknown variable is `CTX_NULL` too, and the message lists the valid ones.
 
 The context comes from, in order of precedence: the flags `--env`, `--branch`, `--sha`, `--pr`; the variables
 `SPONSON_CTX_ENV`, `SPONSON_CTX_BRANCH`, `SPONSON_CTX_SHA`, `SPONSON_CTX_PR` (`SPONSON_CTX_PR=""` means "no pull
-request"); GitHub Actions' variables and event payload; the local git checkout; and, for the pull request number
+request"); the CI host's predefined variables (GitHub Actions' variables and event payload; GitLab CI/CD's
+`CI_MERGE_REQUEST_IID`, `CI_MERGE_REQUEST_SOURCE_BRANCH_NAME`/`_SHA`, `CI_COMMIT_REF_NAME`, `CI_COMMIT_SHA` and
+`CI_DEFAULT_BRANCH`; CircleCI's `CIRCLE_PULL_REQUEST`, `CIRCLE_BRANCH`, `CIRCLE_SHA1`; Bitbucket Pipelines'
+`BITBUCKET_PR_ID`, `BITBUCKET_BRANCH`, `BITBUCKET_COMMIT`); the local git checkout; and, for the pull request number
 outside CI, `gh pr view`. The environment is never inferred: without `--env` it is `preview`.
 
 ## Environments

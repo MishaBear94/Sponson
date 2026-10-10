@@ -26,6 +26,7 @@ async function markdownFiles(): Promise<string[]> {
     }
   };
   await walk(join(REPO, "docs"));
+  await walk(join(REPO, "integrations"));
   return out;
 }
 

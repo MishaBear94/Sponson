@@ -150,6 +150,75 @@ function prFromGithub(env: NodeJS.ProcessEnv, payload: EventPayload | null): num
   return undefined;
 }
 
+/**
+ * GitLab CI/CD (`GITLAB_CI`). In a merge request pipeline the scope is the MR (`CI_MERGE_REQUEST_IID`, the `!N` of the
+ * project) and the commit is the source branch's head: a merged-results pipeline builds a synthetic merge commit as
+ * `CI_COMMIT_SHA`, while what gets deployed is `CI_MERGE_REQUEST_SOURCE_BRANCH_SHA`. Branch and tag pipelines have
+ * no MR, which inside GitLab means "no MR", not "ask gh".
+ */
+export const gitlabCiSource: CtxSource = {
+  name: "gitlab-ci",
+  async detect(_known, env) {
+    if (!nonEmpty(env.GITLAB_CI)) return {};
+    return {
+      branch: firstOf(env, ["CI_MERGE_REQUEST_SOURCE_BRANCH_NAME", "CI_COMMIT_BRANCH", "CI_COMMIT_REF_NAME"]),
+      sha: firstOf(env, ["CI_MERGE_REQUEST_SOURCE_BRANCH_SHA", "CI_COMMIT_SHA"]),
+      pr: positiveInt(env.CI_MERGE_REQUEST_IID) ?? null,
+      defaultBranch: nonEmpty(env.CI_DEFAULT_BRANCH),
+    };
+  },
+};
+
+/**
+ * CircleCI (`CIRCLECI`). `CIRCLE_PULL_REQUEST` is the URL of the branch's pull request (GitHub `/pull/7`, Bitbucket
+ * `/pull-requests/7`), set only when one was open when the pipeline started; `CIRCLE_PR_NUMBER` is set for forks.
+ */
+export const circleCiSource: CtxSource = {
+  name: "circleci",
+  async detect(_known, env) {
+    if (!nonEmpty(env.CIRCLECI)) return {};
+    return {
+      branch: nonEmpty(env.CIRCLE_BRANCH),
+      sha: nonEmpty(env.CIRCLE_SHA1),
+      pr: prFromUrl(env.CIRCLE_PULL_REQUEST) ?? positiveInt(env.CIRCLE_PR_NUMBER) ?? null,
+    };
+  },
+};
+
+/** Bitbucket Pipelines (`BITBUCKET_BUILD_NUMBER`). `BITBUCKET_PR_ID` is set in `pull-requests:` pipelines only. */
+export const bitbucketPipelinesSource: CtxSource = {
+  name: "bitbucket-pipelines",
+  async detect(_known, env) {
+    if (!nonEmpty(env.BITBUCKET_BUILD_NUMBER)) return {};
+    return {
+      branch: nonEmpty(env.BITBUCKET_BRANCH),
+      sha: nonEmpty(env.BITBUCKET_COMMIT),
+      pr: positiveInt(env.BITBUCKET_PR_ID) ?? null,
+    };
+  },
+};
+
+/** The first of `names` that is set and not blank. */
+function firstOf(env: NodeJS.ProcessEnv, names: readonly string[]): string | undefined {
+  for (const name of names) {
+    const v = nonEmpty(env[name]);
+    if (v !== undefined) return v;
+  }
+  return undefined;
+}
+
+/** A positive integer written in decimal digits, or undefined for anything else (absent, blank, `abc`, `0`). */
+function positiveInt(raw: string | undefined): number | undefined {
+  const t = nonEmpty(raw) ?? "";
+  const n = /^\d+$/.test(t) ? Number(t) : 0;
+  return n > 0 ? n : undefined;
+}
+
+/** The number at the end of a pull request URL (`…/pull/7`, `…/pull-requests/7/`). */
+function prFromUrl(raw: string | undefined): number | undefined {
+  return positiveInt(/\/(\d+)\/?$/.exec(nonEmpty(raw) ?? "")?.[1]);
+}
+
 /** The local checkout: `git rev-parse` for branch and sha, `gh pr view` for the pull request. Last resort. */
 export const localGitSource: CtxSource = {
   name: "local-git",
@@ -195,5 +264,15 @@ export function nonEmpty(s: string | undefined): string | undefined {
   return t === "" ? undefined : t;
 }
 
-/** Explicit `SPONSON_CTX_*` first, then GitHub Actions, then the local checkout. */
-export const DEFAULT_CTX_SOURCES: readonly CtxSource[] = [sponsonEnvSource, githubActionsSource, localGitSource];
+/**
+ * Explicit `SPONSON_CTX_*` first, then the CI hosts (GitHub Actions, GitLab CI/CD, CircleCI, Bitbucket Pipelines),
+ * then the local checkout.
+ */
+export const DEFAULT_CTX_SOURCES: readonly CtxSource[] = [
+  sponsonEnvSource,
+  githubActionsSource,
+  gitlabCiSource,
+  circleCiSource,
+  bitbucketPipelinesSource,
+  localGitSource,
+];
