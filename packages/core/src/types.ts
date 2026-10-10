@@ -309,6 +309,16 @@ export interface OpSpec {
    * written to receipts and shown in messages: never put a secret in it. Pure: no provider calls.
    */
   lockOn?(params: ResolvedParams, provider: Record<string, unknown>): string | null;
+  /**
+   * For an op whose change a person makes, not an API (the built-in `manual.step`, ADR 0021): the step as the human
+   * sees it, from resolved params; null while an input is still pending. The engine then owns the line's state:
+   * `plan` shows it as `todo` with these instructions until it is done, `apply` records it only when the run
+   * confirms it (`RunOptions.confirm`) or `read` observes it (a verify request), and otherwise leaves it waiting
+   * with MANUAL_STEP_PENDING; `apply --destroy` shows `undo` and needs the same confirmation. `read` returns the
+   * step's resource only when it can observe that the step is done (`observable`), else null; `apply` and
+   * `destroy` are never called. Pure: no provider calls.
+   */
+  manual?(params: ResolvedParams, ctx: Ctx): ManualStep | null;
   /** Find what currently exists for this change. Null when nothing exists. Must not write. */
   read(actx: AdapterContext, params: ResolvedParams): Promise<LiveState | null>;
   /**
@@ -348,6 +358,21 @@ export interface OpSpec {
    * one returned line. Pure: no provider calls.
    */
   adopt?(resources: Array<Pick<ResourceRecord, "key" | "label"> & { id?: string }>, ctx: Ctx): AdoptedLine[];
+}
+
+/** One step a person must do by hand, as `OpSpec.manual` describes it (ADR 0021). */
+export interface ManualStep {
+  /** The resource key: stable for the step, whatever its instructions say (`step:<title>`). */
+  key: string;
+  title: string;
+  /** What to do, as Markdown, with every reference already filled in. */
+  instructions: string;
+  /** What to do to reverse it when the scope is destroyed, as Markdown; absent when there is nothing to undo. */
+  undo?: string;
+  /** Hash of what the person is asked to do (`sha256(canonicalJson({ title, instructions }))`): a new one is a new step. */
+  hash: string;
+  /** Whether `read` can observe that the step is done (a verify request); otherwise only a confirmation can tell. */
+  observable: boolean;
 }
 
 /**
@@ -509,6 +534,12 @@ export interface LedgerEntry {
    * to the producer's `onceFingerprints` entry means it still holds the current value (ADR 0018).
    */
   onceInputs?: Record<string, string>;
+  /**
+   * For a manual step (ADR 0021): what it was and how it was found done. `undo` is what `apply --destroy` asks a
+   * person to do; `by` and `at` say who confirmed it and when (`how: confirmed`), or when a verify request first
+   * saw it done (`how: verified`). Text is stored masked, as every output is.
+   */
+  manual?: { title: string; undo?: string; how: "confirmed" | "verified"; by?: string; at: string };
 }
 
 /**

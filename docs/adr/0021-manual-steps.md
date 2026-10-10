@@ -1,0 +1,92 @@
+# 21. Manual steps for state no API can manage
+
+Date: 2026-10-11
+
+## Status
+
+Proposed. (0020 is reserved for recipes, decided separately.)
+
+## Context
+
+Some of what ships beside the code can only be changed by a person in a console: a Google OAuth web client's
+authorized redirect URIs (no public API), a Clerk webhook endpoint (Clerk exposes only a dashboard link to its Svix
+app), a Stripe sandbox per pull request (no public API). [docs/coverage.md](../coverage.md) lists them as rows "no
+adapter can reach". Today they live in a README or in someone's head; every preview needs them, nobody can see
+whether they were done for this one, and an agent driving Sponson has no way to say "a person must do this now".
+
+Sponson cannot do these steps. What it can do is the rest of its job for them: say exactly what to do for this
+environment (with the preview URL filled in), hold back what depends on it, remember that it was done and by whom,
+notice when it needs doing again, and ask for it to be undone when the scope goes away.
+
+Options considered:
+
+| Option | Why not |
+|---|---|
+| Comments or a README checklist | Not per environment, not recorded, nothing waits for it |
+| A fourth command (`sponson confirm <line>`) | [ADR 0002](0002-three-commands.md): a flag on `apply` does it, and confirming is part of applying |
+| An `exec` adapter that runs a script | Does not help when there is no API to script; ADR 0017 rejects it for the invariants it cannot keep |
+| Treat a pending step as a refusal (`blocked`, the run fails and rolls back) | The step usually needs an output of an earlier line (the preview URL); rolling that line back would make the step impossible to do |
+| Treat it as an external event like a deploy (`partial`, exit 0) | A deploy finishes by itself; a manual step does not, so CI must not look green until someone does it |
+
+## Decision
+
+**A built-in adapter `manual` with one op, `step`,** and an engine hook any adapter may use, `OpSpec.manual(params,
+ctx)`, which returns the step a person must do (`ManualStep`: key, title, instructions, undo, hash, whether a verify
+request can observe it) or null while an input is pending. For such ops the engine owns the line's state; the adapter
+never writes anything (`apply` is never called).
+
+```yaml
+- id: google-redirect
+  adapter: manual
+  op: step
+  title: "Allow ${ctx.scope}'s OAuth callback on the Google OAuth client"
+  vars: { url: { from: web.preview_url } }
+  instructions: |
+    In Google Cloud console > APIs & Services > Credentials, open the OAuth client "acme-web" and add
+    {url}/api/auth/callback/google under "Authorized redirect URIs". Save.
+  undo: Remove {url}/api/auth/callback/google from the client's "Authorized redirect URIs".
+```
+
+- **Params.** `title` (one line; the identity, key `step:<title>`), `instructions` (Markdown), optional `undo`, `vars`
+  (values for `{name}` placeholders, literals or `{ from }` references, as in the `http` adapter's paths), optional
+  `verify`. `${ctx.*}` works everywhere. A `{ secret }` or `{ keep: true }` anywhere is `PARAM_INVALID` before any
+  provider call: the text is shown to people and kept in receipts.
+- **State.** The hash covers what a person is asked to do (title and rendered instructions). A step is *done* when its
+  verify request sees it, or when the ledger records a person's confirmation of these very instructions. A new
+  preview URL changes the instructions, so the step becomes a todo again.
+- **Plan** shows a step that is not done as `todo` (a new `PlanLineStatus`) with `manual: { title, instructions, … }`;
+  a step whose inputs are pending is `pending` as usual. `plan` exits 0.
+- **Apply** records a done step (`unchanged`, or `applied` when first seen). A todo is recorded only when the run
+  confirms it, `RunOptions.confirm` (`apply --confirm <line>`, repeatable; MCP `confirm`), with `confirmedBy` (the CLI
+  takes `--approved-by`, else the git user); the ledger entry keeps `manual: { how: confirmed, by, at }`. Otherwise
+  the line is `waiting` with `waitingFor: confirmation` and the new code `MANUAL_STEP_PENDING`, its dependents wait
+  too, and independent lines are applied. The receipt is `partial`; the CLI exits 2 (the code's exit, as for
+  refusals) with `error.code: MANUAL_STEP_PENDING`, the `cliHint`, and `manual: [...]`, each step's instructions. A
+  confirmation that names something other than a manual line, or comes without a name, is `USAGE` before anything
+  runs.
+- **Verify** is an optional GET with the generic adapter's client, on an API block under `providers.manual` (the
+  `http` block format, `auth` optional for public endpoints such as DNS-over-HTTPS): done when it answers 2xx and
+  every `match` (JSON pointer → value) holds; 404 or `absent_status` mean not yet. A step a verify request once saw
+  done and no longer sees is `missing` drift, and a todo again. A person's confirmation counts even when the verify
+  request does not (yet) agree.
+- **Rollback never undoes a manual step**: a person did it, and a failed later line does not change that.
+  `--recreate` refuses manual lines.
+- **Destroy** shows `undo` (kept, masked, in the ledger, so a line removed from the plan is still undone) and forgets
+  the step only when the run confirms it (`apply --destroy --confirm <line>`); until then the line waits with
+  `MANUAL_STEP_PENDING`, the receipt is `partial` and the CLI exits 2. A step without `undo` is forgotten.
+- **Agents never confirm on their own.** SKILL.md and the MCP tool descriptions tell an agent to show each step's
+  instructions to the human verbatim and to pass `confirm` only with the lines the human says they did.
+
+## Consequences
+
+- The no-API rows of the coverage survey get a home in the plan, with receipts, drift (for verifiable steps) and
+  teardown. They are counted as **manual**, never as automated coverage.
+- `PlanLineStatus` gains `todo`, `PlanLine` and `ApplyResultSummary` gain `manual`, `LedgerEntry` gains `manual`,
+  `RunOptions` gains `confirm` and `confirmedBy`, `OpSpec` gains `manual`. All are additive; older Sponson versions
+  reading a newer receipt ignore the field (and would treat the step as an ordinary resource of an unknown op).
+- A pull request with a manual step has a red apply job until someone confirms the step. That is the point: the
+  preview does not work until then.
+- A confirmation records what the instructions said when it was given. If they changed between a person reading them
+  and confirming (a new commit, a new preview URL), the confirmation covers the new ones; the person confirms what
+  `plan` shows at that moment.
+- Sponson trusts the person: it cannot check a confirmation of a step without `verify`.

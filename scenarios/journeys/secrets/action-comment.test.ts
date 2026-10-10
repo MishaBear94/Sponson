@@ -241,6 +241,48 @@ changes:
   });
 });
 
+describe("manual steps in the PR comment (ADR 0021)", () => {
+  it("plan and apply comments show each step's instructions whole and escaped, and how a person confirms it", async () => {
+    const plan = `version: 1
+providers:
+  vercel: { project: prj_demo }
+changes:
+  - id: env
+    adapter: vercel
+    op: env
+    target: preview
+    values: { A: b }
+  - id: google-redirect
+    adapter: manual
+    op: step
+    title: "Allow the callback on the Google OAuth client"
+    vars: { url: { from: env.preview_url } }
+    instructions: |
+      1. Open the client | "acme-web".
+      2. Add {url}/cb <script>alert(1)</script> --> and save.
+`;
+    const w = await World.create(plan);
+    worlds.push(w);
+    await w.cli("apply --json");
+    const p = await w.cli("plan --json");
+    const planBody = (await renderComment(w, p.stdout, "plan", p.code)).body;
+    const a = await w.cli("apply --json");
+    expect(a.code).toBe(2);
+    const applyBody = (await renderComment(w, a.stdout, "apply", a.code)).body;
+    for (const body of [planBody, applyBody]) {
+      expect(body).toContain("`sponson apply --confirm google-redirect`");
+      expect(body).toContain('<pre>1. Open the client | "acme-web".');
+      expect(body).toContain("/cb &lt;script&gt;alert(1)&lt;/script&gt; --&gt; and save.</pre>");
+      expect(body).not.toMatch(/<script/);
+      expect(body.split("<!-- sponson:").length - 1).toBe(1);
+      expect(tableProblems(body), body).toEqual([]);
+    }
+    expect(planBody).toContain("| `*` | `google-redirect` | manual.step | todo | by hand: Allow the callback on the Google OAuth client |");
+    expect(applyBody).toContain("**Manual steps waiting for a person**");
+    expect(applyBody).toContain("waiting on confirmation");
+  });
+});
+
 describe("scope derivation (action.yml step `scope`)", () => {
   const sha = SHA;
 

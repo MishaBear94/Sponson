@@ -74,7 +74,7 @@ Each change ("line") is one adapter op:
 | Key | Type | Meaning |
 |---|---|---|
 | `id` | string matching `^[a-z][a-z0-9_-]*$` | Unique within the plan. Other lines refer to it in `from:` and `depends_on`. Receipts key line results by it. |
-| `adapter` | non-empty string | `neon`, `vercel`, `clerk`, `http`, or one added by a plugin (`SPONSON_PLUGINS`). Unknown: `ADAPTER_UNKNOWN`. |
+| `adapter` | non-empty string | A [built-in adapter](/reference/plan-format#built-in-ops) (`neon`, `vercel`, `clerk`, `http`, `manual`, …), or one added by a plugin (`SPONSON_PLUGINS`). Unknown: `ADAPTER_UNKNOWN`. |
 | `op` | non-empty string | An op of that adapter. Unknown: `OP_UNKNOWN`. |
 | `environments` | non-empty list of declared environment names | The line applies only in these environments. Absent: every environment. |
 | `depends_on` | list of ids | Run after these lines although no value flows between them. Prefer `from:` references, which imply the order. |
@@ -248,6 +248,7 @@ The base URL override replaces the provider's API base URL (the test suites poin
 | `launchdarkly` | [`launchdarkly.flag_target`](/reference/plan-format#launchdarkly-flag_target) | `LAUNCHDARKLY_ACCESS_TOKEN` | `LAUNCHDARKLY_API_URL` |
 | `http` | [`http.resource`](/reference/plan-format#http-resource), [`http.list_item`](/reference/plan-format#http-list_item) | `providers.http.<api>.auth` | `providers.http.<api>.base_url_env` |
 | `supabase` | [`supabase.branch`](/reference/plan-format#supabase-branch), [`supabase.auth_redirect`](/reference/plan-format#supabase-auth_redirect) | `SUPABASE_ACCESS_TOKEN` | `SUPABASE_API_URL` |
+| `manual` | [`manual.step`](/reference/plan-format#manual-step) | `none (verify: providers.manual.<api>.auth, optional)` | `providers.manual.<api>.base_url_env` |
 
 A missing credential fails the line with `PROVIDER_AUTH`. Every resource has a key that identifies it within the
 adapter and provider block; the ledger treats two resources with the same key as the same resource.
@@ -541,6 +542,57 @@ never a credential): runs in other pull requests and environments that edit the 
 and never lose an item. A writer outside Sponson editing the parent at the same moment can still drop one; the
 re-read puts it back, or reports `PROVIDER_CONFLICT` after three rounds.
 
+### `manual.step`
+
+A change a person makes by hand, because no API can: a Google OAuth web client's redirect URIs, a Clerk webhook
+endpoint, a Stripe sandbox. Sponson cannot do the step; it says exactly what to do for this environment, holds back
+the lines that depend on it, records who did it and when, notices when it must be done again, and asks for it to be
+undone when the scope is destroyed ([ADR 0021](/contributing/adr/0021-manual-steps)).
+
+```yaml
+- id: google-redirect
+  adapter: manual
+  op: step
+  title: "Allow ${ctx.scope}'s OAuth callback on the Google OAuth client"
+  vars: { url: { from: web.preview_url } }
+  instructions: |
+    In Google Cloud console > APIs & Services > Credentials, open the OAuth client "acme-web" and add
+    {url}/api/auth/callback/google under "Authorized redirect URIs". Save.
+  undo: Remove {url}/api/auth/callback/google from the client's "Authorized redirect URIs".
+```
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `title` | string | (required) | One line naming the step; its identity (key `step:<title>`). |
+| `instructions` | Markdown | (required) | What to do, shown whole to the person. A `{ from }` reference works too. |
+| `undo` | Markdown | none | What to do when the scope is destroyed. Without it, destroy forgets the step. |
+| `vars` | map | `{}` | Values for `{name}` placeholders in `title`, `instructions`, `undo` and `verify.path`: literals or `{ from }` references. A placeholder not in `vars` is `PARAM_INVALID`. |
+| `verify` | `{ api, path, match?, absent_status? }` | none | A GET that tells whether the step is done: `path` on the API block `providers.manual.<api>`; done when it answers 2xx and every `match` (JSON pointer → value) holds; 404, or a status in `absent_status`, means not yet. |
+
+`${ctx.*}` works in every text. A `{ secret }` or `{ keep: true }` anywhere in the line is `PARAM_INVALID`: the text
+is shown to people and kept in receipts. The step has no outputs; other lines wait for it with `depends_on`.
+
+`providers.manual.<api>` blocks have the [`http` adapter's format](/reference/plan-format#the-generic-http-adapter) (`base_url`,
+`base_url_env`, `headers`, `encoding`), except that `auth` is optional, for public endpoints such as a DNS-over-HTTPS
+resolver. Steps without `verify` need no block.
+
+**How a step is done.** The step's hash covers its title and rendered instructions. It is done when its verify
+request sees it, or when a person confirmed these very instructions: `sponson apply --confirm <line>` (repeatable,
+or comma-separated; the MCP tool's `confirm`). The confirmation is recorded in the ledger with who confirmed it
+(`--approved-by`, or else the git user's `user.name` or `user.email`; with neither, `USAGE`) and when. Confirming a
+line that is not a manual step is `USAGE`. Instructions that change (a new preview URL) make it a step to do again.
+
+| Command | A step that is not done |
+|---|---|
+| `plan` | `todo`, with `manual: { line, title, action: do, instructions, observable }`; exit 0. While an input is pending, `pending` as usual. |
+| `apply` | without `--confirm`: the line is `waiting` (`waitingFor: confirmation`, `MANUAL_STEP_PENDING`), so are the lines that depend on it, every other line is applied, nothing is rolled back; the receipt is `partial`, and the command exits 2 with `error.code: MANUAL_STEP_PENDING` and `manual` (each step's instructions). With `--confirm <line>`: recorded, `applied`. |
+| `apply --destroy` | a recorded step with `undo` waits the same way (`action: undo`) until `apply --destroy --confirm <line>`; one without `undo` is forgotten. Nothing is deleted at any provider. |
+
+A verified step that its verify request no longer sees is `missing` drift, and a todo again; a person's confirmation
+counts even when the verify request does not (yet) agree. A failed run never rolls a manual step back, and
+`--recreate` refuses one. Agents show the instructions to a person and never confirm on their own (see
+[SKILL.md](/guides/agents)).
+
 ### Outputs
 
 The outputs each built-in op declares. `immediate` outputs exist once the line is applied; `external` ones only after
@@ -574,6 +626,7 @@ the named event. Sensitive outputs are never displayed, logged or written to rec
 | `supabase.branch` | `db_host` | immediate | no |
 | `supabase.branch` | `connection_string` | immediate | yes |
 | `supabase.auth_redirect` | `url` | immediate | no |
+| `manual.step` | (none) | | |
 
 ### Once-only outputs
 

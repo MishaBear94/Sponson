@@ -107,6 +107,15 @@ export function toRunOptions(inv: Invocation, io: IO, extra: Partial<RunOptions>
   };
 }
 
+/** The git user (`user.name`, else `user.email`) in `cwd`, or undefined when git or the setting is missing. */
+export async function gitUser(cwd: string): Promise<string | undefined> {
+  const read = (key: string) =>
+    new Promise<string | undefined>((resolve) => {
+      execFile("git", ["config", key], { cwd, timeout: 5000 }, (err, stdout) => resolve(err ? undefined : nonEmpty(String(stdout))));
+    });
+  return (await read("user.name")) ?? (await read("user.email"));
+}
+
 /** `git merge-base --is-ancestor`: exit 0 yes, 1 no, anything else (shallow clone, unknown sha) unknown. */
 export function gitAncestry(cwd: string): AncestryCheck {
   return (older, newer) =>

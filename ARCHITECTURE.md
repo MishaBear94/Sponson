@@ -89,7 +89,8 @@ Root-level suites (`scenarios/`, `property/`) import the packages by name; `vite
    refusal `DRIFT_CHANGED`, `OWNED_BY_OTHER_SCOPE` or `SECRET_UNRESOLVED`. Ops with external outputs get a
    read-only `awaitExternal` check, so a finished deploy turns `pending` into `create`.
 6. **Line status**: `blocked` (a refusal, or a dependency in error), `error` (inspect threw), `pending` (an input is
-   not known yet; `waitingOn`, `waitingFor`), else `create`, `update` or `unchanged` from the diff.
+   not known yet; `waitingOn`, `waitingFor`), `todo` (a manual step a person has not done; `manual` carries its
+   instructions), else `create`, `update` or `unchanged` from the diff.
 7. **Scope drift** (`engine/drift.ts`): `orphan` entries (in the ledger, declared by no line) and `unmanaged`
    resources (listed by an op's `listScope`, managed by no scope).
 8. **Output.** `planJson()` / `renderPlan()` in `packages/cli/src/render.ts`; JSON goes through `serialize()` in
@@ -123,7 +124,12 @@ Steps 1–3 are the same. Then `applyRun()` (`engine/apply.ts`):
      stored on the ledger entries;
    - when the op's `lockOn()` names a shared parent object (one callback list on an Auth0 application), the write
      happens holding that object's lease: the line is inspected again under it and applied from that fresh state
-     (`underParentLock`, [ADR 0019](docs/adr/0019-parent-object-locks.md)).
+     (`underParentLock`, [ADR 0019](docs/adr/0019-parent-object-locks.md));
+   - a manual step (an op with `manual()`, such as `manual.step`; `engine/manual.ts`,
+     [ADR 0021](docs/adr/0021-manual-steps.md)) is never sent anywhere: it is done when its verify `read` sees it or
+     the ledger records a person's confirmation of these instructions; a todo is recorded only when the run confirms
+     it (`confirm`, `confirmedBy`), and otherwise waits (`waitingFor: confirmation`, `MANUAL_STEP_PENDING`) with its
+     dependents, never rolled back; the CLI then exits 2 and prints the instructions.
 5. **On failure or refusal**: remaining lines are `skipped`; `rollback()` first re-reads lines with unresolved intents (a create
    whose answer was lost may have succeeded), then destroys what *this run* created, newest first. A destroy that fails
    leaves `rollback_failed` with the resources named.
@@ -135,7 +141,8 @@ Steps 1–3 are the same. Then `applyRun()` (`engine/apply.ts`):
 
 `apply --destroy` runs `destroyRun()` (`engine/destroy.ts`) instead: it walks the **ledger**, not the plan, in reverse
 creation order, using the provider block recorded with each entry. Entries created by Sponson are destroyed, adopted
-ones are forgotten, intents are located first (or reported as `INTENT_UNRESOLVED`). It resolves the plan's secrets
+ones are forgotten, intents are located first (or reported as `INTENT_UNRESOLVED`); a manual step's entry is
+forgotten once a person confirms its `undo` (kept in the entry), and waits for that until then. It resolves the plan's secrets
 too, only so that a provider error echoing one is masked.
 
 ## The ledger
@@ -160,7 +167,9 @@ says what Sponson *manages* in this environment and scope after the run, indepen
   provider object it lives in, when its op declares one (`lockOn`), so rollback and destroy lock that object even
   for a line the plan no longer has; **`onceFingerprints`** and **`onceInputs`** are keyed fingerprints of values a
   provider shows only on create (`OutputSpec.once`), on the producer and on each dependent written with them, which
-  decide whether a later run may keep the dependent as it is ([ADR 0018](docs/adr/0018-once-only-outputs.md)).
+  decide whether a later run may keep the dependent as it is ([ADR 0018](docs/adr/0018-once-only-outputs.md));
+  **`manual`** records a manual step's title and undo, and who confirmed it and when, or when a verify request first
+  saw it done ([ADR 0021](docs/adr/0021-manual-steps.md)).
 - Every run starts from the previous ledger and changes only entries it observed or wrote, so failed, skipped,
   waiting and refused lines never make Sponson forget what it owns.
 

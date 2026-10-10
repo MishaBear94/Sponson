@@ -1,6 +1,7 @@
 import { isSponsonError } from "../errors.js";
 import { resolveParams, type LineOutputs, type ResolveResult } from "../resolve.js";
 import type { Change, DiffSide, Drift, LiveState, OpSpec, ResourceDiff, ResourceRecord } from "../types.js";
+import { inspectManual, type ManualState } from "./manual.js";
 import { holdsCurrentValue } from "./once.js";
 import type { RunContext } from "./run-context.js";
 
@@ -22,6 +23,8 @@ export interface Inspection {
   drift: Drift[];
   /** Keys this line declares (whatever exists live). */
   desired: Set<string>;
+  /** For a manual step whose inputs are known (ADR 0021): the step, and whether it is done. */
+  manual?: ManualState;
 }
 
 /**
@@ -31,6 +34,7 @@ export interface Inspection {
 export async function inspectLine(rc: RunContext, change: Change, op: OpSpec, params: Record<string, unknown>, outputs: Map<string, LineOutputs>): Promise<Inspection> {
   const provider = rc.provider(change);
   const resolved = resolveParams(params, outputs, rc.secrets.values, (ref, line, output) => holdsCurrentValue(rc.ledger.all(), change.id, ref, line, output));
+  if (op.manual) return inspectManual(rc, change, op, provider, resolved);
   const live = await op.read(rc.adapterContext(change.adapter, provider), resolved.params);
   if (live) rc.guardOutputs(live.outputs, op.outputs);
   const spent = diffOrSpent(change, op, live, resolved, changedOutside(rc, change, provider, live));

@@ -30,7 +30,7 @@ export function prepare(opts: RunOptions): Prepared {
     });
   }
   const ordered = orderChanges(changesFor(plan, ctx.env), plan.changes);
-  checkRecreate(opts.recreate ?? [], ordered, ctx.env);
+  checkRecreate(opts.recreate ?? [], ordered, ctx.env, registry);
   const ops = new Map<string, OpSpec>();
   const providers = new Map<string, Record<string, unknown>>();
   const params = new Map<string, Record<string, unknown>>();
@@ -107,12 +107,16 @@ export function requireApproval(opts: RunOptions, prepared: Prepared): string | 
   return approvedBy;
 }
 
-/** `recreate` may name only lines active in this environment. */
-function checkRecreate(recreate: string[], ordered: Change[], env: string): void {
+/** `recreate` may name only lines active in this environment, and never a manual step (a person did it). */
+function checkRecreate(recreate: string[], ordered: Change[], env: string, registry: RunOptions["registry"]): void {
   const unknown = recreate.filter((id) => !ordered.some((c) => c.id === id));
   if (unknown.length) {
     throw new SponsonError("USAGE", `Cannot recreate ${unknown.map((id) => `\`${id}\``).join(", ")}: no such line in environment ${env}. Lines: ${ordered.map((c) => c.id).join(", ")}`, {
       recreate: unknown,
     });
+  }
+  const manual = ordered.filter((c) => recreate.includes(c.id) && registry.op(c.adapter, c.op).manual);
+  if (manual.length) {
+    throw new SponsonError("USAGE", `Cannot recreate ${manual.map((c) => `\`${c.id}\``).join(", ")}: a manual step is done by a person; change its instructions to make it a step to do again.`, { recreate: manual.map((c) => c.id) });
   }
 }

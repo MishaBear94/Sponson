@@ -23,6 +23,13 @@ export interface RunOptions {
    * resource replaces one that existed, so rollback does not remove it.
    */
   recreate?: string[];
+  /**
+   * Manual steps (ADR 0021) a person says are done: apply records them as done, and `apply --destroy` forgets them
+   * once their `undo` is done. Only lines of manual ops may be named. Never set by an agent on its own.
+   */
+  confirm?: string[];
+  /** Who confirms the `confirm` steps (a person's name or email), recorded in the ledger. Required with `confirm`. */
+  confirmedBy?: string;
   /** Poll for external events and locks instead of stopping. */
   wait?: boolean;
   waitTimeoutMs?: number;
@@ -35,8 +42,22 @@ export interface RunOptions {
   now?: () => Date;
 }
 
-/** What apply would do to a line: write it (`create`/`update`), nothing, wait for it, or refuse it. */
-export type PlanLineStatus = "create" | "update" | "unchanged" | "pending" | "blocked" | "error";
+/**
+ * What apply would do to a line: write it (`create`/`update`), nothing, wait for it, or refuse it; `todo` is a
+ * manual step a person still has to do (ADR 0021).
+ */
+export type PlanLineStatus = "create" | "update" | "unchanged" | "pending" | "todo" | "blocked" | "error";
+
+/** A manual step as plan and apply show it to the person who must do it (ADR 0021). */
+export interface ManualTodo {
+  line: string;
+  title: string;
+  /** `do`: the step's instructions; `undo`: its undo instructions (destroy). */
+  action: "do" | "undo";
+  instructions: string;
+  /** Whether a verify request can see it done (then confirming is not needed once it is). */
+  observable: boolean;
+}
 
 /** One line of a plan result. */
 export interface PlanLine {
@@ -55,6 +76,8 @@ export interface PlanLine {
   /** Line this one waits on, and the external event when that is what it waits for (e.g. "deploy"). */
   waitingOn?: string;
   waitingFor?: string;
+  /** For `todo` lines: what the person must do. */
+  manual?: ManualTodo;
   error?: string;
   errorCode?: ErrorCode;
 }
@@ -79,4 +102,6 @@ export interface ApplyResultSummary {
   receipt: Receipt;
   drift: Drift[];
   warnings: string[];
+  /** Manual steps this run left for a person to do (or undo), in plan order (ADR 0021). Absent when none. */
+  manual?: ManualTodo[];
 }

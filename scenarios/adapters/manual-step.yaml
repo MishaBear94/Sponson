@@ -1,0 +1,86 @@
+# A manual step (ADR 0021) end to end through the CLI: a Google OAuth client's redirect URIs have no API, so the plan
+# says what a person must do with the preview URL a Vercel line produces. Format: see the top of scenarios/runner.test.ts.
+name: "manual.step: todo with rendered instructions, apply waits (MANUAL_STEP_PENDING, exit 2) until --confirm, records who and when, destroy asks for the undo"
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+  changes:
+    - id: web
+      adapter: vercel
+      op: env
+      target: preview
+      values: { AUTH_GOOGLE_ID: acme-web.apps.googleusercontent.com }
+      environments: [preview]
+    - id: google-redirect
+      adapter: manual
+      op: step
+      title: "Allow ${ctx.scope}'s OAuth callback on the Google OAuth client"
+      vars: { url: { from: web.preview_url } }
+      instructions: |
+        Google has no API for a web client's redirect URIs.
+        In Google Cloud console > APIs & Services > Credentials, open the OAuth client "acme-web" and add
+        {url}/api/auth/callback/google under "Authorized redirect URIs". Save.
+      undo: |
+        Remove {url}/api/auth/callback/google from the client's "Authorized redirect URIs". Save.
+      environments: [preview]
+    - id: flag
+      adapter: vercel
+      op: env
+      target: preview
+      depends_on: [google-redirect]
+      values: { GOOGLE_LOGIN: "on" }
+      environments: [preview]
+steps:
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { web: create, google-redirect: pending, flag: create } }
+  # The step's input exists after web is applied: the step waits for a person, and so does the line after it.
+  - run: apply --json
+    expect:
+      exit: 2
+      status: partial
+      error: MANUAL_STEP_PENDING
+      lines: { web: applied, google-redirect: waiting, flag: waiting }
+      stdout: ['/"action":\s*"do"/', "https://prj_demo-01234567.vercel.app/api/auth/callback/google", "--confirm <line>"]
+  - sim:
+      vercel_env: { preview: { AUTH_GOOGLE_ID: exists, GOOGLE_LOGIN: absent } }
+  - run: plan --json
+    expect:
+      exit: 0
+      plan_lines: { web: unchanged, google-redirect: todo, flag: create }
+      stdout: ['/"title":\s*"Allow pr-42''s OAuth callback on the Google OAuth client"/', "Authorized redirect URIs"]
+  - run: plan
+    expect: { exit: 0, stdout: ["* google-redirect", "| In Google Cloud console", "sponson apply --confirm google-redirect", "to do by hand"] }
+  # A person did it and says so.
+  - run: apply --confirm google-redirect --approved-by alice --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { web: unchanged, google-redirect: applied, flag: applied }
+      notes: { google-redirect: { manual: { confirmedBy: alice } } }
+      stdout: ['/"how":\s*"confirmed"/', '/"by":\s*"alice"/']
+  # Writing `flag` redeployed the preview, which has a new URL: the instructions changed, so it is a step to do again.
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { web: unchanged, google-redirect: todo, flag: unchanged }, stdout: ["https://prj_demo-01234567-2.vercel.app/api/auth/callback/google"] }
+  - run: apply --json
+    expect: { exit: 2, status: partial, error: MANUAL_STEP_PENDING, writes: 0, lines: { google-redirect: waiting, flag: waiting } }
+  - run: apply --confirm google-redirect --approved-by bob --json
+    expect: { exit: 0, status: complete, lines: { google-redirect: applied, flag: unchanged }, stdout: ['/"by":\s*"bob"/'] }
+  - run: apply --json
+    expect: { exit: 0, status: complete, writes: 0, lines: { web: unchanged, google-redirect: unchanged, flag: unchanged } }
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { web: unchanged, google-redirect: unchanged, flag: unchanged } }
+  # Destroy removes what Sponson made and asks a person for the undo.
+  - run: apply --destroy --json
+    expect:
+      exit: 2
+      status: partial
+      error: MANUAL_STEP_PENDING
+      lines: { web: destroyed, flag: destroyed, google-redirect: waiting }
+      stdout: ['/"action":\s*"undo"/', "Remove https://prj_demo-01234567-2.vercel.app/api/auth/callback/google"]
+  - sim:
+      vercel_env: { preview: { AUTH_GOOGLE_ID: absent, GOOGLE_LOGIN: absent } }
+  - run: apply --destroy --confirm google-redirect --approved-by alice --json
+    expect: { exit: 0, status: complete, lines: { google-redirect: destroyed }, notes: { google-redirect: { manual: { undoneBy: alice } } } }
+  - run: apply --destroy --json
+    expect: { exit: 0, warnings: ["Nothing to destroy"] }

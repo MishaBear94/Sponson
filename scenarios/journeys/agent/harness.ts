@@ -16,12 +16,12 @@ export const repo = new URL("../../..", import.meta.url).pathname;
 
 /** Vocabulary SKILL.md documents. Anything else in the JSON is undocumented. */
 export const SKILL = {
-  planStatuses: ["create", "update", "unchanged", "pending", "blocked", "error"],
+  planStatuses: ["create", "update", "unchanged", "pending", "todo", "blocked", "error"],
   runStatuses: ["complete", "partial", "failed"],
   lineStatuses: ["applied", "unchanged", "waiting", "failed", "rolled_back", "rollback_failed", "skipped", "blocked", "destroyed", "destroy_failed"],
   valueStates: ["literal", "resolved", "pending", "secret"],
-  /** SKILL.md (v2): `+ ~ = ? - !`, one per plan status the human is shown. */
-  symbols: { create: "+", update: "~", unchanged: "=", pending: "?", blocked: "-", error: "!" } as Record<string, string>,
+  /** SKILL.md (v2): `+ ~ = ? * - !`, one per plan status the human is shown. */
+  symbols: { create: "+", update: "~", unchanged: "=", pending: "?", todo: "*", blocked: "-", error: "!" } as Record<string, string>,
   exitCodes: [0, 1, 2, 3],
 };
 

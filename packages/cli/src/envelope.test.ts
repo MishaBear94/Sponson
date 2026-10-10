@@ -162,7 +162,7 @@ describe("error envelope on every failure path", () => {
 
   it("every error code has its exit code in core's ERROR_CODES, and the old hand list still holds", () => {
     for (const [c, spec] of Object.entries(ERROR_CODES)) {
-      const expected = c === "LOCK_HELD" || c === "LOCK_LOST" ? 3 : /^(PLAN_|REF_|ENV_)/.test(c) || ["USAGE", "PARAM_INVALID", "CTX_NULL", "SECRET_LITERAL", "ADAPTER_UNKNOWN", "OP_UNKNOWN"].includes(c) ? 2 : 1;
+      const expected = c === "LOCK_HELD" || c === "LOCK_LOST" ? 3 : /^(PLAN_|REF_|ENV_)/.test(c) || ["USAGE", "PARAM_INVALID", "CTX_NULL", "SECRET_LITERAL", "ADAPTER_UNKNOWN", "OP_UNKNOWN", "MANUAL_STEP_PENDING"].includes(c) ? 2 : 1;
       expect([c, spec.exit]).toEqual([c, expected]);
     }
   });

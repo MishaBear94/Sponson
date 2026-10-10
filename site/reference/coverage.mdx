@@ -48,7 +48,10 @@ Columns:
   **P** partly (the lifecycle needs more than request templates, noted), **N** no.
 - **Pri**: how often it appears in preview-environment workflows. **P0** most preview setups on that stack hit it;
   **P1** common; **P2** occasional. An estimate from public templates, integrations and docs, not a survey.
-- **Now**: **yes** when a built-in op covers it.
+- **Now**: **yes** when a built-in op covers it; **manual** when no API can and the row is covered by
+  [`manual.step`](/reference/plan-format#manual-step) instead: a person does the step from the plan's instructions, Sponson
+  shows it as a todo, holds back what depends on it, records who confirmed it, and asks for its undo on destroy
+  ([ADR 0021](/contributing/adr/0021-manual-steps)). Manual rows are never counted as automated coverage.
 
 ### Deploy targets and their environment variables
 
@@ -91,7 +94,7 @@ Columns:
 | Stytch | Redirect URL per environment | PWA `POST /pwa/v3/projects/{p}/environments/{e}/redirect_urls` (+ get/delete by URL), Basic workspace key; object | Y | P2 | no |
 | Okta | `redirect_uris` on an OIDC app; trusted origin for CORS | `PUT /api/v1/apps/{id}` (**list**, whole app object), `POST /api/v1/trustedOrigins` (object); `SSWS` token or OAuth | Y (list mode; trusted origins object) | P2 | no |
 | Kinde | Callback and logout URLs on an application | Management API `POST`/`PUT /api/v1/applications/{id}/auth_redirect_urls` (add / replace); M2M client-credentials token. Path from SDK docs, not the reference **(unverified)** | Y (token exchange) | P2 | no |
-| Google OAuth clients | Preview URL in a web client's authorized redirect URIs | **No public API** for standard OAuth web clients (Console only); only IAM workforce OAuth clients and IAP are programmable | N | P1 | no |
+| Google OAuth clients | Preview URL in a web client's authorized redirect URIs | **No public API** for standard OAuth web clients (Console only); only IAM workforce OAuth clients and IAP are programmable | N | P1 | **manual** (`manual.step`; [example](https://github.com/MishaBear94/Sponson/blob/main/examples/google-oauth-manual-step.plan.yaml)) |
 
 ### Feature flags and targeting
 
@@ -113,7 +116,7 @@ Columns:
 | Stripe | Test-mode webhook endpoint pointing at the preview URL; its signing secret into the app's env | `POST /v1/webhook_endpoints` (form-encoded), `DELETE /v1/webhook_endpoints/{id}`; bearer; object; `Idempotency-Key`; **`secret` returned only on create** | P (once-only secret must flow into an env line in the same run) | P0 | no |
 | GitHub | Repository webhook to the preview URL | `POST /repos/{o}/{r}/hooks`, `DELETE .../hooks/{id}`; bearer; object; secret write-only (caller supplies it) | Y | P2 | no |
 | Svix (as a sender) | Endpoint per environment on an application | `POST /api/v1/app/{app}/endpoint` with caller-chosen `uid`; bearer; object, idempotent by `uid`; secret readable via `GET .../secret` | Y | P2 | no |
-| Clerk webhooks | Preview URL as a webhook endpoint | Clerk's Backend API only creates/deletes the Svix app and a dashboard link; **no endpoint API** through Clerk | N | P1 | no |
+| Clerk webhooks | Preview URL as a webhook endpoint | Clerk's Backend API only creates/deletes the Svix app and a dashboard link; **no endpoint API** through Clerk | N | P1 | **manual** (`manual.step`) |
 
 ### Email: sending domains, webhooks, test inboxes
 
@@ -160,7 +163,7 @@ Columns:
 |---|---|---|---|---|---|
 | Algolia | Index per environment, copied from a template index | `POST /1/indexes/{src}/operation` `{operation: copy, destination}`, `DELETE /1/indexes/{name}`; `X-Algolia-Application-Id` + `X-Algolia-API-Key`; async task to poll | P (async task) | P2 | no |
 | Stripe test-mode objects | Products / prices / coupons the preview's code expects | `POST /v1/products`, `/v1/prices` (form-encoded, `lookup_key` as identity, `Idempotency-Key`); prices cannot be deleted, only `active=false` | Y (destroy = archive) | P2 | no |
-| Stripe sandboxes | A sandbox per PR | No public API for account sandboxes; anonymous "claimable" sandboxes are private preview | N | P2 | no |
+| Stripe sandboxes | A sandbox per PR | No public API for account sandboxes; anonymous "claimable" sandboxes are private preview | N | P2 | **manual** (`manual.step`) |
 
 ### Secret managers (read side: secret sources, not side effects)
 
@@ -188,17 +191,21 @@ manage). Weights: P0 = 3, P1 = 2, P2 = 1 (9 P0, 16 P1, 31 P2; total weight 90).
 
 | Measure | Covered | Coverage |
 |---|---|---|
-| Rows | 7 of 56 (Vercel env, Neon branch, PlanetScale branch and password, Supabase branch, Clerk redirect, Supabase Auth redirect, LaunchDarkly targeting) | **12.5%** |
-| Weighted by priority | 20 of 90 | **22.2%** |
-| P0 rows only | 6 of 9 | 67% |
+| Automated rows | 7 of 56 (Vercel env, Neon branch, PlanetScale branch and password, Supabase branch, Clerk redirect, Supabase Auth redirect, LaunchDarkly targeting) | **12.5%** |
+| Automated, weighted by priority | 20 of 90 | **22.2%** |
+| Manual rows (`manual.step`, a person does them) | 3 of 56 (Google OAuth redirect URIs, Clerk webhooks, Stripe sandboxes); weighted 5 of 90 | 5.4%; 5.6% |
+| Total rows, automated + manual | 10 of 56 | 17.9% |
+| Total, weighted by priority | 25 of 90 | 27.8% |
+| P0 rows only (all automated) | 6 of 9 | 67% |
 | Secret sources (separate) | 4 of 9 vendors; weighted 7 of 14 | 44%; 50% |
 
 Rows that the generic `http` adapter could reach are not counted: its example plan is illustrative and its tests run
 against a generic REST sim, not against any one provider's API, so no row has a tested example yet.
 
-Plainly: Sponson covers the canonical Vercel + Neon (or PlanetScale, or Supabase) + Clerk (or Supabase Auth) preview stack, plus LaunchDarkly flag targeting, and almost nothing else. Three rows (Google
-OAuth clients, Clerk webhooks, Stripe sandboxes; weight 5) have no usable API, so no adapter can reach them; the
-ceiling is 53 rows / 94.4% weighted.
+Plainly: Sponson automates the canonical Vercel + Neon (or PlanetScale, or Supabase) + Clerk (or Supabase Auth) preview stack, plus LaunchDarkly flag targeting, and almost nothing else. Three rows (Google
+OAuth clients, Clerk webhooks, Stripe sandboxes; weight 5) have no usable API, so no adapter can reach them; they
+are tracked as manual steps, which a person still has to do, so the ceiling for *automated* coverage stays 53 rows /
+94.4% weighted.
 
 ## Strategy
 
@@ -270,7 +277,7 @@ Ranked by weighted rows covered, then by how much they need more than `adapter: 
 
 With these eight plus `adapter: http`, coverage reaches 44 rows (78.6%) and 75 of 90 weighted (83.3%). The rest are
 Fly.io, Amplify, Cloud Run, Azure Static Web Apps, DigitalOcean, Xata, MongoDB Atlas, CockroachDB, Algolia (all P1/P2
-with partial generic fit or SigV4/SQL needs) and the three rows with no API.
+with partial generic fit or SigV4/SQL needs) and the three rows with no API (covered only as manual steps).
 
 ## Sources
 

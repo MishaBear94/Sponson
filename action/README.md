@@ -20,7 +20,7 @@ nobody can move under you.
 
 Outputs: `result` (the CLI's JSON envelope), `status` (`complete` / `partial` / `failed` / `stale` for apply, `ok` / `error` for plan), `exit-code`, `skipped`.
 
-The action exits with the CLI's exit code **after** posting the comment: `0` complete or partial, `1` failed, `2` usage / plan invalid / environment unknown / not approved, `3` another apply holds the lock (or took it over).
+The action exits with the CLI's exit code **after** posting the comment: `0` complete or partial, `1` failed, `2` usage / plan invalid / environment unknown / not approved / a [manual step](../docs/plan-format.md#manualstep) waits for a person, `3` another apply holds the lock (or took it over).
 
 Provider credentials are the providers' own tokens, passed as environment variables to **every** step that runs the action, `destroy` included: a destroy without tokens cannot delete anything. Sponson has no token of its own.
 
@@ -163,5 +163,9 @@ Some lines are waiting on a deploy. The deployment_status run will finish them; 
 ```
 
 Symbols: `+` create/applied, `~` update, `=` unchanged, `?` pending/waiting, `-` blocked/skipped/rolled back/destroyed, `!` error/failed.
+
+A [manual step](../docs/plan-format.md#manualstep) that nobody has done yet (`*` todo in a plan, `waiting on
+confirmation` in an apply) is listed under the table with its instructions, whole, and the command a person runs once
+they did it (`sponson apply --confirm <line>`); the job stays red (exit 2) until then.
 
 Everything that comes from a provider (error messages, drift, labels) is HTML-escaped and flattened to one line in the comment, so an HTML error page, a CRLF or a `|` cannot break the table, open a tag or hide the rest of the comment.

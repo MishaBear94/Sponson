@@ -156,8 +156,8 @@ export function fillPath(path: string, vars: Record<string, unknown>, id?: strin
 // The provider block: one per API
 // ---------------------------------------------------------------------------
 
-/** How the credential is sent. */
-export type Auth = { kind: "bearer"; env: string } | { kind: "header"; header: string; env: string } | { kind: "basic"; userEnv: string; passwordEnv: string };
+/** How the credential is sent; `none` only for a public endpoint a manual step's verify request reads. */
+export type Auth = { kind: "bearer"; env: string } | { kind: "header"; header: string; env: string } | { kind: "basic"; userEnv: string; passwordEnv: string } | { kind: "none" };
 
 /** One API's configuration, from `providers.http.<api>`. */
 export interface ApiConfig {
@@ -232,15 +232,19 @@ export function apiEnvironment(_params: Record<string, unknown>, _ctx: unknown, 
   return provider?.production === true ? "production" : null;
 }
 
-/** One API block, checked. `where` names it in messages (`providers.http.statsig`). */
-export function parseApi(block: Record<string, unknown>, where: string): ApiConfig {
+/**
+ * One API block, checked. `where` names it in messages (`providers.http.statsig`). `authOptional`: a block without
+ * `auth` sends no credential (the `manual` adapter's verify requests to public endpoints); the `http` adapter's
+ * blocks always need one.
+ */
+export function parseApi(block: Record<string, unknown>, where: string, opts: { authOptional?: boolean } = {}): ApiConfig {
   const base = block.base_url;
   if (typeof base !== "string" || !/^https?:\/\/[^\s]+$/.test(base)) throw planError("`base_url` must be an http(s) URL", where);
   const unknown = Object.keys(block).filter((k) => !API_KEYS.includes(k));
   if (unknown.length) throw planError(`unknown key \`${unknown[0]}\` (known: ${API_KEYS.join(", ")})`, where);
   const cfg: ApiConfig = {
     baseUrl: base,
-    auth: parseAuth(block.auth, `${where}.auth`),
+    auth: block.auth === undefined && opts.authOptional ? { kind: "none" } : parseAuth(block.auth, `${where}.auth`),
     headers: parseHeaders(block.headers, `${where}.headers`),
     encoding: parseEncoding(block.encoding, `${where}.encoding`),
     production: parseProduction(block.production, `${where}.production`),
