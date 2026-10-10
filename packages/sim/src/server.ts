@@ -6,7 +6,7 @@
  *   S1. 429s carry `Retry-After` in seconds (chaos `retry_after`).
  */
 import { createHash } from "node:crypto";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { Reply, route, router, type RouteRequest } from "./provider.js";
 import { providerEntries, type SimSeed, type SimState, type WriteLogEntry } from "./state.js";
@@ -34,7 +34,7 @@ async function handle(state: SimState, req: IncomingMessage, res: ServerResponse
   const method = (req.method ?? "GET").toUpperCase();
   const url = new URL(req.url ?? "/", "http://sim.local");
   const raw = await readBody(req);
-  const parsed = parseJson(raw);
+  const parsed = (req.headers["content-type"] ?? "").startsWith("application/x-www-form-urlencoded") ? { body: parseForm(raw) } : parseJson(raw);
   if (!parsed) return send(res, 400, { error: "invalid json" });
   const { body } = parsed;
 
@@ -43,10 +43,21 @@ async function handle(state: SimState, req: IncomingMessage, res: ServerResponse
     return send(res, r.status, r.body);
   }
 
-  // Any non-empty bearer token is accepted; missing-token bugs must surface as 401.
-  const auth = req.headers.authorization ?? "";
-  if (!/^Bearer\s+\S+$/.test(auth)) return send(res, 401, { error: "unauthorized" });
+  // Any non-empty credential is accepted; missing-token bugs must surface as 401.
+  if (!authorized(url, req.headers)) return send(res, 401, { error: "unauthorized" });
   await serveProvider(state, req, res, { method, url, raw, body });
+}
+
+/** `/<provider>` → how that provider takes its credential, when not as a bearer token. */
+const AUTH: Record<string, (headers: IncomingHttpHeaders) => boolean> = Object.fromEntries(
+  providerEntries().flatMap(([name, p]) => (p.authorized ? [[`/${name}`, (h: IncomingHttpHeaders) => p.authorized!(h)]] : [])),
+);
+
+/** The credential check of the provider the path belongs to; a non-empty bearer token by default. */
+function authorized(url: URL, headers: IncomingHttpHeaders): boolean {
+  const prefix = url.pathname.match(/^\/[^/]+/)?.[0] ?? "";
+  const check = AUTH[prefix];
+  return check ? check(headers) : /^Bearer\s+\S+$/.test(headers.authorization ?? "");
 }
 
 /** An authenticated provider request: latency, chaos, the write log, then the provider's routes. */
@@ -111,6 +122,25 @@ const control = router<SimState>(
 );
 
 /** A request body: empty is `undefined`; null when it is not JSON. */
+/**
+ * A form body (`application/x-www-form-urlencoded`) as the object it encodes, bracket-nested the way Stripe reads
+ * it: `a[b]=1&c[0]=x` is `{ a: { b: "1" }, c: ["x"] }`. Every value is a string.
+ */
+function parseForm(raw: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [name, value] of new URLSearchParams(raw)) {
+    const path = name.split(/\[|\]\[|\]/).filter((s) => s !== "");
+    let cur: Record<string, unknown> | unknown[] = out;
+    path.forEach((seg, i) => {
+      const last = i === path.length - 1;
+      const slot = cur as Record<string, unknown>;
+      if (last) slot[seg] = value;
+      else cur = (slot[seg] ??= /^\d+$/.test(path[i + 1]!) ? [] : {}) as Record<string, unknown> | unknown[];
+    });
+  }
+  return out;
+}
+
 function parseJson(raw: string): { body: unknown } | null {
   if (raw.length === 0) return { body: undefined };
   try {
