@@ -47,6 +47,17 @@ describe("rest sim styles", () => {
     expect((await call("PUT", "/services/srv-2/env-vars/API_URL", { value: "x" })).status).toBe(404);
   });
 
+  it("lists and addresses a collection at its other paths too (also_at)", async () => {
+    sim = await startSim({ seed: { rest: { collections: { "/projects/p/databases": [] }, styles: { "/projects/p/databases": { also_at: ["/databases", "/all-databases"] } } } } });
+    const created = await call("POST", "/projects/p/databases", { name: "app-pr-1" });
+    const id = (created.body.data as { id: string }).id;
+    expect((await call("GET", `/databases/${id}`)).body).toEqual({ data: { name: "app-pr-1", id } });
+    expect((await call("GET", "/all-databases")).body).toEqual({ data: [{ name: "app-pr-1", id }], next_cursor: null });
+    expect((await call("PATCH", `/databases/${id}`, { size: 2 })).status).toBe(200);
+    expect((await call("DELETE", `/databases/${id}`)).body).toEqual({ id, deleted: true });
+    expect(sim.state.rest.collections["/projects/p/databases"]).toEqual([]);
+  });
+
   it("accepts a credential in any *-Key or *-Token header", async () => {
     sim = await startSim();
     expect((await call("GET", "/gates", undefined, { "x-auth-token": "t" })).status).toBe(200);

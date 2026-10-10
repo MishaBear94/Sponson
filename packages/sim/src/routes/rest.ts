@@ -16,8 +16,9 @@
  *   R2. Collection objects are answered in a `{ data: <object> }` envelope, lists as `{ data: [...], next_cursor }`,
  *       paged with `?cursor=` under chaos `page_size` (`next_cursor` is null on the last page). Objects that are
  *       not in a collection are answered bare. A collection's style (seed `styles`, by collection path) changes the
- *       envelopes, the cursor's place, and the id's field and type, so that a recipe is tested in its provider's
- *       own response shapes.
+ *       envelopes, the cursor's place, the id's field and type, and the other paths it is listed and addressed at
+ *       (`also_at`: created at `/projects/p/databases`, read at `/databases/<id>`), so that a recipe is tested in
+ *       its provider's own response shapes and URLs.
  *   R3. A path is known once seeded or created: a POST to an unknown path creates the collection; a GET of an
  *       unknown path is 404. A create may choose the id (the id field, or the style's `id_from` field, in the
  *       body, like a flag key or a database name); otherwise the sim assigns `it_<n>` (the next integer with
@@ -54,6 +55,11 @@ export interface RestStyle {
   id_from?: string;
   /** Assign integer ids instead of `it_<n>`. */
   numeric_ids?: boolean;
+  /**
+   * Other paths that list this collection and address its objects as `<path>/<id>`: an API that creates at
+   * `/projects/p/databases` and reads at `/databases/<id>`, or lists at `/redis/databases`.
+   */
+  also_at?: string[];
 }
 
 /** Simulated REST API state, by path: collections of objects, objects that are not in a collection, and styles. */
@@ -116,7 +122,7 @@ function authorized(headers: IncomingHttpHeaders): boolean {
   return Object.entries(headers).some(([name, v]) => /(^|-)(api-key|key|token)$/.test(name) && typeof v === "string" && v.trim() !== "");
 }
 
-type FullStyle = Required<Omit<RestStyle, "next_path">> & { next_path: string | null };
+type FullStyle = Required<Omit<RestStyle, "next_path" | "also_at">> & { next_path: string | null };
 
 /** The style of the collection at `path`, every default filled in. */
 function styleOf(state: RestState, path: string): FullStyle {
@@ -206,14 +212,20 @@ type Target =
   | { kind: "item"; collection: string; index: number; item: RestItem }
   | { kind: "none" };
 
+/** The collection stored at `path`, or listed there too (a style's `also_at`). */
+function collectionAt(state: RestState, path: string): string | undefined {
+  if (state.collections[path]) return path;
+  return Object.keys(state.collections).find((c) => state.styles[c]?.also_at?.includes(path));
+}
+
 function resolve(state: RestState, raw: string): Target {
   const path = raw.length > 1 && raw.endsWith("/") ? raw.slice(0, -1) : raw;
   const object = state.objects[path];
   if (object) return { kind: "object", path, object };
-  const items = state.collections[path];
-  if (items) return { kind: "collection", path, items };
+  const at = collectionAt(state, path);
+  if (at) return { kind: "collection", path: at, items: state.collections[at]! };
   const cut = path.lastIndexOf("/");
-  const collection = path.slice(0, cut);
+  const collection = collectionAt(state, path.slice(0, cut)) ?? path.slice(0, cut);
   const id = decodeURIComponent(path.slice(cut + 1));
   const idf = styleOf(state, collection).id_field;
   const index = (state.collections[collection] ?? []).findIndex((i) => String(i[idf]) === id);
@@ -252,9 +264,10 @@ function patch(state: RestState, t: Target, body: unknown): Reply {
 function putNew(state: RestState, raw: string, body: Record<string, unknown>): Reply {
   const path = raw.length > 1 && raw.endsWith("/") ? raw.slice(0, -1) : raw;
   const cut = path.lastIndexOf("/");
-  const list = state.collections[path.slice(0, cut)];
-  if (!list || cut < 0) return notFound();
-  const style = styleOf(state, path.slice(0, cut));
+  const at = cut < 0 ? undefined : collectionAt(state, path.slice(0, cut));
+  if (!at) return notFound();
+  const list = state.collections[at]!;
+  const style = styleOf(state, at);
   const id = decodeURIComponent(path.slice(cut + 1));
   const item: RestItem = { ...structuredClone(body), [style.id_field]: style.numeric_ids && /^\d+$/.test(id) ? Number(id) : id };
   list.push(item);

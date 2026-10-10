@@ -31,7 +31,7 @@ function credentialVars(r: Recipe): string[] {
 
 /** `${ctx.*}` as the CLI fills it for `scope`. */
 function interpolate<T>(v: T, scope: string): T {
-  return JSON.parse(JSON.stringify(v).replace(/\$\{ctx\.scope\}/g, scope).replace(/\$\{ctx\.env\}/g, "preview")) as T;
+  return JSON.parse(JSON.stringify(v).replace(/\$\{ctx\.scope\}/g, scope).replace(/\$\{ctx\.env\}/g, "preview").replace(/\$\{ctx\.git\.branch\}/g, "feat/x")) as T;
 }
 
 /** The op's example params (live: with the `live.params` variables' values over them). */
@@ -67,6 +67,22 @@ function collectionOf(spec: Record<string, unknown>): string {
   return create.method?.toUpperCase() === "PUT" ? path.slice(0, path.lastIndexOf("/")) : path;
 }
 
+/**
+ * The other paths the provider lists the collection at, or addresses its objects under (`/databases/{id}` for a
+ * create at `/projects/{project}/databases`): the sim style's `also_at`.
+ */
+function otherPaths(spec: Record<string, unknown>, coll: string): string[] {
+  const vars = spec.vars as Record<string, unknown>;
+  const paths: string[] = [];
+  const find = (spec.find as { path?: string } | undefined)?.path;
+  if (find) paths.push(fill(find, vars));
+  for (const req of [spec.read, spec.update, spec.delete] as Array<{ path?: string } | undefined>) {
+    const p = req?.path?.split("?")[0];
+    if (p && /\/\{[A-Za-z_]\w*\}$/.test(p)) paths.push(fill(p.slice(0, p.lastIndexOf("/")), vars));
+  }
+  return [...new Set(paths)].filter((p) => p !== coll);
+}
+
 /** The sim, shaped like the provider: the create's collection (envelopes, id field) and the seeded parents. */
 function simSeed(op: RecipeOp, spec: Record<string, unknown>) {
   const vars = spec.vars as Record<string, unknown>;
@@ -84,6 +100,7 @@ function simSeed(op: RecipeOp, spec: Record<string, unknown>) {
       id_field: token(spec.id_path, "id"),
       ...(op.sim?.id_from ? { id_from: op.sim.id_from } : {}),
       ...(op.sim?.numeric_ids ? { numeric_ids: true } : {}),
+      also_at: otherPaths(spec, coll),
     };
   }
   const objects = Object.fromEntries(Object.entries(op.sim?.objects ?? {}).map(([p, o]) => [fill(p, vars), structuredClone(o)]));
