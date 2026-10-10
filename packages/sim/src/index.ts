@@ -8,6 +8,7 @@ export * from "./state.js";
 export * from "./routes/vercel.js";
 export * from "./routes/neon.js";
 export * from "./routes/clerk.js";
+export * from "./routes/launchdarkly.js";
 export { createSimServer } from "./server.js";
 
 /**

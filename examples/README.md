@@ -12,6 +12,7 @@ The format is specified in [docs/plan-format.md](../docs/plan-format.md).
 | [nextjs-neon-preview.plan.yaml](nextjs-neon-preview.plan.yaml) | a database branch per pull request, wired into preview variables |
 | [vercel-shared-and-branch-vars.plan.yaml](vercel-shared-and-branch-vars.plan.yaml) | project-wide, per-branch and production variables; `${ctx.*}` |
 | [clerk-preview-callbacks.plan.yaml](clerk-preview-callbacks.plan.yaml) | a value that exists only after the deploy; `partial` runs |
+| [launchdarkly-preview-flags.plan.yaml](launchdarkly-preview-flags.plan.yaml) | flags on for a preview: its URL or the scope as the target; a variation by name |
 | [explicit-deploy.plan.yaml](explicit-deploy.plan.yaml) | Sponson starting the deploy; `depends_on` |
 | [production-with-approval.plan.yaml](production-with-approval.plan.yaml) | preview and production in one file; approval |
 | [adopting-an-existing-project.plan.yaml](adopting-an-existing-project.plan.yaml) | what `sponson init` writes when it adopts; `{ keep: true }` |
@@ -72,6 +73,15 @@ In `--json`, `receipt.status` is `partial` and `receipt.lines.callback` has `sta
 Exit code 0. Run `sponson apply` again after the deploy (the README's workflow does it on `deployment_status`) and the
 callback is registered. With `--wait`, one `apply` polls until the deploy finishes instead. If the deploy fails, the
 callback is `skipped` with `EXTERNAL_FAILED` and the branch and variables stay.
+
+## launchdarkly-preview-flags.plan.yaml
+
+Two individual targets on flags that already exist in the LaunchDarkly project `acme-web`, environment `preview`.
+`checkout` serves `new-checkout` = `true` to the context of kind `url` whose key is the preview URL, so like the Clerk
+callback above it waits for the deploy; `pricing` serves the variation named `Treatment` of `pricing-page` to the user
+key `pr-42` (the scope) and is applied at once. `apply --destroy` removes exactly these two targets; the flags, their
+rules and everyone else's targets stay. A target moved to another variation in the LaunchDarkly console is `changed`
+drift, refused until `--reconcile`.
 
 ## explicit-deploy.plan.yaml
 

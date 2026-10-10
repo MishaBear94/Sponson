@@ -17,6 +17,7 @@ The format is specified in [docs/plan-format.md](/reference/plan-format).
 | [nextjs-neon-preview.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/nextjs-neon-preview.plan.yaml) | a database branch per pull request, wired into preview variables |
 | [vercel-shared-and-branch-vars.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/vercel-shared-and-branch-vars.plan.yaml) | project-wide, per-branch and production variables; `${ctx.*}` |
 | [clerk-preview-callbacks.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/clerk-preview-callbacks.plan.yaml) | a value that exists only after the deploy; `partial` runs |
+| [launchdarkly-preview-flags.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/launchdarkly-preview-flags.plan.yaml) | flags on for a preview: its URL or the scope as the target; a variation by name |
 | [explicit-deploy.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/explicit-deploy.plan.yaml) | Sponson starting the deploy; `depends_on` |
 | [production-with-approval.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/production-with-approval.plan.yaml) | preview and production in one file; approval |
 | [adopting-an-existing-project.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/adopting-an-existing-project.plan.yaml) | what `sponson init` writes when it adopts; `{ keep: true }` |
@@ -192,6 +193,60 @@ changes:
     adapter: clerk
     op: redirect_allow
     url: { from: env.preview_url }
+    environments: [preview]
+```
+
+## launchdarkly-preview-flags.plan.yaml
+
+Two individual targets on flags that already exist in the LaunchDarkly project `acme-web`, environment `preview`.
+`checkout` serves `new-checkout` = `true` to the context of kind `url` whose key is the preview URL, so like the Clerk
+callback above it waits for the deploy; `pricing` serves the variation named `Treatment` of `pricing-page` to the user
+key `pr-42` (the scope) and is applied at once. `apply --destroy` removes exactly these two targets; the flags, their
+rules and everyone else's targets stay. A target moved to another variation in the LaunchDarkly console is `changed`
+drift, refused until `--reconcile`.
+
+```yaml launchdarkly-preview-flags.plan.yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/MishaBear94/Sponson/main/schema/release.plan.schema.json
+#
+# Feature flags turned on for each pull request's preview, and off again when it closes
+# (`sponson apply --destroy`). Sponson adds individual targets to flags that already exist
+# in LaunchDarkly; it never creates, deletes, or switches flags. LAUNCHDARKLY_ACCESS_TOKEN
+# is read from the environment.
+version: 1
+providers:
+  vercel: { project: prj_acme_web }
+  # A project key and an environment key. Use a preview or test environment: one that
+  # requires approvals for flag changes refuses Sponson's writes.
+  launchdarkly: { project: acme-web, environment: preview }
+
+changes:
+  - id: env
+    adapter: vercel
+    op: env
+    target: preview
+    values:
+      LAUNCHDARKLY_CLIENT_SIDE_ID: { secret: "env://LAUNCHDARKLY_PREVIEW_CLIENT_SIDE_ID" }
+    environments: [preview]
+
+  # The new checkout, served `true` to the preview deployment. The app evaluates flags with a
+  # context of kind `url` whose key is its own URL, so the target is the preview URL: it exists
+  # once Vercel has deployed this commit, and the next `apply` finishes the line.
+  - id: checkout
+    adapter: launchdarkly
+    op: flag_target
+    flag: new-checkout
+    context_kind: url
+    key: { from: env.preview_url }
+    variation: true
+    environments: [preview]
+
+  # A multivariate flag, by variation name. `key` defaults to the scope (`pr-42`) and
+  # `context_kind` to `user`: the app sends the pull request as a user key in previews.
+  - id: pricing
+    adapter: launchdarkly
+    op: flag_target
+    flag: pricing-page
+    variation: Treatment
     environments: [preview]
 ```
 

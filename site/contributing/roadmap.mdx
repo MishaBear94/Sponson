@@ -42,8 +42,8 @@ and registers them. The checklist is in CONTRIBUTING.md.
 
 | Item | Notes | Label |
 |------|-------|-------|
-| **Feature flags: LaunchDarkly** — `flag_target`: turn a flag on for a preview (target the preview URL or a context key), off again on destroy ([#15](https://github.com/MishaBear94/Sponson/issues/15)) | The README's fourth console. Decide the resource key (project + environment + flag + target) | adapter, help wanted |
-| Feature flags: a second provider (Statsig, Unleash, PostHog or GrowthBook) | Reuse whatever shape LaunchDarkly settles on | adapter |
+| Feature flags: LaunchDarkly rules — serve a variation to contexts whose `url` matches (an `addRule` clause), beside the individual targets `launchdarkly.flag_target` manages ([#15](https://github.com/MishaBear94/Sponson/issues/15)) | Rules are ordered and have no client-chosen identity; needs a rule `ref` or description to find ours | adapter |
+| Feature flags: a second provider (Statsig, Unleash, PostHog or GrowthBook) | Reuse `launchdarkly.flag_target`'s shape: key `target:<flag>:<context kind>:<key>` under a provider block naming the project and environment; the hash covers the variation | adapter |
 | Identity callbacks beyond Clerk: Auth0 (allowed callback URLs on an application), Supabase Auth redirect URLs ([#16](https://github.com/MishaBear94/Sponson/issues/16)) | Small, close to `clerk.ts` | adapter, **good first issue** |
 | Database branches: Supabase branching, PlanetScale branches | Close to `neon.ts`; output a connection string marked `sensitive` | adapter |
 | Deploy-target env vars: Netlify, Railway, Fly.io secrets | Close to `vercel.ts`'s `env` op, without the deploy barrier at first | adapter |

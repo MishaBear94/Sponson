@@ -37,7 +37,23 @@ function seedFor(file: string, plan: Plan): Partial<SimSeed> {
   const seed: Partial<SimSeed> = {};
   if (plan.providers.vercel) seed.vercel = { projects: { [project(plan, "vercel")]: { envs: [] } } };
   if (plan.providers.neon) seed.neon = { projects: { [project(plan, "neon")]: { branches: [{ name: "main" }] } } };
+  if (plan.providers.launchdarkly) seed.launchdarkly = { projects: { [project(plan, "launchdarkly")]: launchdarklyProject(plan) } };
   return { ...seed, ...(SEEDS[file]?.(plan) ?? {}) };
+}
+
+/**
+ * The LaunchDarkly project an example's lines target: its environment, and each flag a line names, with on/off
+ * variations plus the names an example asks for (`variation: Treatment`).
+ */
+function launchdarklyProject(plan: Plan) {
+  const lines = plan.changes.filter((c) => c.adapter === "launchdarkly");
+  const flags = Object.fromEntries(
+    lines.map((c) => {
+      const named = typeof c.params.variation === "string" ? [{ value: c.params.variation.toLowerCase(), name: c.params.variation }] : [];
+      return [String(c.params.flag), { variations: [{ value: true, name: "on" }, { value: false, name: "off" }, ...named] }];
+    }),
+  );
+  return { environments: [String(plan.providers.launchdarkly?.environment)], flags };
 }
 
 /** A value for every `env://NAME` the plan references, so secrets resolve the way they would in CI. */

@@ -5,7 +5,7 @@ plan: |
     vercel: { project: prj_demo }
     neon: { project: proj_demo }
   changes:
-    - { id: a, adapter: launchdarkly, op: flag }
+    - { id: a, adapter: posthog, op: flag }
 steps:
   - run: plan
     expect: { exit: 2, stderr: ["ADAPTER_UNKNOWN", "Known: "] }
