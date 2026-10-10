@@ -28,19 +28,20 @@ changes:
 
 /** Rewrite every deployment state the client sees through `stateFor(createdAt)`. */
 function lifecycle(world: World, stateFor: (ageMs: number, real: string) => string) {
-  const rewrite = (u: Upstream, field: "readyState" | "state"): Upstream => {
+  const rewrite = (u: Upstream): Upstream => {
     if (u.status !== 200) return u;
     const b = JSON.parse(u.body);
     const fix = (d: Record<string, unknown>) => {
-      d[field] = stateFor(Date.now() - Number(d.createdAt), String(d[field]));
+      d.readyState = stateFor(Date.now() - Number(d.createdAt), String(d.readyState));
+      if ("state" in d) d.state = d.readyState;
     };
     if (Array.isArray(b.deployments)) b.deployments.forEach(fix);
     else fix(b);
     return { ...u, body: JSON.stringify(b) };
   };
-  world.proxy.on(isPath("POST", /^\/vercel\/v13\/deployments$/), () => ({ rewrite: (u) => rewrite(u, "readyState") }));
-  world.proxy.on(isPath("GET", /^\/vercel\/v13\/deployments\/[^/]+$/), () => ({ rewrite: (u) => rewrite(u, "readyState") }));
-  world.proxy.on(isPath("GET", /^\/vercel\/v6\/deployments$/), () => ({ rewrite: (u) => rewrite(u, "state") }));
+  world.proxy.on(isPath("POST", /^\/vercel\/v13\/deployments$/), () => ({ rewrite }));
+  world.proxy.on(isPath("GET", /^\/vercel\/v13\/deployments\/[^/]+$/), () => ({ rewrite }));
+  world.proxy.on(isPath("GET", /^\/vercel\/v7\/deployments$/), () => ({ rewrite }));
 }
 
 describe("deployment lifecycle", () => {
@@ -74,9 +75,9 @@ describe("deployment lifecycle", () => {
 
   it("one 502 from the deployment list while checking for the deploy event leaves the run partial (still waiting), not failed with the callback skipped", async () => {
     w = await World.create({ plan: THREE_LINE_PLAN });
-    // 1st GET /v6/deployments: vercel.env's redeploy check after the upsert. 2nd: awaitExternal for `callback`.
+    // 1st GET /v7/deployments: vercel.env's redeploy check after the upsert. 2nd: awaitExternal for `callback`.
     let n = 0;
-    w.proxy.on(isPath("GET", /^\/vercel\/v6\/deployments$/), () => (++n === 2 ? { status: 502, headers: { "content-type": "text/html" }, body: "<html>502 Bad Gateway</html>" } : undefined));
+    w.proxy.on(isPath("GET", /^\/vercel\/v7\/deployments$/), () => (++n === 2 ? { status: 502, headers: { "content-type": "text/html" }, body: "<html>502 Bad Gateway</html>" } : undefined));
 
     const r = await w.cli("apply --json");
     expect(r.json.receipt.lines.env.status).toBe("applied");

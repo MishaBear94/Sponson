@@ -7,7 +7,7 @@ const ABOUT = { credentialEnv: "CLERK_SECRET_KEY", baseUrlEnv: "CLERK_API_URL" }
 
 /** Clerk's API base URL; `CLERK_API_URL` overrides it (the sim and tests use that). */
 export const CLERK_DEFAULT_API_URL = "https://api.clerk.com/v1";
-/** Page size asked for when Clerk answers with the paginated envelope. */
+/** Page size asked for (the spec's `limit` allows 1–500, default 10). */
 const CLERK_PAGE_LIMIT = 100;
 
 interface RedirectUrl {
@@ -31,8 +31,9 @@ function record(r: RedirectUrl): ResourceRecord {
 }
 
 /**
- * GET /redirect_urls answers a bare array (everything) or the paginated `{ data, total_count }` envelope, paged by
- * `offset`/`limit`. Both are accepted; anything else is a PROVIDER_RESPONSE naming the endpoint.
+ * GET /redirect_urls?paginated=true answers `{ data, total_count }`, paged by `offset`/`limit` (Clerk's own SDKs ask
+ * for it the same way; without `paginated` the spec documents a bare array). A bare array is still accepted;
+ * anything else is a PROVIDER_RESPONSE naming the endpoint.
  */
 function parseRedirects(body: unknown): { items: RedirectUrl[]; total?: number } {
   if (Array.isArray(body)) return { items: records(body, "the redirect URL list", ["id", "url"]) };
@@ -44,11 +45,11 @@ function parseRedirects(body: unknown): { items: RedirectUrl[]; total?: number }
 
 async function list(api: ApiClient): Promise<RedirectUrl[]> {
   let seen = 0;
-  return listAll(api, "/redirect_urls", (body): Page<RedirectUrl> => {
+  return listAll(api, `/redirect_urls?paginated=true&limit=${CLERK_PAGE_LIMIT}`, (body): Page<RedirectUrl> => {
     const p = parseRedirects(body);
     seen += p.items.length;
     const more = p.total !== undefined && seen < p.total;
-    return { items: p.items.map((r) => ({ id: r.id, url: r.url })), next: more ? { offset: String(seen), limit: String(CLERK_PAGE_LIMIT) } : null };
+    return { items: p.items.map((r) => ({ id: r.id, url: r.url })), next: more ? { offset: String(seen) } : null };
   });
 }
 
@@ -82,7 +83,10 @@ const redirect_allow: OpSpec = {
       const r = await api.post("/redirect_urls", { url }, (b) => records([b], "the created redirect URL", ["id", "url"])[0]!);
       return { resources: [record(r)], outputs: { id: r.id }, created: [key] };
     } catch (e) {
-      if (!isProviderError(e, "PROVIDER_CONFLICT")) throw e;
+      // The spec documents 400 and 422 for a refused create without saying which a duplicate gets, so any refusal
+      // is checked against the list before it is reported.
+      const refused = isProviderError(e, "PROVIDER_INVALID") && (e.details.status === 400 || e.details.status === 422);
+      if (!isProviderError(e, "PROVIDER_CONFLICT") && !refused) throw e;
       // It exists already: registered by someone else, or by an earlier attempt of ours whose answer was lost.
       // Either way it is not created by this call; the engine claims it if an earlier intent of ours named it.
       const found = (await list(api)).find((r) => r.url === url);

@@ -237,7 +237,8 @@ A Neon branch. Requires `providers.neon.project`.
 | `name` | string | `sponson/${ctx.env}/${ctx.scope}` | Branch name; the branch's identity (key `branch:<name>`). |
 | `parent` | string | `main` | Parent branch, by name or id. Used only when the branch is created; a different parent on an existing branch is not a change. An unknown parent is `PARAM_INVALID`. |
 
-`connection_string` is the URI for database `neondb` and role `neondb_owner` (the defaults of a new Neon project).
+`connection_string` is the URI for the branch's database `neondb` (a new Neon project's default) or, when it has no
+such database, its first one, connecting as the role that owns that database.
 Destroy deletes the branch. For drift and adoption, every branch except the project's root branch is in scope.
 
 ### `vercel.env`
@@ -258,14 +259,16 @@ failed), the adapter triggers a redeploy so the build sees the new values, and t
 `notes.redeployed: true`.
 
 `preview_url` and `deployment_id` are external outputs: they become available when the newest deployment of the
-current commit is `READY`. A deployment that ends `ERROR` or `CANCELED` fails the lines waiting on it
+current commit is `READY`. A deployment that ends `ERROR`, `CANCELED`, `BLOCKED` or `DELETED` fails the lines waiting on it
 (`EXTERNAL_FAILED`). Project-wide variables belong to the scope that applied them first and are destroyed with it;
 see [examples/README.md](../examples/README.md#vercel-shared-and-branch-varsplanyaml).
 
 ### `vercel.deploy`
 
-A deployment of the current commit, started by Sponson (from the GitHub git source: branch and sha of the context;
-target `production` when `--env production`). Takes no parameters. Requires `providers.vercel.project`.
+A deployment of the current commit, started by Sponson through the project's Git connection (GitHub, GitLab or
+Bitbucket: the connected repository at the context's branch and sha; target `production` when `--env production`).
+A project with no Git connection fails with `PROVIDER_INVALID`. Takes no parameters. Requires
+`providers.vercel.project`.
 
 If a deployment of this commit exists and has not failed, the op watches it instead of starting another. `apply`
 waits until it is `READY`, for at most `SPONSON_DEPLOY_TIMEOUT_MS` (default 120000), then fails with `WAIT_TIMEOUT`.

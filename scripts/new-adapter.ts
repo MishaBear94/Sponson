@@ -12,7 +12,8 @@
  * (packages/core/src/public-api.test.ts) — read from the rendered files, so whatever the templates export is
  * registered —, and the op's section
  * under "Built-in ops" in docs/plan-format.md (templates/adapter/plan-format-op.md.tmpl); and finally runs
- * `pnpm docs:gen`, because the docs restate the registry.
+ * `pnpm docs:gen`, because the docs restate the registry, then `pnpm site:gen`, because the documentation site
+ * restates docs/plan-format.md.
  *
  * The result passes `pnpm typecheck && pnpm lint && pnpm test` with no manual edit; scenarios/tooling/
  * new-adapter.test.ts runs those checks against a scaffolded copy of the repository.
@@ -32,6 +33,8 @@ export interface ScaffoldResult {
   edited: Array<{ file: string; change: string }>;
   /** What `pnpm docs:gen` wrote (its output lines); empty when the docs were already up to date or on a dry run. */
   docs: string[];
+  /** What `pnpm site:gen` wrote, likewise. */
+  site: string[];
 }
 
 const NAME = /^[a-z][a-z0-9]{1,29}$/;
@@ -186,7 +189,7 @@ function edits(name: string, api: Map<string, string[]>, opDoc: string): Edit[] 
 export async function scaffold(name: string, opts: { root: string; templates?: string; dryRun?: boolean }): Promise<ScaffoldResult> {
   if (!NAME.test(name)) throw new Error(`adapter name must match ${NAME} (lowercase letters and digits, starting with a letter), got "${name}"`);
   const templates = opts.templates ?? join(opts.root, "templates/adapter");
-  const result: ScaffoldResult = { created: [], skipped: [], edited: [], docs: [] };
+  const result: ScaffoldResult = { created: [], skipped: [], edited: [], docs: [], site: [] };
 
   // Refuse before writing anything if a target exists that this script did not generate (e.g. `clerk`).
   for (const f of FILES(name)) {
@@ -237,19 +240,22 @@ export async function scaffold(name: string, opts: { root: string; templates?: s
     }
     // The docs restate the registry (the outputs table in docs/plan-format.md); regenerate them from it. Run
     // always, not only after edits, so re-running after a failure here completes the job.
-    result.docs = await docsGen(opts.root);
+    result.docs = await runScript(opts.root, "docs:gen");
+    // The site's plan-format page is generated from docs/plan-format.md, which the scaffold just edited.
+    result.site = await runScript(opts.root, "site:gen");
   }
   return result;
 }
 
 /**
- * Run the repository's `docs:gen` script as `pnpm docs:gen` would (package.json is the contract, not the
- * generator's internals), in a fresh process so it sees the registrations just written. Returns its output lines.
+ * Run one of the repository's generator scripts (`docs:gen`, `site:gen`) as `pnpm <name>` would (package.json is the
+ * contract, not the generator's internals), in a fresh process so it sees the registrations just written. Returns
+ * its output lines.
  */
-async function docsGen(root: string): Promise<string[]> {
+async function runScript(root: string, name: string): Promise<string[]> {
   const scripts = (JSON.parse(await readFile(join(root, "package.json"), "utf8")) as { scripts?: Record<string, string> }).scripts ?? {};
-  const command = scripts["docs:gen"];
-  if (!command) throw new Error("package.json has no `docs:gen` script; cannot regenerate the docs");
+  const command = scripts[name];
+  if (!command) throw new Error(`package.json has no \`${name}\` script; cannot regenerate the docs`);
   const env = { ...process.env, PATH: `${join(root, "node_modules/.bin")}${delimiter}${process.env.PATH ?? ""}` };
   const { code, out } = await new Promise<{ code: number | null; out: string }>((resolve, reject) => {
     const child = spawn(command, { cwd: root, env, shell: true, stdio: ["ignore", "pipe", "pipe"] });
@@ -259,7 +265,7 @@ async function docsGen(root: string): Promise<string[]> {
     child.on("error", reject);
     child.on("close", (c) => resolve({ code: c, out }));
   });
-  if (code !== 0) throw new Error(`the adapter is scaffolded, but \`pnpm docs:gen\` failed (exit ${code}):\n${out.trim()}\nFix it and run \`pnpm docs:gen\`.`);
+  if (code !== 0) throw new Error(`the adapter is scaffolded, but \`pnpm ${name}\` failed (exit ${code}):\n${out.trim()}\nFix it and run \`pnpm ${name}\`.`);
   return out.split("\n").map((l) => l.trim()).filter(Boolean);
 }
 
@@ -269,9 +275,12 @@ function report(name: string, r: ScaffoldResult, root: string, dryRun: boolean):
   for (const f of r.created) lines.push(`  ${verb}create  ${f}`);
   for (const f of r.skipped) lines.push(`  exists   ${f} (left alone)`);
   for (const e of r.edited) lines.push(`  ${verb}edit    ${e.file}: ${e.change}`);
-  if (dryRun) lines.push("  would run     pnpm docs:gen");
-  else lines.push(`  ran     pnpm docs:gen: ${r.docs.length ? r.docs.join("; ") : "generated docs already up to date"}`);
-  if (r.created.length === 0 && r.edited.length === 0 && r.docs.length === 0) lines.unshift("  nothing to do: every file and registration is already in place");
+  if (dryRun) lines.push("  would run     pnpm docs:gen", "  would run     pnpm site:gen");
+  else {
+    lines.push(`  ran     pnpm docs:gen: ${r.docs.length ? r.docs.join("; ") : "generated docs already up to date"}`);
+    lines.push(`  ran     pnpm site:gen: ${r.site.length ? r.site.join("; ") : "documentation site already up to date"}`);
+  }
+  if (r.created.length === 0 && r.edited.length === 0 && r.docs.length === 0 && r.site.length === 0) lines.unshift("  nothing to do: every file and registration is already in place");
   const rel = (p: string) => relative(process.cwd(), join(root, p)) || ".";
   return [
     `${dryRun ? "Dry run: " : ""}scaffolding adapter \`${name}\``,
@@ -285,7 +294,7 @@ function report(name: string, r: ScaffoldResult, root: string, dryRun: boolean):
     `  2. pnpm vitest run packages/adapters/src/${name}.test.ts`,
     `  3. pnpm vitest run --project scenarios scenarios/runner.test.ts -t ${name}`,
     `  4. Docs and schema: rewrite the op's section under "Built-in ops" in ${rel(PLAN_FORMAT_FILE)} and the`,
-    "     adapter's `about` (credential and base-URL variables) for the real API; run pnpm docs:gen again",
+    "     adapter's `about` (credential and base-URL variables) for the real API; run pnpm docs:gen and pnpm site:gen again",
     `     after changing ops or outputs; and in ${rel("schema/release.plan.schema.json")} add the \`providers.${name}\``,
     "     block and the op's params definition, unless docs:gen generates them (scenarios/docs/ checks both).",
     "  5. pnpm typecheck && pnpm lint && pnpm test, then add a changeset (pnpm changeset).",

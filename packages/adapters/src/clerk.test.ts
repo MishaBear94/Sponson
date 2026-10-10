@@ -1,3 +1,5 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { clerkAdapter } from "./clerk.js";
 import { harness, writeIndex, type Harness } from "./testing.js";
@@ -56,6 +58,42 @@ describe("clerk redirect_allow", () => {
     const live = await op.read(actx, params);
     expect(live?.resources.map((r) => r.key)).toEqual([KEY]);
     expect((await op.listScope!(actx, params)).map((r) => r.key)).toHaveLength(5);
+  });
+
+  it("asks for the paginated list (as Clerk's SDKs do) and reads past the spec's default page size of 10", async () => {
+    await h.close();
+    const urls = Array.from({ length: 150 }, (_, i) => `https://pr-${i}.example.app/callback`);
+    h = await harness({ clerk: { redirect_urls: urls } });
+    expect(await op.listScope!(h.actx("clerk"), params)).toHaveLength(150);
+    expect((await op.read(h.actx("clerk"), { url: urls[149] }))?.resources).toHaveLength(1);
+  });
+
+  it("a create refused with 400/422 for a reason that does not say 'exists' is still checked against the list", async () => {
+    // Someone registered it already, and Clerk words the refusal in a way the conflict classifier does not know.
+    await fetch(`${h.sim.url}/clerk/redirect_urls`, { method: "POST", body: JSON.stringify(params), headers: { authorization: "Bearer other", "content-type": "application/json" } });
+    const server = createServer((req, res) => {
+      if (req.method === "POST") {
+        res.writeHead(422, { "content-type": "application/json" });
+        res.end(JSON.stringify({ errors: [{ code: "form_param_value_invalid", message: "is invalid", long_message: "url is invalid" }] }));
+        return;
+      }
+      void fetch(`${h.sim.url}/clerk${req.url}`, { headers: { authorization: String(req.headers.authorization) } }).then(async (up) => {
+        res.writeHead(up.status, { "content-type": "application/json" });
+        res.end(await up.text());
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    try {
+      const actx = h.actx("clerk", undefined, { env: { ...h.env, CLERK_API_URL: `http://127.0.0.1:${(server.address() as AddressInfo).port}` } });
+      const r = await op.apply(actx, params, null);
+      expect(r.created).toEqual([]);
+      expect(r.resources.map((x) => x.key)).toEqual([KEY]);
+      // A refusal for a URL that is not on the list is reported as it is.
+      await expect(op.apply(actx, { url: "https://other.example.app" }, null)).rejects.toMatchObject({ code: "PROVIDER_INVALID", details: { status: 422 } });
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
   });
 
   it("a GET that answers 502 once is retried", async () => {

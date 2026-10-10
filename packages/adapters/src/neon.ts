@@ -63,13 +63,30 @@ async function listBranches(c: Client): Promise<NeonBranch[]> {
   return listAll(c.api, `/projects/${c.project}/branches`, branchPage);
 }
 
+/** The database a branch's connection string points at: `neondb` (a new project's default) if present, else the first one. */
+const DEFAULT_DATABASE = "neondb";
+
+/**
+ * The branch's endpoint host and connection string. GET /projects/:id/connection_uri requires `database_name` and
+ * `role_name`; both come from the branch's own database list (the database's `owner_name` is the role), so a
+ * project whose database or role is not named like a new project's defaults still works.
+ */
 async function outputsFor(c: Client, b: NeonBranch): Promise<LiveState["outputs"]> {
-  const host = await c.api.get(`/projects/${c.project}/branches/${b.id}/endpoints`, (body) => {
-    const h = records(obj(body, "the endpoint list").endpoints, "`endpoints`", ["id", "host"])[0]?.host;
-    if (!h) throw new ShapeError(`branch ${b.name} has no endpoint`);
-    return h;
-  });
-  const q = new URLSearchParams({ branch_id: b.id, database_name: "neondb", role_name: "neondb_owner" });
+  const [host, db] = await Promise.all([
+    c.api.get(`/projects/${c.project}/branches/${b.id}/endpoints`, (body) => {
+      const eps = records(obj(body, "the endpoint list").endpoints, "`endpoints`", ["id", "host"]);
+      const h = (eps.find((e) => e.type === "read_write") ?? eps[0])?.host;
+      if (!h) throw new ShapeError(`branch ${b.name} has no endpoint`);
+      return h;
+    }),
+    c.api.get(`/projects/${c.project}/branches/${b.id}/databases`, (body) => {
+      const dbs = records(obj(body, "the database list").databases, "`databases`", ["name", "owner_name"]);
+      const d = dbs.find((x) => x.name === DEFAULT_DATABASE) ?? dbs[0];
+      if (!d) throw new ShapeError(`branch ${b.name} has no database`);
+      return d;
+    }),
+  ]);
+  const q = new URLSearchParams({ branch_id: b.id, database_name: db.name, role_name: db.owner_name });
   const uri = await c.api.get(`/projects/${c.project}/connection_uri?${q}`, (body) => {
     const o = obj(body, "the connection URI");
     if (typeof o.uri !== "string") throw new ShapeError("expected `uri` to be a string");

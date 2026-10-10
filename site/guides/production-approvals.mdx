@@ -1,0 +1,30 @@
+---
+title: "Production approvals"
+description: "Production is never inferred, and no run writes to it without a named human approver."
+---
+
+The default environment is always `preview`. A run writes to production only when you ask for it, and only with an
+approver:
+
+```bash
+sponson plan  --env production                       # read-only; reports requiresApproval: true
+sponson apply --env production                       # refused with ENV_NOT_APPROVED, nothing written
+sponson apply --env production --approved-by alice   # runs, and records approvedBy in the receipt
+```
+
+The approver must come from a person or an approval workflow, never from an agent. The same rule applies to a
+preview run that contains a line writing to production, which is why production lines are filtered with
+`environments: [production]`.
+
+## In CI
+
+Put the production job behind a GitHub environment with required reviewers and pass the reviewer's name as
+`approved-by`. The complete workflow, including the step that reads the approver back, is in
+[CI with GitHub Actions](/guides/github-actions#example-workflow).
+
+## Read next
+
+- The rule and the environment filter: [Environments](/reference/plan-format#environments) in the plan format.
+- A plan with preview and production lines: [Examples](/reference/examples#production-with-approval-plan-yaml).
+- What agents must never do: [Agents and MCP](/guides/agents).
+- Why production is never inferred: [ADR 0012](/contributing/adr/0012-flat-plan-with-environment-filters).

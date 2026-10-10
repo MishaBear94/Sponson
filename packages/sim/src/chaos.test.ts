@@ -63,7 +63,7 @@ describe("sim chaos", () => {
     expect(sim.state.clerk.redirect_urls.map((r) => r.url)).toEqual(["https://seeded"]);
     // A partial seed keeps the default projects of the providers it does not name.
     expect(sim.state.neon.projects.proj_demo!.branches.map((b) => b.name)).toEqual(["main"]);
-    expect(sim.state.vercel.projects.prj_demo).toEqual({ envs: [], deployments: [] });
+    expect(sim.state.vercel.projects.prj_demo).toMatchObject({ envs: [], deployments: [], link: { type: "github" } });
     await fetch(`${sim.url}/_reset`, { method: "POST", body: JSON.stringify({ neon: { projects: {} } }), headers: auth });
     expect(sim.state.neon.projects).toEqual({});
     expect(sim.state.clerk.redirect_urls).toEqual([]);
@@ -170,22 +170,27 @@ describe("sim pagination (page_size)", () => {
     expect((n2.branches as Array<{ name: string }>).map((b) => b.name)).toEqual(["b"]);
     expect(n2.pagination).toEqual({});
 
-    const v1 = await get("/vercel/v9/projects/prj_demo/env");
+    const v1 = await get("/vercel/v10/projects/prj_demo/env");
     expect(v1.pagination).toEqual({ count: 2, next: 2, prev: null });
-    const v2 = await get("/vercel/v9/projects/prj_demo/env?until=2");
+    const v2 = await get("/vercel/v10/projects/prj_demo/env?until=2");
     expect((v2.envs as Array<{ key: string }>).map((e) => e.key)).toEqual(["C"]);
     expect((v2.pagination as { next: unknown }).next).toBeNull();
 
-    const c1 = await get("/clerk/redirect_urls");
+    const c1 = await get("/clerk/redirect_urls?paginated=true");
     expect(c1).toMatchObject({ total_count: 3 });
     expect((c1.data as unknown[]).length).toBe(2);
-    const c2 = await get("/clerk/redirect_urls?offset=2&limit=100");
+    const c2 = await get("/clerk/redirect_urls?paginated=true&offset=2&limit=100");
     expect((c2.data as Array<{ url: string }>).map((r) => r.url)).toEqual(["https://3"]);
   });
 
-  it("without page_size, Clerk answers a bare array", async () => {
-    sim = await startSim({ seed: { clerk: { redirect_urls: ["https://1"] } } });
-    expect(Array.isArray(await fetch(`${sim.url}/clerk/redirect_urls`, { headers: auth }).then((r) => r.json()))).toBe(true);
+  it("Clerk answers a bare array without `paginated=true`, and pages by the spec's default limit (10) with it", async () => {
+    sim = await startSim({ seed: { clerk: { redirect_urls: Array.from({ length: 12 }, (_, i) => `https://${i}`) } } });
+    const bare = (await fetch(`${sim.url}/clerk/redirect_urls`, { headers: auth }).then((r) => r.json())) as unknown[];
+    expect(bare).toHaveLength(12);
+    expect(bare[0]).toEqual({ object: "redirect_url", id: expect.any(String), url: "https://0", created_at: expect.any(Number), updated_at: expect.any(Number) });
+    const paged = await get("/clerk/redirect_urls?paginated=true");
+    expect(paged).toMatchObject({ total_count: 12 });
+    expect(paged.data as unknown[]).toHaveLength(10);
   });
 });
 
@@ -211,7 +216,7 @@ describe("sim providers: async operations, deployments, upsert conflicts, drift"
 
   it("deploy_ms: QUEUED → BUILDING → READY; every deployment gets its own URL", async () => {
     await chaos({ deploy: "never", deploy_ms: 150 });
-    const create = async () => (await (await post("/vercel/v13/deployments", { name: "prj_demo", gitSource: { ref: "feat/x", sha: "a".repeat(40) } })).json()) as { id: string; url: string; readyState: string };
+    const create = async () => (await (await post("/vercel/v13/deployments", { name: "prj_demo", gitSource: { type: "github", repoId: 100000, ref: "feat/x", sha: "a".repeat(40) } })).json()) as { id: string; url: string; readyState: string };
     const d = await create();
     expect(d.readyState).toBe("QUEUED");
     await sleep(60);
@@ -225,9 +230,9 @@ describe("sim providers: async operations, deployments, upsert conflicts, drift"
 
   it("deploy cancel: a new build on a branch cancels that branch's builds in progress", async () => {
     await chaos({ deploy: "cancel", deploy_ms: 1000 });
-    await post("/vercel/v13/deployments", { name: "prj_demo", gitSource: { ref: "feat/x", sha: "a".repeat(40) } });
-    await post("/vercel/v13/deployments", { name: "prj_demo", gitSource: { ref: "other", sha: "c".repeat(40) } });
-    await post("/vercel/v13/deployments", { name: "prj_demo", gitSource: { ref: "feat/x", sha: "b".repeat(40) } });
+    await post("/vercel/v13/deployments", { name: "prj_demo", gitSource: { type: "github", repoId: 100000, ref: "feat/x", sha: "a".repeat(40) } });
+    await post("/vercel/v13/deployments", { name: "prj_demo", gitSource: { type: "github", repoId: 100000, ref: "other", sha: "c".repeat(40) } });
+    await post("/vercel/v13/deployments", { name: "prj_demo", gitSource: { type: "github", repoId: 100000, ref: "feat/x", sha: "b".repeat(40) } });
     expect(sim.state.vercel.projects.prj_demo!.deployments.map((d) => d.state)).toEqual(["CANCELED", "QUEUED", "QUEUED"]);
   });
 

@@ -4,7 +4,7 @@
  *
  * Pagination shapes modelled here:
  *   Neon   GET /projects/:id/branches  → { branches, pagination: { next } }, next page via ?cursor=
- *   Vercel GET /v9/projects/:id/env    → { envs, pagination: { count, next, prev } }, next page via ?until=
+ *   Vercel GET /v10/projects/:id/env   → { envs, pagination: { count, next, prev } }, next page via ?until=
  * Real page sizes are larger than the 2–3 used here; any project with enough preview branches/vars hits it.
  * Expected behaviour: invariant I3 (apply; apply → the second run is all unchanged, 0 writes) and plain
  * convergence hold whatever page a resource lands on.
@@ -81,7 +81,7 @@ changes:
         },
       },
     });
-    w.proxy.on(isPath("GET", /^\/vercel\/v9\/projects\/[^/]+\/env$/), (r) => ({
+    w.proxy.on(isPath("GET", /^\/vercel\/v10\/projects\/[^/]+\/env$/), (r) => ({
       rewrite: (u) => paginate(u, "envs", 3, r.query.get("until"), (next, total) => ({ count: Math.min(3, total), next: next === null ? null : Number(next), prev: null })),
     }));
 
@@ -116,7 +116,7 @@ changes:
       hiddenUntil = Date.now() + 500;
       return undefined;
     });
-    w.proxy.on(isPath("GET", /^\/vercel\/v9\/projects\/[^/]+\/env$/), () => ({
+    w.proxy.on(isPath("GET", /^\/vercel\/v10\/projects\/[^/]+\/env$/), () => ({
       rewrite: (u) => {
         if (Date.now() >= hiddenUntil) return u;
         const b = JSON.parse(u.body);

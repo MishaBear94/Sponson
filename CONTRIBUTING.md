@@ -47,6 +47,7 @@ scenarios/journeys/ long system tests, one directory per dimension (team lifecyc
 property/           property-based tests over random plans
 action/             GitHub Action
 docs/adr/           architecture decision records
+site/               the documentation site (Mintlify), generated from the Markdown by scripts/gen-site.ts
 scripts/            repository tooling (new-adapter.ts); templates/adapter/ holds what it generates
 .changeset/         pending changelog entries (see "Changesets" below)
 ```
@@ -68,7 +69,14 @@ pnpm sim                  # start the fake cloud on :4777 for manual poking
 pnpm sponson plan         # run the CLI from source
 pnpm new:adapter <name>   # scaffold an adapter (add --dry-run to see what it would do)
 pnpm changeset            # describe a user-visible change for the changelog
+pnpm docs:gen             # regenerate the parts of docs/ that restate the code
+pnpm site:gen             # regenerate the documentation site in site/ from the Markdown
 ```
+
+Documentation site: `site/` is published with Mintlify and generated from the Markdown you already edit (README,
+`docs/`, `examples/`, this file and the others at the root). After changing any of them, run `pnpm site:gen` and
+commit the result; `scenarios/docs/site.test.ts` fails when you forget. Previewing it locally is described in
+[site/README.md](site/README.md).
 
 CI (`.github/workflows/ci.yml`) runs typecheck, lint and tests on Node 22 and 24 (and macOS on 24), a coverage
 job, and a packaging job that builds from clean, packs every package and installs the tarballs into an empty

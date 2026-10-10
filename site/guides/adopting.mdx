@@ -1,0 +1,28 @@
+---
+title: "Adopting an existing project"
+description: "Bring resources that already exist under a plan without copying their values or ever destroying them."
+---
+
+Most projects already have environment variables in the Vercel dashboard, a long-lived Neon branch or allowed
+callback URLs. Sponson does not need to recreate them. `sponson init` adopts them into the plan.
+
+## Run init
+
+```bash
+npx sponson init            # first run: writes a starter release.plan.yaml
+npx sponson init            # later runs: appends lines for resources no scope manages
+npx sponson plan            # nothing live changes: adopted lines are unchanged
+```
+
+`sponson plan` lists resources the plan does not know about as `unmanaged` drift, and never touches them. To adopt
+one at a time, pass its key: `sponson init --adopt <key>`. The keys are in `sponson plan --json`, under `drift`.
+
+## What adoption writes
+
+Adopted variables are written as `{ keep: true }`, which means "whatever value is live". The value is never copied
+into the repository, and an adopted resource is never destroyed, not even by `sponson apply --destroy`. Replace
+`{ keep: true }` with a literal or a reference when you want Sponson to manage the value from then on.
+
+- The value form: [`{ keep: true }`](/reference/plan-format#-keep-true-) in the plan format.
+- A complete plan as `init` writes it: [Examples](/reference/examples#adopting-an-existing-project-plan-yaml).
+- Why it works this way: [ADR 0007](/contributing/adr/0007-keep-true-for-adoption).

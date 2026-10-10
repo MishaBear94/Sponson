@@ -51,6 +51,16 @@ describe("neon branch", () => {
     await expect(op.destroy(actx, result.resources)).resolves.toBeUndefined();
   });
 
+  it("reads the connection string for the branch's own database and owner role, not hard-coded defaults", async () => {
+    // An older project: its database and role are not named like a new project's `neondb` / `neondb_owner`.
+    h.sim.state.neon.projects.proj_demo!.branches[0]!.database = { name: "app", owner_name: "alex" };
+    const actx = h.actx("neon");
+    const r = await op.apply(actx, params(), null);
+    expect(String(r.outputs.connection_string)).toMatch(/^postgres:\/\/alex:pw_br-\d+@.*\/app$/);
+    const live = await op.read(actx, params());
+    expect(live?.outputs).toEqual(r.outputs);
+  });
+
   it("announces the key with intend() before the create request", async () => {
     const r = await op.apply(h.actx("neon"), params(), null);
     expect(h.intents).toEqual([{ keys: r.created, writesBefore: 0 }]);

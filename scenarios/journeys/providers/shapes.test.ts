@@ -120,7 +120,7 @@ changes:
     for (const line of PEM_LINES) expect(everything, "PEM body leaked through an echoed, JSON-escaped error body").not.toContain(line);
   });
 
-  it("clerk list endpoint switches to the paginated `{ data, total_count }` envelope: the error names Clerk and the unexpected shape instead of a bare TypeError", async () => {
+  it("clerk list endpoint answers the bare array (the spec's documented shape) although the adapter asks for the paginated `{ data, total_count }` envelope: still read, no raw TypeError", async () => {
     w = await World.create({
       plan: `version: 1
 changes:
@@ -132,13 +132,13 @@ changes:
     });
     w.proxy.on(isPath("GET", /^\/clerk\/redirect_urls$/), () => ({
       rewrite: (u) => {
-        const list = JSON.parse(u.body);
-        return { ...u, body: JSON.stringify({ data: list, total_count: list.length }) };
+        const b = JSON.parse(u.body);
+        return { ...u, body: JSON.stringify(Array.isArray(b) ? b : b.data) };
       },
     }));
 
-    // v2 (response-shape handling): the `{ data, total_count }` envelope is supported, so plan simply works, and an
-    // existing URL listed inside the envelope is recognised (no duplicate on the next apply).
+    // Both shapes are supported, so plan simply works, and an existing URL in the bare list is recognised (no
+    // duplicate on the next apply).
     const r = await w.cli("plan --json");
     const line = r.json.lines[0];
     expect(line.error, "error is a raw JS TypeError").toBeUndefined();

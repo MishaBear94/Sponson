@@ -50,7 +50,8 @@ Why this direction:
   error codes to flags through `cliHint` in `ERROR_CODES`. The MCP server reuses the same engine calls.
 - **`sim` shares no code with `adapters`.** The fake cloud is an independent model of the providers' APIs. If
   adapters and sim shared types or helpers, a misunderstanding of an API would be encoded twice and could never be caught.
-  The sim's assumptions are numbered at the top of each file in `packages/sim/src/routes/`;
+  The sim's assumptions are numbered at the top of each file in `packages/sim/src/routes/`, each marked verified
+  against the providers' published specifications or not ([docs/api-verification.md](docs/api-verification.md));
   `scenarios/contract.test.ts` pins the critical ones, against the sim by default and against real accounts with
   `pnpm test:live`.
 - **`cli` is the composition root.** It is the only place that decides which adapters exist (`createRegistry()`

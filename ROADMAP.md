@@ -12,17 +12,20 @@ three secret sources, local and git-branch receipt stores, CLI, MCP server, GitH
 
 ## 1. Prove the sim against the real APIs
 
-The fake cloud encodes numbered assumptions about each provider at the top of its routes file. Only V1, N1 and
-N2 are pinned by `scenarios/contract.test.ts`, and the live run (`pnpm test:live`) has never been done against
-real accounts. Every item here is: write an `assumption <id>:` test in the contract suite, run it against a
-throwaway account, and if it fails fix the sim first, then the adapter.
+The fake cloud encodes numbered assumptions about each provider at the top of its routes file. Every adapter call
+and every assumption has been checked against the providers' published API specifications
+([docs/api-verification.md](docs/api-verification.md)); each assumption is marked verified or unverified there and
+in its routes file. What remains needs a live account: V1, N1, N2 and C2 are pinned by `scenarios/contract.test.ts`,
+and the live run (`pnpm test:live`) has never been done against real accounts. Every item here is: write an
+`assumption <id>:` test in the contract suite, run it against a throwaway account, and if it fails fix the sim
+first, then the adapter.
 
 | Item | Where | Label |
 |------|-------|-------|
 | Run `pnpm test:live` against free Vercel, Neon and Clerk dev accounts and report the results in an issue (pass/fail per assumption, API versions seen) | `scenarios/contract.test.ts` header | **good first issue** |
-| Clerk C1 (duplicate redirect URL answers 422) and C2 (bare array vs `{ data, total_count }` paging) | `packages/sim/src/routes/clerk.ts` | **good first issue** |
-| Neon N3 (`neondb` / `neondb_owner` defaults, `default: true` root branch) and N4 (cursor pagination) | `packages/sim/src/routes/neon.ts` | help wanted |
-| Vercel V2 (deployment list order), V3 (`?decrypt=true`; `sensitive`-type vars never returned — decide how they should diff), V4 (`upsert=true` answer shape, `ENV_CONFLICT`), V5 (`project` vs `name`, deployment states), V6 (`until` pagination) | `packages/sim/src/routes/vercel.ts` | help wanted |
+| Clerk C1 (status and wording of a duplicate redirect URL; the adapter re-reads after any 400/422) | `packages/sim/src/routes/clerk.ts` | **good first issue** |
+| Neon N1 (does a branch being deleted still list?), N2 (which requests answer 423 during a create) and N5 (status of a duplicate branch name) | `packages/sim/src/routes/neon.ts` | help wanted |
+| Vercel V2 (deployment list order), V3 (does the deprecated `?decrypt=true` still decrypt; `sensitive`-type vars are never returned — decide how they should diff), V4 (`created` for updated entries, `ENV_CONFLICT`), V5 (branch auto-cancel; a `gitSource` deployment built from the project's `link`), V6 (`until` on the env list) | `packages/sim/src/routes/vercel.ts` | help wanted |
 | A scheduled (weekly) CI job that runs the live contract suite with repository secrets, and opens an issue when an assumption breaks | `.github/workflows/` | help wanted |
 
 ## 2. More adapters

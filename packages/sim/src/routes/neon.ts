@@ -1,15 +1,24 @@
 /**
- * Simulated Neon: branches, their endpoints and connection strings.
+ * Simulated Neon: branches, their endpoints, databases and connection strings.
  *
- * Assumptions about the real API that this fake encodes and that are most likely wrong (see vercel.ts for how
- * they are checked):
- *   N1. Branch deletion is synchronous; the branch is gone when DELETE returns.
- *   N2. Branch creation runs async operations: for chaos `neon_op_ms` (default 0) after a create, further
- *       creates in the project and writes to the new branch answer 423 Locked. The endpoint is usable at once.
- *   N3. Connection strings use database `neondb` and role `neondb_owner`, the defaults of a new project.
- *       Branches carry `default: true` on the project's root branch.
- *   N4. Pagination (chaos `page_size`): `{ branches, pagination: { next } }` with `?cursor=`. Cursors are opaque
- *       to the client.
+ * Assumptions about the real API that this fake encodes, each marked with how far it is checked. "Verified" means
+ * against Neon's published OpenAPI document (https://neon.tech/api_spec/release/v2.json, fetched 2026-10-10); see
+ * docs/api-verification.md:
+ *   N1. Branch deletion is synchronous here: the branch is gone when DELETE returns. Contradicted in part: the
+ *       spec says "the deletion completes after all operations finish" and DELETE answers with `operations`.
+ *       Whether the list still shows the branch meanwhile is unverified: needs a live account.
+ *   N2. Branch creation runs async operations (verified: the create answer carries `operations`): for chaos
+ *       `neon_op_ms` (default 0) after a create, further creates in the project and writes to the new branch
+ *       answer 423 Locked, which the spec documents as safe to retry (verified). Which requests are locked, and
+ *       that the endpoint is usable at once, are unverified: needs a live account.
+ *   N3. A root branch has one database `neondb` owned by role `neondb_owner` (a new project's defaults); a child
+ *       copies its parent's. The adapter no longer relies on these names: it reads them from
+ *       GET /projects/:id/branches/:id/databases (verified), and connection_uri requires both (verified).
+ *       Branches carry `default: true` on the project's root branch (verified; `primary` is deprecated).
+ *   N4. Pagination (chaos `page_size`): `{ branches, pagination: { next } }` with `?cursor=`, cursors opaque
+ *       (verified: CursorPagination). Without `limit` the list is not paged here; the spec says a paged read
+ *       starts with `limit`, and the adapter follows `next` either way.
+ *   N5. Creating a branch whose name exists answers 409. Unverified: the spec documents only the generic error.
  */
 import { page, Reply, type CreatedBy, type ProviderSim, type SimCore } from "../provider.js";
 
@@ -24,6 +33,8 @@ export interface NeonBranch {
   opUntil: number;
   created_at: string;
   endpoint: { id: string; host: string };
+  /** The branch's one database and the role owning it; a child branch copies its parent's. */
+  database: { name: string; owner_name: string };
   createdAt: number;
   createdBy: CreatedBy;
 }
@@ -84,7 +95,7 @@ export const neonSim: ProviderSim<NeonState, NeonSeed> = {
 
     if ((m = path.match(/^\/projects\/([^/]+)\/branches$/))) {
       const p = state.projects[m[1]!];
-      if (!p) return new Reply(404, { error: "project not found" });
+      if (!p) return notFound("project");
       if (method === "GET") {
         const pg = page(core, p.branches, url.searchParams.get("cursor"));
         return new Reply(200, { branches: pg.items.map(publicBranch), pagination: pg.next === null ? {} : { next: String(pg.next) } });
@@ -93,40 +104,57 @@ export const neonSim: ProviderSim<NeonState, NeonSeed> = {
         if (Date.now() < p.opUntil) return locked();
         const b = (body ?? {}) as { branch?: { name?: string; parent_id?: string } };
         const name = b.branch?.name;
-        if (!name) return new Reply(400, { error: "branch.name required" });
+        if (!name) return new Reply(400, { code: "", message: "branch.name required" });
         if (p.branches.some((x) => x.name === name)) return new Reply(409, { code: "", message: "branch already exists" });
         const parentId = b.branch?.parent_id ?? null;
-        if (parentId && !p.branches.some((x) => x.id === parentId)) return new Reply(404, { error: "parent branch not found" });
+        if (parentId && !p.branches.some((x) => x.id === parentId)) return notFound("parent branch");
         const branch = createBranch(core, p, name, parentId, "api");
         if (core.chaos.neon_op_ms > 0) branch.opUntil = p.opUntil = Date.now() + core.chaos.neon_op_ms;
+        // CreatedBranch: branch, endpoints, operations, roles, databases and (one database and role) connection_uris.
         return new Reply(201, {
           branch: publicBranch(branch),
-          endpoints: [{ id: branch.endpoint.id, host: branch.endpoint.host }],
-          connection_uris: [{ connection_uri: connectionUri(branch) }],
+          endpoints: [publicEndpoint(branch)],
+          operations: [{ id: core.nextId("op-"), branch_id: branch.id, action: "create_branch", status: core.chaos.neon_op_ms > 0 ? "running" : "finished" }],
+          roles: [{ branch_id: branch.id, name: branch.database.owner_name }],
+          databases: [publicDatabase(branch)],
+          connection_uris: [{ connection_uri: connectionUri(branch), connection_parameters: { database: branch.database.name, role: branch.database.owner_name, host: branch.endpoint.host } }],
         });
       }
     }
     if ((m = path.match(/^\/projects\/([^/]+)\/branches\/([^/]+)\/endpoints$/)) && method === "GET") {
       const p = state.projects[m[1]!];
       const b = p?.branches.find((x) => x.id === m![2]);
-      if (!p || !b) return new Reply(404, { error: "branch not found" });
-      return new Reply(200, { endpoints: [{ id: b.endpoint.id, host: b.endpoint.host }] });
+      if (!p || !b) return notFound("branch");
+      return new Reply(200, { endpoints: [publicEndpoint(b)] });
+    }
+    if ((m = path.match(/^\/projects\/([^/]+)\/branches\/([^/]+)\/databases$/)) && method === "GET") {
+      const p = state.projects[m[1]!];
+      const b = p?.branches.find((x) => x.id === m![2]);
+      if (!p || !b) return notFound("branch");
+      return new Reply(200, { databases: [publicDatabase(b)] });
     }
     if ((m = path.match(/^\/projects\/([^/]+)\/connection_uri$/)) && method === "GET") {
       const p = state.projects[m[1]!];
       const b = p?.branches.find((x) => x.id === url.searchParams.get("branch_id"));
-      if (!p || !b) return new Reply(404, { error: "branch not found" });
+      if (!p || !b) return notFound("branch");
+      // Both are required query parameters in the spec.
+      const database = url.searchParams.get("database_name");
+      const role = url.searchParams.get("role_name");
+      if (!database || !role) return new Reply(400, { code: "", message: "database_name and role_name are required" });
+      if (database !== b.database.name) return notFound(`database ${database}`);
+      if (role !== b.database.owner_name) return notFound(`role ${role}`);
       return new Reply(200, { uri: connectionUri(b) });
     }
     if ((m = path.match(/^\/projects\/([^/]+)\/branches\/([^/]+)$/)) && method === "DELETE") {
       const p = state.projects[m[1]!];
       const b = p?.branches.find((x) => x.id === m![2]);
-      if (!p || !b) return new Reply(404, { error: "branch not found" });
+      if (!p || !b) return notFound("branch");
       if (Date.now() < b.opUntil) return locked();
+      // The real deletion "completes after all operations finish" (assumption N1); the sim removes it at once.
       p.branches = p.branches.filter((x) => x !== b);
-      return new Reply(200, { branch: { id: b.id, name: b.name } });
+      return new Reply(200, { branch: publicBranch(b), operations: [{ id: core.nextId("op-"), branch_id: b.id, action: "delete_timeline", status: "finished" }] });
     }
-    return new Reply(404, { error: "not found" });
+    return notFound("route");
   },
 };
 
@@ -144,6 +172,7 @@ export function createBranch(core: SimCore, project: NeonProject, name: string, 
     opUntil: 0,
     created_at: new Date().toISOString(),
     endpoint: { id: core.nextId("ep-"), host: `${id}.sim.neon.tech` },
+    database: { ...(project.branches.find((b) => b.id === parentId)?.database ?? { name: DATABASE, owner_name: ROLE }) },
     createdAt: Date.now(),
     createdBy,
   };
@@ -151,13 +180,30 @@ export function createBranch(core: SimCore, project: NeonProject, name: string, 
   return branch;
 }
 
+/** A root branch's database and its owner: a new Neon project's defaults. */
+const DATABASE = "neondb";
+const ROLE = "neondb_owner";
+
 /** The connection string Neon would hand out for a branch. */
 export function connectionUri(branch: NeonBranch): string {
-  return `postgres://neondb_owner:pw_${branch.id}@${branch.endpoint.host}/neondb`;
+  return `postgres://${branch.database.owner_name}:pw_${branch.id}@${branch.endpoint.host}/${branch.database.name}`;
+}
+
+function publicEndpoint(b: NeonBranch) {
+  return { id: b.endpoint.id, host: b.endpoint.host, branch_id: b.id, type: "read_write" };
+}
+
+function publicDatabase(b: NeonBranch) {
+  return { id: 1, branch_id: b.id, name: b.database.name, owner_name: b.database.owner_name, created_at: b.created_at, updated_at: b.created_at };
+}
+
+/** Neon's GeneralError: `{ code, message }`. */
+function notFound(what: string): Reply {
+  return new Reply(404, { code: "", message: `${what} not found` });
 }
 
 function publicBranch(b: NeonBranch) {
-  return { id: b.id, name: b.name, parent_id: b.parent_id, default: b.default, created_at: b.created_at };
+  return { id: b.id, name: b.name, parent_id: b.parent_id, default: b.default, current_state: "ready", created_at: b.created_at };
 }
 
 function locked(): Reply {

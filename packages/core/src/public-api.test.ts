@@ -44,7 +44,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "CHAOS_KEYS", "ChaosAction", "ChaosConfig", "ChaosRequest", "ClerkRedirect", "ClerkSeed", "ClerkState",
     "CreatedBy", "DEFAULT_CHAOS", "DEFAULT_SEED", "DeploymentState", "DriftRequest", "NeonBranch", "NeonProject",
     "NeonSeed", "NeonState", "PROVIDERS", "ProviderName", "ProviderSim", "ProviderStates", "Reply", "RouteRequest",
-    "SIM_TOKENS", "SimCore", "SimHandle", "SimSeed", "SimState", "VercelDeployment", "VercelEnv", "VercelProject",
+    "SIM_TOKENS", "SimCore", "SimHandle", "SimSeed", "SimState", "VercelDeployment", "VercelEnv", "VercelLink", "VercelProject",
     "VercelSeed", "VercelState", "WriteLogEntry", "chaosFor", "clerkSim", "connectionUri", "createBranch",
     "createDeployment", "createSimServer", "defaultChaos", "matchesRule", "neonSim", "page", "providerEntries",
     "refreshDeployments", "simEnv", "startSim", "vercelSim",

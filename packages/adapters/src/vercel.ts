@@ -20,13 +20,19 @@ interface VercelEnv {
   value?: string;
   target: string[];
   gitBranch?: string;
+  /** `encrypted`, `plain`, `sensitive`, … A `sensitive` value is never returned by the API. */
+  type?: string;
+  /** Whether `value` is the plaintext (`decrypted` in the API's env objects). */
+  decrypted?: boolean;
 }
 
-type DeploymentState = "QUEUED" | "BUILDING" | "READY" | "ERROR" | "CANCELED" | "INITIALIZING";
+/** `readyState` values (OpenAPI: GET /v7/deployments, GET /v13/deployments/{idOrUrl}). */
+type DeploymentState = "QUEUED" | "INITIALIZING" | "BUILDING" | "READY" | "ERROR" | "CANCELED" | "BLOCKED" | "DELETED";
 
 interface Deployment {
   uid: string;
-  url: string;
+  /** Absent until the deployment's upload is complete (GET /v7/deployments) or in POST's lean answer. */
+  url?: string;
   state: DeploymentState;
   createdAt: number;
 }
@@ -69,11 +75,26 @@ function parseEnvs(v: unknown, what: string): VercelEnv[] {
       target: target as string[],
       ...(typeof e.value === "string" ? { value: e.value } : {}),
       ...(typeof e.gitBranch === "string" && e.gitBranch !== "" ? { gitBranch: e.gitBranch } : {}),
+      ...(typeof e.type === "string" ? { type: e.type } : {}),
+      ...(typeof e.decrypted === "boolean" ? { decrypted: e.decrypted } : {}),
     };
   });
 }
 
-/** `{ envs, pagination: { next } }`; the next page is `?until=<next>`. */
+/**
+ * The plaintext of a listed variable when the list carries it: `plain` vars always, others only when the API says
+ * `decrypted: true`. Undefined means "ask GET /v1/projects/:id/env/:id" (or, for `sensitive`, unknowable).
+ */
+function plaintext(e: VercelEnv): string | undefined {
+  if (e.value === undefined) return undefined;
+  return e.type === "plain" || e.decrypted === true ? e.value : undefined;
+}
+
+/**
+ * `{ envs, pagination: { next } }`. The OpenAPI spec defines the `pagination` object for this endpoint but no
+ * page parameter; `?until=<next>` is the convention of Vercel's other lists. listEnvs drops repeats, so an API
+ * that ignores `until` costs one extra request, not duplicate records.
+ */
 function envPage(body: unknown): Page<VercelEnv> {
   const o = obj(body, "the env list");
   const items = parseEnvs(o.envs, "`envs`");
@@ -82,17 +103,20 @@ function envPage(body: unknown): Page<VercelEnv> {
   return { items, next: typeof next === "number" || (typeof next === "string" && next !== "") ? { until: String(next) } : null };
 }
 
+/** GET /v7/deployments: `readyState` is required by the spec, `state` optional; `url` is null until the upload completes. */
 function parseDeployments(body: unknown): Deployment[] {
-  return records(obj(body, "the deployment list").deployments, "`deployments`", ["uid", "url", "state"]).map((d, i) => {
+  return records(obj(body, "the deployment list").deployments, "`deployments`", ["uid"]).map((d, i) => {
     if (typeof d.createdAt !== "number") throw new ShapeError(`expected deployments[${i}].createdAt to be a number`);
-    return { uid: d.uid, url: d.url, state: d.state as DeploymentState, createdAt: d.createdAt };
+    const state = typeof d.readyState === "string" ? d.readyState : d.state;
+    if (typeof state !== "string") throw new ShapeError(`expected deployments[${i}].readyState to be a string`);
+    return { uid: d.uid, ...(typeof d.url === "string" && d.url !== "" ? { url: d.url } : {}), state: state as DeploymentState, createdAt: d.createdAt };
   });
 }
 
-/** POST /v13/deployments and GET /v13/deployments/:id answer `{ id, url, readyState }`. */
+/** POST /v13/deployments and GET /v13/deployments/:id answer `{ id, readyState, url? }` (POST's lean variant has no `url`). */
 function parseDeploymentDetail(body: unknown): Deployment {
-  const [d] = records([body], "the deployment", ["id", "url", "readyState"]);
-  return { uid: d!.id, url: d!.url, state: d!.readyState as DeploymentState, createdAt: typeof d!.createdAt === "number" ? d!.createdAt : Date.now() };
+  const [d] = records([body], "the deployment", ["id", "readyState"]);
+  return { uid: d!.id, ...(typeof d!.url === "string" && d!.url !== "" ? { url: d!.url } : {}), state: d!.readyState as DeploymentState, createdAt: typeof d!.createdAt === "number" ? d!.createdAt : Date.now() };
 }
 
 interface UpsertResult {
@@ -108,7 +132,9 @@ function parseUpsert(body: unknown): UpsertResult {
   if (!Array.isArray(failed)) throw new ShapeError("expected `failed` to be a list");
   const failedKeys = failed.map((f) => {
     const err = f && typeof f === "object" ? (f as Record<string, unknown>).error : undefined;
-    const key = err && typeof err === "object" ? (err as Record<string, unknown>).key : undefined;
+    const e = err && typeof err === "object" ? (err as Record<string, unknown>) : {};
+    // The spec's failure object names the variable as `key` or `envVarKey`.
+    const key = typeof e.key === "string" ? e.key : e.envVarKey;
     return typeof key === "string" ? key : "(unnamed)";
   });
   return { created, failedKeys };
@@ -118,32 +144,72 @@ function parseUpsert(body: unknown): UpsertResult {
 // Lists
 // ---------------------------------------------------------------------------
 
+/** Every variable of the project, once each (by id). `decrypt=true` is deprecated in the spec but still listed. */
 async function listEnvs(c: Client): Promise<VercelEnv[]> {
-  return listAll(c.api, `/v9/projects/${c.project}/env${query(c, { decrypt: "true" })}`, envPage);
+  const all = await listAll(c.api, `/v10/projects/${c.project}/env${query(c, { decrypt: "true" })}`, envPage);
+  const seen = new Set<string>();
+  return all.filter((e) => !seen.has(e.id) && seen.add(e.id));
 }
 
+/**
+ * The value to compare a declared variable by: the listed plaintext, else the decrypted value from
+ * GET /v1/projects/:id/env/:id ("Retrieve the decrypted value of an environment variable"). A `sensitive`
+ * variable's value is never readable, so it hashes as "" and always diffs as an update.
+ */
+async function comparableValue(c: Client, e: VercelEnv): Promise<string> {
+  const listed = plaintext(e);
+  if (listed !== undefined || e.type === "sensitive") return listed ?? "";
+  const one = await c.api.get(`/v1/projects/${c.project}/env/${encodeURIComponent(e.id)}${query(c)}`, (body) => parseEnvs([body], "the env var")[0]!);
+  return plaintext(one) ?? "";
+}
+
+/** GET /v7/deployments filtered by commit (`sha` is a documented v7 filter), newest first. */
 async function deploymentsFor(c: Client, sha: string): Promise<Deployment[]> {
-  return c.api.get(`/v6/deployments${query(c, { projectId: c.project, sha, limit: "20" })}`, parseDeployments);
+  return c.api.get(`/v7/deployments${query(c, { projectId: c.project, sha, limit: "20" })}`, parseDeployments);
 }
 
 function newest(list: Deployment[]): Deployment | undefined {
   return list.reduce<Deployment | undefined>((best, d) => (!best || d.createdAt > best.createdAt ? d : best), undefined);
 }
 
-const FAILED_STATES: ReadonlySet<string> = new Set(["ERROR", "CANCELED"]);
+/** States a deployment does not leave by itself. BLOCKED needs someone to act in Vercel; DELETED is gone. */
+const FAILED_STATES: ReadonlySet<string> = new Set(["ERROR", "CANCELED", "BLOCKED", "DELETED"]);
 
 function deploymentFailed(d: Deployment): SponsonError {
   return new SponsonError("PROVIDER_INVALID", `vercel: deployment ${d.uid} ended ${d.state}; it will not become ready`, { adapter: "vercel", deployment: d.uid, state: d.state });
 }
 
+/**
+ * The `gitSource` of POST /v13/deployments for this project's connected repository. The spec requires the
+ * repository's identity (`repoId`, GitLab `projectId`, Bitbucket `repoUuid`) next to `ref`; it comes from the
+ * project's `link` (GET /v9/projects/:id).
+ */
+async function gitSourceFor(c: Client, ctx: Ctx): Promise<Record<string, unknown>> {
+  const link = await c.api.get(`/v9/projects/${c.project}${query(c)}`, (body) => {
+    const l = obj(body, "the project").link;
+    return l && typeof l === "object" && !Array.isArray(l) ? (l as Record<string, unknown>) : undefined;
+  });
+  const at = { ref: ctx.git.branch, sha: ctx.git.sha };
+  const id = (v: unknown) => typeof v === "string" || typeof v === "number";
+  if ((link?.type === "github" || link?.type === "github-limited") && id(link.repoId)) return { type: link.type, repoId: link.repoId, ...at };
+  if (link?.type === "gitlab" && id(link.projectId)) return { type: "gitlab", projectId: link.projectId, ...at };
+  if (link?.type === "bitbucket" && typeof link.uuid === "string") return { type: "bitbucket", repoUuid: link.uuid, ...(typeof link.workspaceUuid === "string" ? { workspaceUuid: link.workspaceUuid } : {}), ...at };
+  throw new SponsonError(
+    "PROVIDER_INVALID",
+    `vercel: project ${c.project} is ${link ? `connected to a ${String(link.type)} repository, which Sponson cannot deploy from` : "not connected to a Git repository"}; Sponson deploys a commit through the project's GitHub, GitLab or Bitbucket connection`,
+    { adapter: "vercel", project: c.project },
+  );
+}
+
+/** A new build of this commit. `forceNew=1`: Vercel may otherwise answer with an earlier deployment of the same commit. */
 async function triggerDeploy(c: Client, ctx: Ctx): Promise<Deployment> {
   const body = {
     name: c.project,
     project: c.project,
-    gitSource: { type: "github", ref: ctx.git.branch, sha: ctx.git.sha },
+    gitSource: await gitSourceFor(c, ctx),
     ...(ctx.env === "production" ? { target: "production" } : {}),
   };
-  return c.api.post(`/v13/deployments${query(c)}`, body, parseDeploymentDetail);
+  return c.api.post(`/v13/deployments${query(c, { forceNew: "1" })}`, body, parseDeploymentDetail);
 }
 
 // ---------------------------------------------------------------------------
@@ -235,7 +301,7 @@ const env: OpSpec = {
       const e = live.find((x) => x.key === name);
       if (!e) continue;
       if (e.target.length !== 1) throw refuseShared(e, scope);
-      resources.push(envRecord(scope.target, e, sha256(e.value ?? "")));
+      resources.push(envRecord(scope.target, e, sha256(await comparableValue(c, e))));
     }
     if (resources.length === 0) return null;
     return { resources, outputs: {} };
@@ -313,7 +379,7 @@ const env: OpSpec = {
     const c = client(actx);
     return (await listEnvs(c))
       .filter((e) => e.target.includes(scope.target) && (e.gitBranch === undefined || e.gitBranch === scope.branch))
-      .map((e) => envRecord(scope.target, e, sha256(e.value ?? "")));
+      .map((e) => envRecord(scope.target, e, sha256(plaintext(e) ?? "")));
   },
 
   /**
@@ -350,7 +416,7 @@ const env: OpSpec = {
     }
     const d = newest(list);
     if (!d) return null;
-    if (d.state === "READY") return deployOutputs(d);
+    if (d.state === "READY" && d.url) return deployOutputs(d);
     if (FAILED_STATES.has(d.state)) throw deploymentFailed(d);
     return null;
   },
@@ -369,6 +435,7 @@ function deployRecord(sha: string, d: Deployment): ResourceRecord {
 }
 
 function deployOutputs(d: Deployment): Record<string, Literal> {
+  if (!d.url) throw new SponsonError("PROVIDER_RESPONSE", `vercel: deployment ${d.uid} is READY but has no \`url\``, { adapter: "vercel", deployment: d.uid });
   return { preview_url: `https://${d.url}`, deployment_id: d.uid };
 }
 
@@ -378,7 +445,7 @@ async function untilReady(c: Client, actx: AdapterContext, first: Deployment): P
   const deadline = Date.now() + timeout;
   let d = first;
   for (;;) {
-    if (d.state === "READY") return d;
+    if (d.state === "READY" && d.url) return d;
     if (FAILED_STATES.has(d.state)) throw deploymentFailed(d);
     if (Date.now() > deadline) throw new SponsonError("WAIT_TIMEOUT", `vercel: deployment ${d.uid} not ready after ${timeout}ms (still ${d.state}); run again to keep watching it`, { adapter: "vercel", deployment: d.uid, state: d.state });
     await sleep(Math.min(200, Math.max(0, deadline - Date.now()) + 1));
@@ -405,7 +472,7 @@ const deploy: OpSpec = {
     const c = client(actx);
     const d = newest((await deploymentsFor(c, actx.ctx.git.sha)).filter((x) => !FAILED_STATES.has(x.state)));
     if (!d) return null;
-    return { resources: [deployRecord(actx.ctx.git.sha, d)], outputs: d.state === "READY" ? deployOutputs(d) : {} };
+    return { resources: [deployRecord(actx.ctx.git.sha, d)], outputs: d.state === "READY" && d.url ? deployOutputs(d) : {} };
   },
 
   diff(live): ResourceDiff[] {
@@ -427,7 +494,7 @@ const deploy: OpSpec = {
     const created: string[] = [];
     if (existing) {
       actx.log(`deployment ${existing.id} for ${sha} is in progress; watching it`);
-      start = { uid: existing.id, url: "", state: "BUILDING", createdAt: 0 };
+      start = { uid: existing.id, state: "BUILDING", createdAt: 0 };
     } else {
       await actx.intend([deployKey(sha)]);
       actx.log(`deploy ${sha}`);

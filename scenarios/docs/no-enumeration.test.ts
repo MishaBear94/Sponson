@@ -6,17 +6,25 @@
  * all. This suite fails when either comes back.
  *
  * Architecture decision records (docs/adr/) are exempt: they record what was true when they were written.
+ *
+ * The documentation site (site/) is checked where it is written by hand: its hand-written pages and its README.
+ * Generated pages restate the sources checked here, generated blocks included, so they are not checked twice.
  */
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createRegistry } from "@sponson/adapters";
+import { GENERATED_MARK, SITE, sitePages } from "../../scripts/gen-site.js";
 import { REPO } from "./plans.js";
 
 /** Every doc a contributor or user reads as current, plus the schema and package descriptions. */
 async function docs(): Promise<Array<{ path: string; text: string }>> {
   const paths = ["README.md", "CONTRIBUTING.md", "SKILL.md", "ARCHITECTURE.md", "docs/plan-format.md", "docs/errors.md", "schema/release.plan.schema.json"];
   for (const pkg of await readdir(join(REPO, "packages"))) paths.push(`packages/${pkg}/README.md`);
+  paths.push(`${SITE}/README.md`);
+  for (const page of await sitePages()) {
+    if (!(await readFile(join(REPO, page), "utf8")).includes(GENERATED_MARK)) paths.push(page);
+  }
   const out: Array<{ path: string; text: string }> = [];
   for (const path of paths) {
     const text = await readFile(join(REPO, path), "utf8").catch(() => null);
@@ -61,5 +69,5 @@ describe.each(files.map((f) => [f.path, f.text] as const))("%s", (_path, text) =
 });
 
 it("the guard sees every doc it is meant to", () => {
-  expect(files.map((f) => relative(REPO, join(REPO, f.path)))).toEqual(expect.arrayContaining(["README.md", "SKILL.md", "ARCHITECTURE.md", "docs/plan-format.md"]));
+  expect(files.map((f) => relative(REPO, join(REPO, f.path)))).toEqual(expect.arrayContaining(["README.md", "SKILL.md", "ARCHITECTURE.md", "docs/plan-format.md", "site/README.md", "site/guides/adopting.mdx"]));
 });

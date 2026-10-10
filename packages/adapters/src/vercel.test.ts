@@ -224,14 +224,14 @@ describe("vercel env", () => {
   });
 
   it("awaitExternal: a deployment list that keeps failing transiently means still waiting, not failed", async () => {
-    await h.chaos({ fail_on: "GET /vercel/v6/deployments", fail_next: 10, status: 502 });
+    await h.chaos({ fail_on: "GET /vercel/v7/deployments", fail_next: 10, status: 502 });
     expect(await env.awaitExternal!(h.actx("vercel"), params({}), { resources: [], outputs: {} })).toBeNull();
   });
 
   it("awaitExternal: a build canceled by a newer push on the branch fails", async () => {
     await h.chaos({ deploy: "cancel", deploy_ms: 500 });
     const post = (sha: string) =>
-      fetch(`${h.sim.url}/vercel/v13/deployments`, { method: "POST", headers: { authorization: "Bearer t", "content-type": "application/json" }, body: JSON.stringify({ name: "prj_demo", gitSource: { ref: "feat/x", sha } }) });
+      fetch(`${h.sim.url}/vercel/v13/deployments`, { method: "POST", headers: { authorization: "Bearer t", "content-type": "application/json" }, body: JSON.stringify({ name: "prj_demo", gitSource: { type: "github", repoId: 100000, ref: "feat/x", sha } }) });
     await post(SHA);
     await post("f".repeat(40));
     await expect(env.awaitExternal!(h.actx("vercel"), params({}), { resources: [], outputs: {} })).rejects.toMatchObject({ code: "PROVIDER_INVALID", message: expect.stringMatching(/CANCELED/) });
@@ -252,6 +252,73 @@ describe("vercel env", () => {
     const r2 = await env.apply(actx, params({ A: "1" }), null);
     expect(r2.notes).toBeUndefined();
     expect(h.sim.state.vercel.projects.prj_demo!.deployments).toHaveLength(1);
+  });
+
+  it("reads a value the list does not decrypt from GET /v1/projects/:id/env/:id, so it diffs unchanged", async () => {
+    const actx0 = h.actx("vercel");
+    const p = params({ A: "plain-text-value" });
+    await env.apply(actx0, p, null);
+    // The list's `decrypt` parameter is deprecated: model a list that answers ciphertext with `decrypted: false`.
+    const proxy = await recordingProxy(h.sim.url, (req, body) => {
+      if (req.method === "GET" && /\/v10\/projects\/[^/]+\/env$/.test(req.path)) {
+        const b = body as { envs: Array<Record<string, unknown>> };
+        return { ...b, envs: b.envs.map((e) => ({ ...e, value: "ciphertext", decrypted: false })) };
+      }
+      return body;
+    });
+    try {
+      const actx = h.actx("vercel", undefined, { env: { ...h.env, VERCEL_API_URL: `${proxy.url}/vercel` } });
+      const live = await env.read(actx, p);
+      expect(env.diff(live, p).map((d) => d.kind)).toEqual(["unchanged"]);
+      expect(proxy.log.filter((x) => /^\/vercel\/v1\/projects\/prj_demo\/env\/env_/.test(x.path))).toHaveLength(1);
+    } finally {
+      await proxy.close();
+    }
+  });
+
+  it("an env list that ignores the page cursor yields each variable once", async () => {
+    await h.close();
+    h = await harness({ vercel: { projects: { prj_demo: { envs: [{ key: "S1", value: "1", target: "preview" }] } } } });
+    const proxy = await recordingProxy(h.sim.url, (req, body) => (req.method === "GET" && req.path.endsWith("/env") ? { ...(body as object), pagination: { count: 1, next: 1700000000000, prev: null } } : body));
+    try {
+      const actx = h.actx("vercel", undefined, { env: { ...h.env, VERCEL_API_URL: `${proxy.url}/vercel` } });
+      expect((await env.listScope!(actx, params({}, { branch: "*" }))).map((r) => r.key)).toEqual(["env:preview:*:S1"]);
+    } finally {
+      await proxy.close();
+    }
+  });
+
+  it("names a failed upsert entry reported as `envVarKey`", async () => {
+    const proxy = await recordingProxy(h.sim.url, (req, body) => (req.method === "POST" && UPSERT.test(req.path) ? { created: [], failed: [{ error: { code: "ENV_CONFLICT", envVarKey: "A", message: "value: s3cret" } }] } : body));
+    try {
+      const actx = h.actx("vercel", undefined, { env: { ...h.env, VERCEL_API_URL: `${proxy.url}/vercel` } });
+      await expect(env.apply(actx, params({ A: "s3cret" }), null)).rejects.toMatchObject({ code: "PROVIDER_INVALID", message: "vercel: the bulk upsert rejected 1 env var(s): A" });
+    } finally {
+      await proxy.close();
+    }
+  });
+
+  it("awaitExternal reads `readyState` (the spec's required field), waits while `url` is not set, and treats BLOCKED as failed", async () => {
+    let mode: "building" | "blocked" | "ready" = "building";
+    const proxy = await recordingProxy(h.sim.url, (req, body) => {
+      if (req.method !== "GET" || !req.path.endsWith("/v7/deployments")) return body;
+      const b = body as { deployments: Array<Record<string, unknown>> };
+      return {
+        ...b,
+        deployments: b.deployments.map(({ state: _s, ...d }) => (mode === "building" ? { ...d, readyState: "BUILDING", url: null } : mode === "blocked" ? { ...d, readyState: "BLOCKED" } : d)),
+      };
+    });
+    try {
+      const actx = h.actx("vercel", undefined, { env: { ...h.env, VERCEL_API_URL: `${proxy.url}/vercel` } });
+      const live = { resources: [], outputs: {} };
+      expect(await env.awaitExternal!(actx, params({}), live)).toBeNull();
+      mode = "ready";
+      expect(await env.awaitExternal!(actx, params({}), live)).toMatchObject({ preview_url: "https://prj_demo-abcdef12.vercel.app" });
+      mode = "blocked";
+      await expect(env.awaitExternal!(actx, params({}), live)).rejects.toMatchObject({ code: "PROVIDER_INVALID", message: expect.stringMatching(/ended BLOCKED/) });
+    } finally {
+      await proxy.close();
+    }
   });
 
   it("names missing token and project", async () => {
@@ -288,7 +355,7 @@ describe("vercel deploy", () => {
     const actx = h.actx("vercel");
     await h.chaos({ deploy: "never", deploy_ms: 400 });
     const first = await (
-      await fetch(`${h.sim.url}/vercel/v13/deployments`, { method: "POST", headers: { authorization: "Bearer t", "content-type": "application/json" }, body: JSON.stringify({ name: "prj_demo", gitSource: { ref: "feat/x", sha: SHA } }) })
+      await fetch(`${h.sim.url}/vercel/v13/deployments`, { method: "POST", headers: { authorization: "Bearer t", "content-type": "application/json" }, body: JSON.stringify({ name: "prj_demo", gitSource: { type: "github", repoId: 100000, ref: "feat/x", sha: SHA } }) })
     ).json() as { id: string };
     const live = await deploy.read(actx, {});
     expect(live?.resources[0]?.id).toBe(first.id);
@@ -301,6 +368,21 @@ describe("vercel deploy", () => {
     expect(h.intents).toEqual([]);
     expect(r.outputs.deployment_id).toBe(first.id);
     expect(h.sim.state.vercel.projects.prj_demo!.deployments).toHaveLength(1);
+  });
+
+  it("deploys through the project's Git connection: `gitSource` carries the linked repository's id", async () => {
+    await h.chaos({ deploy: "never" });
+    const r = await deploy.apply(h.actx("vercel"), {}, null);
+    expect(r.outputs.preview_url).toBe("https://prj_demo-abcdef12.vercel.app");
+    // The sim, like the spec, refuses a GitHub gitSource without `repoId` (or `org` + `repo`).
+    expect((await h.writes()).filter((w) => DEPLOY.test(w.path) && w.failed)).toEqual([]);
+  });
+
+  it("refuses to deploy a project with no Git connection, before creating anything", async () => {
+    h.sim.state.vercel.projects.prj_demo!.link = null;
+    await h.chaos({ deploy: "never" });
+    await expect(deploy.apply(h.actx("vercel"), {}, null)).rejects.toMatchObject({ code: "PROVIDER_INVALID", message: expect.stringMatching(/not connected to a Git repository/) });
+    expect(await h.writes()).toEqual([]);
   });
 
   it("fails with PROVIDER_INVALID when the deployment errors", async () => {

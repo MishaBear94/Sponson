@@ -20,7 +20,7 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { clerkAdapter, neonAdapter, vercelAdapter } from "@sponson/adapters";
+import { CLERK_DEFAULT_API_URL, clerkAdapter, neonAdapter, vercelAdapter } from "@sponson/adapters";
 import type { AdapterContext, Ctx } from "@sponson/core";
 import { startSim, type SimHandle } from "@sponson/sim";
 import { cliEnv, runCli, workspace, type CliRun, type Workspace } from "./support.js";
@@ -133,6 +133,15 @@ describe(`contract (${LIVE ? "@live" : "sim"})`, () => {
     const live = await op.read(actx("neon"), params);
     expect(live?.resources).toHaveLength(1);
     expect(String(live?.outputs.connection_string)).toMatch(/^postgres(ql)?:\/\//);
+  });
+
+  it("assumption C2: GET /redirect_urls?paginated=true answers { data, total_count } (not in the spec; how Clerk's SDKs read it)", async () => {
+    const res = await fetch(`${env.CLERK_API_URL ?? CLERK_DEFAULT_API_URL}/redirect_urls?paginated=true&limit=1`, { headers: { authorization: `Bearer ${env.CLERK_SECRET_KEY}` } });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data?: unknown; total_count?: unknown };
+    expect(Array.isArray(body.data)).toBe(true);
+    expect(typeof body.total_count).toBe("number");
+    expect(body.total_count).toBeGreaterThanOrEqual(1);
   });
 
   it("second apply writes nothing", async () => {

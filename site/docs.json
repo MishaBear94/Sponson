@@ -1,0 +1,106 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Sponson",
+  "description": "One release, one plan. Declares and applies everything that ships beside the code.",
+  "colors": {
+    "primary": "#115E59",
+    "light": "#2DD4BF",
+    "dark": "#0F766E"
+  },
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg",
+    "href": "/"
+  },
+  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/MishaBear94/Sponson"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/MishaBear94/Sponson"
+    }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get started",
+            "pages": [
+              "index",
+              "quickstart",
+              "concepts"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/github-actions",
+              "guides/agents",
+              "guides/adopting",
+              "guides/production-approvals"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Reference",
+            "pages": [
+              "reference/plan-format",
+              "reference/errors",
+              "reference/cli",
+              "reference/examples",
+              "reference/api-verification"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Contributing",
+        "groups": [
+          {
+            "group": "Contributing",
+            "pages": [
+              "contributing/contributing",
+              "contributing/architecture",
+              {
+                "group": "Decisions (ADRs)",
+                "pages": [
+                  "contributing/decisions",
+                  "contributing/adr/0001-plan-file-is-yaml-not-a-dsl",
+                  "contributing/adr/0002-three-commands",
+                  "contributing/adr/0003-receipts-on-an-orphan-git-branch",
+                  "contributing/adr/0004-apply-phases-inferred-from-output-availability",
+                  "contributing/adr/0005-receipts-are-a-ledger-with-write-ahead-intents",
+                  "contributing/adr/0006-drift-kinds-and-refusing-changed-values",
+                  "contributing/adr/0007-keep-true-for-adoption",
+                  "contributing/adr/0008-scopes-succession-and-leases",
+                  "contributing/adr/0009-single-point-redaction",
+                  "contributing/adr/0010-one-json-envelope-and-error-codes-table",
+                  "contributing/adr/0011-testing-against-a-local-fake-cloud",
+                  "contributing/adr/0012-flat-plan-with-environment-filters",
+                  "contributing/adr/0013-rollback-undoes-only-this-run",
+                  "contributing/adr/0014-secrets-are-references",
+                  "contributing/adr/0015-adapters-describe-themselves",
+                  "contributing/adr/0016-one-receipts-ref-per-scope"
+                ]
+              },
+              "contributing/security",
+              "contributing/roadmap",
+              "contributing/changelog"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

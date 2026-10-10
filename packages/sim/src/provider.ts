@@ -28,7 +28,7 @@ export class Reply {
 export interface RouteRequest {
   method: string;
   url: URL;
-  /** The path with the provider prefix stripped, e.g. `/v9/projects/prj_demo/env`. */
+  /** The path with the provider prefix stripped, e.g. `/v10/projects/prj_demo/env`. */
   path: string;
   body: unknown;
 }

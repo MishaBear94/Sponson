@@ -174,7 +174,7 @@ describe("provider error bodies that echo request data", () => {
     const proxy = await startEchoProxy(w.sim.url, [
       {
         method: "GET",
-        path: /\/vercel\/v9\/projects\/[^/]+\/env$/,
+        path: /\/vercel\/v10\/projects\/[^/]+\/env$/,
         // A gateway error that dumps the (decrypted) upstream payload, truncated by the adapter to 500 chars.
         respond: () => ({ status: 502, body: JSON.stringify({ error: "upstream decode failed", partial: w.sim.state.vercel.projects.prj_demo!.envs.map((e) => ({ k: e.key, v: e.value })) }) }),
       },
