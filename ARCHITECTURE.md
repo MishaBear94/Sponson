@@ -154,9 +154,12 @@ says what Sponson *manages* in this environment and scope after the run, indepen
   waiting and refused lines never make Sponson forget what it owns.
 
 Receipts are stored by `ReceiptStore` (`types.ts`) at `<environment>/<scope>/latest.json`, one `<runId>.json` per run,
-and `lock.json` (`receipts/layout.ts`). `GitBranchReceiptStore` (`receipts/git.ts`) commits them to the orphan branch
-`sponson/receipts` and uses git's non-fast-forward rejection as compare-and-swap; `LocalReceiptStore`
-(`receipts/local.ts`) uses `link(2)` and a short-lived mutex. `parseReceipt()` migrates version 1 receipts in memory
+and `lock.json` (`receipts/layout.ts`). `GitBranchReceiptStore` (`receipts/git.ts`) commits them to one orphan branch
+per environment and scope, `sponson-receipts/<env>/<scope>` (`receiptsBranch()`), so unrelated scopes never race for
+a ref, and uses git's non-fast-forward rejection as compare-and-swap. A scope with no branch yet is read from the
+legacy shared branch `sponson/receipts` and moves to its own branch with its first write
+([ADR 0016](docs/adr/0016-one-receipts-ref-per-scope.md)). `LocalReceiptStore` (`receipts/local.ts`) uses `link(2)`
+and a short-lived mutex. `parseReceipt()` migrates version 1 receipts in memory
 and refuses newer versions (`RECEIPT_VERSION`).
 
 ## Scopes, leases and succession

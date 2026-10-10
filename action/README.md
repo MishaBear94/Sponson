@@ -28,7 +28,7 @@ For `deployment_status`, the scope is the **open** pull request associated with 
 
 ```yaml
 permissions:
-  contents: write        # receipts are pushed to the orphan branch sponson/receipts
+  contents: write        # receipts are pushed to the orphan branches sponson-receipts/<env>/<scope>
   pull-requests: write   # the plan / receipt comment
   deployments: read      # deployment_status payloads
   actions: read          # production job: read who approved the environment

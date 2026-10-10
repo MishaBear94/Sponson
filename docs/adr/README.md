@@ -8,7 +8,7 @@ Nygard's format). They explain *why* the code is the way it is; [ARCHITECTURE.md
 |---|---|---|
 | [0001](0001-plan-file-is-yaml-not-a-dsl.md) | The plan file is YAML, not a DSL | Accepted |
 | [0002](0002-three-commands.md) | Three commands | Accepted |
-| [0003](0003-receipts-on-an-orphan-git-branch.md) | Receipts live on an orphan git branch, behind a `ReceiptStore` interface | Accepted |
+| [0003](0003-receipts-on-an-orphan-git-branch.md) | Receipts live on an orphan git branch, behind a `ReceiptStore` interface | Accepted; amended by [0016](0016-one-receipts-ref-per-scope.md) |
 | [0004](0004-apply-phases-inferred-from-output-availability.md) | Apply phases are inferred from output availability | Accepted |
 | [0005](0005-receipts-are-a-ledger-with-write-ahead-intents.md) | Receipts are a ledger keyed by resource identity, with write-ahead intents | Accepted |
 | [0006](0006-drift-kinds-and-refusing-changed-values.md) | Four kinds of drift, and apply refuses changed values | Accepted |
@@ -21,6 +21,7 @@ Nygard's format). They explain *why* the code is the way it is; [ARCHITECTURE.md
 | [0013](0013-rollback-undoes-only-this-run.md) | Rollback undoes only what this run created | Accepted |
 | [0014](0014-secrets-are-references.md) | Secrets are references, never values | Accepted |
 | [0015](0015-adapters-describe-themselves.md) | Adapters and secret sources describe themselves | Accepted |
+| [0016](0016-one-receipts-ref-per-scope.md) | One receipts branch per environment and scope | Accepted |
 
 ## Writing a new record
 
@@ -32,5 +33,6 @@ dependency between packages.
    `Consequences`.
 2. Use the next free number: `NNNN-short-title.md`.
 3. Status is `Proposed` in the pull request and `Accepted` when it merges. Records are not rewritten later; a
-   decision that changes gets a new record, and the old one's status becomes `Superseded by NNNN`.
+   decision that changes gets a new record, and the old one's status becomes `Superseded by NNNN` (or
+   `Amended by NNNN` when the new record changes only part of it).
 4. Add it to the table above.

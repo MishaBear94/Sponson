@@ -74,7 +74,7 @@ body:
     id: receipt
     attributes:
       label: Receipt (optional)
-      description: The relevant `latest.json` from `.sponson/receipts/<env>/<scope>/` or the `sponson/receipts` branch, if the bug is about what Sponson remembered. Receipts never contain secret values, but check anyway.
+      description: The relevant `latest.json` from `.sponson/receipts/<env>/<scope>/` or the `sponson-receipts/<env>/<scope>` branch, if the bug is about what Sponson remembered. Receipts never contain secret values, but check anyway.
       render: json
   - type: textarea
     id: repro

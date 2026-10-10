@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import { onTestFinished } from "vitest";
 import { createRegistry } from "@sponson/adapters";
-import { loadPlan, Redactor, type ReceiptStore, type RunOptions } from "@sponson/core";
+import { loadPlan, receiptsBranch, Redactor, type ReceiptStore, type RunOptions } from "@sponson/core";
 import { detectCtx } from "sponson";
 import type { SimHandle } from "@sponson/sim";
 import { CLI_COMMAND, workspace } from "../../support.js";
@@ -119,8 +119,14 @@ export async function waitFor(pred: () => boolean | Promise<boolean>, timeoutMs 
   }
 }
 
-/** Read a file from the receipts branch of a bare remote, or null. */
-export async function remoteFile(remote: string, path: string, branch = "sponson/receipts"): Promise<string | null> {
+/** The receipts branch of the scope a layout path (`<env>/<scope>/...`) belongs to. */
+export function branchOf(path: string): string {
+  const [env, scope] = path.split("/");
+  return receiptsBranch(env!, scope!);
+}
+
+/** Read a file from the receipts branch of a bare remote (the branch of the scope the path names), or null. */
+export async function remoteFile(remote: string, path: string, branch = branchOf(path)): Promise<string | null> {
   try {
     const { stdout } = await exec("git", ["--git-dir", remote, "show", `${branch}:${path}`]);
     return stdout;
@@ -129,10 +135,10 @@ export async function remoteFile(remote: string, path: string, branch = "sponson
   }
 }
 
-/** A human's own clone of the receipts branch, for tampering. */
-export async function humanClone(remote: string): Promise<string> {
+/** A human's own clone of one scope's receipts branch, for tampering. */
+export async function humanClone(remote: string, branch: string): Promise<string> {
   const dir = await tmp("human");
-  await exec("git", ["clone", "-q", "--branch", "sponson/receipts", remote, dir]);
+  await exec("git", ["clone", "-q", "--branch", branch, remote, dir]);
   return dir;
 }
 

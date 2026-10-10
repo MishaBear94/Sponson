@@ -55,6 +55,7 @@ A secret source is an object with a `scheme` and `resolve(ref, env)` (`packages/
 | Item | Notes | Label |
 |------|-------|-------|
 | **Garbage-collect abandoned scopes** — scopes whose pull request closed (or branch was deleted) without the Action's destroy running | Find them from receipts plus the GitHub API; destroy from the ledger. Must not add a fourth command lightly: compare `apply --destroy --scope <s>` and an Action mode | **ADR** |
+| **Remove receipts branches of destroyed scopes** — since [ADR 0016](docs/adr/0016-one-receipts-ref-per-scope.md) each scope has its own `sponson-receipts/<env>/<scope>` branch, and nothing deletes it after destroy | Keep the history long enough that a late deployment event for a destroyed PR stays stale; likely part of the garbage-collection work above | **ADR** |
 | **Hosted approval inbox as a `ReceiptStore`** — production approvals requested and granted outside CI, with the approver recorded in the receipt | Implements `ReceiptStore` (`packages/core/src/types.ts`); the store contract tests in `packages/core/src/receipts/stores.test.ts` must pass against it | **ADR** |
 | An S3 / R2 receipt store for teams that cannot push to the repository | Same store contract; conditional writes for fencing | **ADR**, help wanted |
 | `sponson plan --json` diff for Vercel `sensitive`-type variables (see V3) | Today they would always diff as `update` against the real API | help wanted |

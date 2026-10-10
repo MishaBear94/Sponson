@@ -106,7 +106,7 @@ function buildProgram(io: IO, redactor: Redactor, setCode: (c: number) => void):
     .option("--json", "machine-readable output on stdout: one JSON document, also for errors")
     .addOption(new Option("--receipts <store>", "receipt store; overrides the plan's `receipts:`").choices(["git-branch", "local"]))
     .option("--receipts-dir <dir>", "local receipt store root (default: .sponson/receipts, or $SPONSON_RECEIPTS_DIR)")
-    .option("--receipts-remote <url>", "git remote for the receipts branch (default: origin, or $SPONSON_RECEIPTS_REMOTE)")
+    .option("--receipts-remote <url>", "git remote for the receipts branches (default: origin, or $SPONSON_RECEIPTS_REMOTE)")
     .exitOverride()
     // Usage errors are reported once, by reportError, in the same envelope as every other failure.
     .configureOutput({ writeOut: (s) => io.stdout.write(s), writeErr: (s) => io.stderr.write(s), outputError: () => {} })

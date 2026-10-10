@@ -52,7 +52,7 @@ export async function initCommand(opts: InitOpts, io: IO, redactor: Redactor): P
   if (origin) {
     text.push(
       "",
-      "Receipts will live on the orphan branch `sponson/receipts` of this repository. Every `sponson apply` pushes a small JSON file there recording what it did and the hashes of what it wrote, so the next run (on any machine, including CI) can detect drift and know what to destroy. The branch shares no history with your code, is never merged, and uses the same credentials you already push with.",
+      "Receipts will live on orphan branches of this repository, one per environment and scope (`sponson-receipts/<env>/<scope>`). Every `sponson apply` pushes a small JSON file to its scope's branch recording what it did and the hashes of what it wrote, so the next run (on any machine, including CI) can detect drift and know what to destroy. These branches share no history with your code, are never merged, and use the same credentials you already push with.",
     );
   }
   io.stdout.write(text.join("\n") + "\n");

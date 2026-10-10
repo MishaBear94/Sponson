@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { beforeEach, describe, expect, it } from "vitest";
 import { LockHeldError, LockLostError, type Receipt, type ReceiptStore } from "../types.js";
-import { GitBranchReceiptStore } from "./git.js";
+import { GitBranchReceiptStore, receiptsBranch } from "./git.js";
 import { parseReceipt, serialize } from "./layout.js";
 import { LocalReceiptStore } from "./local.js";
 
@@ -219,21 +219,32 @@ describe("local store", () => {
 });
 
 describe("git-branch store", () => {
-  it("creates the orphan branch with a README on first use", async () => {
+  it("creates the scope's orphan branch with a README on first use", async () => {
     const remote = await bareRemote();
     const store = await gitStore(remote);
     await store.write(receipt("pr-7", "run-1"));
-    const { stdout } = await exec("git", ["--git-dir", remote, "ls-tree", "--name-only", "sponson/receipts"]);
+    const ref = "sponson-receipts/preview/pr-7";
+    expect(receiptsBranch("preview", "pr-7")).toBe(ref);
+    const { stdout } = await exec("git", ["--git-dir", remote, "ls-tree", "--name-only", ref]);
     expect(stdout.split("\n")).toContain("README.md");
-    const { stdout: readme } = await exec("git", ["--git-dir", remote, "show", "sponson/receipts:README.md"]);
+    const { stdout: readme } = await exec("git", ["--git-dir", remote, "show", `${ref}:README.md`]);
     expect(readme).toMatch(/only when no apply is running/);
     expect(readme).toMatch(/unmanaged/);
-    const { stdout: tree } = await exec("git", ["--git-dir", remote, "ls-tree", "-r", "--name-only", "sponson/receipts"]);
+    const { stdout: tree } = await exec("git", ["--git-dir", remote, "ls-tree", "-r", "--name-only", ref]);
     expect(tree).toContain("preview/pr-7/latest.json");
     expect(tree).toContain("preview/pr-7/run-1.json");
+    // Nothing else is created: no shared branch.
+    expect(await refs(remote)).toEqual([`refs/heads/${ref}`]);
   });
 
-  it("eight scopes writing at once (lock, receipt, unlock) all converge within the budget", async () => {
+  it("branch names stay valid git refs for any scope, and distinct scopes get distinct branches", () => {
+    expect(receiptsBranch("preview", "branch-feat/x y")).toBe("sponson-receipts/preview/branch-feat-x-y");
+    const odd = ["x.lock", ".hidden", "trailing.", "a..b"].map((s) => receiptsBranch("preview", s));
+    expect(new Set(odd).size).toBe(4);
+    for (const b of odd) expect(b).toMatch(/^sponson-receipts\/preview\/=[0-9a-f]+$/);
+  });
+
+  it("eight scopes writing at once (lock, receipt, unlock) never contend: no ref race, and each scope's branch has exactly its own commits", async () => {
     const remote = await bareRemote();
     const writers = await Promise.all(Array.from({ length: 8 }, () => gitStore(remote, { budgetMs: 30_000 })));
     await Promise.all(
@@ -243,8 +254,18 @@ describe("git-branch store", () => {
         await w.releaseLock("preview", `pr-${i}`, `h${i}`);
       }),
     );
+    expect(writers.map((w) => w.refRaceCount)).toEqual(Array(8).fill(0));
+    for (let i = 0; i < 8; i++) {
+      const { stdout } = await exec("git", ["--git-dir", remote, "log", "--format=%s", `sponson-receipts/preview/pr-${i}`]);
+      expect(stdout.trim().split("\n").reverse()).toEqual([
+        `Start receipts for preview/pr-${i}`,
+        `lock preview/pr-${i} h${i}`,
+        `receipt preview/pr-${i} run-${i} (complete)`,
+        `unlock preview/pr-${i} h${i}`,
+      ]);
+    }
     const reader = await gitStore(remote);
-    expect((await reader.list("preview")).map((s) => s.scope).sort()).toEqual(Array.from({ length: 8 }, (_, i) => `pr-${i}`));
+    expect((await reader.list("preview")).map((s) => s.scope)).toEqual(Array.from({ length: 8 }, (_, i) => `pr-${i}`));
     for (let i = 0; i < 8; i++) expect(await reader.readLock("preview", `pr-${i}`)).toBeNull();
   }, 45_000); // longer than the 30s store budget it tests: only the product may give up first
 
@@ -309,19 +330,19 @@ describe("git-branch store", () => {
     await expect(stat(join(fallbackDir, "preview/pr-1/run-1.json"))).rejects.toThrow();
   });
 
-  it("survives the branch being deleted by a human, and re-asserts a deleted lock only if nobody else wrote the scope", async () => {
+  it("survives the scope's branch being deleted by a human, and re-asserts a deleted lock only if nobody else wrote the scope", async () => {
     const remote = await bareRemote();
     const store = await gitStore(remote);
     await store.write(receipt("pr-1", "run-1"));
     await store.acquireLock("preview", "pr-1", "a", 60_000);
-    await exec("git", ["--git-dir", remote, "update-ref", "-d", "refs/heads/sponson/receipts"]);
+    await exec("git", ["--git-dir", remote, "update-ref", "-d", "refs/heads/sponson-receipts/preview/pr-1"]);
     expect(await store.read("preview", "pr-1")).toBeNull();
     // "a" is still running; its fenced write lands (nobody else can have held the scope) and restores its lock.
     await store.write(receipt("pr-1", "run-2"), { holder: "a" });
     expect((await store.read("preview", "pr-1"))?.runId).toBe("run-2");
     expect((await store.readLock("preview", "pr-1"))?.holder).toBe("a");
     // Deleted again, and this time a newcomer takes the scope: "a" has lost it.
-    await exec("git", ["--git-dir", remote, "update-ref", "-d", "refs/heads/sponson/receipts"]);
+    await exec("git", ["--git-dir", remote, "update-ref", "-d", "refs/heads/sponson-receipts/preview/pr-1"]);
     const b = await gitStore(remote);
     await b.acquireLock("preview", "pr-1", "b", 60_000);
     await expect(store.write(receipt("pr-1", "run-3"), { holder: "a" })).rejects.toBeInstanceOf(LockLostError);
@@ -363,3 +384,85 @@ describe("git-branch store", () => {
     await expect((await gitStore("/nonexistent/repo.git")).read("preview", "pr-1")).rejects.toMatchObject({ code: "STORE_PERMISSION" });
   });
 });
+
+describe("git-branch store: the legacy shared branch (ADR 0016)", () => {
+  /** A remote as a pre-0016 Sponson left it: every scope under one `sponson/receipts` branch. */
+  async function legacyRemote(files: Record<string, string>): Promise<string> {
+    const remote = await bareRemote();
+    const dir = await tmp("legacy");
+    const git = (...args: string[]) => exec("git", ["-c", "user.name=old", "-c", "user.email=old@localhost", "-c", "commit.gpgsign=false", ...args], { cwd: dir });
+    await git("init", "-q", "--initial-branch=sponson/receipts");
+    for (const [path, content] of Object.entries({ "README.md": "old\n", ...files })) {
+      await mkdir(join(dir, path, ".."), { recursive: true });
+      await writeFile(join(dir, path), content);
+    }
+    await git("add", "-A");
+    await git("commit", "-qm", "legacy receipts");
+    await git("push", "-q", remote, "sponson/receipts");
+    return remote;
+  }
+  const legacyHead = async (remote: string) => (await exec("git", ["--git-dir", remote, "rev-parse", "refs/heads/sponson/receipts"])).stdout.trim();
+
+  it("reads a scope that has no branch of its own from the legacy branch, and the first write migrates it", async () => {
+    const remote = await legacyRemote({
+      "preview/pr-1/latest.json": serialize(receipt("pr-1", "old-1")),
+      "preview/pr-1/old-1.json": serialize(receipt("pr-1", "old-1")),
+      "preview/pr-1/lock.json": serialize(expired("old-runner")),
+    });
+    const before = await legacyHead(remote);
+    const store = await gitStore(remote);
+    expect((await store.read("preview", "pr-1"))?.runId).toBe("old-1");
+    expect(await refs(remote)).toEqual(["refs/heads/sponson/receipts"]); // reading migrates nothing
+
+    // A lock is the first write: the scope's branch is created carrying its legacy receipts (not the legacy lock).
+    expect(await store.acquireLock("preview", "pr-1", "a", 60_000)).toBeNull();
+    const ref = "sponson-receipts/preview/pr-1";
+    const { stdout: tree } = await exec("git", ["--git-dir", remote, "ls-tree", "-r", "--name-only", ref]);
+    expect(tree.trim().split("\n").sort()).toEqual(["README.md", "preview/pr-1/latest.json", "preview/pr-1/lock.json", "preview/pr-1/old-1.json"]);
+    expect(JSON.parse((await exec("git", ["--git-dir", remote, "show", `${ref}:preview/pr-1/lock.json`])).stdout).holder).toBe("a");
+    await store.write(receipt("pr-1", "new-1"), { holder: "a" });
+    await store.releaseLock("preview", "pr-1", "a");
+
+    expect((await (await gitStore(remote)).read("preview", "pr-1"))?.runId).toBe("new-1");
+    expect(await legacyHead(remote)).toBe(before); // the legacy branch is never written
+    // Once every scope has migrated, the legacy branch can go: nothing reads it any more.
+    await exec("git", ["--git-dir", remote, "update-ref", "-d", "refs/heads/sponson/receipts"]);
+    expect((await (await gitStore(remote)).read("preview", "pr-1"))?.runId).toBe("new-1");
+  });
+
+  it("list() merges scopes on their own branches with legacy scopes that have none yet; an own branch wins", async () => {
+    const remote = await legacyRemote({
+      "preview/pr-1/latest.json": serialize(receipt("pr-1", "old-1")),
+      "preview/pr-2/latest.json": serialize(receipt("pr-2", "old-2")),
+      "preview/pr-3/lock.json": serialize(expired("x")), // no latest: not listed
+      "production/main/latest.json": serialize({ ...receipt("main", "old-m"), environment: "production" }),
+    });
+    const store = await gitStore(remote);
+    await store.write(receipt("pr-2", "new-2"));
+    await store.write(receipt("pr-4", "new-4"));
+    await (await gitStore(remote)).write({ ...receipt("main", "new-m"), environment: "staging" });
+    const listed = (await store.list("preview")).map((s) => `${s.scope}:${s.receipt.runId}`);
+    expect(listed).toEqual(["pr-1:old-1", "pr-2:new-2", "pr-4:new-4"]);
+    expect((await store.list("production")).map((s) => `${s.scope}:${s.receipt.runId}`)).toEqual(["main:old-m"]);
+    expect((await store.list("staging")).map((s) => `${s.scope}:${s.receipt.runId}`)).toEqual(["main:new-m"]);
+    expect(await store.list("nowhere")).toEqual([]);
+    // With the fallback turned off, only the scopes' own branches count.
+    expect(await (await gitStore(remote, { legacyBranch: null })).read("preview", "pr-1")).toBeNull();
+    expect((await (await gitStore(remote, { legacyBranch: null })).list("preview")).map((s) => s.scope)).toEqual(["pr-2", "pr-4"]);
+  });
+
+  it("list() sees a scope's branch deleted since the last list", async () => {
+    const remote = await bareRemote();
+    const store = await gitStore(remote);
+    await store.write(receipt("pr-1", "r1"));
+    await store.write(receipt("pr-2", "r2"));
+    expect((await store.list("preview")).map((s) => s.scope)).toEqual(["pr-1", "pr-2"]);
+    await exec("git", ["--git-dir", remote, "update-ref", "-d", "refs/heads/sponson-receipts/preview/pr-1"]);
+    expect((await store.list("preview")).map((s) => s.scope)).toEqual(["pr-2"]);
+  });
+});
+
+async function refs(remote: string): Promise<string[]> {
+  const { stdout } = await exec("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname)"]);
+  return stdout.trim().split("\n").filter(Boolean).sort();
+}

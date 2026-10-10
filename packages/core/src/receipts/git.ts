@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import { SponsonError } from "../errors.js";
 import { LockHeldError, LockLostError, type LockInfo, type Receipt, type ReceiptStore } from "../types.js";
-import { latestPath, lockExpired, lockPath, parseLock, parseReceipt, receiptDir, runPath, serialize } from "./layout.js";
+import { latestPath, lockExpired, lockPath, parseLock, parseReceipt, receiptDir, runPath, safeSegment, serialize } from "./layout.js";
 
 const exec = promisify(execFile);
 
@@ -17,11 +17,43 @@ const MAX_REMOTE_REJECTIONS = 4;
 const BACKOFF_BASE_MS = 25;
 const BACKOFF_CAP_MS = 2_000;
 
+/** Namespace of the per-scope receipts branches: `refs/heads/sponson-receipts/<environment>/<scope>`. */
+export const RECEIPTS_REF_PREFIX = "sponson-receipts";
+/** The single branch every scope shared before ADR 0016. Read as a fallback, never written. */
+export const LEGACY_RECEIPTS_BRANCH = "sponson/receipts";
+
+/**
+ * The branch (without `refs/heads/`) holding one environment+scope's receipts and lock:
+ * `sponson-receipts/<environment>/<scope>`, each segment made safe with the receipt layout's rule. A segment that
+ * would still not be a valid git ref component (`.x`, `x.`, `x.lock`, `a..b`) is written as `=` + its hex; `=` never
+ * occurs in a safe segment, so the mapping stays one-to-one.
+ */
+export function receiptsBranch(environment: string, scope: string, prefix = RECEIPTS_REF_PREFIX): string {
+  return `${prefix}/${refSegment(environment)}/${refSegment(scope)}`;
+}
+
+function refSegment(s: string): string {
+  const x = safeSegment(s);
+  const valid = x !== "" && !x.startsWith(".") && !x.endsWith(".") && !x.endsWith(".lock") && !x.includes("..");
+  return valid ? x : `=${Buffer.from(x, "utf8").toString("hex")}`;
+}
+
+/** Inverse of `refSegment`: the safe segment (the scope's directory name in the layout). */
+function fromRefSegment(seg: string): string {
+  return seg.startsWith("=") ? Buffer.from(seg.slice(1), "hex").toString("utf8") : seg;
+}
+
 /** Options for `GitBranchReceiptStore`; only `remote` is required. */
 export interface GitBranchStoreOptions {
   /** Remote URL or path. Defaults to the `origin` of `cwd`. */
   remote: string;
-  branch?: string;
+  /** Namespace of the per-scope branches. Default `sponson-receipts`. */
+  refPrefix?: string;
+  /**
+   * The pre-0016 shared branch, read (never written) for scopes that have no branch of their own yet.
+   * Default `sponson/receipts`; `null` turns the fallback off.
+   */
+  legacyBranch?: string | null;
   /**
    * Where the working clone lives. When given, it is used as-is (and kept).
    * Default: a fresh directory per store instance (remote hash + pid + random) under `<tmpdir>/sponson-receipts/`,
@@ -47,7 +79,13 @@ interface Fence {
 }
 
 /**
- * Receipts on an orphan branch (`sponson/receipts`) of the user's repository.
+ * Receipts on orphan branches of the user's repository, one per environment and scope
+ * (`sponson-receipts/<environment>/<scope>`, see `receiptsBranch`; ADR 0016). Unrelated scopes never push to the
+ * same ref, so they never race each other.
+ *
+ * A scope that has no branch yet is read from the legacy shared branch (`sponson/receipts`, same layout); the first
+ * write of any kind (lock or receipt) creates the scope's branch seeded with that scope's legacy files, and nothing is
+ * ever written to the legacy branch again.
  *
  * Every mutation is "fetch, check, mutate, commit, push". Git's non-fast-forward rejection is the compare-and-swap:
  * a check made against the fetched tree (who holds the lock) holds for the commit that is pushed on top of it, so the
@@ -59,7 +97,8 @@ interface Fence {
  */
 export class GitBranchReceiptStore implements ReceiptStore {
   readonly kind = "git-branch";
-  private readonly branch: string;
+  private readonly refPrefix: string;
+  private readonly legacyBranch: string | null;
   private readonly workdir: string;
   private readonly ownsWorkdir: boolean;
   private readonly budgetMs: number;
@@ -68,9 +107,13 @@ export class GitBranchReceiptStore implements ReceiptStore {
   private initialized = false;
   private queue: Promise<unknown> = Promise.resolve();
   private readonly fences = new Map<string, Fence>();
+  /** Where the tree of the last `sync` came from when it was not the scope's own branch (the legacy branch). */
+  private source: string | null = null;
+  private refRaces = 0;
 
   constructor(private readonly options: GitBranchStoreOptions) {
-    this.branch = options.branch ?? "sponson/receipts";
+    this.refPrefix = options.refPrefix ?? RECEIPTS_REF_PREFIX;
+    this.legacyBranch = options.legacyBranch === undefined ? LEGACY_RECEIPTS_BRANCH : options.legacyBranch;
     const envBudget = Number(process.env.SPONSON_STORE_BUDGET_MS);
     this.budgetMs = options.budgetMs ?? (Number.isFinite(envBudget) && envBudget > 0 ? envBudget : DEFAULT_BUDGET_MS);
     this.fallbackDir = options.fallbackDir ?? join(process.cwd(), ".sponson", "unpushed");
@@ -83,6 +126,11 @@ export class GitBranchReceiptStore implements ReceiptStore {
         "sponson-receipts",
         `${createHash("sha256").update(options.remote).digest("hex").slice(0, 12)}-${process.pid}-${randomBytes(4).toString("hex")}`,
       );
+  }
+
+  /** How many pushes of this instance lost a race for their ref and were retried (for diagnostics and tests). */
+  get refRaceCount(): number {
+    return this.refRaces;
   }
 
   /** The working clone this instance uses (for diagnostics and tests). */
@@ -102,10 +150,10 @@ export class GitBranchReceiptStore implements ReceiptStore {
 
   async read(environment: string, scope: string): Promise<Receipt | null> {
     return this.exclusive(async () => {
-      await this.sync();
+      const branch = await this.sync(environment, scope);
       const rel = latestPath(environment, scope);
       try {
-        return parseReceipt(await readFile(join(this.workdir, rel), "utf8"), `${this.branch}:${rel}`);
+        return parseReceipt(await readFile(join(this.workdir, rel), "utf8"), `${this.source ?? branch}:${rel}`);
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
         throw e;
@@ -121,13 +169,13 @@ export class GitBranchReceiptStore implements ReceiptStore {
     await writeFile(keptAt, serialize(receipt), "utf8");
     try {
       await this.exclusive(async () => {
-        const retry = this.retrier(`receipt ${environment}/${scope}`);
+        const retry = this.retrier(`receipt ${environment}/${scope}`, environment, scope);
         for (;;) {
-          await this.sync();
+          const branch = await this.sync(environment, scope);
           if (opts.holder !== undefined) await this.assertHolder(environment, scope, opts.holder, null);
           await this.put(runPath(environment, scope, runId), serialize(receipt));
           await this.put(latestPath(environment, scope), serialize(receipt));
-          const outcome = await this.tryCommitAndPush(`receipt ${environment}/${scope} ${runId} (${receipt.status})`);
+          const outcome = await this.tryCommitAndPush(branch, `receipt ${environment}/${scope} ${runId} (${receipt.status})`);
           if (outcome === "ok") break;
           await retry.backoff(outcome);
         }
@@ -141,40 +189,39 @@ export class GitBranchReceiptStore implements ReceiptStore {
     await pruneEmpty(dirname(keptAt), this.fallbackDir);
   }
 
+  /**
+   * Every scope of `environment` with a readable latest receipt: one `ls-remote` to find the scopes' branches (and
+   * the legacy branch), one shallow fetch of all of them, one `cat-file` to read them. Scopes that have no branch of
+   * their own yet are taken from the legacy branch.
+   */
   async list(environment: string): Promise<Array<{ scope: string; receipt: Receipt }>> {
     return this.exclusive(async () => {
-      await this.sync();
-      let scopes: string[];
-      try {
-        scopes = await readdir(join(this.workdir, environment));
-      } catch {
-        return [];
-      }
-      const out: Array<{ scope: string; receipt: Receipt }> = [];
-      for (const scope of scopes) {
+      await this.init();
+      for (let attempt = 1; ; attempt++) {
         try {
-          const text = await readFile(join(this.workdir, latestPath(environment, scope)), "utf8");
-          out.push({ scope, receipt: parseReceipt(text, scope) });
-        } catch {
-          /* skip scopes without a readable latest */
+          return await this.listOnce(environment);
+        } catch (e) {
+          // A branch deleted between ls-remote and fetch: look again (a few times; then report it).
+          if (attempt < 3 && e instanceof GitCommandError && /couldn't find remote ref/i.test(e.stderr || e.message)) continue;
+          if (e instanceof GitCommandError) throw this.classifyRemoteError(e.stderr || e.message, null);
+          throw e;
         }
       }
-      return out;
     });
   }
 
   async acquireLock(environment: string, scope: string, holder: string, ttlMs: number): Promise<LockInfo | null> {
     return this.exclusive(async () => {
-      const retry = this.retrier(`lock ${environment}/${scope}`);
+      const retry = this.retrier(`lock ${environment}/${scope}`, environment, scope);
       for (;;) {
-        await this.sync();
+        const branch = await this.sync(environment, scope);
         const existing = await this.lockInTree(environment, scope);
         // Seen in the tree we are about to push on top of: if it is live, it really is held by that holder.
         if (existing && !lockExpired(existing)) throw new LockHeldError(existing);
         const now = Date.now();
         await this.put(lockPath(environment, scope), serialize({ holder, acquiredAt: new Date(now).toISOString(), expiresAt: new Date(now + ttlMs).toISOString() }));
         const latestRunId = await this.latestRunIdInTree(environment, scope);
-        const outcome = await this.tryCommitAndPush(`lock ${environment}/${scope} ${holder}`);
+        const outcome = await this.tryCommitAndPush(branch, `lock ${environment}/${scope} ${holder}`);
         if (outcome === "ok") {
           this.fences.set(receiptDir(environment, scope), { holder, ttlMs, latestRunId });
           return existing;
@@ -186,12 +233,12 @@ export class GitBranchReceiptStore implements ReceiptStore {
 
   async renewLock(environment: string, scope: string, holder: string, ttlMs: number): Promise<void> {
     return this.exclusive(async () => {
-      const retry = this.retrier(`renew ${environment}/${scope}`);
+      const retry = this.retrier(`renew ${environment}/${scope}`, environment, scope);
       for (;;) {
-        await this.sync();
+        const branch = await this.sync(environment, scope);
         const cur = await this.assertHolder(environment, scope, holder, ttlMs);
         if (cur) await this.put(lockPath(environment, scope), serialize({ ...cur, expiresAt: new Date(Date.now() + ttlMs).toISOString() }));
-        const outcome = await this.tryCommitAndPush(`renew ${environment}/${scope} ${holder}`);
+        const outcome = await this.tryCommitAndPush(branch, `renew ${environment}/${scope} ${holder}`);
         if (outcome === "ok") {
           const fence = this.fences.get(receiptDir(environment, scope));
           if (fence && fence.holder === holder) fence.ttlMs = ttlMs;
@@ -204,21 +251,21 @@ export class GitBranchReceiptStore implements ReceiptStore {
 
   async readLock(environment: string, scope: string): Promise<LockInfo | null> {
     return this.exclusive(async () => {
-      await this.sync();
+      await this.sync(environment, scope);
       return this.lockInTree(environment, scope);
     });
   }
 
   async releaseLock(environment: string, scope: string, holder: string): Promise<void> {
     return this.exclusive(async () => {
-      const retry = this.retrier(`unlock ${environment}/${scope}`);
+      const retry = this.retrier(`unlock ${environment}/${scope}`, environment, scope);
       for (;;) {
         // Safe to reset the clone: any receipt this instance failed to push is already in the fallback directory.
-        await this.sync();
+        const branch = await this.sync(environment, scope);
         const existing = await this.lockInTree(environment, scope);
         if (!existing || existing.holder !== holder) break; // not ours (any more): nothing to do
         await rm(join(this.workdir, lockPath(environment, scope)), { force: true });
-        const outcome = await this.tryCommitAndPush(`unlock ${environment}/${scope} ${holder}`);
+        const outcome = await this.tryCommitAndPush(branch, `unlock ${environment}/${scope} ${holder}`);
         if (outcome === "ok") break;
         await retry.backoff(outcome);
       }
@@ -245,14 +292,16 @@ export class GitBranchReceiptStore implements ReceiptStore {
     return run;
   }
 
-  private retrier(what: string): { backoff(outcome: Exclude<PushOutcome, "ok">): Promise<void> } {
+  private retrier(what: string, environment: string, scope: string): { backoff(outcome: Exclude<PushOutcome, "ok">): Promise<void> } {
     const started = Date.now();
+    const branch = receiptsBranch(environment, scope, this.refPrefix);
     let attempts = 0;
     let rejections = 0;
     return {
       backoff: async (outcome) => {
         attempts++;
         if (outcome.kind === "rejected") rejections++;
+        else this.refRaces++;
         const delay = BACKOFF_BASE_MS / 2 + Math.random() * Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** Math.min(attempts, 16));
         const elapsed = Date.now() - started;
         if (rejections >= MAX_REMOTE_REJECTIONS || elapsed + delay > this.budgetMs) {
@@ -261,8 +310,8 @@ export class GitBranchReceiptStore implements ReceiptStore {
               ? `the remote rejected the push (${outcome.detail})`
               : `lost the race for the branch ref ${attempts} times in ${elapsed}ms (budget ${this.budgetMs}ms, SPONSON_STORE_BUDGET_MS)`;
           // A hook or branch protection refusing the push is a policy decision, not contention.
-          throw new SponsonError(outcome.kind === "rejected" ? "STORE_REJECTED" : "STORE_CONTENDED", stripCredentials(`Could not push ${what} to ${this.branch} at ${this.remoteForMessages}: ${why}.`), {
-            branch: this.branch,
+          throw new SponsonError(outcome.kind === "rejected" ? "STORE_REJECTED" : "STORE_CONTENDED", stripCredentials(`Could not push ${what} to ${branch} at ${this.remoteForMessages}: ${why}.`), {
+            branch,
             remote: this.remoteForMessages,
             attempts,
             elapsedMs: elapsed,
@@ -307,20 +356,28 @@ export class GitBranchReceiptStore implements ReceiptStore {
     throw new LockLostError(holder, cur);
   }
 
-  private async git(args: string[]): Promise<string> {
-    try {
-      const { stdout } = await exec("git", ["-c", "user.name=sponson", "-c", "user.email=sponson@localhost", "-c", "commit.gpgsign=false", ...args], {
-        cwd: this.workdir,
-        maxBuffer: 16 * 1024 * 1024,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-      });
-      return stdout;
-    } catch (e) {
-      const err = e as Error & { stderr?: string };
-      const clean = new GitCommandError(stripCredentials(err.message), stripCredentials(err.stderr ?? ""));
-      clean.stack = stripCredentials(err.stack ?? "");
-      throw clean;
-    }
+  private async git(args: string[], input?: Buffer): Promise<string> {
+    return (await this.gitRaw(args, input)).toString("utf8");
+  }
+
+  private gitRaw(args: string[], input?: Buffer): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const child = execFile(
+        "git",
+        ["-c", "user.name=sponson", "-c", "user.email=sponson@localhost", "-c", "commit.gpgsign=false", ...args],
+        { cwd: this.workdir, maxBuffer: 64 * 1024 * 1024, encoding: "buffer", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
+        (err, stdout, stderr) => {
+          if (!err) return resolve(stdout);
+          const clean = new GitCommandError(stripCredentials(err.message), stripCredentials(stderr.toString("utf8")));
+          clean.stack = stripCredentials(err.stack ?? "");
+          reject(clean);
+        },
+      );
+      // git may exit before reading its input (an error): that is reported through the callback, not as EPIPE.
+      child.stdin?.on("error", () => {});
+      if (input) child.stdin?.end(input);
+      else child.stdin?.end();
+    });
   }
 
   private async put(rel: string, content: string): Promise<void> {
@@ -329,45 +386,152 @@ export class GitBranchReceiptStore implements ReceiptStore {
     await writeFile(abs, content, "utf8");
   }
 
-  /** Make the working clone match the remote branch exactly, creating the branch locally if it does not exist yet. */
-  private async sync(): Promise<void> {
-    if (!this.initialized) {
-      await mkdir(this.workdir, { recursive: true });
-      const isRepo = await stat(join(this.workdir, ".git")).then(() => true, () => false);
-      if (!isRepo) {
-        await this.git(["init", "-q"]);
-        await this.git(["remote", "add", "origin", this.options.remote]);
-      } else {
-        await this.git(["remote", "set-url", "origin", this.options.remote]);
-      }
-      this.initialized = true;
+  private async init(): Promise<void> {
+    if (this.initialized) return;
+    await mkdir(this.workdir, { recursive: true });
+    const isRepo = await stat(join(this.workdir, ".git")).then(() => true, () => false);
+    if (!isRepo) {
+      await this.git(["init", "-q"]);
+      await this.git(["remote", "add", "origin", this.options.remote]);
+    } else {
+      await this.git(["remote", "set-url", "origin", this.options.remote]);
     }
-    try {
-      await this.git(["fetch", "-q", "--depth=1", "origin", this.branch]);
-    } catch (e) {
-      const msg = e instanceof GitCommandError ? e.stderr || e.message : String(e);
-      if (/couldn't find remote ref/i.test(msg)) return this.startOrphan();
-      throw this.classifyRemoteError(msg);
-    }
-    await this.git(["checkout", "-q", "-f", "-B", this.branch, "FETCH_HEAD"]);
-    await this.git(["clean", "-qfdx"]);
+    this.initialized = true;
   }
 
-  /** The branch does not exist on the remote yet: an orphan with a README so humans know what it is. */
-  private async startOrphan(): Promise<void> {
-    await this.git(["symbolic-ref", "HEAD", `refs/heads/${this.branch}`]);
-    await this.git(["update-ref", "-d", `refs/heads/${this.branch}`]).catch(() => {});
+  /**
+   * Make the working clone match the scope's remote branch exactly. When the branch does not exist yet, start it
+   * locally (seeded from the legacy branch); it reaches the remote with the first push. Returns the branch name.
+   */
+  private async sync(environment: string, scope: string): Promise<string> {
+    await this.init();
+    const branch = receiptsBranch(environment, scope, this.refPrefix);
+    this.source = null;
+    try {
+      await this.git(["fetch", "-q", "--depth=1", "origin", `refs/heads/${branch}`]);
+    } catch (e) {
+      const msg = e instanceof GitCommandError ? e.stderr || e.message : String(e);
+      if (/couldn't find remote ref/i.test(msg)) {
+        await this.startOrphan(environment, scope, branch);
+        return branch;
+      }
+      throw this.classifyRemoteError(msg, branch);
+    }
+    await this.git(["checkout", "-q", "-f", "-B", branch, "FETCH_HEAD"]);
+    await this.git(["clean", "-qfdx"]);
+    return branch;
+  }
+
+  /**
+   * The scope's branch does not exist on the remote yet: an orphan with a README so humans know what it is, carrying
+   * this scope's files from the legacy branch (all but its lock) when there are any. That is the whole migration: the
+   * first push for the scope publishes them on its own branch.
+   */
+  private async startOrphan(environment: string, scope: string, branch: string): Promise<void> {
+    await this.git(["symbolic-ref", "HEAD", `refs/heads/${branch}`]);
+    await this.git(["update-ref", "-d", `refs/heads/${branch}`]).catch(() => {});
     await this.git(["rm", "-rfq", "--cached", "--ignore-unmatch", "."]).catch(() => {});
     for (const entry of await readdir(this.workdir)) if (entry !== ".git") await rm(join(this.workdir, entry), { recursive: true, force: true });
     await this.put("README.md", RECEIPTS_README);
+    const migrated = await this.seedFromLegacy(environment, scope);
     await this.git(["add", "-A"]);
-    await this.git(["commit", "-qm", "Initialize Sponson receipts branch"]);
+    await this.git(["commit", "-qm", migrated ? `Start receipts for ${environment}/${scope} (from ${this.legacyBranch})` : `Start receipts for ${environment}/${scope}`]);
+  }
+
+  /** Copy `<env>/<scope>/` (without `lock.json`) from the legacy branch into the working tree; false when there is none. */
+  private async seedFromLegacy(environment: string, scope: string): Promise<boolean> {
+    if (this.legacyBranch === null) return false;
+    try {
+      await this.git(["fetch", "-q", "--depth=1", "origin", `refs/heads/${this.legacyBranch}`]);
+    } catch (e) {
+      const msg = e instanceof GitCommandError ? e.stderr || e.message : String(e);
+      if (/couldn't find remote ref/i.test(msg)) return false;
+      throw this.classifyRemoteError(msg, this.legacyBranch);
+    }
+    const dir = receiptDir(environment, scope);
+    const files = (await this.git(["ls-tree", "-r", "--name-only", "FETCH_HEAD", "--", `${dir}/`])).split("\n").filter(Boolean);
+    if (!files.some((f) => f !== lockPath(environment, scope))) return false;
+    await this.git(["checkout", "-q", "FETCH_HEAD", "--", `${dir}/`]);
+    await this.git(["rm", "-q", "--cached", "--ignore-unmatch", "--", lockPath(environment, scope)]);
+    await rm(join(this.workdir, lockPath(environment, scope)), { force: true });
+    this.source = this.legacyBranch;
+    return true;
+  }
+
+  private async listOnce(environment: string): Promise<Array<{ scope: string; receipt: Receipt }>> {
+    const envSeg = refSegment(environment);
+    const prefix = `refs/heads/${this.refPrefix}/${envSeg}/`;
+    const legacyRef = this.legacyBranch === null ? null : `refs/heads/${this.legacyBranch}`;
+    const advertised = (await this.git(["ls-remote", "origin", `${prefix}*`, ...(legacyRef ? [legacyRef] : [])]))
+      .split("\n")
+      .map((l) => l.split("\t")[1]?.trim())
+      .filter((r): r is string => !!r);
+    const scopeRefs = advertised.filter((r) => r.startsWith(prefix) && !r.slice(prefix.length).includes("/"));
+    const hasLegacy = legacyRef !== null && advertised.includes(legacyRef);
+    if (scopeRefs.length === 0 && !hasLegacy) return [];
+
+    const local = `refs/sponson-list/${envSeg}`;
+    const legacyLocal = "refs/sponson-list-legacy";
+    const refspecs = [...(scopeRefs.length ? [`+${prefix}*:${local}/*`] : []), ...(hasLegacy ? [`+${legacyRef}:${legacyLocal}`] : [])];
+    await this.git(["fetch", "-q", "--prune", "--depth=1", "origin", ...refspecs]);
+
+    const envDir = safeSegment(environment);
+    const wanted: Array<{ scope: string; object: string }> = [];
+    const own = new Set<string>();
+    for (const ref of scopeRefs) {
+      const seg = ref.slice(prefix.length);
+      const scope = fromRefSegment(seg);
+      own.add(scope);
+      wanted.push({ scope, object: `${local}/${seg}:${envDir}/${scope}/latest.json` });
+    }
+    if (hasLegacy) {
+      const dirs = (await this.git(["ls-tree", "-d", "--name-only", legacyLocal, "--", `${envDir}/`])).split("\n").filter(Boolean);
+      for (const d of dirs) {
+        const scope = d.slice(envDir.length + 1);
+        if (!own.has(scope)) wanted.push({ scope, object: `${legacyLocal}:${envDir}/${scope}/latest.json` });
+      }
+    }
+    const blobs = await this.catFiles(wanted.map((w) => w.object));
+    const out: Array<{ scope: string; receipt: Receipt }> = [];
+    for (const [i, w] of wanted.entries()) {
+      const text = blobs[i];
+      if (text === null || text === undefined) continue;
+      try {
+        out.push({ scope: w.scope, receipt: parseReceipt(text, w.object) });
+      } catch {
+        /* skip scopes without a readable latest */
+      }
+    }
+    return out.sort((a, b) => (a.scope < b.scope ? -1 : a.scope > b.scope ? 1 : 0));
+  }
+
+  /** Read many blobs in one `git cat-file --batch`; null for each one that does not exist. */
+  private async catFiles(objects: string[]): Promise<Array<string | null>> {
+    if (objects.length === 0) return [];
+    const raw = await this.gitRaw(["cat-file", "--batch"], Buffer.from(objects.map((o) => `${o}\n`).join(""), "utf8"));
+    const out: Array<string | null> = [];
+    let pos = 0;
+    for (let i = 0; i < objects.length; i++) {
+      const nl = raw.indexOf(0x0a, pos);
+      if (nl < 0) break;
+      const header = raw.subarray(pos, nl).toString("utf8");
+      pos = nl + 1;
+      const m = /^[0-9a-f]+ (\w+) (\d+)$/.exec(header);
+      if (!m) {
+        out.push(null); // "<object> missing" (or ambiguous)
+        continue;
+      }
+      const size = Number(m[2]);
+      out.push(m[1] === "blob" ? raw.subarray(pos, pos + size).toString("utf8") : null);
+      pos += size + 1;
+    }
+    return out;
   }
 
   /** Anything other than "the branch does not exist": the repository is unreachable or we may not read it. */
-  private classifyRemoteError(msg: string): Error {
+  private classifyRemoteError(msg: string, branch: string | null): Error {
     const last = stripCredentials(msg.trim().split("\n").filter(Boolean).pop() ?? "");
-    const details = { remote: this.remoteForMessages, branch: this.branch };
+    const details = { remote: this.remoteForMessages, branch: branch ?? `${this.refPrefix}/*` };
     if (/repository not found|not found|\b404\b/i.test(msg)) {
       return new SponsonError(
         "STORE_PERMISSION",
@@ -382,12 +546,12 @@ export class GitBranchReceiptStore implements ReceiptStore {
   }
 
   /** Commit the working tree and push. A ref race or a server-side rejection is returned for the caller to retry. */
-  private async tryCommitAndPush(message: string): Promise<PushOutcome> {
+  private async tryCommitAndPush(branch: string, message: string): Promise<PushOutcome> {
     await this.git(["add", "-A"]);
     const status = await this.git(["status", "--porcelain"]);
     if (status.trim() !== "") await this.git(["commit", "-qm", message]);
     try {
-      await this.git(["push", "-q", "origin", `${this.branch}:${this.branch}`]);
+      await this.git(["push", "-q", "origin", `HEAD:refs/heads/${branch}`]);
       return "ok";
     } catch (e) {
       if (!(e instanceof GitCommandError)) throw e;
@@ -398,8 +562,8 @@ export class GitBranchReceiptStore implements ReceiptStore {
       if (/\b40[134]\b|permission to .* denied|access denied|not permitted|authentication failed|could not read username|terminal prompts disabled|repository not found|unable to access/i.test(msg)) {
         throw new SponsonError(
           "STORE_PERMISSION",
-          stripCredentials(`Push to ${this.branch} was denied. In GitHub Actions, add \`permissions: { contents: write }\` to the workflow. (${msg.trim().split("\n").filter(Boolean).pop()})`),
-          { branch: this.branch, remote: this.remoteForMessages },
+          stripCredentials(`Push to ${branch} was denied. In GitHub Actions, add \`permissions: { contents: write }\` to the workflow. (${msg.trim().split("\n").filter(Boolean).pop()})`),
+          { branch, remote: this.remoteForMessages },
         );
       }
       if (/remote rejected|hook declined|\[rejected\]|rejected/i.test(msg)) {
@@ -458,15 +622,22 @@ async function pruneEmpty(dir: string, stopAt: string): Promise<void> {
   }
 }
 
+/**
+ * Written once at the root of every scope's branch. Every copy is the same blob, so git stores it once however many
+ * branches there are; it is there because each branch is listed on its own in the hosting UI, and a human who opens
+ * one should learn what it is and whether deleting it is safe.
+ */
 const RECEIPTS_README = `# Sponson receipts
 
-This branch is written by \`sponson apply\`. It records what each run actually did and the ledger of
-resources Sponson manages per environment and scope: which resources it created, their value hashes,
-and whether the run completed. It also holds each scope's lock while an apply runs.
+This branch is written by \`sponson apply\`. It holds the receipts of one environment and scope (the
+\`<environment>/<scope>/\` directory): what each run actually did, the ledger of resources Sponson manages
+there (which resources it created, their value hashes), and whether the run completed. It also holds the
+scope's lock while an apply runs. Every scope has its own \`sponson-receipts/<environment>/<scope>\` branch,
+so runs for unrelated pull requests never wait on each other.
 
 It is an orphan branch so it never conflicts with your code. Do not merge it.
 
-Deleting it is safe only when no apply is running (a running apply's lock lives here). Deleting it makes
-Sponson forget what it created: those resources will then be reported as unmanaged, and destroy will
-no longer remove them. Sponson recreates the branch on the next run.
+Deleting it is safe only when no apply is running for this scope (a running apply's lock lives here).
+Deleting it makes Sponson forget what it created in this scope: those resources will then be reported as
+unmanaged, and destroy will no longer remove them. Sponson recreates the branch on the next run.
 `;

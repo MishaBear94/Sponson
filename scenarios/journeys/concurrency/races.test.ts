@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { startSim, type SimHandle } from "@sponson/sim";
 import { applyRun, destroyRun, GitBranchReceiptStore, LocalReceiptStore, type Receipt } from "@sponson/core";
-import { bareRemote, checkout, engineOpts, exec, git, humanClone, neonBranches, remoteFile, tmp, waitFor } from "./helpers.js";
+import { bareRemote, branchOf, checkout, engineOpts, exec, git, humanClone, neonBranches, remoteFile, tmp, waitFor } from "./helpers.js";
 import { cliEnv } from "../../support.js";
 
 let sim: SimHandle;
@@ -60,7 +60,7 @@ describe("a human tampers with the receipts branch mid-run", () => {
     const a = applyRun(await engineOpts(cwd, env, 91, new GitBranchReceiptStore({ remote, workdir: await tmp("wd-a"), fallbackDir: await tmp("wd-a-unpushed") })))
       .then((r) => events.push(`A:${r.receipt.status}`), (e: Error & { code?: string }) => events.push(`A:error:${e.code ?? e.message.slice(0, 80)}`));
     await waitFor(async () => (await remoteFile(remote, "preview/pr-91/lock.json")) !== null, 10_000, "A's lock");
-    await exec("git", ["--git-dir", remote, "update-ref", "-d", "refs/heads/sponson/receipts"]);
+    await exec("git", ["--git-dir", remote, "update-ref", "-d", `refs/heads/${branchOf("preview/pr-91")}`]);
     const b = await applyRun(await engineOpts(cwd, env, 91, new GitBranchReceiptStore({ remote, workdir: await tmp("wd-b"), fallbackDir: await tmp("wd-b-unpushed") })))
       .then((r) => `B:${r.receipt.status}`, (e: Error & { code?: string }) => `B:error:${e.code ?? e.message.slice(0, 80)}`);
     await a;
@@ -77,15 +77,17 @@ describe("a human tampers with the receipts branch mid-run", () => {
     const remote = await bareRemote();
     const cwd = await checkout();
     const env = cliEnv(sim);
-    // History: PR 92's earlier receipt exists, then PR 93's apply starts.
+    // History: PR 92's earlier receipt exists (on its own branch), then PR 93's apply starts.
     await applyRun(await engineOpts(cwd, env, 92, new GitBranchReceiptStore({ remote, workdir: await tmp("wd-0"), fallbackDir: await tmp("wd-0-unpushed") })));
-    const old = (await exec("git", ["--git-dir", remote, "rev-parse", "sponson/receipts"])).stdout.trim();
     sim.state.applyChaos({ latency_ms: 60 });
     const a = applyRun(await engineOpts(cwd, env, 93, new GitBranchReceiptStore({ remote, workdir: await tmp("wd-a"), fallbackDir: await tmp("wd-a-unpushed") })));
     await waitFor(async () => (await remoteFile(remote, "preview/pr-93/lock.json")) !== null, 10_000, "A's lock");
-    const human = await humanClone(remote);
-    await git(human, ["reset", "-q", "--hard", old]);
-    await git(human, ["push", "-q", "--force", "origin", "sponson/receipts"]);
+    // Rewound to the branch's first commit, from before A took its lock.
+    const branch = branchOf("preview/pr-93");
+    const human = await humanClone(remote, branch);
+    const [old] = (await git(human, ["rev-list", "--max-parents=0", "HEAD"])).trim().split("\n");
+    await git(human, ["reset", "-q", "--hard", old!]);
+    await git(human, ["push", "-q", "--force", "origin", branch]);
     const r = await a;
     expect(r.receipt.status).toBe("complete");
     expect(JSON.parse((await remoteFile(remote, "preview/pr-93/latest.json"))!).runId).toBe(r.receipt.runId);

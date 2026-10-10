@@ -4,7 +4,8 @@ Date: 2026-10-10
 
 ## Status
 
-Accepted
+Accepted. Amended by [0016](0016-one-receipts-ref-per-scope.md): each environment and scope now has its own branch,
+`sponson-receipts/<env>/<scope>`; `sponson/receipts` is read only as a fallback for scopes not yet migrated.
 
 ## Context
 

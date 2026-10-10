@@ -44,7 +44,7 @@
       }
     },
     "receipts": {
-      "description": "Receipt store. Default git-branch (an orphan branch `sponson/receipts` on the `origin` remote). `--receipts` overrides it.",
+      "description": "Receipt store. Default git-branch (orphan branches `sponson-receipts/<env>/<scope>` on the `origin` remote). `--receipts` overrides it.",
       "enum": ["git-branch", "local"]
     },
     "changes": {

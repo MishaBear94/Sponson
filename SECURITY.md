@@ -29,7 +29,7 @@ Please include:
 - the Sponson version (`sponson --version`) and Node.js version;
 - a minimal `release.plan.yaml` and the commands that reproduce the problem (against `pnpm sim` if possible —
   the fake cloud needs no real credentials);
-- what leaked or what was bypassed, and where (stdout, stderr, `--json`, a receipt file, the receipts branch,
+- what leaked or what was bypassed, and where (stdout, stderr, `--json`, a receipt file, a receipts branch,
   a PR comment, MCP output, a provider request).
 
 **Never send real secrets.** Use obvious placeholders such as `sk_test_PLACEHOLDER`; the reproduction should show
@@ -57,9 +57,9 @@ as vulnerabilities, not ordinary bugs:
   `CLERK_SECRET_KEY`, …) or an output marked `sensitive` appearing — in any encoding (plain, URL-encoded,
   base64, JSON-escaped, truncated) — in stdout, stderr, `--json` output, error messages, plan text, MCP
   responses, PR comments written by the Action, or log lines. (Invariant 1.)
-- **Receipts.** A secret value or a reversible hash of one written into a receipt or into the history of the
-  `sponson/receipts` branch; a receipt that can be made to claim ownership of resources Sponson did not create
-  so that `apply --destroy` deletes them; a receipt or lock that can be forged or tampered with to make
+- **Receipts.** A secret value or a reversible hash of one written into a receipt or into the history of a
+  receipts branch (`sponson-receipts/<env>/<scope>`, or the legacy `sponson/receipts`); a receipt that can be made to
+  claim ownership of resources Sponson did not create so that `apply --destroy` deletes them; a receipt or lock that can be forged or tampered with to make
   Sponson modify resources it does not manage. (Invariants 5, 6, 8.)
 - **Production approval bypass.** Any way to make Sponson write to `production` — directly, through a line whose
   `writesEnvironment()` is production while `--env` is something else, through MCP, through the GitHub Action,

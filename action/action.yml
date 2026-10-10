@@ -4,7 +4,7 @@
 # as the `result` output, and on pull_request events upserts one PR comment per environment.
 #
 # Required workflow permissions:
-#   contents: write        apply pushes receipts to the orphan branch `sponson/receipts`
+#   contents: write        apply pushes receipts to the orphan branches `sponson-receipts/<env>/<scope>`
 #   pull-requests: write   plan/apply comment on the PR
 #
 # The same action serves all three triggers: pull_request (opened, synchronize) -> apply,

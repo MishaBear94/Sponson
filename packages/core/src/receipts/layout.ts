@@ -11,7 +11,7 @@ import type { LedgerEntry, LockInfo, Receipt, ReceiptLine } from "../types.js";
 
 /** `<environment>/<scope>`, each segment made filesystem-safe. */
 export function receiptDir(environment: string, scope: string): string {
-  return `${safe(environment)}/${safe(scope)}`;
+  return `${safeSegment(environment)}/${safeSegment(scope)}`;
 }
 
 /** Path of a scope's latest receipt, relative to the store root. */
@@ -21,7 +21,7 @@ export function latestPath(environment: string, scope: string): string {
 
 /** Path of one run's receipt, relative to the store root. */
 export function runPath(environment: string, scope: string, runId: string): string {
-  return `${receiptDir(environment, scope)}/${safe(runId)}.json`;
+  return `${receiptDir(environment, scope)}/${safeSegment(runId)}.json`;
 }
 
 /** Path of a scope's lock, relative to the store root. */
@@ -29,7 +29,8 @@ export function lockPath(environment: string, scope: string): string {
   return `${receiptDir(environment, scope)}/lock.json`;
 }
 
-function safe(s: string): string {
+/** One path segment made filesystem-safe: every run of characters outside `[a-zA-Z0-9._-]` becomes `-`. */
+export function safeSegment(s: string): string {
   return s.replace(/[^a-zA-Z0-9._-]+/g, "-");
 }
 

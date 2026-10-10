@@ -27,7 +27,7 @@ afterAll(() => {
 });
 
 describe("git-branch receipts", () => {
-  it("control: every commit of sponson/receipts is free of secrets, connection strings and their passwords across fail → rollback → apply → destroy", async () => {
+  it("control: every commit of every receipts branch is free of secrets, connection strings and their passwords across fail → rollback → apply → destroy", async () => {
     const stripe = "fake_lv_gitHistoryCheck_ZZ9";
     const w = await World.create(PLAN_DB_ENV(`      STRIPE_KEY: { secret: "env://STRIPE_KEY" }\n`), { env: { STRIPE_KEY: stripe } });
     const remote = await workspace("bare");

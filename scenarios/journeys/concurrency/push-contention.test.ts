@@ -1,9 +1,8 @@
 /**
  * Many PRs apply at the same moment (a dependabot batch, a rebase of a stack), each on its own CI runner with its
- * own clone, all pushing to the one `sponson/receipts` branch.
- * Design: concurrent PRs have no content conflicts, only a race for the ref; a rejected push fetches, rebases and
- * pushes again — distinct
- * scopes are independent; a ref race must never fail a run or lose a receipt.
+ * own clone, all pushing receipts to the same remote.
+ * Design (ADR 0016): each scope has its own receipts branch, so distinct scopes never race for a ref at all; within a
+ * scope, a rejected push fetches, re-checks and pushes again. A ref race must never fail a run or lose a receipt.
  */
 import { chmod, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";

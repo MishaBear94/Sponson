@@ -17,10 +17,10 @@ const PUBLIC_API: Record<string, string[]> = {
   "@sponson/core": [
     "AdapterAbout", "AdapterContext", "AdoptedLine", "AncestryCheck", "ApplyResult", "ApplyResultSummary", "Change", "Ctx",
     "DiffKind", "DiffSide", "Drift", "DriftKind", "ERROR_CODES", "ErrorCode", "ErrorCodeSpec", "ExitCode", "FromRef",
-    "GitBranchReceiptStore", "GitBranchStoreOptions", "KeepRef", "Ledger", "LedgerEntry", "LineOutputs", "LineStatus",
+    "GitBranchReceiptStore", "GitBranchStoreOptions", "KeepRef", "LEGACY_RECEIPTS_BRANCH", "Ledger", "LedgerEntry", "LineOutputs", "LineStatus",
     "Literal", "LiveState", "LocalReceiptStore", "LockHeldError", "LockInfo", "LockLostError", "MASK",
     "MIN_REDACT_LENGTH", "MarkerKind", "OpSpec", "OutputSpec", "PLAN_FILENAME", "ParseWarning", "ParsedPlan", "Plan",
-    "PlanLine", "PlanLineStatus", "PlanResult", "RECEIPT_VERSION", "Receipt", "ReceiptLine", "ReceiptStore",
+    "PlanLine", "PlanLineStatus", "PlanResult", "RECEIPTS_REF_PREFIX", "RECEIPT_VERSION", "Receipt", "ReceiptLine", "ReceiptStore",
     "RedactDeepOptions", "Redactor", "Registry", "ResolveResult", "ResolvedParams", "ResolvedValue",
     "ResourceAdapter", "ResourceDiff", "ResourceRecord", "RunOptions", "RunStatus", "SecretRef", "SecretSource",
     "SponsonError", "Staleness", "ValueSpec", "ValueState", "WARNING_CODES", "WarningCode", "applyRun",
@@ -28,7 +28,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "identity", "interpolate", "isFromRef", "isKeepMarker", "isKeepRef", "isPendingMarker", "isSecretRef",
     "isSponsonError", "latestPath", "loadPlan", "lockExpired", "lockPath", "markerKind", "migrateV1", "orderChanges",
     "outputRefs", "parseLock", "parsePlan", "parseReceipt", "pendingMarker", "pendingRef", "planRun", "receiptDir",
-    "resolveParams", "runPath", "scopeFor", "secretRefs", "serialize", "sha256", "shortHash", "staleness",
+    "receiptsBranch", "resolveParams", "runPath", "safeSegment", "scopeFor", "secretRefs", "serialize", "sha256", "shortHash", "staleness",
     "walkParams",
   ],
   "@sponson/adapters": [
