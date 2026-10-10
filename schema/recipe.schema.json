@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/MishaBear94/Sponson/main/schema/recipe.schema.json",
+  "title": "Sponson recipe",
+  "description": "One provider's recipes for the generic http adapter: packages/adapters/recipes/<provider>.yaml. See docs/adr/0020-recipes.md and CONTRIBUTING.md (Adding a recipe).",
+  "type": "object",
+  "required": ["provider", "title", "category", "verified_on", "docs", "api", "assumptions", "ops"],
+  "additionalProperties": false,
+  "properties": {
+    "provider": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$", "description": "The provider's name: the file's name, and the first half of a line's `recipe: <provider>.<op>`." },
+    "title": { "type": "string", "minLength": 1, "description": "The provider as people write it (Cloudflare)." },
+    "category": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "The id of a category in docs/coverage.yaml." },
+    "verified_on": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "The date the API facts were checked against `docs`." },
+    "docs": {
+      "type": "array",
+      "minItems": 1,
+      "description": "The provider's official pages the recipe was verified against.",
+      "items": {
+        "type": "object",
+        "required": ["title", "url"],
+        "additionalProperties": false,
+        "properties": { "title": { "type": "string", "minLength": 1 }, "url": { "type": "string", "pattern": "^https://\\S+$" } }
+      }
+    },
+    "api": {
+      "type": "object",
+      "description": "The API block defaults: what `providers.http.<api>: { recipe: <provider> }` means. `base_url` may be left out only for per-account APIs; then every plan sets it.",
+      "required": ["base_url_env", "auth"],
+      "additionalProperties": false,
+      "properties": {
+        "base_url": { "type": "string", "pattern": "^https://\\S+$" },
+        "base_url_env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*_API_URL$", "description": "The conventional override variable, `<PROVIDER>_API_URL`; the recipe tests point it at the fake cloud." },
+        "auth": {
+          "description": "The credential, under the provider's conventional variable name (its CLI's or SDK's).",
+          "oneOf": [
+            { "type": "object", "required": ["bearer_env"], "additionalProperties": false, "properties": { "bearer_env": { "$ref": "#/$defs/credentialEnv" } } },
+            { "type": "object", "required": ["header", "value_env"], "additionalProperties": false, "properties": { "header": { "type": "string", "minLength": 1 }, "value_env": { "$ref": "#/$defs/credentialEnv" } } },
+            {
+              "type": "object",
+              "required": ["basic"],
+              "additionalProperties": false,
+              "properties": { "basic": { "type": "object", "required": ["user_env", "password_env"], "additionalProperties": false, "properties": { "user_env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" }, "password_env": { "$ref": "#/$defs/credentialEnv" } } } }
+            }
+          ]
+        },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "encoding": { "enum": ["json", "form"] }
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Numbered facts about the API the recipe relies on. Verified ones cite their source.",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "verified"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[A-Z]{2,3}[0-9]+$" },
+          "text": { "type": "string", "minLength": 10 },
+          "verified": { "type": "boolean" },
+          "source": { "type": "string", "pattern": "^https://\\S+$" }
+        },
+        "if": { "properties": { "verified": { "const": true } } },
+        "then": { "properties": { "source": true }, "required": ["source"] }
+      }
+    },
+    "ops": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+      "additionalProperties": { "$ref": "#/$defs/op" }
+    }
+  },
+  "$defs": {
+    "credentialEnv": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|_KEY|APIKEY)$" },
+    "param": {
+      "type": "object",
+      "required": ["type", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["string", "integer", "number", "boolean", "list", "map"] },
+        "description": { "type": "string", "minLength": 5 },
+        "required": { "type": "boolean" },
+        "default": true,
+        "enum": { "type": "array", "minItems": 1 },
+        "pattern": { "type": "string" },
+        "example": true
+      },
+      "if": { "properties": { "required": { "const": true } }, "required": ["required"] },
+      "then": { "properties": { "example": true, "default": true }, "required": ["example"], "not": { "properties": { "default": true }, "required": ["default"] } }
+    },
+    "op": {
+      "type": "object",
+      "required": ["kind", "title", "summary", "covers", "params", "http"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "enum": ["resource", "list_item"], "description": "The http op it expands into; the plan line's `op`." },
+        "title": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string", "minLength": 20 },
+        "covers": { "type": "array", "items": { "type": "string", "pattern": "^[a-z0-9-]+$" }, "description": "Ids of docs/coverage.yaml rows this op covers." },
+        "params": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$", "not": { "enum": ["api", "recipe", "destroy", "id", "adapter", "op", "environments", "depends_on"] } },
+          "additionalProperties": { "$ref": "#/$defs/param" }
+        },
+        "http": {
+          "type": "object",
+          "description": "The http.resource or http.list_item params, without api, vars and destroy. `{ param: <name> }` stands for a param's value; `{<name>}` in a path for its URI-encoded value.",
+          "properties": { "api": false, "vars": false, "destroy": false }
+        },
+        "sim": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "How the generic REST sim stands in for the provider in the recipe tests.",
+          "properties": {
+            "id_from": { "type": "string", "description": "The body field a create chooses the id with." },
+            "numeric_ids": { "type": "boolean" },
+            "objects": { "type": "object", "additionalProperties": { "type": "object" }, "description": "Objects to seed, by path (placeholders filled from the examples)." }
+          }
+        },
+        "live": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "params": { "type": "object", "additionalProperties": { "type": "string", "pattern": "^SPONSON_LIVE_[A-Z0-9_]+$" } } }
+        }
+      }
+    }
+  }
+}

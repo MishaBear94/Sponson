@@ -70,6 +70,7 @@
               "reference/cli",
               "reference/examples",
               "reference/api-verification",
+              "reference/recipes",
               "reference/coverage"
             ]
           }
@@ -106,6 +107,7 @@
                   "contributing/adr/0017-generic-http-adapter",
                   "contributing/adr/0018-once-only-outputs",
                   "contributing/adr/0019-parent-object-locks",
+                  "contributing/adr/0020-recipes",
                   "contributing/adr/0021-manual-steps"
                 ]
               },

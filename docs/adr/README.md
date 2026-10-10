@@ -25,6 +25,7 @@ Nygard's format). They explain *why* the code is the way it is; [ARCHITECTURE.md
 | [0017](0017-generic-http-adapter.md) | A generic, declarative `http` adapter | Proposed |
 | [0018](0018-once-only-outputs.md) | Once-only outputs resolve to `{ keep: true }` after the run that revealed them, when fingerprints prove it | Proposed |
 | [0019](0019-parent-object-locks.md) | Locks on shared parent objects | Accepted |
+| [0020](0020-recipes.md) | Recipes: verified http specs as one-line building blocks | Proposed |
 | [0021](0021-manual-steps.md) | Manual steps for state no API can manage | Proposed |
 
 ## Writing a new record

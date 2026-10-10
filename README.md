@@ -68,7 +68,7 @@ One release, one plan. Three commands.
 
 | Command | What it does | Writes anything? |
 |---|---|---|
-| `sponson init` | Detects your stack from the repository's files (Vercel, Neon, PlanetScale, Supabase, Clerk, LaunchDarkly, the framework and ORM) and writes a plan for it, with the project ids it can find. Run again to adopt resources the plan does not know about. | the plan file only |
+| `sponson init` | Detects your stack from the repository's files (Vercel, Netlify, Neon, PlanetScale, Supabase, Clerk, LaunchDarkly, the framework and ORM) and writes a plan for it, with the project ids it can find. Run again to adopt resources the plan does not know about. | the plan file only |
 | `sponson plan` | Reads live state, prints the diff and any drift. | no |
 | `sponson apply` | Runs the plan in dependency order. Rolls back what this run created if a line fails. Writes a receipt. | yes |
 
@@ -142,14 +142,17 @@ sponson apply         # creates the branch, injects the variable, waits for the 
 ```
 
 `sponson init` reads the repository's files only (no network, no credentials): `.vercel/project.json` and
-`vercel.json`, `package.json` dependencies, Prisma and Drizzle configs, `.neon`, and the variable *names* in
+`vercel.json`, `netlify.toml` and `.netlify/state.json`, `package.json` dependencies, Prisma and Drizzle configs,
+`.neon`, and the variable *names* in
 `.env.example`, `.env.local` and the other `.env*` files. It never reads a value out of them, except to recognise a
 database host such as `*.neon.tech`. It writes a line only for what it found (one database: a Neon branch, a PlanetScale branch and
-password, or a Supabase preview branch, in that order of preference when several are detected; the Vercel preview
+password, or a Supabase preview branch, in that order of preference when several are detected; the Vercel or Netlify preview
 variable that references it under the name your code reads; a Clerk redirect or a Supabase Auth redirect for the
 preview URL), fills in the project ids it can find, and marks each one it cannot with a `TODO` comment saying where to
-look (`vercel link`, `neonctl projects list`, `supabase link`). LaunchDarkly gets a commented example line to fill in with a
-flag key and uncomment. Services Sponson does not manage yet (Auth0, Netlify, Cloudflare, PostHog, Stripe,
+look (`vercel link`, `netlify link`, `neonctl projects list`, `supabase link`). LaunchDarkly gets a commented example line to fill in with a
+flag key and uncomment. A Wrangler configuration (`wrangler.toml`, `wrangler.json`) gives a Cloudflare Pages
+variables line with the project's `name`; Pages preview variables are shared by every preview, so no per-PR value
+is wired into them. Services Sponson does not manage yet (Auth0, PostHog, Stripe,
 Sentry, …) are listed as "not supported yet" with a link to the
 [roadmap](ROADMAP.md), never silently dropped. With nothing detected it writes the Vercel + Neon template.
 
@@ -166,6 +169,11 @@ Next: set VERCEL_TOKEN, NEON_API_KEY, CLERK_SECRET_KEY in your environment, then
 `todo` (each placeholder's `path` and `hint`) and `assumed` (true when it wrote the template).
 
 Which providers are covered today, and what is planned, is measured in [docs/coverage.md](docs/coverage.md).
+
+Beyond the built-in adapters, any JSON REST API is reachable with the generic `http` adapter, and the providers it
+has been verified against ship as [recipes](docs/recipes.md): one plan line names a provider operation and fills in
+its params, for example `recipe: cloudflare.dns_cname` with a `zone_id`, a `name` and a `target`. Each recipe cites the
+API docs it was checked against and runs through create, re-apply, drift and destroy in the test suite.
 
 Third-party adapters and secret sources load as plugins: `SPONSON_PLUGINS=sponson-adapter-x,./local-adapter.mjs`, each module exporting `register(registry)`.
 
@@ -263,6 +271,7 @@ Format, engine, the [built-in adapters](docs/plan-format.md#built-in-ops) and [s
 - [ARCHITECTURE.md](ARCHITECTURE.md): how a `plan` and an `apply` run through the code, the ledger, scopes, redaction.
 - [docs/plan-format.md](docs/plan-format.md): every key of `release.plan.yaml`, value forms, `${ctx.*}`, the built-in ops.
 - [docs/errors.md](docs/errors.md): every error code, its exit code and remedy (generated from the code).
+- [docs/recipes.md](docs/recipes.md): the shipped recipes, their params and sources (generated from the recipe files).
 - [docs/adr/](docs/adr/README.md): the design decisions and why they were made.
 - [examples/](examples/README.md): complete, tested plans to start from.
 
@@ -275,7 +284,7 @@ line of `release.plan.yaml`:
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full adapter checklist: the adapter file, its registration (or a plugin loaded with `SPONSON_PLUGINS`), one sim routes file, and one scenario.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full adapter checklist: the adapter file, its registration (or a plugin loaded with `SPONSON_PLUGINS`), one sim routes file, and one scenario. Adding a recipe is one YAML file; its checklist is there too.
 
 ## License
 

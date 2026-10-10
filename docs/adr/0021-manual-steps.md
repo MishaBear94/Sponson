@@ -4,7 +4,7 @@ Date: 2026-10-11
 
 ## Status
 
-Proposed. (0020 is reserved for recipes, decided separately.)
+Proposed. Independent of [ADR 0020](0020-recipes.md) (recipes); `verify` reuses the generic adapter of [ADR 0017](0017-generic-http-adapter.md).
 
 ## Context
 

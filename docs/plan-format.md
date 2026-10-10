@@ -209,7 +209,9 @@ An op decides that from the line or from the provider block it writes through, b
 | `vercel.env` | `target: production` (or no `target` under `--env production`) |
 | `vercel.deploy` | `--env production` |
 | `launchdarkly.flag_target` | `providers.launchdarkly.production: true`, or, without that key, an `environment` key containing `prod` in any case (`production`, `prod-eu`); `production: false` opts a key such as `preprod` out |
-| `http.resource`, `http.list_item` | the line's API block says `production: true` |
+| `netlify.env` | `context: production` (or no `context` under `--env production`) |
+| `cloudflare.pages_env` | `target: production` (or no `target` under `--env production`) |
+| `http.resource`, `http.list_item` | the line's API block says `production: true` (a recipe line's resolved block too) |
 
 Without an approver, `apply` is refused with `ENV_NOT_APPROVED` before any provider is called. `plan --json` reports
 `requiresApproval: true` in both cases. A blank name is no name.
@@ -246,6 +248,8 @@ The base URL override replaces the provider's API base URL (the test suites poin
 | `launchdarkly` | [`launchdarkly.flag_target`](#launchdarklyflag_target) | `LAUNCHDARKLY_ACCESS_TOKEN` | `LAUNCHDARKLY_API_URL` |
 | `http` | [`http.resource`](#httpresource), [`http.list_item`](#httplist_item) | `providers.http.<api>.auth` | `providers.http.<api>.base_url_env` |
 | `supabase` | [`supabase.branch`](#supabasebranch), [`supabase.auth_redirect`](#supabaseauth_redirect) | `SUPABASE_ACCESS_TOKEN` | `SUPABASE_API_URL` |
+| `netlify` | [`netlify.env`](#netlifyenv) | `NETLIFY_AUTH_TOKEN` | `NETLIFY_API_URL` |
+| `cloudflare` | [`cloudflare.pages_env`](#cloudflarepages_env) | `CLOUDFLARE_API_TOKEN` | `CLOUDFLARE_API_URL` |
 | `manual` | [`manual.step`](#manualstep) | `none (verify: providers.manual.<api>.auth, optional)` | `providers.manual.<api>.base_url_env` |
 <!-- generated:adapters:end -->
 
@@ -312,6 +316,51 @@ One URL on the Clerk instance's redirect allow-list (the instance `CLERK_SECRET_
 
 A URL that is already on the list is taken over, not duplicated. Destroy removes the URL. For drift and adoption,
 every URL on the instance's list is in scope.
+
+### `netlify.env`
+
+Environment variable values of one Netlify deploy context. Requires `providers.netlify.site` (the site's Project ID,
+`site_id`); `providers.netlify.account` (the team's slug or id) is optional, and looked up from the site when absent.
+
+Netlify keeps one variable per name with one value per deploy context. A line owns **one context's value** of each
+variable it declares, never the variable: values someone set for other contexts are left alone, and so is the
+variable itself unless the line created it and nothing else holds a value in it.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `context` | `production` \| `deploy-preview` \| `branch-deploy` \| `dev` \| `dev-server` \| `branch` | `production` when `--env production`, else `branch` | The deploy context. `branch` is a value for one branch, which Netlify uses for that branch's Deploy Previews, branch deploys and permalinks, so two pull requests never see each other's values. `deploy-preview` is one value for every Deploy Preview of the site. `production` requires approval (see [Environments](#environments)). One value for all contexts (`all`) cannot be owned by a line. |
+| `branch` | string | the current git branch, for `context: branch` | The branch (Netlify's `context_parameter`; a trailing `*` matches a prefix, e.g. `release/*`). Only valid with `context: branch`. |
+| `values` | map: NAME → value | `{}` | The variables. Each value is a literal, `{ from }`, `{ secret }` or `{ keep: true }`. Values are shown as sensitive in diffs. |
+
+Each value is a resource with key `env:<context>:<branch or *>:<NAME>`; drift compares a hash of the value. A
+variable created by Sponson is not marked secret (its values stay readable to the token, which is what lets
+Sponson see drift). A variable already marked *Contains secret values* can be written, but Netlify never shows its
+values again (except in `dev`), so such a value is written on every apply. A variable that has one value for all
+deploy contexts fails the line with `PROVIDER_CONFLICT`: give it per-context values in the Netlify UI first.
+Destroy deletes the line's values one by one, then deletes a variable only when no value is left in it.
+
+A variable is shared by every scope that writes a value of it, so `netlify.env` lines lock the site's variables,
+parent object `netlify:<site>:env` ([ADR 0019](adr/0019-parent-object-locks.md)): lines of different pull requests
+on one site write, roll back and destroy one at a time. Two pull requests creating the same variable at once, or one
+destroying the variable's last value while another adds its own, therefore never lose a value. The lock is per site,
+not per variable, because a lock names one object per line and a line declares several variables; lines of other
+sites never wait for each other.
+
+`preview_url`, `deploy_id` and `deploy_preview_url` are external outputs: they become available when the newest
+deploy of the current commit that reads the line's context (production deploys for `production`, Deploy Previews
+for `deploy-preview`, branch deploys for `branch-deploy`, and both for `branch`) is `ready` **and started after the
+line's variables last changed** — a build reads the values set when it started, so an older deploy is never
+reported. `preview_url` is the deploy's permalink, `https://<deploy id>--<site name>.netlify.app`;
+`deploy_preview_url` is the pull request's stable URL, `https://deploy-preview-<n>--<site name>.netlify.app`, for a
+Deploy Preview, and the permalink otherwise. A deploy that ends `error` or `rejected` fails the lines waiting on it
+(`EXTERNAL_FAILED`); `dev` and `dev-server` values belong to no deploy, so reading their `preview_url` is
+`PARAM_INVALID`.
+
+After writing, if a deploy of this commit for the line's context started before the write, the adapter starts a new
+build (`POST /sites/{site_id}/builds`: production for `production`, a branch deploy of the branch otherwise) and the
+receipt line gets `notes.redeployed: true`. Netlify's API cannot rebuild a Deploy Preview, so a `deploy-preview`
+line records `notes.stale_deploy: <deploy id>` instead and waits for a newer deploy: retry the deploy in the
+Netlify UI or push a commit. For drift and adoption, every value of the line's context (and branch) is in scope.
 
 ### `planetscale.branch`
 
@@ -592,6 +641,81 @@ counts even when the verify request does not (yet) agree. A failed run never rol
 `--recreate` refuses one. Agents show the instructions to a person and never confirm on their own (see
 [SKILL.md](../SKILL.md)).
 
+### Recipes
+
+A recipe is a verified `http.resource` or `http.list_item` spec for one provider operation, shipped with Sponson:
+the line names it and fills in typed params instead of writing requests. Every recipe, its params, an example line
+and what it was verified against: [docs/recipes.md](recipes.md).
+
+```yaml
+- id: preview_dns
+  adapter: http
+  op: resource                        # the recipe's kind
+  recipe: cloudflare.dns_cname        # <provider>.<op>
+  zone_id: 023e105f4ecef8ad9ca31a8372d0c353
+  name: "${ctx.scope}.preview.example.com"
+  target: preview-host.example.net
+```
+
+`api` defaults to the recipe's provider, and its block under `providers.http` to `{ recipe: <provider> }`: the
+recipe's base URL, credential variable, headers and encoding. Write the block to override any of them
+(`cloudflare: { recipe: cloudflare, auth: { bearer_env: MY_CLOUDFLARE_TOKEN } }`); a hand-written line may name such a
+block too. Every key of the line other than `api`, `recipe` and `destroy` is a recipe param; an unknown recipe, op or
+param, a missing required one or a wrong value is `PARAM_INVALID` naming it before any request. The ledger records
+the resolved block and the keys the expanded requests produce, never the recipe's text
+([ADR 0020](adr/0020-recipes.md)).
+
+### `cloudflare.pages_env`
+
+Variables of a Cloudflare Pages project's `preview` or `production` deployment configuration. Requires
+`providers.cloudflare.account` (the account id) and `providers.cloudflare.project` (the Pages project name), and an
+API token in `CLOUDFLARE_API_TOKEN` with the account permission "Cloudflare Pages Edit".
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `target` | `preview` \| `production` | `production` when `--env production`, else `preview` | The variable set. It must be the run's environment (`--env`); anything else is `PARAM_INVALID` (see below). `production` requires approval (see [Environments](#environments)). |
+| `vars` | map: NAME → value | `{}` | Plain-text variables (`plain_text`). Each value is a literal, `{ from }`, `{ secret }` or `{ keep: true }`. Diffs show the new value; the old one is shown as sensitive. |
+| `secrets` | map: NAME → value | `{}` | Secret variables (`secret_text`), shown as sensitive. A name may not be in both maps. |
+| `rewrite_secrets` | boolean | `false` | Send every secret on every apply (see "Secrets" below). |
+
+Each variable is a resource with key `env:<target>:<NAME>`. The variables are one map on the project, so `apply`
+reads the project, PATCHes only the keys this line writes (Cloudflare merges the map; a key set to `null` is deleted),
+then reads it again and fails with `PROVIDER_RESPONSE` if a key it sent is not there as sent or a key it did not send
+has disappeared. Keys this line does not declare are never written. Destroy sets this line's keys to `null`; a key or
+project that is already gone is success. For drift and adoption, every variable of the line's environment is in
+scope; `sponson init` adopts them as `{ keep: true }`, plain ones under `vars` and secret ones under `secrets`.
+
+**Preview variables are shared.** Pages has one set of preview variables for every preview deployment of the
+project, whatever the branch; there are no per-branch values. A key is therefore one resource in the `preview`
+environment, not one per pull request. The first scope that writes it owns it; another scope (a second pull request)
+that declares the same key with the same value relies on it unchanged, and one that declares a different value is
+refused with `OWNED_BY_OTHER_SCOPE` until the owner's scope is destroyed. So per-PR values (`${ctx.pr.number}`, a PR's
+database URL) do not belong in Pages preview variables: two open pull requests would conflict. The owner's destroy
+removes a key a second scope relied on. Because ownership is decided among the scopes of one Sponson environment, the
+line's `target` must equal the run's `--env`: a run of any other environment fails the line with `PARAM_INVALID`.
+
+**Locked map.** The variables of one environment are one map on one project object, written by read-modify-write, so
+the line names it as a shared parent object (`lockOn`, [ADR 0019](adr/0019-parent-object-locks.md)):
+`cloudflare:<account>:pages:<project>:<target>:env`. Runs of every scope that write that map (apply, rollback,
+`apply --destroy`) take turns, so one run's re-read never mistakes another's concurrent write or destroy for a lost
+key. Writers outside Sponson are not serialised: Cloudflare offers no precondition (ETag) on the PATCH.
+
+**Secrets.** Cloudflare never returns a `secret_text` value, so a secret is compared by presence and type only:
+
+- a secret that exists as `secret_text` is `unchanged`, whatever value the plan has. A new value in the plan (a
+  rotated `{ secret }`) is not written unless the line sets `rewrite_secrets: true`, which sends every secret of the
+  line on every apply (one PATCH; never reported as drift). Without it, rotate by setting `rewrite_secrets: true` for
+  one apply.
+- a secret's value changed in the dashboard is not detected; deleting it is `missing` drift (recreated), and turning it
+  into plain text, or a plain variable into a secret, is `changed` drift.
+
+Plain variables are compared by type and value: a dashboard edit is `changed` drift, refused until `--reconcile`.
+
+Variables apply to the next deployment; Sponson does not redeploy a Pages project, and this op has no outputs. The
+branch alias URL of a preview (`<alias>.<project>.pages.dev`) is not an output: Cloudflare documents that the alias is
+the branch name lowercased with other characters replaced by `-`, but not how long names are shortened or collisions
+resolved.
+
 ### Outputs
 
 The outputs each built-in op declares. `immediate` outputs exist once the line is applied; `external` ones only after
@@ -626,6 +750,10 @@ the named event. Sensitive outputs are never displayed, logged or written to rec
 | `supabase.branch` | `db_host` | immediate | no |
 | `supabase.branch` | `connection_string` | immediate | yes |
 | `supabase.auth_redirect` | `url` | immediate | no |
+| `netlify.env` | `preview_url` | external (`deploy`) | no |
+| `netlify.env` | `deploy_id` | external (`deploy`) | no |
+| `netlify.env` | `deploy_preview_url` | external (`deploy`) | no |
+| `cloudflare.pages_env` | (none) | | |
 | `manual.step` | (none) | | |
 <!-- generated:outputs:end -->
 
@@ -654,7 +782,7 @@ working. The alternative is to keep the value in a secret manager and reference 
 |---|---|---|
 | Editing, with the schema | shape of every key; id format; value forms; secret-looking literals; display text; the built-in ops' parameter names and `target` values | (editor diagnostics) |
 | Parsing (every command) | everything above that the parser enforces, plus unique ids, declared environments, `depends_on` and `from:` ids exist | `PLAN_PARSE`, `PLAN_INVALID`, `SECRET_LITERAL`, `REF_UNKNOWN` |
-| Preparing a run (before any provider call) | `--env` declared; adapters and ops exist; references survive the environment filter; no cycles; referenced outputs exist; `${ctx.*}` resolves; approval | `ENV_UNKNOWN`, `ADAPTER_UNKNOWN`, `OP_UNKNOWN`, `REF_FILTERED`, `REF_CYCLE`, `REF_OUTPUT_UNKNOWN`, `CTX_NULL`, `ENV_NOT_APPROVED` (apply only) |
+| Preparing a run (before any provider call) | `--env` declared; adapters and ops exist; references survive the environment filter; no cycles; referenced outputs exist; `${ctx.*}` resolves; recipe lines' recipe, op and params; approval | `ENV_UNKNOWN`, `ADAPTER_UNKNOWN`, `OP_UNKNOWN`, `REF_FILTERED`, `REF_CYCLE`, `REF_OUTPUT_UNKNOWN`, `CTX_NULL`, `PARAM_INVALID`, `PLAN_INVALID`, `ENV_NOT_APPROVED` (apply only) |
 | Reading live state (per line) | parameter values; credentials; secrets resolve; drift; ownership by another scope; once-only outputs a line would need again | `PARAM_INVALID`, `PROVIDER_*`, `SECRET_UNRESOLVED`, `DRIFT_CHANGED`, `OWNED_BY_OTHER_SCOPE`, `OUTPUT_UNAVAILABLE` |
 
 Every code is listed in [errors.md](errors.md).

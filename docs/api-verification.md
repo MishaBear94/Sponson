@@ -11,7 +11,7 @@ silent; needs a live account.
 
 ## Sources
 
-All fetched on 2026-10-10 (LaunchDarkly, PlanetScale, Supabase: 2026-10-11) and treated as data; none is vendored into the repository.
+All fetched on 2026-10-10 (LaunchDarkly, PlanetScale, Supabase, Netlify: 2026-10-11) and treated as data; none is vendored into the repository.
 
 | Provider | Source | Version |
 |---|---|---|
@@ -23,11 +23,15 @@ All fetched on 2026-10-10 (LaunchDarkly, PlanetScale, Supabase: 2026-10-11) and 
 | PlanetScale | OpenAPI document, https://planetscale.com/docs/openapi.yaml (fetched 2026-10-11); service tokens, https://planetscale.com/docs/api/reference/service-tokens; CLI references https://planetscale.com/docs/cli/service-tokens.md, https://planetscale.com/docs/cli/branch.md, https://planetscale.com/docs/cli/password.md; Node.js connection string, https://planetscale.com/docs/vitess/tutorials/connect-nodejs-app | `v1` |
 | Supabase | Management API OpenAPI document, https://api.supabase.com/api/v1-json (rendered at https://supabase.com/docs/reference/api/introduction) | `1.0.0` as served on that date |
 | Supabase | Docs pages, for what the spec does not say: Auth's `URI_ALLOW_LIST` format (https://github.com/supabase/auth, README "General Config"), the direct connection string (https://supabase.com/docs/guides/database/connecting-to-postgres), the project API URL (https://supabase.com/docs/guides/api), Branching (https://supabase.com/docs/guides/deployment/branching), redirect URL wildcards (https://supabase.com/docs/guides/auth/redirect-urls) | as served on that date |
+| Netlify | OpenAPI document, https://github.com/netlify/open-api/blob/master/swagger.yml (rendered at https://open-api.netlify.com/), fetched 2026-10-11 | `master` on that date |
+| Netlify | Docs, fetched 2026-10-11: API guide https://docs.netlify.com/api-and-cli-guides/api-guides/get-started-with-api/, env vars https://docs.netlify.com/build/environment-variables/overview/ and …/get-started/, Secrets Controller https://docs.netlify.com/build/environment-variables/secrets-controller/, deploy overview https://docs.netlify.com/deploy/deploy-overview/ | as served on that date |
+| Cloudflare | OpenAPI document, https://github.com/cloudflare/api-schemas (`openapi.json`); API reference https://developers.cloudflare.com/api/resources/pages/subresources/projects/methods/get/ and [`…/methods/edit/`](https://developers.cloudflare.com/api/resources/pages/subresources/projects/methods/edit/); the Pages and fundamentals pages cited below | fetched 2026-10-11 |
 
 Vercel, Neon and Clerk use bearer authentication (`securitySchemes`), which is what the shared HTTP client sends
 by default: ✅. LaunchDarkly takes the access token as the whole `Authorization` value, without `Bearer`; the adapter
 sends it that way (`authHeader: "header:authorization"`): ✅. PlanetScale service tokens are not bearer tokens
-either; see below. Supabase's Management API uses bearer tokens: ✅.
+either; see below. Supabase's Management API and Netlify's API use bearer tokens: ✅. Cloudflare's API token is a bearer token
+too ("The preferred authorization scheme"): ✅.
 
 ## Vercel
 
@@ -184,14 +188,18 @@ The `http` adapter makes the calls a plan line declares, so there is no provider
 checked by running `sponson plan` (it only reads) against the real API before the first `apply`. The plans in
 [examples/](../examples/README.md) that use it are illustrative and say so.
 
+[Recipes](recipes.md) are the exception: each is verified against the provider pages it cites, its assumptions are
+numbered and marked verified or not in its file (and listed in docs/recipes.md), and `pnpm test:live` runs it against
+the real API when its credential and `SPONSON_LIVE_*` variables are set ([ADR 0020](adr/0020-recipes.md)).
+
 ### Sim assumptions (`packages/sim/src/routes/rest.ts`)
 
 They describe a conventional JSON REST API, not one provider; the adapter's tests and scenarios run against them.
 
 | Id | Assumption | Status |
 |---|---|---|
-| R1 | credentials as `Authorization: Bearer`, `Authorization: Basic` or a `*-Api-Key` header | convention |
-| R2 | `{ data }` envelopes for collection objects and lists, cursor in `next_cursor`; other objects bare | convention (the plan line names its own envelope with `item_path`, `list_path`, `find.next`) |
+| R1 | credentials as `Authorization: Bearer`, `Authorization: Basic` or a header ending in `-Api-Key`, `-Key` or `-Token` | convention |
+| R2 | `{ data }` envelopes for collection objects and lists, cursor in `next_cursor`; other objects bare; a collection's style changes the envelopes, cursor and id field | convention (the plan line names its own envelope with `item_path`, `list_path`, `find.next`; the recipe tests shape the style from the recipe) |
 | R3 | unknown paths are 404 until seeded or created; client-chosen ids; duplicate `name` → 409 | convention (`exists_status` covers providers that answer otherwise) |
 | R4 | PATCH is a JSON merge patch (RFC 7396); PUT replaces; JSON or form bodies; no preconditions | RFC 7396 for PATCH; the rest convention |
 | R5 | DELETE answers `{ id, deleted }`; unknown is 404 | convention (`gone_status` covers providers that answer otherwise) |
@@ -233,6 +241,84 @@ unless the project has the IPv4 add-on.
 | S8 | the allow-list is comma-separated; stored verbatim | format verified (Auth's `URI_ALLOW_LIST`); verbatim storage ❓ (pinned) |
 | S9 | a branch has its own Auth config at `/v1/projects/{branch ref}/config/auth` | ❓ |
 
+## Netlify
+
+Written against the specification and docs from the start (no earlier version to correct), so the table records
+what each call relies on rather than fixes.
+
+### Calls the adapter makes
+
+| Call | What the adapter sends and reads | Spec | Notes |
+|---|---|---|---|
+| `GET /sites/{site_id}` | reads `name`, `account_id` (else `account_slug`) | ✅ | getSite. Only to name the account when the plan does not, and to build URLs from `name`. That `name` is the `<name>.netlify.app` subdomain is the docs' example (`mysitename.netlify.app`), not a statement (NL2, pinned). |
+| `GET /accounts/{account_id}/env` | `site_id`; reads `[].key`, `values[].id`, `value`, `context`, `context_parameter`, `is_secret`, `updated_at` | ✅ | getEnvVars; "If specified, only return environment variables set on this site", so shared (account) variables never enter a line's scope. `{account_id}` may be the slug (API guide). No page parameters are documented; the adapter reads one answer. |
+| `POST /accounts/{account_id}/env` | `site_id`; body `[{ key, values: [{ context, value, context_parameter? }] }]`; reads `201` list of `envVar` | ✅ | createEnvVars. `scopes` and `is_secret` are left out: "By default, environment variables apply to all scopes" (overview); a variable Sponson creates is not secret, so its values stay comparable. |
+| same, an existing key | re-list, then PATCH instead | ❓ | The status is not documented (NL5); the adapter treats `400`, `409` and `422` alike and only falls back when the re-list shows every key. Between Sponson runs this cannot happen: lines lock `netlify:<site>:env` (ADR 0019); it covers a person or another tool creating the variable meanwhile. |
+| `PATCH /accounts/{account_id}/env/{key}` | `site_id`; body `{ context, value, context_parameter? }`; reads `201` `envVar` | ✅ | setEnvVarValue: "updates or creates a new value for an existing environment variable". Sent as idempotent (it sets state). That it leaves other contexts' values and keeps the replaced value's id is ❓ (NL3, pinned). |
+| `DELETE /accounts/{account_id}/env/{key}/value/{id}` | `site_id`; `404` is success | ✅ | deleteEnvVarValue, `204`. Destroy removes only the line's values. |
+| `GET /accounts/{account_id}/env/{key}` | `site_id`; reads `values` | ✅ | getEnvVar, after a value delete: is anything left? |
+| `DELETE /accounts/{account_id}/env/{key}` | `site_id`; `404` is success | ✅ | deleteEnvVar, `204`; only when the variable has no value left (NL6). Netlify offers no precondition, so the check and the delete run under the `netlify:<site>:env` lock: another Sponson scope cannot add a value in between. |
+| `GET /sites/{site_id}/deploys` | `page=1&per_page=100`; reads `[].id`, `state`, `context`, `commit_ref`, `review_id`, `created_at` | ✅ fields; ❓ order and `context` values | listSiteDeploys; `page`/`per_page` from the API guide. `state` values from the operation's `state` filter enum (`ready`; `error`, `rejected` treated as failed; the rest in progress). `context` and `review_id` have no enum or description in the spec (NL7, pinned). The adapter sorts by `created_at` and filters by commit itself. |
+| `POST /sites/{site_id}/builds` | `branch` (absent: production) | ✅ | createSiteBuild: "No branch means production … Otherwise it's a branch deploy." Used to rebuild a production or branch deploy that predates a write. Whether it builds a branch whose branch deploys are off is ❓ (NL11). |
+
+Deploy Previews cannot be rebuilt through any documented call (the docs describe "Retry deploy" in the UI only), so a
+`context: deploy-preview` line reports the stale deploy (`notes.stale_deploy`) and waits for a newer one.
+
+### Sim assumptions (`packages/sim/src/routes/netlify.ts`)
+
+| Id | Assumption | Status |
+|---|---|---|
+| NL1 | base URL `https://api.netlify.com/api/v1`, bearer | ✅ verified |
+| NL2 | env paths, statuses (`201`, `204`); account slug accepted; site `name`, `account_id`, `account_slug` | ✅ verified; `name` = subdomain ❓ (pinned) |
+| NL3 | `envVar` / `envVarValue` shapes and contexts; `branch` needs `context_parameter`; default scopes | ✅ verified; PATCH leaves other values and keeps the id ❓ (pinned) |
+| NL4 | secret values write-only except `dev` | ✅ verified (Secrets Controller); how a masked value is returned ❓ (the adapter ignores it) |
+| NL5 | duplicate key on POST → `400`; `all` cannot sit with contextual values | ❓ (pinned: `400` or `409`) |
+| NL6 | a variable keeps existing with no values | ❓ (pinned: the adapter deletes it either way) |
+| NL7 | deploy list newest first, its fields; `context` values; `review_id` = PR number | fields ✅; order and values ❓ (pinned) |
+| NL8 | deploy `state` values | ✅ verified (enum of the `state` filter) |
+| NL9 | permalink and Deploy Preview URL formats | ✅ verified (deploy overview) |
+| NL10 | builds read the values set when they started; `updated_at` changes with a value | first ✅ verified; that PATCH bumps `updated_at` ❓ (pinned) |
+| NL11 | `POST /sites/{site_id}/builds` with and without `branch` | ✅ verified; branch deploys turned off ❓ |
+| NL12 | a `branch` value reaches that branch's Deploy Previews | ✅ verified ("used for deploy permalinks, Deploy Previews, and branch deploys for the specified branch") |
+
+## Cloudflare
+
+### Calls the adapter makes
+
+| Call | What the adapter sends and reads | Spec | Notes |
+|---|---|---|---|
+| base URL and auth | `https://api.cloudflare.com/client/v4`, `Authorization: Bearer <CLOUDFLARE_API_TOKEN>` | ✅ | [Make API calls](https://developers.cloudflare.com/fundamentals/api/how-to/make-api-calls/). The token needs the account permission "Cloudflare Pages Edit" ([permissions](https://developers.cloudflare.com/fundamentals/api/reference/permissions/); schema token groups `Pages Read`/`Pages Write`). |
+| `GET /accounts/{account_id}/pages/projects/{project_name}` | reads `success`, `result.deployment_configs.{preview,production}.env_vars`: NAME → `{ type, value }` | ✅ | Schema `pages_project` (required `deployment_configs`, each with `env_vars`, a nullable map of `pages_plain_text_env_var` / `pages_secret_text_env_var`). A null `env_vars` or entry is read as empty / absent. |
+| same, secrets | a `secret_text` value is never used, whatever the answer holds | ❓ → hardened | The docs say a secret cannot be seen after it is set ([bindings](https://developers.cloudflare.com/pages/functions/bindings/)); the schema's example is `{"type":"secret_text","value":""}` (marked `x-sensitive`). Not stated whether `value` is `""`, null or absent; the adapter ignores it in every case (CF3). |
+| `PATCH` of the same path | body `{ deployment_configs: { <target>: { env_vars: { NAME: { type, value } \| null } } } }`, sent as idempotent | ✅ `null`, ❓ merge | "To delete an environment variable, set its key to `null`" (schema and edit reference). That keys not in the body are kept is implied (the rule, and no required body field) but not stated; the adapter re-reads after every write and fails with `PROVIDER_RESPONSE` naming any key it did not send that disappeared (CF4, pinned). Answer `200` with the project: ✅. |
+| same, concurrency | none | ✅ (none exists) | No `If-Match`/ETag parameter and no `412` on this operation (CF5). Sponson's own writers of one map are serialised by the parent lock `cloudflare:<account>:pages:<project>:<target>:env` (ADR 0019); writers outside Sponson race, last write wins. |
+| failures | `4XX { success: false, errors: [{ code, message }] }`; unknown project → `404` | ✅ shape, ❓ `404` | Schema `pages_api-response-common-failure`; it declares only `4XX`. `404` with code `8000007` comes from Wrangler's error reports, not the spec (CF6). The shared client classifies by status. |
+| rate limit | `429` retried, honouring `Retry-After` | ✅ | "1,200 requests per five minute period per user"; `Retry-After` in seconds ([limits](https://developers.cloudflare.com/fundamentals/api/reference/limits/)). |
+
+### Sim assumptions (`packages/sim/src/routes/cloudflare.ts`)
+
+| Id | Assumption | Status |
+|---|---|---|
+| CF1 | base URL, bearer token, "Pages Edit" permission | ✅ verified |
+| CF2 | GET envelope and `deployment_configs.<env>.env_vars` shape | ✅ verified |
+| CF3 | a secret's value is never returned; the entry keeps its type | partly verified (docs and schema example); exact form ❓ (pinned by the contract suite) |
+| CF4 | PATCH merges the map; `null` deletes; `200` with the project | `null` and `200` ✅; merge ❓ (pinned) |
+| CF5 | no precondition on the PATCH | ✅ verified |
+| CF6 | failure envelope; unknown project `404` / `8000007` | envelope ✅; status and code ❓ |
+| CF7 | a write is visible to the next GET | ❓ (pinned) |
+| CF8 | one set of preview variables for every preview deployment | ✅ verified: "This will set the configuration for all preview deployments, not just the deployments from a specific branch" ([Wrangler configuration](https://developers.cloudflare.com/pages/functions/wrangler-configuration/)) |
+| CF9 | no documented pattern for variable names | ✅ (schema map keys are free-form) |
+| CF10 | a variable reaches only later deployments | indirectly documented ("Redeploy your project for the binding to take effect", [bindings](https://developers.cloudflare.com/pages/functions/bindings/)); the adapter does not redeploy |
+
+### Not built, and why
+
+- **Preview URL output.** [Preview deployments](https://developers.cloudflare.com/pages/configuration/preview-deployments/)
+  documents the branch alias `<alias>.<project>.pages.dev` and that "Branch name aliases are lowercased and
+  non-alphanumeric characters are replaced with a hyphen", but not the shortening of long names (a 28-character
+  limit appears only in community answers) or what happens on collisions, and the host is the project's `subdomain`,
+  which may differ from its name. Computing it from the branch would sometimes be wrong, so `pages_env` has no
+  outputs. The deployment object's documented `aliases` list is the reliable source, for a later deployment op.
+
 ## What still needs a live account
 
 - Vercel: V1 (propagation of env writes), the deployment list's order, whether `decrypt=true` still decrypts,
@@ -250,5 +336,10 @@ unless the project has the IPv4 add-on.
   personal access token), S5 (status of a duplicate name), S6 (`404` for an unknown ref, list visibility after
   delete), S8 (verbatim storage of the list), S9 (a branch's own Auth config through the same endpoint). The
   Supabase block of the contract suite is optional in a live run (branching needs a paid plan).
+- Netlify: NL2 (`name` is the subdomain), NL3 (PATCH leaves other values and keeps ids), NL5 (status of a
+  duplicate key), NL6 (an emptied variable), NL7 (deploy order, `context` values, `review_id`), NL10 (`updated_at`
+  on PATCH), NL11 (a build of a branch whose branch deploys are off).
+- Cloudflare: CF3 (what a secret's `value` looks like in GET), CF4 (that PATCH merges the map), CF6 (status of an
+  unknown project), CF7 (a write is readable at once).
 
 Run them with `pnpm test:live`; see the header of `scenarios/contract.test.ts`.

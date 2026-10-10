@@ -29,6 +29,24 @@
             "database": { "type": "string", "minLength": 1 }
           }
         },
+        "netlify": {
+          "type": "object",
+          "description": "Netlify site (its Project ID, `site_id`) and, optionally, its account (team) slug or id; without it the site's own account is looked up.",
+          "required": ["site"],
+          "properties": {
+            "site": { "type": "string", "minLength": 1 },
+            "account": { "type": "string", "minLength": 1 }
+          }
+        },
+        "cloudflare": {
+          "type": "object",
+          "description": "Cloudflare account id and Pages project name. Credential: CLOUDFLARE_API_TOKEN in the environment.",
+          "required": ["account", "project"],
+          "properties": {
+            "account": { "type": "string", "minLength": 1 },
+            "project": { "type": "string", "minLength": 1 }
+          }
+        },
         "supabase": {
           "type": "object",
           "description": "Supabase project ref (20 lowercase letters) of the parent project: its preview branches and its Auth redirect allow-list.",
@@ -68,13 +86,13 @@
         },
         "http": {
           "type": "object",
-          "description": "The generic http adapter: one block per API, named by each line's `api:`. Each block is part of its resources' identity.",
-          "additionalProperties": { "allOf": [{ "$ref": "#/$defs/httpApi" }, { "required": ["auth"], "properties": { "auth": true } }] }
+          "description": "The generic http adapter: one block per API, named by each line's `api:` (or a recipe line's provider). Each block, as resolved, is part of its resources' identity.",
+          "additionalProperties": { "allOf": [{ "$ref": "#/$defs/httpApi" }, { "anyOf": [{ "properties": { "base_url": true, "auth": true }, "required": ["base_url", "auth"] }, { "properties": { "recipe": true }, "required": ["recipe"] }] }] }
         },
         "manual": {
           "type": "object",
-          "description": "The manual adapter: API blocks a manual step's verify request reads, named by its `verify.api` (the http adapter's block format; `auth` optional for a public endpoint). Steps without verify need none.",
-          "additionalProperties": { "$ref": "#/$defs/httpApi" }
+          "description": "The manual adapter: API blocks a manual step's verify request reads, named by its `verify.api` (the http adapter's block format, without `recipe`; `auth` optional for a public endpoint). Steps without verify need none.",
+          "additionalProperties": { "allOf": [{ "$ref": "#/$defs/httpApi" }, { "properties": { "base_url": true, "recipe": false }, "required": ["base_url"] }] }
         }
       }
     },
@@ -192,7 +210,7 @@
       "required": ["id", "adapter", "op"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk, planetscale, launchdarkly, supabase, http (any JSON REST API described in the plan), and manual (a step a person does by hand). Plugins (SPONSON_PLUGINS) add more." },
+        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk, planetscale, launchdarkly, supabase, netlify, cloudflare, http (any JSON REST API described in the plan), and manual (a step a person does by hand). Plugins (SPONSON_PLUGINS) add more." },
         "op": { "type": "string", "minLength": 1 },
         "environments": { "$ref": "#/$defs/nameList", "description": "Environments this line applies to. Absent: all." },
         "depends_on": { "type": "array", "items": { "$ref": "#/$defs/id" }, "description": "Ordering without a data dependency. Prefer `from:` references." }
@@ -224,12 +242,16 @@
           "then": { "$ref": "#/$defs/op_planetscale_password" }
         },
         {
-          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "http" }, "op": { "const": "resource" } } },
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "http" }, "op": { "const": "resource" } }, "not": { "properties": { "recipe": true }, "required": ["recipe"] } },
           "then": { "$ref": "#/$defs/op_http_resource" }
         },
         {
-          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "http" }, "op": { "const": "list_item" } } },
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "http" }, "op": { "const": "list_item" } }, "not": { "properties": { "recipe": true }, "required": ["recipe"] } },
           "then": { "$ref": "#/$defs/op_http_list_item" }
+        },
+        {
+          "if": { "required": ["adapter", "recipe"], "properties": { "adapter": { "const": "http" }, "recipe": true } },
+          "then": { "$ref": "#/$defs/op_http_recipe" }
         },
         {
           "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "launchdarkly" }, "op": { "const": "flag_target" } } },
@@ -242,6 +264,14 @@
         {
           "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "supabase" }, "op": { "const": "auth_redirect" } } },
           "then": { "$ref": "#/$defs/op_supabase_auth_redirect" }
+        },
+        {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "netlify" }, "op": { "const": "env" } } },
+          "then": { "$ref": "#/$defs/op_netlify_env" }
+        },
+        {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "cloudflare" }, "op": { "const": "pages_env" } } },
+          "then": { "$ref": "#/$defs/op_cloudflare_pages_env" }
         },
         {
           "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "manual" }, "op": { "const": "step" } } },
@@ -373,10 +403,10 @@
     },
     "httpApi": {
       "type": "object",
-      "description": "One API for the http adapter (or a manual step's verify request): where it is, and how its credential is sent.",
-      "required": ["base_url"],
+      "description": "One API for the http adapter (or a manual step's verify request): where it is, and how its credential is sent. With `recipe`, the recipe's API defaults fill in what the block leaves out.",
       "additionalProperties": false,
       "properties": {
+        "recipe": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$", "description": "A shipped recipe's provider (docs/recipes.md): its base URL, credential variable, headers and encoding are the defaults of this block." },
         "base_url": { "type": "string", "pattern": "^https?://\\S+$", "description": "The API's base URL; request paths are relative to it." },
         "base_url_env": { "$ref": "#/$defs/envName", "description": "Optional: a variable that overrides base_url when set (a staging API, the local fake cloud)." },
         "auth": {
@@ -458,6 +488,16 @@
       },
       "additionalProperties": false
     },
+    "op_http_recipe": {
+      "description": "A recipe line of the http adapter: `recipe: <provider>.<op>` and that recipe op's params (docs/recipes.md), which `sponson plan` checks. `op` is the recipe's kind.",
+      "required": ["recipe"],
+      "properties": {
+        "op": { "enum": ["resource", "list_item"] },
+        "recipe": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*\\.[a-z0-9_]+$", "description": "The recipe op, `<provider>.<op>` (docs/recipes.md)." },
+        "api": { "type": "string", "minLength": 1, "description": "The block under providers.http. Default: the recipe's provider (the block may then be left out)." },
+        "destroy": { "$ref": "#/$defs/httpDestroy" }
+      }
+    },
     "op_http_list_item": {
       "description": "http.list_item: one value kept in an array, delimited string or keyed map on a parent object, by read-modify-write. No outputs.",
       "required": ["api", "parent", "item"],
@@ -533,6 +573,62 @@
         "depends_on": true,
         "url": { "$ref": "#/$defs/stringOrRef", "description": "The URL or wildcard pattern to allow; no commas. Usually `{ from: <vercel.env line>.preview_url }`." },
         "project": { "$ref": "#/$defs/stringOrRef", "description": "Ref of the project whose allow-list to edit. Default: providers.supabase.project. A preview branch's own: `{ from: <supabase.branch line>.project_ref }`." }
+      },
+      "additionalProperties": false
+    },
+    "op_netlify_env": {
+      "description": "netlify.env: environment variable values of one Netlify deploy context (and, for `branch`, one branch). Outputs: preview_url, deploy_id and deploy_preview_url, available after the deploy.",
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "context": {
+          "description": "production, deploy-preview, branch-deploy, dev, dev-server or branch. Default: production when --env production, else branch (the current git branch's value, which its Deploy Previews read).",
+          "anyOf": [
+            { "enum": ["production", "deploy-preview", "branch-deploy", "dev", "dev-server", "branch"] },
+            { "type": "string", "pattern": "\\$\\{ctx\\.[a-z_.]+\\}" }
+          ]
+        },
+        "branch": {
+          "type": "string",
+          "description": "The branch of `context: branch` (Netlify's `context_parameter`; a trailing `*` matches a prefix). Default: the current git branch. Only valid with context branch."
+        },
+        "values": {
+          "type": "object",
+          "description": "NAME: value. A value is a literal, `{ from }`, `{ secret }` or `{ keep: true }`.",
+          "additionalProperties": { "$ref": "#/$defs/value" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "op_cloudflare_pages_env": {
+      "description": "cloudflare.pages_env: plain-text and secret variables of a Cloudflare Pages project's preview or production configuration (preview variables are shared by every preview deployment). No outputs.",
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "target": {
+          "description": "preview or production; must be the run's --env. Default: production when --env production, else preview.",
+          "anyOf": [
+            { "enum": ["preview", "production"] },
+            { "type": "string", "pattern": "\\$\\{ctx\\.[a-z_.]+\\}" }
+          ]
+        },
+        "vars": {
+          "type": "object",
+          "description": "NAME: value, written as plain_text. A value is a literal, `{ from }`, `{ secret }` or `{ keep: true }`.",
+          "additionalProperties": { "$ref": "#/$defs/value" }
+        },
+        "secrets": {
+          "type": "object",
+          "description": "NAME: value, written as secret_text and compared by presence and type only (Cloudflare never returns a secret's value).",
+          "additionalProperties": { "$ref": "#/$defs/value" }
+        },
+        "rewrite_secrets": { "type": "boolean", "description": "Send every secret on every apply, so a changed value is written. Default: false." }
       },
       "additionalProperties": false
     },

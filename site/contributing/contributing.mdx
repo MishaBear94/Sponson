@@ -69,7 +69,7 @@ pnpm test                 # unit + scenarios + journeys + property, then the too
 pnpm test:tooling         # just the tooling suites: scaffold and docs-as-code checks (they run tsc/eslint)
 pnpm test:coverage        # unit + scenarios + journeys + property with a coverage table (not tooling); fails below CI's thresholds
 pnpm test:scenarios       # the acceptance catalogue only
-pnpm test:live            # contract suite against the real APIs (needs credentials, see scenarios/contract.test.ts)
+pnpm test:live            # contract suite and recipes against the real APIs (needs credentials, see scenarios/contract.test.ts, scenarios/recipes.test.ts)
 pnpm sim                  # start the fake cloud on :4777 for manual poking
 pnpm sponson plan         # run the CLI from source
 pnpm new:adapter <name>   # scaffold an adapter (add --dry-run to see what it would do)
@@ -91,11 +91,36 @@ uncovered. CodeQL (`.github/workflows/codeql.yml`) scans the TypeScript and the 
 third-party action is pinned to a commit SHA with its version in a comment (`uses: owner/action@<sha> # vX.Y.Z`);
 pin new ones the same way — Dependabot keeps the pins current, including in `action/action.yml`.
 
+## Adding a recipe
+
+A provider operation that is plain CRUD on one object, or one entry in a list on a parent, is a recipe: a YAML file
+the generic `http` adapter expands ([ADR 0020](/contributing/adr/0020-recipes), [docs/recipes.md](/reference/recipes)). Copy an
+existing file in `packages/adapters/recipes/` and:
+
+1. **Verify against the provider's official API reference**, and cite every page you used under `docs`. Write each
+   fact the recipe relies on as a numbered assumption: `verified: true` with its `source`, or `verified: false`.
+2. **Write `packages/adapters/recipes/<provider>.yaml`** (`schema/recipe.schema.json` describes every key; the
+   `# yaml-language-server` line gives editor checks): `api` with the provider's conventional credential variable
+   and `<PROVIDER>_API_URL`; per op its `kind`, typed `params` with an `example` for each required one, and `http`
+   using `{ param: <name> }` and `{<name>}` path placeholders. Add `sim` hints when the sim needs them (a parent
+   object to seed for a list item, the body field a client-chosen id comes from).
+3. **Mark the row covered** in `docs/coverage.yaml` (`covered_by: recipe:<provider>.<op>`) and list its id in the
+   op's `covers`.
+4. **Run `SPONSON_UPDATE_RECIPE_LOCK=1 pnpm vitest run packages/adapters/src/recipes.test.ts`** to pin the new op's
+   identity, then `pnpm docs:gen` (docs/recipes.md, the coverage tables and numbers, the site).
+5. **`pnpm test`**: the schema, metadata, expansion and param checks (`recipes.test.ts`) and the sim lifecycle
+   (`scenarios/recipes.test.ts`) pick the file up by themselves. If you have an account, run `pnpm test:live` with the
+   credential and the `SPONSON_LIVE_*` variables your `live.params` name.
+6. **A changeset** (`@sponson/adapters`, minor).
+
+Changing a shipped recipe so that the identity lock fails (a base URL, a credential variable, a path, a match field)
+re-identifies every resource made with it: only with a **Breaking:** changeset that says what to do.
+
 ## Adding an adapter
 
 First check whether the provider needs one: the generic `http` adapter
 ([docs/plan-format.md](/reference/plan-format#the-generic-http-adapter)) already manages plain CRUD objects and list
-entries of any JSON REST API from the plan. Write a first-class adapter when the lifecycle needs more than a
+entries of any JSON REST API from the plan, and a [recipe](/contributing/contributing#adding-a-recipe) makes one such operation a one-line building block. Write a first-class adapter when the lifecycle needs more than a
 request template can say ([ADR 0017](/contributing/adr/0017-generic-http-adapter)).
 
 An adapter is an object implementing `ResourceAdapter` from `@sponson/core`: a name and a map of ops. Read `packages/core/src/types.ts` (the contract, with the marker rules next to `OpSpec.diff`) and the fake adapter in `packages/core/src/testing/fake.ts` (`@sponson/core/testing`), the smallest complete example.

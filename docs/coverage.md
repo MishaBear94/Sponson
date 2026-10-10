@@ -43,18 +43,21 @@ Columns:
   **P** partly (the lifecycle needs more than request templates, noted), **N** no.
 - **Pri**: how often it appears in preview-environment workflows. **P0** most preview setups on that stack hit it;
   **P1** common; **P2** occasional. An estimate from public templates, integrations and docs, not a survey.
-- **Now**: **yes** when a built-in op covers it; **manual** when no API can and the row is covered by
-  [`manual.step`](plan-format.md#manualstep) instead: a person does the step from the plan's instructions, Sponson
-  shows it as a todo, holds back what depends on it, records who confirmed it, and asks for its undo on destroy
-  ([ADR 0021](adr/0021-manual-steps.md)). Manual rows are never counted as automated coverage.
+- **Now**: **yes** when a built-in op or a shipped [recipe](recipes.md) covers it; **manual step** when no API can
+  and a [`manual.step`](plan-format.md#manualstep) line tracks what a person does ([ADR 0021](adr/0021-manual-steps.md)),
+  never counted as automated; **no (no API)** when nothing can.
 
+The rows live in [coverage.yaml](coverage.yaml) (`covered_by` names the op or recipe op that manages each one) and
+the tables below are generated from it: edit the data, then run `pnpm docs:gen`.
+
+<!-- generated:coverage-matrix:start (scripts/gen-docs.ts; run `pnpm docs:gen`) -->
 ### Deploy targets and their environment variables
 
 | Provider | Side effect | API shape | Generic? | Pri | Now |
 |---|---|---|---|---|---|
 | Vercel | Env vars per target and git branch; wait for the preview deployment, redeploy if it built before the write | REST `/v10/projects/{id}/env`, bearer; object per variable; deployment barrier | P (barrier, redeploy) | P0 | **yes** (`vercel.env`, `vercel.deploy`) |
-| Netlify | Env var values per deploy context (`deploy-preview`, `branch` + `context_parameter`) | REST `POST /api/v1/accounts/{account}/env?site_id=`, `PATCH .../env/{key}`; bearer; object per key, values list per context; deploys only see values set before they started | P (deploy barrier like Vercel) | P0 | no |
-| Cloudflare Pages / Workers | Pages: `deployment_configs.preview.env_vars` (all previews share one set, no per-branch values). Workers: secrets per script / preview version | REST `PATCH /accounts/{a}/pages/projects/{p}`, bearer; **map** merge-patch, `null` deletes; Workers `PUT .../workers/scripts/{s}/secrets` object | Y | P1 | no |
+| Netlify | Env var values per deploy context (`deploy-preview`, `branch` + `context_parameter`); wait for the deploy of the commit, rebuild if it started before the write | REST `POST /api/v1/accounts/{account}/env?site_id=`, `PATCH .../env/{key}`; bearer; object per key, values list per context; deploys only see values set before they started | P (deploy barrier like Vercel) | P0 | **yes** (`netlify.env`) |
+| Cloudflare Pages / Workers | Pages: `deployment_configs.preview.env_vars` (all previews share one set, no per-branch values). Workers: secrets per script / preview version | REST `PATCH /accounts/{a}/pages/projects/{p}`, bearer; **map** merge-patch, `null` deletes; Workers `PUT .../workers/scripts/{s}/secrets` object | Y | P1 | **yes** (`cloudflare.pages_env`: Pages variables; Workers secrets are not covered) |
 | Render | Env vars on a preview service / preview environment | REST `PUT /v1/services/{id}/env-vars/{key}`, bearer; object per key; previews created by Render from `render.yaml` | Y | P1 | no |
 | Railway | Variables in a PR environment (Railway creates PR environments natively) | GraphQL `variableUpsert(projectId, environmentId, serviceId, name, value)`, bearer; object per name; deployment status for a barrier | P (GraphQL, env id lookup, barrier) | P1 | no |
 | Fly.io | Per-PR app (the usual pattern is one app per PR) plus its secrets | Machines API `api.machines.dev/v1/apps/{app}/secrets` (secret writes return a version, changed 2025) and GraphQL `setSecrets`; bearer; object; machines must be updated to see new secrets | P (app lifecycle, restart) | P1 | no |
@@ -70,8 +73,8 @@ Columns:
 |---|---|---|---|---|---|
 | Neon | Copy-on-write branch per PR, connection string out | REST `/api/v2/projects/{p}/branches`, bearer; object; async operations, `423` while busy | P (async ops) | P0 | **yes** (`neon.branch`) |
 | Supabase | Preview branch per PR (a separate project with its own ref, keys and URL) | Management API `POST /v1/projects/{ref}/branches`, `GET`/`DELETE /v1/branches/{ref}`, bearer PAT; object; async provisioning (`ACTIVE_HEALTHY`), migrations run by Supabase | P (async, outputs from a second project) | P0 | **yes** (`supabase.branch`) |
-| PlanetScale | Branch per PR; password (credential) per branch; deploy request on merge | REST `POST /v1/organizations/{o}/databases/{d}/branches`, `.../branches/{b}/passwords`; service token header; object; branch `ready` async; password plaintext returned once | P (async, once-only secret) | P1 | **yes** (`planetscale.branch`, `planetscale.password`; deploy requests on merge are not managed) |
-| Turso | Database branched from a parent (`seed: {type: database}`), token per DB | Platform API `POST /v1/organizations/{o}/databases`, `.../databases/{d}/auth/tokens`; bearer; object | Y | P1 | no |
+| PlanetScale | Branch per PR; password (credential) per branch; deploy request on merge | REST `POST /v1/organizations/{o}/databases/{d}/branches`, `.../branches/{b}/passwords`; service token header; object; branch `ready` async; password plaintext returned once | P (async, once-only secret) | P1 | **yes** (`planetscale.branch`, `planetscale.password`: deploy requests on merge are not managed) |
+| Turso | Database branched from a parent (`seed: {type: database}`), token per DB | Platform API `POST /v1/organizations/{o}/databases`, `.../databases/{d}/auth/tokens`; bearer; object | Y | P1 | **yes** (recipe [`turso.database_branch`](recipes.md#tursodatabase_branch)) |
 | Xata | Copy-on-write Postgres branch | REST control plane and `xata branch create --from`; API keys. Endpoint paths not confirmed **(unverified)**; the product was re-platformed onto Postgres in 2025 | P (async; API in flux) | P2 | no |
 | MongoDB Atlas | No branching; per-PR database user and database name on a shared cluster (cluster per PR is slow and costly) | Admin API v2 `POST /api/atlas/v2/groups/{g}/databaseUsers`, digest or service-account OAuth; object | P (digest auth) | P2 | no |
 | CockroachDB Cloud | No branching; per-PR database is SQL (`CREATE DATABASE`), a cluster per PR is infra | Cloud API `/api/v1/clusters` (cluster level only), bearer | N (needs SQL) | P2 | no |
@@ -89,13 +92,13 @@ Columns:
 | Stytch | Redirect URL per environment | PWA `POST /pwa/v3/projects/{p}/environments/{e}/redirect_urls` (+ get/delete by URL), Basic workspace key; object | Y | P2 | no |
 | Okta | `redirect_uris` on an OIDC app; trusted origin for CORS | `PUT /api/v1/apps/{id}` (**list**, whole app object), `POST /api/v1/trustedOrigins` (object); `SSWS` token or OAuth | Y (list mode; trusted origins object) | P2 | no |
 | Kinde | Callback and logout URLs on an application | Management API `POST`/`PUT /api/v1/applications/{id}/auth_redirect_urls` (add / replace); M2M client-credentials token. Path from SDK docs, not the reference **(unverified)** | Y (token exchange) | P2 | no |
-| Google OAuth clients | Preview URL in a web client's authorized redirect URIs | **No public API** for standard OAuth web clients (Console only); only IAM workforce OAuth clients and IAP are programmable | N | P1 | **manual** (`manual.step`; [example](../examples/google-oauth-manual-step.plan.yaml)) |
+| Google OAuth clients | Preview URL in a web client's authorized redirect URIs | **No public API** for standard OAuth web clients (Console only); only IAM workforce OAuth clients and IAP are programmable | N | P1 | manual step (`manual.step`) |
 
 ### Feature flags and targeting
 
 | Provider | Side effect | API shape | Generic? | Pri | Now |
 |---|---|---|---|---|---|
-| LaunchDarkly | Flag on for a preview: target a context key or add a rule on `url`, in a per-PR or shared preview environment | `PATCH /api/v2/flags/{proj}/{flag}` with semantic patch (`Content-Type: application/json; domain-model=launchdarkly.semanticpatch`, instructions `addTargets`/`removeTargets`/`addRule`), API token; instructions are idempotent per target; approvals may gate production | P (instruction-based diff, approvals) | P0 | yes (`launchdarkly.flag_target`: context-key targets; `url` rules not yet) |
+| LaunchDarkly | Flag on for a preview: target a context key or add a rule on `url`, in a per-PR or shared preview environment | `PATCH /api/v2/flags/{proj}/{flag}` with semantic patch (`Content-Type: application/json; domain-model=launchdarkly.semanticpatch`, instructions `addTargets`/`removeTargets`/`addRule`), API token; instructions are idempotent per target; approvals may gate production | P (instruction-based diff, approvals) | P0 | **yes** (`launchdarkly.flag_target`: context-key targets; `url` rules not yet) |
 | PostHog | Release condition matching the preview host on a flag | `PATCH /api/projects/{id}/feature_flags/{id}` `filters.groups`, personal API key bearer; **list** in `filters` | Y (list mode) | P1 | no |
 | Statsig | Gate rule for the preview (condition `url` or `environment_tier`) | Console API `POST /console/v1/gates/{id}/rule`, `PATCH`/`DELETE .../rules/{ruleID}`, `STATSIG-API-KEY` header; object per rule; reviews may gate changes | Y | P1 | no |
 | GrowthBook | Force rule in a per-environment feature | REST `POST /api/v1/features/{id}` with `environments.{env}.rules`, bearer; **list** per environment | Y (list mode) | P2 | no |
@@ -111,7 +114,7 @@ Columns:
 | Stripe | Test-mode webhook endpoint pointing at the preview URL; its signing secret into the app's env | `POST /v1/webhook_endpoints` (form-encoded), `DELETE /v1/webhook_endpoints/{id}`; bearer; object; `Idempotency-Key`; **`secret` returned only on create** | P (once-only secret must flow into an env line in the same run) | P0 | no |
 | GitHub | Repository webhook to the preview URL | `POST /repos/{o}/{r}/hooks`, `DELETE .../hooks/{id}`; bearer; object; secret write-only (caller supplies it) | Y | P2 | no |
 | Svix (as a sender) | Endpoint per environment on an application | `POST /api/v1/app/{app}/endpoint` with caller-chosen `uid`; bearer; object, idempotent by `uid`; secret readable via `GET .../secret` | Y | P2 | no |
-| Clerk webhooks | Preview URL as a webhook endpoint | Clerk's Backend API only creates/deletes the Svix app and a dashboard link; **no endpoint API** through Clerk | N | P1 | **manual** (`manual.step`) |
+| Clerk webhooks | Preview URL as a webhook endpoint | Clerk's Backend API only creates/deletes the Svix app and a dashboard link; **no endpoint API** through Clerk | N | P1 | manual step (`manual.step`) |
 
 ### Email: sending domains, webhooks, test inboxes
 
@@ -133,7 +136,7 @@ Columns:
 
 | Provider | Side effect | API shape | Generic? | Pri | Now |
 |---|---|---|---|---|---|
-| Cloudflare DNS | CNAME `pr-42.preview.example.com` → the preview | `POST /zones/{z}/dns_records`, `DELETE .../{id}`; bearer; object; no idempotency key, find by name+type | Y | P1 | no |
+| Cloudflare DNS | CNAME `pr-42.preview.example.com` → the preview | `POST /zones/{z}/dns_records`, `DELETE .../{id}`; bearer; object; no idempotency key, find by name+type | Y | P1 | **yes** (recipe [`cloudflare.dns_cname`](recipes.md#cloudflaredns_cname)) |
 | Vercel domains | Branch-bound project domain (`gitBranch`) for a stable preview hostname | `POST /v10/projects/{id}/domains` `{name, gitBranch}`, `DELETE`; bearer; object | Y (or a `vercel` op) | P1 | no |
 
 ### CORS and allowed origins
@@ -158,49 +161,55 @@ Columns:
 |---|---|---|---|---|---|
 | Algolia | Index per environment, copied from a template index | `POST /1/indexes/{src}/operation` `{operation: copy, destination}`, `DELETE /1/indexes/{name}`; `X-Algolia-Application-Id` + `X-Algolia-API-Key`; async task to poll | P (async task) | P2 | no |
 | Stripe test-mode objects | Products / prices / coupons the preview's code expects | `POST /v1/products`, `/v1/prices` (form-encoded, `lookup_key` as identity, `Idempotency-Key`); prices cannot be deleted, only `active=false` | Y (destroy = archive) | P2 | no |
-| Stripe sandboxes | A sandbox per PR | No public API for account sandboxes; anonymous "claimable" sandboxes are private preview | N | P2 | **manual** (`manual.step`) |
+| Stripe sandboxes | A sandbox per PR | No public API for account sandboxes; anonymous "claimable" sandboxes are private preview | N | P2 | manual step (`manual.step`) |
+<!-- generated:coverage-matrix:end -->
 
 ### Secret managers (read side: secret sources, not side effects)
 
 Secret sources resolve `{ secret }` references; they create nothing, so they are counted separately. The built-in ones
 are [listed in docs/plan-format.md](plan-format.md#secret-schemes).
 
+<!-- generated:coverage-secrets:start (scripts/gen-docs.ts; run `pnpm docs:gen`) -->
 | Provider | Read API | Pri | Now |
 |---|---|---|---|
-| Doppler | CLI / REST, service token | P1 | **yes** |
-| 1Password (CLI, service accounts) | `op read` | P1 | **yes** |
-| AWS Secrets Manager | CLI, SigV4 | P1 | **yes** |
-| Google Secret Manager | CLI, Google OAuth | P2 | **yes** |
+| Doppler | CLI / REST, service token | P1 | **yes** (`doppler://`) |
+| 1Password (CLI, service accounts) | `op read` | P1 | **yes** (`op://`) |
+| AWS Secrets Manager | CLI, SigV4 | P1 | **yes** (`aws-sm://`) |
+| Google Secret Manager | CLI, Google OAuth | P2 | **yes** (`gcp-sm://`) |
 | HashiCorp Vault | KV v2 `GET /v1/{mount}/data/{path}`, `X-Vault-Token` | P1 | no ([#17](https://github.com/MishaBear94/Sponson/issues/17)) |
 | Infisical | CLI or `GET /api/v3/secrets/raw/{name}`, machine identity | P1 | no ([#18](https://github.com/MishaBear94/Sponson/issues/18)) |
 | Azure Key Vault | `GET {vault}/secrets/{name}?api-version=7.4`, AAD token, or `az keyvault secret show` | P2 | no |
 | 1Password Connect | `GET /v1/vaults/{v}/items/{i}`, bearer | P2 | no |
 | Bitwarden Secrets Manager | `bws secret get`, `BWS_ACCESS_TOKEN` | P2 | no |
+<!-- generated:coverage-secrets:end -->
 
 The write side (a per-PR Doppler branch config, `POST /v3/configs`) is a side effect; it is P2 and not counted above.
 
 ## Current coverage
 
-Counted over the side-effect rows above (56 rows; the Supabase CORS row is excluded because there is nothing to
-manage). Weights: P0 = 3, P1 = 2, P2 = 1 (9 P0, 16 P1, 31 P2; total weight 90).
+Every number below is computed from [coverage.yaml](coverage.yaml) by `pnpm docs:gen`; a row counts as covered when
+a registered op or a shipped [recipe](recipes.md) manages it.
+
+<!-- generated:coverage-numbers:start (scripts/gen-docs.ts; run `pnpm docs:gen`) -->
+Counted over the 56 side-effect rows of the matrix (rows marked `n/a` have nothing to manage). Weights: P0 = 3, P1 = 2, P2 = 1 (9 P0, 16 P1, 31 P2; total weight 90).
 
 | Measure | Covered | Coverage |
 |---|---|---|
-| Automated rows | 7 of 56 (Vercel env, Neon branch, PlanetScale branch and password, Supabase branch, Clerk redirect, Supabase Auth redirect, LaunchDarkly targeting) | **12.5%** |
-| Automated, weighted by priority | 20 of 90 | **22.2%** |
-| Manual rows (`manual.step`, a person does them) | 3 of 56 (Google OAuth redirect URIs, Clerk webhooks, Stripe sandboxes); weighted 5 of 90 | 5.4%; 5.6% |
-| Total rows, automated + manual | 10 of 56 | 17.9% |
-| Total, weighted by priority | 25 of 90 | 27.8% |
-| P0 rows only (all automated) | 6 of 9 | 67% |
-| Secret sources (separate) | 4 of 9 vendors; weighted 7 of 14 | 44%; 50% |
+| Rows | 11 of 56 | **19.6%** |
+| Weighted by priority | 29 of 90 | **32.2%** |
+| P0 rows only | 7 of 9 | 77.8% |
+| Rows an API reaches (all but `manual`) | 11 of 53 | 20.8% |
+| Weighted, rows an API reaches | 29 of 85 | 34.1% |
+| Rows, including manual steps (`manual.step`) | 14 of 56 | 25.0% |
+| Weighted, including manual steps | 34 of 90 | 37.8% |
+| Secret sources (separate) | 4 of 9 vendors; weighted 7 of 14 | 44.4%; 50.0% |
 
-Rows that the generic `http` adapter could reach are not counted: its example plan is illustrative and its tests run
-against a generic REST sim, not against any one provider's API, so no row has a tested example yet.
+Covered: Vercel (`vercel.env`, `vercel.deploy`); Netlify (`netlify.env`); Cloudflare Pages / Workers (`cloudflare.pages_env`); Neon (`neon.branch`); Supabase (`supabase.branch`); PlanetScale (`planetscale.branch`, `planetscale.password`); Turso (recipe [`turso.database_branch`](recipes.md#tursodatabase_branch)); Clerk (`clerk.redirect_allow`); Supabase Auth (`supabase.auth_redirect`); LaunchDarkly (`launchdarkly.flag_target`); Cloudflare DNS (recipe [`cloudflare.dns_cname`](recipes.md#cloudflaredns_cname)).
 
-Plainly: Sponson automates the canonical Vercel + Neon (or PlanetScale, or Supabase) + Clerk (or Supabase Auth) preview stack, plus LaunchDarkly flag targeting, and almost nothing else. Three rows (Google
-OAuth clients, Clerk webhooks, Stripe sandboxes; weight 5) have no usable API, so no adapter can reach them; they
-are tracked as manual steps, which a person still has to do, so the ceiling for *automated* coverage stays 53 rows /
-94.4% weighted.
+Automated coverage counts only rows an op manages without a person. Rows no API reaches (`manual`, or a `manual.step` line that records the step a person does; weight 5): Google OAuth clients (no public API for standard OAuth web clients); Clerk webhooks (Clerk's API manages the Svix app, not its endpoints); Stripe sandboxes (no public API for account sandboxes). They cap coverage at 53 rows, 85 of 90 weighted (94.4%).
+
+Recipe candidates, rows the generic adapter can express fully (`Y`) that nothing covers yet: 30 (Render, Heroku, Prisma Postgres, Auth0, Firebase Auth, WorkOS, Stytch, Okta, Kinde, PostHog, Statsig, GrowthBook, Unleash, Flagsmith, ConfigCat, Split (Harness FME), GitHub, Svix (as a sender), Resend, Postmark, SendGrid, Sentry, Datadog, Honeycomb, Vercel domains, Firebase Storage (GCS bucket), Upstash Redis, Upstash QStash, Inngest, Stripe test-mode objects).
+<!-- generated:coverage-numbers:end -->
 
 ## Strategy
 
@@ -211,9 +220,11 @@ create/read/delete: asynchronous provisioning (branches, Supabase previews), an 
 Railway deploys, like `vercel.env`), outputs that exist only once (Stripe webhook secret, PlanetScale password),
 instruction-based diffs (LaunchDarkly), GraphQL, or non-bearer signing (SigV4).
 
-**A generic declarative HTTP adapter** (`adapter: http`) for the long tail where each item is a URL, a rule or a record
-and the lifecycle is plain CRUD. Rows marked **Y**: 33 rows not covered today, which would bring coverage to 40 rows
-(71.4%), 66 of 90 weighted (73.3%), without a line of provider code.
+**The generic HTTP adapter and its recipes** (`adapter: http`, [ADR 0017](adr/0017-generic-http-adapter.md) and
+[ADR 0020](adr/0020-recipes.md)) for the long tail where each item is a URL, a rule or a record and the lifecycle is
+plain CRUD. A row counts as covered once a [recipe](recipes.md) for it ships: a verified, tested, documented spec a
+plan line names in one line, not a request template every team writes. The rows marked **Y** that no recipe covers
+yet are listed under [Current coverage](#current-coverage).
 
 ### What `adapter: http` must support to cover the P0/P1 rows
 
@@ -238,7 +249,6 @@ and the lifecycle is plain CRUD. Rows marked **Y**: 33 rows not covered today, w
    `If-Match`, GCS `ifMetagenerationMatch`), re-read after write to confirm the item landed, and declare the parent
    object (`lockOn`) so the engine's per-object lock serialises Sponson's writers
    ([ADR 0019](adr/0019-parent-object-locks.md)). Without this, two PRs editing one Auth0 application lose writes.
-   Done: `http.list_item` locks its parent object, `supabase.auth_redirect` its project's allow-list.
 7. **Status classification overrides**: which statuses mean "already exists" (re-read and claim), "gone" (success on
    delete), "busy" (retry), on top of `packages/adapters/src/http.ts`'s defaults; plus pagination styles (cursor,
    `next` link, page number).
@@ -262,7 +272,7 @@ Ranked by weighted rows covered, then by how much they need more than `adapter: 
 | # | Adapter | Rows (Pri) | Why first-class |
 |---|---|---|---|
 | 1 | `supabase` (done: `supabase.branch`, `supabase.auth_redirect`) | branch (P0), auth redirect URLs (P0) | Two P0 rows with one credential; preview branches are separate projects provisioned asynchronously, and their URL and keys are outputs the env line needs. |
-| 2 | `netlify` | env per deploy context (P0) | Second most common preview host; needs the same deploy barrier and redeploy-after-write logic as `vercel.env`. |
+| 2 | `netlify` (done: `netlify.env`) | env per deploy context (P0) | Second most common preview host; needs the same deploy barrier and redeploy-after-write logic as `vercel.env`. Deploy Previews cannot be rebuilt through Netlify's API, so a `deploy-preview` line reports a stale deploy instead of rebuilding it. |
 | 3 | `launchdarkly` | flag targeting (P0) | **Shipped** as `launchdarkly.flag_target` ([#15](https://github.com/MishaBear94/Sponson/issues/15)); semantic-patch instructions and approval workflows do not fit a request template. Rules on `url` are not covered yet. |
 | 4 | `stripe` | test-mode webhook endpoint (P0), test objects (P2) | Its signing secret exists only in the create response and must flow into the app's env in the same run; form encoding and `Idempotency-Key`. |
 | 5 | `auth0` | callbacks / logout URLs / web origins (P0) | Four arrays on one shared application with no precondition: the reference case for the list-mode lock, worth owning before generalising ([#16](https://github.com/MishaBear94/Sponson/issues/16)). |
@@ -270,9 +280,9 @@ Ranked by weighted rows covered, then by how much they need more than `adapter: 
 | 7 | `railway` | PR-environment variables (P1) | GraphQL, environment-id lookup, and a deploy barrier; Railway creates the PR environment, Sponson fills it. |
 | 8 | `cloudflare` | Pages/Workers env (P1), DNS record (P1), R2 CORS (P2) | One token, three rows; Workers secrets and preview versions need script-level handling a template cannot express. |
 
-With these eight plus `adapter: http`, coverage reaches 44 rows (78.6%) and 75 of 90 weighted (83.3%). The rest are
+With these eight plus recipes for the **Y** rows, the remaining rows are
 Fly.io, Amplify, Cloud Run, Azure Static Web Apps, DigitalOcean, Xata, MongoDB Atlas, CockroachDB, Algolia (all P1/P2
-with partial generic fit or SigV4/SQL needs) and the three rows with no API (covered only as manual steps).
+with partial generic fit or SigV4/SQL needs) and the three rows with no API.
 
 ## Sources
 

@@ -1,0 +1,108 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Cloudflare API v4 recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: cloudflare
+title: Cloudflare
+category: dns
+verified_on: "2026-10-11"
+docs:
+  - title: Create DNS record
+    url: https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/create/
+  - title: List DNS records
+    url: https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/list/
+  - title: DNS record details
+    url: https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/get/
+  - title: Update DNS record (PATCH)
+    url: https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/edit/
+  - title: Delete DNS record
+    url: https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/delete/
+api:
+  base_url: https://api.cloudflare.com/client/v4
+  base_url_env: CLOUDFLARE_API_URL
+  auth: { bearer_env: CLOUDFLARE_API_TOKEN }
+assumptions:
+  - id: CF1
+    verified: true
+    text: "Records are created with `POST /zones/{zone_id}/dns_records` (`type`, `name`, `content`, `ttl`, `proxied`, `comment`), authenticated with an API token as `Authorization: Bearer` that has DNS Write on the zone."
+    source: https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/create/
+  - id: CF2
+    verified: true
+    text: "`GET /zones/{zone_id}/dns_records` answers `{ result: [...] }` and filters by `type` and `name.exact` (names compare case-insensitively)."
+    source: https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/list/
+  - id: CF3
+    verified: true
+    text: "Single-record answers (create, details, update) carry the record under `result`, with its `id`."
+    source: https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/get/
+  - id: CF4
+    verified: true
+    text: "`PATCH /zones/{zone_id}/dns_records/{id}` updates a record; `DELETE` on the same path removes it permanently."
+    source: https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/delete/
+  - id: CF5
+    verified: false
+    text: "A PATCH needs `name` and `type` alongside the changed fields (the edit schema does not mark them optional), so every update sends both."
+    source: https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/edit/
+  - id: CF6
+    verified: false
+    text: "The API returns `name` lower-cased as the full name and `content` as written, so `name` must be given lower-case and fully qualified, or every plan finds no record and tries to create one."
+  - id: CF7
+    verified: false
+    text: "A proxied record reports `ttl: 1` (automatic) whatever was sent, so `ttl` other than 1 with `proxied: true` shows as drift on every plan."
+  - id: CF8
+    verified: true
+    text: A CNAME cannot share its name with another record, so name and type identify it within the zone and a filtered list holds at most one, on its first page.
+    source: https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/create/
+ops:
+  dns_cname:
+    kind: resource
+    title: DNS CNAME record
+    summary: A CNAME record in a zone, such as `pr-42.preview.example.com` pointing at the preview deployment's host. Located by name and type; a console edit of its target, proxying, TTL or comment is drift.
+    covers: [cloudflare-dns]
+    params:
+      zone_id:
+        type: string
+        required: true
+        pattern: "^[0-9a-f]{32}$"
+        description: The zone's id (32 hex characters, on the zone's Overview page).
+        example: 023e105f4ecef8ad9ca31a8372d0c353
+      name:
+        type: string
+        required: true
+        pattern: "^[a-z0-9*_.-]+$"
+        description: The record's full name, lower-case, zone included.
+        example: "${ctx.scope}.preview.example.com"
+      target:
+        type: string
+        required: true
+        description: The host the name points at (the record's `content`).
+        example: preview-host.example.net
+      proxied:
+        type: boolean
+        default: false
+        description: Whether Cloudflare proxies the traffic.
+      ttl:
+        type: integer
+        default: 1
+        description: TTL in seconds (60–86400), or 1 for automatic.
+      comment:
+        type: string
+        description: A note on the record; no effect on DNS.
+        example: Managed by Sponson
+    http:
+      find:
+        path: "/zones/{zone_id}/dns_records?type=CNAME&name.exact={name}"
+        list_path: /result
+        match: { type: CNAME, name: { param: name } }
+      create: { path: "/zones/{zone_id}/dns_records" }
+      update:
+        method: PATCH
+        path: "/zones/{zone_id}/dns_records/{id}"
+        body: { type: CNAME, name: { param: name } }
+      delete: { path: "/zones/{zone_id}/dns_records/{id}" }
+      item_path: /result
+      fields:
+        content: { param: target }
+        proxied: { param: proxied }
+        ttl: { param: ttl }
+        comment: { param: comment }
+      outputs: { hostname: /name }
+    live:
+      params: { zone_id: SPONSON_LIVE_CLOUDFLARE_ZONE_ID, name: SPONSON_LIVE_CLOUDFLARE_NAME }

@@ -18,7 +18,9 @@ The format is specified in [docs/plan-format.md](../docs/plan-format.md).
 | [explicit-deploy.plan.yaml](explicit-deploy.plan.yaml) | Sponson starting the deploy; `depends_on` |
 | [production-with-approval.plan.yaml](production-with-approval.plan.yaml) | preview and production in one file; approval |
 | [adopting-an-existing-project.plan.yaml](adopting-an-existing-project.plan.yaml) | what `sponson init` writes when it adopts; `{ keep: true }` |
+| [netlify-neon-preview.plan.yaml](netlify-neon-preview.plan.yaml) | Netlify values per deploy context; the Deploy Preview URL |
 | [http-flags-webhooks-allowlists.plan.yaml](http-flags-webhooks-allowlists.plan.yaml) | APIs with no adapter of their own, through the generic `http` adapter (illustrative) |
+| [cloudflare-pages-vars.plan.yaml](cloudflare-pages-vars.plan.yaml) | Cloudflare Pages preview and production variables; shared preview keys; write-only secrets |
 | [google-oauth-manual-step.plan.yaml](google-oauth-manual-step.plan.yaml) | a step no API can do (a Google OAuth redirect URI for the preview URL): a manual step, `--confirm` |
 
 ## nextjs-neon-preview.plan.yaml
@@ -168,6 +170,18 @@ What `sponson init` appends to an existing plan when it finds resources no scope
 changes, and adopted resources are never destroyed. Run `sponson init --adopt <key>` to adopt a single resource; the
 keys are listed under `drift` (`kind: unmanaged`) in `sponson plan --json`.
 
+## netlify-neon-preview.plan.yaml
+
+The Neon branch per pull request on a Netlify site. Netlify stores one variable per name with one value per deploy
+context; a `netlify.env` line owns one context's value of each variable it declares, so values a human set for other
+contexts are never read, changed or deleted. In previews the line writes the value for the pull request's git branch
+(`context: branch`), which Netlify uses for that branch's Deploy Previews; `context: deploy-preview` would instead
+be one value shared by every pull request.
+
+`callback` reads `env.deploy_preview_url`, the pull request's `https://deploy-preview-<n>--<site>.netlify.app`. Like
+Vercel's `preview_url`, it exists only once the Deploy Preview of this commit is ready, and only a deploy that
+started after the variables were written counts: a build reads the values set when it started.
+
 ## http-flags-webhooks-allowlists.plan.yaml
 
 **Illustrative.** The generic `http` adapter managing what has no Sponson adapter: a feature gate per pull request
@@ -179,3 +193,15 @@ references as we understand them; plan against the real API (`sponson plan` only
 `apply --destroy` removes the gate, the endpoint and the two list items, and leaves every other origin and
 redirect as it was. Reference: [`http.resource`](../docs/plan-format.md#httpresource),
 [`http.list_item`](../docs/plan-format.md#httplist_item).
+
+## cloudflare-pages-vars.plan.yaml
+
+A Cloudflare Pages project's variables: plain text under `vars:`, secrets under `secrets:`. Pages has one set of
+preview variables for every preview deployment, so `pages-preview` holds only values that are the same for every pull
+request; apply it from the default branch first (scope `main`), and pull requests then rely on it without owning it.
+A pull request that sets another value for one of these keys is refused with `OWNED_BY_OTHER_SCOPE`. Each line's
+`target` must equal the run's `--env`; the production line requires approval like any other.
+
+Cloudflare never returns a secret's value, so Sponson compares secrets by presence and type: `pages-production` sets
+`rewrite_secrets: true` so that a rotated `STRIPE_LIVE_SECRET_KEY` is written on the next apply. Variables reach the
+next deployment; Sponson does not redeploy a Pages project.

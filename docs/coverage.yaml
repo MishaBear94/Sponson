@@ -1,0 +1,510 @@
+# The provider coverage matrix: the source of truth for the tables and numbers in docs/coverage.md, which
+# `pnpm docs:gen` (scripts/gen-docs.ts) regenerates from this file. Edit rows here, never in the Markdown.
+#
+# A row is one piece of per-environment SaaS state (scope: docs/coverage.md). Keys:
+#   id           stable, kebab-case; recipes name it in their op's `covers`
+#   priority     P0 | P1 | P2 (weights below)
+#   generic      whether the generic http adapter can express it: Y, P (partly, why) or N (why)
+#   covered_by   what manages it today: `<adapter>.<op>` (a registered op), `recipe:<provider>.<op>` (a shipped
+#                recipe op), a list of those, `manual.step` (no API reaches it: a person does it, tracked by a
+#                manual step line, never counted as automated; `why` says so), `manual` (the same, untracked), or
+#                null (not yet). scenarios/docs/coverage.test.ts checks every reference resolves and is tested.
+#   counted      false for a row kept for completeness that has nothing to manage (`why` says so)
+#   note         shown after the coverage mark
+# Secret sources resolve references and create nothing; they are counted separately (covered_by: `secret:<scheme>`).
+weights:
+  P0: 3
+  P1: 2
+  P2: 1
+categories:
+  - id: deploy
+    title: Deploy targets and their environment variables
+    rows:
+      - id: vercel-env
+        provider: Vercel
+        side_effect: Env vars per target and git branch; wait for the preview deployment, redeploy if it built before the write
+        api_shape: REST `/v10/projects/{id}/env`, bearer; object per variable; deployment barrier
+        generic: P (barrier, redeploy)
+        priority: P0
+        covered_by:
+          - vercel.env
+          - vercel.deploy
+      - id: netlify-env
+        provider: Netlify
+        side_effect: Env var values per deploy context (`deploy-preview`, `branch` + `context_parameter`); wait for the deploy of the commit, rebuild if it started before the write
+        api_shape: REST `POST /api/v1/accounts/{account}/env?site_id=`, `PATCH .../env/{key}`; bearer; object per key, values list per context; deploys only see values set before they started
+        generic: P (deploy barrier like Vercel)
+        priority: P0
+        covered_by: netlify.env
+      - id: cloudflare-pages-env
+        provider: Cloudflare Pages / Workers
+        side_effect: "Pages: `deployment_configs.preview.env_vars` (all previews share one set, no per-branch values). Workers: secrets per script / preview version"
+        api_shape: REST `PATCH /accounts/{a}/pages/projects/{p}`, bearer; **map** merge-patch, `null` deletes; Workers `PUT .../workers/scripts/{s}/secrets` object
+        generic: Y
+        priority: P1
+        covered_by: cloudflare.pages_env
+        note: Pages variables; Workers secrets are not covered
+      - id: render-env
+        provider: Render
+        side_effect: Env vars on a preview service / preview environment
+        api_shape: REST `PUT /v1/services/{id}/env-vars/{key}`, bearer; object per key; previews created by Render from `render.yaml`
+        generic: Y
+        priority: P1
+        covered_by: null
+      - id: railway-variables
+        provider: Railway
+        side_effect: Variables in a PR environment (Railway creates PR environments natively)
+        api_shape: GraphQL `variableUpsert(projectId, environmentId, serviceId, name, value)`, bearer; object per name; deployment status for a barrier
+        generic: P (GraphQL, env id lookup, barrier)
+        priority: P1
+        covered_by: null
+      - id: fly-secrets
+        provider: Fly.io
+        side_effect: Per-PR app (the usual pattern is one app per PR) plus its secrets
+        api_shape: Machines API `api.machines.dev/v1/apps/{app}/secrets` (secret writes return a version, changed 2025) and GraphQL `setSecrets`; bearer; object; machines must be updated to see new secrets
+        generic: P (app lifecycle, restart)
+        priority: P1
+        covered_by: null
+      - id: heroku-config-vars
+        provider: Heroku
+        side_effect: Review app per PR; config vars on it
+        api_shape: REST `POST /review-apps`, `PATCH /apps/{app}/config-vars`, bearer; **map** merge, `null` deletes; review-app creation async
+        generic: Y (config vars); P (review app)
+        priority: P2
+        covered_by: null
+      - id: amplify-branch
+        provider: AWS Amplify
+        side_effect: Branch (per-PR previews built in); env vars per branch
+        api_shape: "`UpdateBranch` `environmentVariables`, SigV4; **map** full replace"
+        generic: N (SigV4; CLI fallback)
+        priority: P2
+        covered_by: null
+      - id: cloud-run-tag
+        provider: Google Cloud Run
+        side_effect: Tagged revision per PR (`--tag pr-42`), env vars on it
+        api_shape: Admin API v2 / `gcloud run deploy --tag --update-env-vars`, Google OAuth; revision = whole service spec
+        generic: N (part of the deploy, not beside it)
+        priority: P2
+        covered_by: null
+      - id: azure-swa-settings
+        provider: Azure Static Web Apps
+        side_effect: Preview environment per PR (built in); app settings
+        api_shape: ARM `PUT .../staticSites/{s}/builds/{env}/config/appsettings`, AAD token; **map** full replace
+        generic: P (AAD token)
+        priority: P2
+        covered_by: null
+      - id: digitalocean-app
+        provider: DigitalOcean App Platform
+        side_effect: No native PR previews; app per PR via its GitHub action; envs in the app spec
+        api_shape: REST `PUT /v2/apps/{id}` whole spec, bearer; **list** in spec
+        generic: P (whole-spec writes)
+        priority: P2
+        covered_by: null
+  - id: databases
+    title: Databases with branching or per-PR instances
+    rows:
+      - id: neon-branch
+        provider: Neon
+        side_effect: Copy-on-write branch per PR, connection string out
+        api_shape: REST `/api/v2/projects/{p}/branches`, bearer; object; async operations, `423` while busy
+        generic: P (async ops)
+        priority: P0
+        covered_by: neon.branch
+      - id: supabase-branch
+        provider: Supabase
+        side_effect: Preview branch per PR (a separate project with its own ref, keys and URL)
+        api_shape: Management API `POST /v1/projects/{ref}/branches`, `GET`/`DELETE /v1/branches/{ref}`, bearer PAT; object; async provisioning (`ACTIVE_HEALTHY`), migrations run by Supabase
+        generic: P (async, outputs from a second project)
+        priority: P0
+        covered_by: supabase.branch
+      - id: planetscale-branch
+        provider: PlanetScale
+        side_effect: Branch per PR; password (credential) per branch; deploy request on merge
+        api_shape: REST `POST /v1/organizations/{o}/databases/{d}/branches`, `.../branches/{b}/passwords`; service token header; object; branch `ready` async; password plaintext returned once
+        generic: P (async, once-only secret)
+        priority: P1
+        covered_by:
+          - planetscale.branch
+          - planetscale.password
+        note: deploy requests on merge are not managed
+      - id: turso-database
+        provider: Turso
+        side_effect: "Database branched from a parent (`seed: {type: database}`), token per DB"
+        api_shape: Platform API `POST /v1/organizations/{o}/databases`, `.../databases/{d}/auth/tokens`; bearer; object
+        generic: Y
+        priority: P1
+        covered_by: recipe:turso.database_branch
+      - id: xata-branch
+        provider: Xata
+        side_effect: Copy-on-write Postgres branch
+        api_shape: REST control plane and `xata branch create --from`; API keys. Endpoint paths not confirmed **(unverified)**; the product was re-platformed onto Postgres in 2025
+        generic: P (async; API in flux)
+        priority: P2
+        covered_by: null
+      - id: mongodb-atlas-user
+        provider: MongoDB Atlas
+        side_effect: No branching; per-PR database user and database name on a shared cluster (cluster per PR is slow and costly)
+        api_shape: Admin API v2 `POST /api/atlas/v2/groups/{g}/databaseUsers`, digest or service-account OAuth; object
+        generic: P (digest auth)
+        priority: P2
+        covered_by: null
+      - id: cockroachdb-database
+        provider: CockroachDB Cloud
+        side_effect: No branching; per-PR database is SQL (`CREATE DATABASE`), a cluster per PR is infra
+        api_shape: Cloud API `/api/v1/clusters` (cluster level only), bearer
+        generic: N (needs SQL)
+        priority: P2
+        covered_by: null
+      - id: prisma-postgres-database
+        provider: Prisma Postgres
+        side_effect: Database per PR in a project, connection string per database
+        api_shape: Management API `POST /v1/projects/{id}/databases`, `POST /v1/databases/{id}/connections`; service token; object; connection string returned on create
+        generic: Y
+        priority: P2
+        covered_by: null
+  - id: auth
+    title: Auth callback and redirect allow-lists
+    rows:
+      - id: clerk-redirect
+        provider: Clerk
+        side_effect: Preview URL on the instance's redirect allow-list
+        api_shape: Backend API `POST /v1/redirect_urls`, `DELETE /v1/redirect_urls/{id}`, bearer secret key; object
+        generic: Y
+        priority: P0
+        covered_by: clerk.redirect_allow
+      - id: auth0-callbacks
+        provider: Auth0
+        side_effect: Preview URL in an application's `callbacks`, `allowed_logout_urls`, `web_origins`, `allowed_origins`
+        api_shape: Management API `PATCH /api/v2/clients/{id}`, bearer from client-credentials; **list** (each array replaced whole); no ETag
+        generic: Y (list mode, token exchange)
+        priority: P0
+        covered_by: null
+      - id: supabase-auth-redirect
+        provider: Supabase Auth
+        side_effect: Preview URL in "Additional Redirect URLs"
+        api_shape: Management API `PATCH /v1/projects/{ref}/config/auth` with `uri_allow_list`, bearer; **list** encoded as one comma-separated string; send only that field; no precondition, so the op locks the list (`lockOn`)
+        generic: Y (list mode over a delimited string)
+        priority: P0
+        covered_by: supabase.auth_redirect
+      - id: firebase-auth-domains
+        provider: Firebase Auth
+        side_effect: Preview domain in `authorizedDomains`
+        api_shape: Identity Toolkit `PATCH admin/v2/projects/{p}/config?updateMask=authorizedDomains`, Google OAuth; **list** full replace
+        generic: Y (list mode, Google token)
+        priority: P1
+        covered_by: null
+      - id: workos-redirect
+        provider: WorkOS
+        side_effect: Redirect URI for AuthKit
+        api_shape: "`POST /user_management/redirect_uris`, list via `GET`; bearer; object. Delete endpoint not confirmed **(unverified)**"
+        generic: Y
+        priority: P1
+        covered_by: null
+      - id: stytch-redirect
+        provider: Stytch
+        side_effect: Redirect URL per environment
+        api_shape: PWA `POST /pwa/v3/projects/{p}/environments/{e}/redirect_urls` (+ get/delete by URL), Basic workspace key; object
+        generic: Y
+        priority: P2
+        covered_by: null
+      - id: okta-redirect
+        provider: Okta
+        side_effect: "`redirect_uris` on an OIDC app; trusted origin for CORS"
+        api_shape: "`PUT /api/v1/apps/{id}` (**list**, whole app object), `POST /api/v1/trustedOrigins` (object); `SSWS` token or OAuth"
+        generic: Y (list mode; trusted origins object)
+        priority: P2
+        covered_by: null
+      - id: kinde-callbacks
+        provider: Kinde
+        side_effect: Callback and logout URLs on an application
+        api_shape: Management API `POST`/`PUT /api/v1/applications/{id}/auth_redirect_urls` (add / replace); M2M client-credentials token. Path from SDK docs, not the reference **(unverified)**
+        generic: Y (token exchange)
+        priority: P2
+        covered_by: null
+      - id: google-oauth-redirect
+        provider: Google OAuth clients
+        side_effect: Preview URL in a web client's authorized redirect URIs
+        api_shape: "**No public API** for standard OAuth web clients (Console only); only IAM workforce OAuth clients and IAP are programmable"
+        generic: N
+        priority: P1
+        covered_by: manual.step
+        why: no public API for standard OAuth web clients
+  - id: flags
+    title: Feature flags and targeting
+    rows:
+      - id: launchdarkly-targeting
+        provider: LaunchDarkly
+        side_effect: "Flag on for a preview: target a context key or add a rule on `url`, in a per-PR or shared preview environment"
+        api_shape: "`PATCH /api/v2/flags/{proj}/{flag}` with semantic patch (`Content-Type: application/json; domain-model=launchdarkly.semanticpatch`, instructions `addTargets`/`removeTargets`/`addRule`), API token; instructions are idempotent per target; approvals may gate production"
+        generic: P (instruction-based diff, approvals)
+        priority: P0
+        covered_by: launchdarkly.flag_target
+        note: context-key targets; `url` rules not yet
+      - id: posthog-release-condition
+        provider: PostHog
+        side_effect: Release condition matching the preview host on a flag
+        api_shape: "`PATCH /api/projects/{id}/feature_flags/{id}` `filters.groups`, personal API key bearer; **list** in `filters`"
+        generic: Y (list mode)
+        priority: P1
+        covered_by: null
+      - id: statsig-gate-rule
+        provider: Statsig
+        side_effect: Gate rule for the preview (condition `url` or `environment_tier`)
+        api_shape: Console API `POST /console/v1/gates/{id}/rule`, `PATCH`/`DELETE .../rules/{ruleID}`, `STATSIG-API-KEY` header; object per rule; reviews may gate changes
+        generic: Y
+        priority: P1
+        covered_by: null
+      - id: growthbook-force-rule
+        provider: GrowthBook
+        side_effect: Force rule in a per-environment feature
+        api_shape: REST `POST /api/v1/features/{id}` with `environments.{env}.rules`, bearer; **list** per environment
+        generic: Y (list mode)
+        priority: P2
+        covered_by: null
+      - id: unleash-strategy
+        provider: Unleash
+        side_effect: Strategy (with constraints) on a flag in an environment
+        api_shape: Admin API `POST /api/admin/projects/{p}/features/{f}/environments/{env}/strategies`, `DELETE .../{id}`; token header; object
+        generic: Y
+        priority: P2
+        covered_by: null
+      - id: flagsmith-override
+        provider: Flagsmith
+        side_effect: Segment override or a per-PR environment
+        api_shape: "`POST /api/v1/environments/`, feature-state endpoints; `Token` header; object"
+        generic: Y
+        priority: P2
+        covered_by: null
+      - id: configcat-rule
+        provider: ConfigCat
+        side_effect: Targeting rule on a setting in an environment
+        api_shape: Management API v2 `PATCH /v2/environments/{e}/settings/{s}/value` (JSON Patch), Basic; **list** of rules
+        generic: Y (JSON Patch body)
+        priority: P2
+        covered_by: null
+      - id: split-rule
+        provider: Split (Harness FME)
+        side_effect: Targeting rule / individual target in an environment
+        api_shape: Admin API `PATCH /internal/api/v2/splits/ws/{ws}/{split}/environments/{env}` (JSON Patch), bearer; **list** **(unverified paths since the Harness migration)**
+        generic: Y
+        priority: P2
+        covered_by: null
+  - id: webhooks
+    title: Webhooks registered per environment
+    rows:
+      - id: stripe-webhook
+        provider: Stripe
+        side_effect: Test-mode webhook endpoint pointing at the preview URL; its signing secret into the app's env
+        api_shape: "`POST /v1/webhook_endpoints` (form-encoded), `DELETE /v1/webhook_endpoints/{id}`; bearer; object; `Idempotency-Key`; **`secret` returned only on create**"
+        generic: P (once-only secret must flow into an env line in the same run)
+        priority: P0
+        covered_by: null
+      - id: github-webhook
+        provider: GitHub
+        side_effect: Repository webhook to the preview URL
+        api_shape: "`POST /repos/{o}/{r}/hooks`, `DELETE .../hooks/{id}`; bearer; object; secret write-only (caller supplies it)"
+        generic: Y
+        priority: P2
+        covered_by: null
+      - id: svix-endpoint
+        provider: Svix (as a sender)
+        side_effect: Endpoint per environment on an application
+        api_shape: "`POST /api/v1/app/{app}/endpoint` with caller-chosen `uid`; bearer; object, idempotent by `uid`; secret readable via `GET .../secret`"
+        generic: Y
+        priority: P2
+        covered_by: null
+      - id: clerk-webhook
+        provider: Clerk webhooks
+        side_effect: Preview URL as a webhook endpoint
+        api_shape: Clerk's Backend API only creates/deletes the Svix app and a dashboard link; **no endpoint API** through Clerk
+        generic: N
+        priority: P1
+        covered_by: manual.step
+        why: Clerk's API manages the Svix app, not its endpoints
+  - id: email
+    title: "Email: sending domains, webhooks, test inboxes"
+    rows:
+      - id: resend-key-webhook
+        provider: Resend
+        side_effect: Restricted API key or webhook per environment (domains are long-lived; test addresses like `delivered@resend.dev` need no API)
+        api_shape: "`POST /api-keys` (token returned once), `POST /webhooks`; bearer; object"
+        generic: Y
+        priority: P2
+        covered_by: null
+      - id: postmark-server-webhook
+        provider: Postmark
+        side_effect: Server per environment, webhook per server
+        api_shape: Account API `POST /servers` (`X-Postmark-Account-Token`), Server API `POST /webhooks` (`X-Postmark-Server-Token`); object
+        generic: Y
+        priority: P2
+        covered_by: null
+      - id: sendgrid-webhook
+        provider: SendGrid
+        side_effect: Event webhook or inbound-parse host per environment
+        api_shape: "`POST /v3/user/webhooks/event/settings`, `POST /v3/user/webhooks/parse/settings`; bearer; object"
+        generic: Y
+        priority: P2
+        covered_by: null
+  - id: observability
+    title: Observability per release
+    rows:
+      - id: sentry-release
+        provider: Sentry
+        side_effect: Release for the commit, deploy record for the environment; finalize
+        api_shape: "`POST /api/0/organizations/{o}/releases/`, `POST .../releases/{v}/deploys/`; bearer; object; environments appear on first event"
+        generic: Y (destroy = leave; history)
+        priority: P1
+        covered_by: null
+      - id: datadog-marker
+        provider: Datadog
+        side_effect: Deployment marker / synthetic test against the preview URL
+        api_shape: "`datadog-ci deployment mark`; `POST /api/v1/synthetics/tests/api`; `DD-API-KEY` + `DD-APPLICATION-KEY` headers; object"
+        generic: Y
+        priority: P2
+        covered_by: null
+      - id: honeycomb-marker
+        provider: Honeycomb
+        side_effect: Marker per deploy in the environment's dataset
+        api_shape: "`POST /1/markers/{dataset}`, `X-Honeycomb-Team` header; object"
+        generic: Y
+        priority: P2
+        covered_by: null
+  - id: dns
+    title: DNS and preview domains
+    rows:
+      - id: cloudflare-dns
+        provider: Cloudflare DNS
+        side_effect: CNAME `pr-42.preview.example.com` → the preview
+        api_shape: "`POST /zones/{z}/dns_records`, `DELETE .../{id}`; bearer; object; no idempotency key, find by name+type"
+        generic: Y
+        priority: P1
+        covered_by: recipe:cloudflare.dns_cname
+      - id: vercel-domain
+        provider: Vercel domains
+        side_effect: Branch-bound project domain (`gitBranch`) for a stable preview hostname
+        api_shape: "`POST /v10/projects/{id}/domains` `{name, gitBranch}`, `DELETE`; bearer; object"
+        generic: Y (or a `vercel` op)
+        priority: P1
+        covered_by: null
+  - id: cors
+    title: CORS and allowed origins
+    rows:
+      - id: supabase-cors
+        provider: Supabase
+        side_effect: (none) The Data API and Storage have no per-origin allow-list; Edge Functions set CORS in code
+        api_shape: n/a, not counted
+        generic: n/a
+        priority: n/a
+        counted: false
+        why: "nothing to manage: the Data API and Storage have no per-origin allow-list"
+      - id: gcs-cors
+        provider: Firebase Storage (GCS bucket)
+        side_effect: Preview origin in the bucket's `cors`
+        api_shape: GCS JSON API `PATCH /storage/v1/b/{bucket}?fields=cors`, Google OAuth; **list** full replace; `ifMetagenerationMatch` precondition available
+        generic: Y (list mode with precondition)
+        priority: P2
+        covered_by: null
+      - id: s3-r2-cors
+        provider: S3 / R2
+        side_effect: Preview origin in the bucket CORS rules
+        api_shape: S3 `PutBucketCors` (SigV4, full replace); R2 `PUT /accounts/{a}/r2/buckets/{b}/cors` (bearer, full replace); **list**
+        generic: P (R2 yes; S3 needs SigV4)
+        priority: P2
+        covered_by: null
+  - id: queues
+    title: Queues, caches, background jobs
+    rows:
+      - id: upstash-redis-database
+        provider: Upstash Redis
+        side_effect: Database per PR, REST URL and token out
+        api_shape: Developer API `POST /v2/redis/database`, `DELETE /v2/redis/database/{id}`; Basic (email:key); object
+        generic: Y
+        priority: P2
+        covered_by: null
+      - id: qstash-schedule
+        provider: Upstash QStash
+        side_effect: Schedule that calls the preview URL
+        api_shape: "`POST /v2/schedules/{destination}` with `Upstash-Schedule-Id` (idempotent upsert), `DELETE /v2/schedules/{id}`; bearer; object"
+        generic: Y
+        priority: P2
+        covered_by: null
+      - id: inngest-sync
+        provider: Inngest
+        side_effect: Sync the preview deployment into its branch environment
+        api_shape: "`PUT {preview_url}/api/inngest` (the app registers itself) or the Vercel integration; branch env selected by `INNGEST_ENV` var"
+        generic: Y (one call, no destroy; archive via dashboard)
+        priority: P1
+        covered_by: null
+  - id: search-payments
+    title: Search, payments test mode
+    rows:
+      - id: algolia-index
+        provider: Algolia
+        side_effect: Index per environment, copied from a template index
+        api_shape: "`POST /1/indexes/{src}/operation` `{operation: copy, destination}`, `DELETE /1/indexes/{name}`; `X-Algolia-Application-Id` + `X-Algolia-API-Key`; async task to poll"
+        generic: P (async task)
+        priority: P2
+        covered_by: null
+      - id: stripe-test-objects
+        provider: Stripe test-mode objects
+        side_effect: Products / prices / coupons the preview's code expects
+        api_shape: "`POST /v1/products`, `/v1/prices` (form-encoded, `lookup_key` as identity, `Idempotency-Key`); prices cannot be deleted, only `active=false`"
+        generic: Y (destroy = archive)
+        priority: P2
+        covered_by: null
+      - id: stripe-sandbox
+        provider: Stripe sandboxes
+        side_effect: A sandbox per PR
+        api_shape: No public API for account sandboxes; anonymous "claimable" sandboxes are private preview
+        generic: N
+        priority: P2
+        covered_by: manual.step
+        why: no public API for account sandboxes
+secret_sources:
+  - id: doppler
+    provider: Doppler
+    read_api: CLI / REST, service token
+    priority: P1
+    covered_by: secret:doppler
+  - id: 1password
+    provider: 1Password (CLI, service accounts)
+    read_api: "`op read`"
+    priority: P1
+    covered_by: secret:op
+  - id: aws-secrets-manager
+    provider: AWS Secrets Manager
+    read_api: CLI, SigV4
+    priority: P1
+    covered_by: secret:aws-sm
+  - id: google-secret-manager
+    provider: Google Secret Manager
+    read_api: CLI, Google OAuth
+    priority: P2
+    covered_by: secret:gcp-sm
+  - id: hashicorp-vault
+    provider: HashiCorp Vault
+    read_api: KV v2 `GET /v1/{mount}/data/{path}`, `X-Vault-Token`
+    priority: P1
+    covered_by: null
+    issue: https://github.com/MishaBear94/Sponson/issues/17
+  - id: infisical
+    provider: Infisical
+    read_api: CLI or `GET /api/v3/secrets/raw/{name}`, machine identity
+    priority: P1
+    covered_by: null
+    issue: https://github.com/MishaBear94/Sponson/issues/18
+  - id: azure-key-vault
+    provider: Azure Key Vault
+    read_api: "`GET {vault}/secrets/{name}?api-version=7.4`, AAD token, or `az keyvault secret show`"
+    priority: P2
+    covered_by: null
+  - id: 1password-connect
+    provider: 1Password Connect
+    read_api: "`GET /v1/vaults/{v}/items/{i}`, bearer"
+    priority: P2
+    covered_by: null
+  - id: bitwarden-secrets-manager
+    provider: Bitwarden Secrets Manager
+    read_api: "`bws secret get`, `BWS_ACCESS_TOKEN`"
+    priority: P2
+    covered_by: null
