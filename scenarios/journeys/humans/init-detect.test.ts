@@ -40,12 +40,13 @@ const NEXT_VERCEL_SUPABASE: Files = {
   ".env.local": `NEXT_PUBLIC_SUPABASE_URL=https://abcd.supabase.co\nSUPABASE_SERVICE_ROLE_KEY=${SECRET_SUPABASE}\n`,
 };
 
-/** SvelteKit + Drizzle on Neon (context file from `neonctl set-context`), deployed somewhere Sponson does not manage. */
+/** SvelteKit + Drizzle on Neon (context file from `neonctl set-context`), deployed on Netlify (linked with `netlify link`). */
 const SVELTEKIT_NEON_NETLIFY: Files = {
   "package.json": { dependencies: { "@sveltejs/kit": "^2.0.0", "drizzle-orm": "^0.36.0", "@neondatabase/serverless": "^1.0.0" } },
   ".neon": { projectId: "proj_demo" },
   "drizzle.config.ts": "export default { dialect: 'postgresql', dbCredentials: { url: process.env.POSTGRES_URL! } };\n",
   "netlify.toml": "[build]\n  command = \"vite build\"\n",
+  ".netlify/state.json": { siteId: "site_demo" },
 };
 
 let ws: Workspace | undefined;
@@ -120,17 +121,26 @@ describe("sponson init detects the stack", () => {
     expect(human.stdout).toMatch(/Not supported yet \(no line manages them\):\n {2}Supabase \(package\.json: @supabase\/supabase-js\): database branches/);
   });
 
-  it("SvelteKit + Drizzle + Neon on Netlify: the Neon id from `.neon`, the variable Drizzle reads, Netlify not supported", async () => {
+  it("SvelteKit + Drizzle + Neon on Netlify: both ids from their files, the variable Drizzle reads, a Netlify line that plans", async () => {
     const cwd = await repoWith(SVELTEKIT_NEON_NETLIFY);
     const r = await init(cwd, "--json");
     expect(r.code, r.stderr).toBe(0);
     expect(r.json.detected).toMatchObject({ assumed: false, todo: [] });
-    expect(r.json.detected.found.map((f: any) => f.id)).toEqual(["neon", "sveltekit", "drizzle"]);
-    expect(r.json.detected.unsupported.map((f: any) => f.id)).toEqual(["netlify"]);
+    expect(r.json.detected.found.map((f: any) => f.id)).toEqual(["neon", "netlify", "sveltekit", "drizzle"]);
+    expect(r.json.detected.unsupported).toEqual([]);
     const { text, ids } = await writtenPlan(cwd);
-    expect(ids).toEqual(["db"]);
+    expect(ids).toEqual(["db", "env"]);
     expect(text).toContain('neon: { project: "proj_demo" }   # from .neon');
-    expect(text).toContain("has no deploy target Sponson manages yet");
+    expect(text).toContain('netlify: { site: "site_demo" }   # from .netlify/state.json');
+    expect(text).toContain("POSTGRES_URL: { from: db.connection_string }");
+    expect(text).not.toContain("has no deploy target Sponson manages yet");
+
+    // It plans against the (fake) cloud as written: db to create, the Netlify line pending on it.
+    sim = await startSim();
+    await writeFile(join(cwd, "release.plan.yaml"), text + "receipts: local\n");
+    const p = await runCli(["plan", "--json", "--branch", "feat/x", "--sha", SHA, "--pr", "42"], { env: cliEnv(sim), cwd });
+    expect(p.code, p.stdout + p.stderr).toBe(0);
+    expect(p.json.lines.map((l: any) => [l.id, l.status])).toEqual([["db", "create"], ["env", "pending"]]);
   });
 
   it("a bare repository: the Vercel + Neon template, explained, with both ids to fill in", async () => {

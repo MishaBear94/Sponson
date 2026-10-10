@@ -50,7 +50,7 @@ Columns:
 | Provider | Side effect | API shape | Generic? | Pri | Now |
 |---|---|---|---|---|---|
 | Vercel | Env vars per target and git branch; wait for the preview deployment, redeploy if it built before the write | REST `/v10/projects/{id}/env`, bearer; object per variable; deployment barrier | P (barrier, redeploy) | P0 | **yes** (`vercel.env`, `vercel.deploy`) |
-| Netlify | Env var values per deploy context (`deploy-preview`, `branch` + `context_parameter`) | REST `POST /api/v1/accounts/{account}/env?site_id=`, `PATCH .../env/{key}`; bearer; object per key, values list per context; deploys only see values set before they started | P (deploy barrier like Vercel) | P0 | no |
+| Netlify | Env var values per deploy context (`deploy-preview`, `branch` + `context_parameter`); wait for the deploy of the commit, rebuild if it started before the write | REST `POST /api/v1/accounts/{account}/env?site_id=`, `PATCH .../env/{key}`; bearer; object per key, values list per context; deploys only see values set before they started | P (deploy barrier like Vercel) | P0 | **yes** (`netlify.env`) |
 | Cloudflare Pages / Workers | Pages: `deployment_configs.preview.env_vars` (all previews share one set, no per-branch values). Workers: secrets per script / preview version | REST `PATCH /accounts/{a}/pages/projects/{p}`, bearer; **map** merge-patch, `null` deletes; Workers `PUT .../workers/scripts/{s}/secrets` object | Y | P1 | no |
 | Render | Env vars on a preview service / preview environment | REST `PUT /v1/services/{id}/env-vars/{key}`, bearer; object per key; previews created by Render from `render.yaml` | Y | P1 | no |
 | Railway | Variables in a PR environment (Railway creates PR environments natively) | GraphQL `variableUpsert(projectId, environmentId, serviceId, name, value)`, bearer; object per name; deployment status for a barrier | P (GraphQL, env id lookup, barrier) | P1 | no |
@@ -183,12 +183,12 @@ manage). Weights: P0 = 3, P1 = 2, P2 = 1 (9 P0, 16 P1, 31 P2; total weight 90).
 
 | Measure | Covered | Coverage |
 |---|---|---|
-| Rows | 3 of 56 (Vercel env, Neon branch, Clerk redirect) | **5.4%** |
-| Weighted by priority | 9 of 90 | **10.0%** |
-| P0 rows only | 3 of 9 | 33% |
+| Rows | 4 of 56 (Vercel env, Netlify env, Neon branch, Clerk redirect) | **7.1%** |
+| Weighted by priority | 12 of 90 | **13.3%** |
+| P0 rows only | 4 of 9 | 44% |
 | Secret sources (separate) | 4 of 9 vendors; weighted 7 of 14 | 44%; 50% |
 
-Plainly: Sponson covers the canonical Vercel + Neon + Clerk preview stack and almost nothing else. Three rows (Google
+Plainly: Sponson covers the canonical Vercel (or Netlify) + Neon + Clerk preview stack and almost nothing else. Three rows (Google
 OAuth clients, Clerk webhooks, Stripe sandboxes; weight 5) have no usable API, so no adapter can reach them; the
 ceiling is 53 rows / 94.4% weighted.
 
@@ -202,8 +202,8 @@ Railway deploys, like `vercel.env`), outputs that exist only once (Stripe webhoo
 instruction-based diffs (LaunchDarkly), GraphQL, or non-bearer signing (SigV4).
 
 **A generic declarative HTTP adapter** (`adapter: http`) for the long tail where each item is a URL, a rule or a record
-and the lifecycle is plain CRUD. Rows marked **Y**: 34 rows not covered today, which would bring coverage to 37 rows
-(66.1%), 58 of 90 weighted (64.4%), without a line of provider code.
+and the lifecycle is plain CRUD. Rows marked **Y**: 34 rows not covered today, which would bring coverage to 38 rows
+(67.9%), 61 of 90 weighted (67.8%), without a line of provider code.
 
 ### What `adapter: http` must support to cover the P0/P1 rows
 
@@ -250,7 +250,7 @@ Ranked by weighted rows covered, then by how much they need more than `adapter: 
 | # | Adapter | Rows (Pri) | Why first-class |
 |---|---|---|---|
 | 1 | `supabase` | branch (P0), auth redirect URLs (P0) | Two P0 rows with one credential; preview branches are separate projects provisioned asynchronously, and their URL and keys are outputs the env line needs. |
-| 2 | `netlify` | env per deploy context (P0) | Second most common preview host; needs the same deploy barrier and redeploy-after-write logic as `vercel.env`. |
+| 2 | `netlify` (**shipped**: `netlify.env`) | env per deploy context (P0) | Second most common preview host; needs the same deploy barrier and redeploy-after-write logic as `vercel.env`. Deploy Previews cannot be rebuilt through Netlify's API, so a `deploy-preview` line reports a stale deploy instead of rebuilding it. |
 | 3 | `launchdarkly` | flag targeting (P0) | The README's fourth console ([#15](https://github.com/MishaBear94/Sponson/issues/15)); semantic-patch instructions and approval workflows do not fit a request template. |
 | 4 | `stripe` | test-mode webhook endpoint (P0), test objects (P2) | Its signing secret exists only in the create response and must flow into the app's env in the same run; form encoding and `Idempotency-Key`. |
 | 5 | `auth0` | callbacks / logout URLs / web origins (P0) | Four arrays on one shared application with no precondition: the reference case for the list-mode lock, worth owning before generalising ([#16](https://github.com/MishaBear94/Sponson/issues/16)). |

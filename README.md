@@ -68,7 +68,7 @@ One release, one plan. Three commands.
 
 | Command | What it does | Writes anything? |
 |---|---|---|
-| `sponson init` | Detects your stack from the repository's files (Vercel, Neon, Clerk, the framework and ORM) and writes a plan for it, with the project ids it can find. Run again to adopt resources the plan does not know about. | the plan file only |
+| `sponson init` | Detects your stack from the repository's files (Vercel, Netlify, Neon, Clerk, the framework and ORM) and writes a plan for it, with the project ids it can find. Run again to adopt resources the plan does not know about. | the plan file only |
 | `sponson plan` | Reads live state, prints the diff and any drift. | no |
 | `sponson apply` | Runs the plan in dependency order. Rolls back what this run created if a line fails. Writes a receipt. | yes |
 
@@ -141,13 +141,14 @@ sponson apply         # creates the branch, injects the variable, waits for the 
 ```
 
 `sponson init` reads the repository's files only (no network, no credentials): `.vercel/project.json` and
-`vercel.json`, `package.json` dependencies, Prisma and Drizzle configs, `.neon`, and the variable *names* in
+`vercel.json`, `netlify.toml` and `.netlify/state.json`, `package.json` dependencies, Prisma and Drizzle configs,
+`.neon`, and the variable *names* in
 `.env.example`, `.env.local` and the other `.env*` files. It never reads a value out of them, except to recognise a
-database host such as `*.neon.tech`. It writes a line only for what it found (a Neon branch, the Vercel preview
-variable that references it under the name your code reads, a Clerk redirect for the preview URL), fills in the
-project ids it can find, and marks each one it cannot with a `TODO` comment saying where to look
-(`vercel link`, `neonctl projects list`). Services Sponson does not manage yet (Supabase, PlanetScale, Auth0,
-Netlify, Cloudflare, LaunchDarkly, PostHog, Stripe, Sentry, …) are listed as "not supported yet" with a link to the
+database host such as `*.neon.tech`. It writes a line only for what it found (a Neon branch, the Vercel or Netlify
+preview variable that references it under the name your code reads, a Clerk redirect for the preview URL), fills in
+the project ids it can find, and marks each one it cannot with a `TODO` comment saying where to look
+(`vercel link`, `netlify link`, `neonctl projects list`). Services Sponson does not manage yet (Supabase, PlanetScale,
+Auth0, Cloudflare, LaunchDarkly, PostHog, Stripe, Sentry, …) are listed as "not supported yet" with a link to the
 [roadmap](ROADMAP.md), never silently dropped. With nothing detected it writes the Vercel + Neon template.
 
 ```

@@ -41,7 +41,7 @@ and registers them. The checklist is in CONTRIBUTING.md.
 | Feature flags: a second provider (Statsig, Unleash, PostHog or GrowthBook) | Reuse whatever shape LaunchDarkly settles on | adapter |
 | Identity callbacks beyond Clerk: Auth0 (allowed callback URLs on an application), Supabase Auth redirect URLs ([#16](https://github.com/MishaBear94/Sponson/issues/16)) | Small, close to `clerk.ts` | adapter, **good first issue** |
 | Database branches: Supabase branching, PlanetScale branches | Close to `neon.ts`; output a connection string marked `sensitive` | adapter |
-| Deploy-target env vars: Netlify, Railway, Fly.io secrets | Close to `vercel.ts`'s `env` op, without the deploy barrier at first | adapter |
+| Deploy-target env vars: Railway, Fly.io secrets | Close to `vercel.ts`'s and `netlify.ts`'s `env` ops, without the deploy barrier at first | adapter |
 
 ## 3. More secret sources
 

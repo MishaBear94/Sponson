@@ -25,13 +25,16 @@ const SCHEMA_LINE = "# yaml-language-server: $schema=https://raw.githubuserconte
 
 export const VERCEL_PROJECT_HINT =
   "run `vercel link` (it writes .vercel/project.json; then delete this file and run `sponson init` again), or Vercel dashboard → your project → Settings → General → Project ID";
+export const NETLIFY_SITE_HINT =
+  "run `netlify link` (it writes .netlify/state.json; then delete this file and run `sponson init` again), or Netlify UI → your project → Project configuration → General → Project ID";
 export const NEON_PROJECT_HINT = "run `neonctl projects list`, or https://console.neon.tech → your project → Settings → General → Project ID";
 
 /** Each provider's credential variable, read when Sponson runs (never written into the plan). */
-const CREDENTIALS: Record<string, string> = { vercel: "VERCEL_TOKEN", neon: "NEON_API_KEY", clerk: "CLERK_SECRET_KEY" };
+const CREDENTIALS: Record<string, string> = { vercel: "VERCEL_TOKEN", netlify: "NETLIFY_AUTH_TOKEN", neon: "NEON_API_KEY", clerk: "CLERK_SECRET_KEY" };
 
 interface Shape {
   vercel: boolean;
+  netlify: boolean;
   neon: boolean;
   clerk: boolean;
   deploy: boolean;
@@ -39,15 +42,16 @@ interface Shape {
 }
 
 function shapeOf(d: StackDetection): Shape {
-  const assumed = !has(d, "vercel") && !has(d, "neon");
+  const netlify = has(d, "netlify");
+  const assumed = !has(d, "vercel") && !has(d, "neon") && !netlify;
   const vercel = has(d, "vercel") || assumed;
-  return { vercel, neon: has(d, "neon") || assumed, clerk: has(d, "clerk"), deploy: vercel && d.vercelAutoDeployOff, assumed };
+  return { vercel, netlify, neon: has(d, "neon") || assumed, clerk: has(d, "clerk"), deploy: vercel && d.vercelAutoDeployOff, assumed };
 }
 
 /** The adapters the starter's lines use, for the "set these credentials" hint. */
 export function credentialsFor(d: StackDetection): string[] {
   const s = shapeOf(d);
-  return (["vercel", "neon", "clerk"] as const).filter((a) => s[a] && (a !== "clerk" || s.vercel)).map((a) => CREDENTIALS[a]!);
+  return (["vercel", "netlify", "neon", "clerk"] as const).filter((a) => s[a] && (a !== "clerk" || s.vercel || s.netlify)).map((a) => CREDENTIALS[a]!);
 }
 
 export function composeStarter(d: StackDetection): Starter {
@@ -55,7 +59,7 @@ export function composeStarter(d: StackDetection): Starter {
   const todos: Todo[] = [];
   const out = [...header(d, s), "version: 1", "environments: [preview, production]", ...providers(d, s, todos), "", "changes:"];
   // Never empty: without Vercel or Neon the template assumes both.
-  out.push(...dbLine(s), ...envLine(d, s), ...deployLine(s), ...clerkLine(s), ...orphanNotes(s));
+  out.push(...dbLine(s), ...envLine(d, s), ...netlifyEnvLine(d, s), ...deployLine(s), ...clerkLine(s), ...orphanNotes(s));
   const text = out.join("\n").replace(/\n+$/, "") + "\n";
   return { text, todos, assumed: s.assumed };
 }
@@ -87,6 +91,11 @@ function providers(d: StackDetection, s: Shape, todos: Todo[]): string[] {
     const note = d.ids.vercelProjectFrom ? `# from ${d.ids.vercelProjectFrom}` : todo(todos, "providers.vercel.project", project, VERCEL_PROJECT_HINT);
     out.push(`  vercel: { project: ${q(project)}${team} }   ${note}`);
   }
+  if (s.netlify) {
+    const site = d.ids.netlifySite ?? "your-site-id";
+    const note = d.ids.netlifySiteFrom ? `# from ${d.ids.netlifySiteFrom}` : todo(todos, "providers.netlify.site", site, NETLIFY_SITE_HINT);
+    out.push(`  netlify: { site: ${q(site)} }   ${note}`);
+  }
   if (s.neon) {
     const project = d.ids.neonProject ?? "proj_xxx";
     const note = d.ids.neonProjectFrom ? `# from ${d.ids.neonProjectFrom}` : todo(todos, "providers.neon.project", project, NEON_PROJECT_HINT);
@@ -113,11 +122,35 @@ function dbLine(s: Shape): string[] {
   ];
 }
 
-function envLine(d: StackDetection, s: Shape): string[] {
-  if (!s.vercel) return [];
-  const value = s.neon
+/** The variable line both deploy targets write: the Neon branch's connection string, or an example. */
+function valueLine(d: StackDetection, s: Shape): string {
+  return s.neon
     ? `      ${d.databaseVar}: { from: db.connection_string }   # ${d.databaseVarFrom ? `the name ${d.databaseVarFrom} uses; ` : ""}a reference, never a value`
     : `      ${d.publicPrefix}SPONSON_SCOPE: "\${ctx.scope}"   # an example (pr-42, main, …): replace with the variables your previews need`;
+}
+
+/** The Netlify line's id: `env`, unless a Vercel line already has it. */
+function netlifyId(s: Shape): string {
+  return s.vercel ? "netlify-env" : "env";
+}
+
+function netlifyEnvLine(d: StackDetection, s: Shape): string[] {
+  if (!s.netlify) return [];
+  return [
+    "  # Values for the current git branch, which Netlify uses for its Deploy Previews: two pull requests never see each other's values.",
+    `  - id: ${netlifyId(s)}`,
+    "    adapter: netlify",
+    "    op: env",
+    "    values:",
+    valueLine(d, s),
+    "    environments: [preview]",
+    "",
+  ];
+}
+
+function envLine(d: StackDetection, s: Shape): string[] {
+  if (!s.vercel) return [];
+  const value = valueLine(d, s);
   return [
     "  # Preview variables for the current git branch only, so two pull requests never see each other's values.",
     "  - id: env",
@@ -145,9 +178,12 @@ function deployLine(s: Shape): string[] {
 }
 
 function clerkLine(s: Shape): string[] {
-  if (!s.clerk || !s.vercel) return [];
-  const from = s.deploy ? "deploy.preview_url" : "env.preview_url";
-  const note = s.deploy ? "known once the deploy line has finished" : "exists once Vercel has deployed this commit; the next `apply` finishes the line";
+  if (!s.clerk || (!s.vercel && !s.netlify)) return [];
+  const [from, note] = !s.vercel
+    ? [`${netlifyId(s)}.deploy_preview_url`, "exists once Netlify has built this commit's Deploy Preview; the next `apply` finishes the line"]
+    : s.deploy
+      ? ["deploy.preview_url", "known once the deploy line has finished"]
+      : ["env.preview_url", "exists once Vercel has deployed this commit; the next `apply` finishes the line"];
   return [
     "  # The preview's URL on the Clerk instance's redirect allow-list (the instance of CLERK_SECRET_KEY: use a development one).",
     "  - id: callback",
@@ -162,10 +198,10 @@ function clerkLine(s: Shape): string[] {
 /** Detected providers that have nothing to connect to, said in the plan instead of silently dropped. */
 function orphanNotes(s: Shape): string[] {
   const out: string[] = [];
-  if (s.neon && !s.vercel) {
-    out.push("  # The branch's connection string (`{ from: db.connection_string }`) has no deploy target Sponson manages yet;", "  # pass it to yours by hand, or follow ROADMAP.md section 2 for Netlify, Railway and Fly.io.");
+  if (s.neon && !s.vercel && !s.netlify) {
+    out.push("  # The branch's connection string (`{ from: db.connection_string }`) has no deploy target Sponson manages yet;", "  # pass it to yours by hand, or follow ROADMAP.md section 2 for Railway and Fly.io.");
   }
-  if (s.clerk && !s.vercel) out.push("  # Clerk was detected, but a redirect line needs a preview URL from a deploy target Sponson manages (Vercel).");
+  if (s.clerk && !s.vercel && !s.netlify) out.push("  # Clerk was detected, but a redirect line needs a preview URL from a deploy target Sponson manages (Vercel, Netlify).");
   return out;
 }
 

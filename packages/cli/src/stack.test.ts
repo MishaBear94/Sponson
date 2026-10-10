@@ -158,21 +158,47 @@ describe("detectStack", () => {
     const d = await detectStack(
       repo({
         "package.json": pkg({ "@planetscale/database": "1", "@auth0/nextjs-auth0": "3", "@launchdarkly/node-server-sdk": "9", "posthog-js": "1", stripe: "16", "@sentry/nextjs": "8", firebase: "10", "@libsql/client": "0.6" }, { wrangler: "3" }),
-        "netlify.toml": "[build]\n",
         "fly.toml": "app = 'x'\n",
         "railway.json": "{}",
         ".env.example": "DATABASE_URL=mysql://u:p@aws.connect.psdb.cloud/db\n",
       }),
     );
-    expect(unsupportedIds(d)).toEqual(["planetscale", "turso", "auth0", "netlify", "cloudflare", "railway", "fly", "firebase", "launchdarkly", "posthog", "stripe", "sentry"]);
+    expect(unsupportedIds(d)).toEqual(["planetscale", "turso", "auth0", "cloudflare", "railway", "fly", "firebase", "launchdarkly", "posthog", "stripe", "sentry"]);
     for (const u of d.unsupported) expect(u.pointer, u.id).toMatch(/ROADMAP\.md|issues/);
     const text = expectValidPlan(d, ["db", "env"]);
     for (const u of d.unsupported) expect(text).toContain(`# Not supported yet, so no line below manages it: ${u.name}`);
   });
 
+  it("Netlify + Neon + Clerk: the site id from .netlify/state.json, a branch-context line, the callback on the Deploy Preview URL", async () => {
+    const d = await detectStack(repo({ "package.json": pkg({ "@clerk/clerk-js": "5", "@neondatabase/serverless": "1" }), "netlify.toml": "[build]\n", ".netlify/state.json": { siteId: "site-123" } }));
+    expect(ids(d)).toEqual(["neon", "clerk", "netlify"]);
+    expect(d.found.find((f) => f.id === "netlify")!.evidence).toEqual(["netlify.toml", ".netlify/state.json"]);
+    expect(unsupportedIds(d)).toEqual([]);
+    expect(d.ids).toMatchObject({ netlifySite: "site-123", netlifySiteFrom: ".netlify/state.json" });
+    const text = expectValidPlan(d, ["db", "env", "callback"]);
+    expect(text).toContain('netlify: { site: "site-123" }   # from .netlify/state.json');
+    expect(text).toMatch(/- id: env\n {4}adapter: netlify\n {4}op: env\n {4}values:\n {6}DATABASE_URL: \{ from: db\.connection_string \}/);
+    expect(text).toContain("url: { from: env.deploy_preview_url }");
+    expect(text).not.toContain("adapter: vercel");
+    expect(composeStarter(d).todos).toEqual([expect.objectContaining({ path: "providers.neon.project" })]);
+    expect(credentialsFor(d)).toEqual(["NETLIFY_AUTH_TOKEN", "NEON_API_KEY", "CLERK_SECRET_KEY"]);
+  });
+
+  it("Netlify without a linked site: NETLIFY_SITE_ID wins, else a TODO; next to Vercel the line is `netlify-env`", async () => {
+    const fromEnv = await detectStack(repo({ "netlify.toml": "[build]\n", ".netlify/state.json": { siteId: "file-site" } }), { NETLIFY_SITE_ID: "env-site" });
+    expect(fromEnv.ids).toMatchObject({ netlifySite: "env-site", netlifySiteFrom: "NETLIFY_SITE_ID" });
+    const onlyEnv = await detectStack(repo({}), { NETLIFY_SITE_ID: "env-site" });
+    expect(onlyEnv.found.find((f) => f.id === "netlify")!.evidence).toEqual(["NETLIFY_SITE_ID in the environment"]);
+    const unlinked = await detectStack(repo({ "package.json": pkg({}, { "netlify-cli": "17" }) }));
+    expect(composeStarter(unlinked).todos).toEqual([expect.objectContaining({ path: "providers.netlify.site", placeholder: "your-site-id" })]);
+    expect(expectValidPlan(unlinked, ["env"])).toContain('SPONSON_SCOPE: "${ctx.scope}"');
+    const both = await detectStack(repo({ "vercel.json": "{}", "netlify.toml": "[build]\n" }));
+    expectValidPlan(both, ["env", "netlify-env"]);
+  });
+
   it("broken files are no signal rather than a crash", async () => {
-    const d = await detectStack(repo({ "package.json": "{ not json", ".vercel/project.json": "[]", "vercel.json": "nope", ".neon": '{"projectId": 3}' }));
-    expect(ids(d)).toEqual(["vercel", "neon"]); // the files exist, but hold no ids
+    const d = await detectStack(repo({ "package.json": "{ not json", ".vercel/project.json": "[]", "vercel.json": "nope", ".neon": '{"projectId": 3}', ".netlify/state.json": "{" }));
+    expect(ids(d)).toEqual(["vercel", "neon", "netlify"]); // the files exist, but hold no ids
     expect(d.ids).toEqual({});
     expect(d.vercelAutoDeployOff).toBe(false);
   });
