@@ -49,9 +49,9 @@ jobs:
         uses: changesets/action@v2
         with:
           # No `publish:` here on purpose: publishing is a separate, manual, approved step.
-          version: pnpm changeset version
-          title: Version Packages
-          commit: Version Packages
+          version-script: pnpm changeset version
+          pr-title: Version Packages
+          commit-message: Version Packages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
