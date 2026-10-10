@@ -10,6 +10,7 @@ The format is specified in [docs/plan-format.md](../docs/plan-format.md).
 | File | Shows |
 |---|---|
 | [nextjs-neon-preview.plan.yaml](nextjs-neon-preview.plan.yaml) | a database branch per pull request, wired into preview variables |
+| [nextjs-supabase-preview.plan.yaml](nextjs-supabase-preview.plan.yaml) | a Supabase preview branch per pull request; its URL and connection string in preview variables; an Auth redirect on the branch |
 | [vercel-shared-and-branch-vars.plan.yaml](vercel-shared-and-branch-vars.plan.yaml) | project-wide, per-branch and production variables; `${ctx.*}` |
 | [clerk-preview-callbacks.plan.yaml](clerk-preview-callbacks.plan.yaml) | a value that exists only after the deploy; `partial` runs |
 | [explicit-deploy.plan.yaml](explicit-deploy.plan.yaml) | Sponson starting the deploy; `depends_on` |
@@ -40,6 +41,18 @@ Every Vercel variable is shown as `(secret)` in the diff: the adapter treats all
 
 `env` is `pending` until `db` exists; one `apply` creates both, in that order. Closing the pull request and running
 `sponson apply --destroy` deletes the variables and then the branch.
+
+## nextjs-supabase-preview.plan.yaml
+
+The Supabase version of the plan above. `db` creates a Supabase preview branch named `sponson-preview-<scope>` on the
+project (branching must be enabled on it) and waits until it is `ACTIVE_HEALTHY`; `env` writes its sensitive
+`connection_string` and its `api_url` into the preview target for the current git branch; `auth_callback` puts the
+preview URL on the branch's own Auth redirect allow-list, because a branch is a project with its own Auth settings.
+Without `project:`, an `auth_redirect` line edits the allow-list of `providers.supabase.project` instead, leaving every
+entry Sponson did not add in place.
+
+The branch's API keys are not an output yet, so the example passes the anon key as a secret.
+`sponson apply --destroy` removes the redirect, the variables, then the branch.
 
 ## vercel-shared-and-branch-vars.plan.yaml
 

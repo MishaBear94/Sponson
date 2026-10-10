@@ -22,7 +22,7 @@
       "properties": {
         "supabase": {
           "type": "object",
-          "description": "TODO: what providers.supabase configures.",
+          "description": "Supabase project ref (20 lowercase letters) of the parent project: its preview branches and its Auth redirect allow-list.",
           "required": ["project"],
           "properties": { "project": { "type": "string", "minLength": 1 } }
         },
@@ -187,8 +187,12 @@
           "then": { "$ref": "#/$defs/op_clerk_redirect_allow" }
         },
         {
-          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "supabase" }, "op": { "const": "item" } } },
-          "then": { "$ref": "#/$defs/op_supabase_item" }
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "supabase" }, "op": { "const": "branch" } } },
+          "then": { "$ref": "#/$defs/op_supabase_branch" }
+        },
+        {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "supabase" }, "op": { "const": "auth_redirect" } } },
+          "then": { "$ref": "#/$defs/op_supabase_auth_redirect" }
         }
       ]
     },
@@ -272,17 +276,29 @@
       },
       "additionalProperties": false
     },
-    "op_supabase_item": {
-      "description": "supabase.item: TODO: one line on what the op manages. Outputs: id, value.",
-      "required": ["value"],
+    "op_supabase_branch": {
+      "description": "supabase.branch: a Supabase preview branch of the project, waited for until it is up. Outputs: project_ref, api_url, db_host, connection_string (sensitive).",
       "properties": {
         "id": true,
         "adapter": true,
         "op": true,
         "environments": true,
         "depends_on": true,
-        "name": { "$ref": "#/$defs/stringOrRef", "description": "Defaults to sponson-<env>-<scope>." },
-        "value": { "$ref": "#/$defs/stringOrRef" }
+        "name": { "$ref": "#/$defs/stringOrRef", "description": "Branch name. Default: sponson-${ctx.env}-${ctx.scope}. The branch is identified by its name; the project's default branch cannot be named." }
+      },
+      "additionalProperties": false
+    },
+    "op_supabase_auth_redirect": {
+      "description": "supabase.auth_redirect: one URL in the project's Auth redirect allow-list (uri_allow_list). Output: url.",
+      "required": ["url"],
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "url": { "$ref": "#/$defs/stringOrRef", "description": "The URL or wildcard pattern to allow; no commas. Usually `{ from: <vercel.env line>.preview_url }`." },
+        "project": { "$ref": "#/$defs/stringOrRef", "description": "Ref of the project whose allow-list to edit. Default: providers.supabase.project. A preview branch's own: `{ from: <supabase.branch line>.project_ref }`." }
       },
       "additionalProperties": false
     }

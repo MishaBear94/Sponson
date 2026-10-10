@@ -176,7 +176,7 @@ describe.skipIf(LIVE && !SUPABASE_LIVE)(`contract supabase (${SUPABASE_LIVE ? "@
   const redirectOp = supabaseAdapter.ops.auth_redirect!;
   const ctx: Ctx = { env: "preview", git: { branch, sha, short_sha: sha.slice(0, 7) }, pr: { number: pr }, scope: `pr-${pr}` };
   const params = branchOp.defaults!({}, ctx);
-  const redirect = { key: `redirect:${callbackUrl}`, id: callbackUrl, hash: "" };
+  const redirect = () => ({ key: `redirect:${callbackUrl}`, id: `${project}:${callbackUrl}`, hash: "" });
   let ssim: SimHandle | null = null;
   let senv: NodeJS.ProcessEnv;
   let project: string;
@@ -211,7 +211,7 @@ describe.skipIf(LIVE && !SUPABASE_LIVE)(`contract supabase (${SUPABASE_LIVE ? "@
     // Always clean up, even when assertions failed half-way.
     const live = await branchOp.read(sactx(), params).catch(() => null);
     if (live) await branchOp.destroy(sactx(), live.resources).catch(() => {});
-    await redirectOp.destroy(sactx(), [redirect]).catch(() => {});
+    await redirectOp.destroy(sactx(), [redirect()]).catch(() => {});
     await ssim?.close();
   }, 120_000);
 
@@ -241,17 +241,27 @@ describe.skipIf(LIVE && !SUPABASE_LIVE)(`contract supabase (${SUPABASE_LIVE ? "@
 
   it("assumption S7, S8: PATCH with uri_allow_list alone appends one comma-separated entry and leaves the rest", async () => {
     const r = await redirectOp.apply(sactx(), { url: callbackUrl }, null);
-    expect(r.created).toEqual([redirect.key]);
+    expect(r.created).toEqual([redirect().key]);
     const after = await authConfig();
     expect(entries(after.uri_allow_list)).toEqual([...listBefore, callbackUrl]);
     expect(after.site_url).toEqual(siteUrlBefore);
+  });
+
+  it("assumption S9: a branch's own Auth allow-list is read and written through /projects/{branch ref}/config/auth", async () => {
+    const live = await branchOp.read(sactx(), params);
+    const ref = String(live!.outputs.project_ref);
+    const r = await redirectOp.apply(sactx(), { url: callbackUrl, project: ref }, null);
+    expect(r.created).toEqual([`redirect:${ref}:${callbackUrl}`]);
+    expect(await redirectOp.read(sactx(), { url: callbackUrl, project: ref })).not.toBeNull();
+    await redirectOp.destroy(sactx(), r.resources);
+    expect(await redirectOp.read(sactx(), { url: callbackUrl, project: ref })).toBeNull();
   });
 
   it("assumption S6: DELETE /branches/{ref} removes the branch from the list at once; the allow-list is restored", async () => {
     const live = await branchOp.read(sactx(), params);
     await branchOp.destroy(sactx(), live!.resources);
     expect(await branchOp.read(sactx(), params)).toBeNull();
-    await redirectOp.destroy(sactx(), [redirect]);
+    await redirectOp.destroy(sactx(), [redirect()]);
     expect(entries((await authConfig()).uri_allow_list)).toEqual(listBefore);
   }, 120_000);
 });

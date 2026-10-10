@@ -7,7 +7,8 @@
  * names are kept. The one exception is a database URL, whose host is classified against known provider domains
  * (`*.neon.tech`, `*.supabase.co`, …) inside `dbHostProvider`; the URL itself, its credentials and the host are
  * dropped there and only the provider's id comes out. Ids that are not secrets (`.vercel/project.json`, `.neon`,
- * `VERCEL_PROJECT_ID` / `VERCEL_ORG_ID` / `NEON_PROJECT_ID` in the process environment) are read as values.
+ * `supabase/.temp/project-ref`, `VERCEL_PROJECT_ID` / `VERCEL_ORG_ID` / `NEON_PROJECT_ID` in the process environment)
+ * are read as values.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -38,11 +39,11 @@ export interface UnsupportedFinding extends Finding {
 }
 
 export interface StackDetection {
-  /** What Sponson can use, in a fixed order: providers (vercel, neon, clerk), then frameworks, then ORMs. */
+  /** What Sponson can use, in a fixed order: providers (vercel, neon, clerk, supabase), then frameworks, then ORMs. */
   found: Finding[];
   /** Detected but not managed by any built-in adapter. Never silently dropped. */
   unsupported: UnsupportedFinding[];
-  ids: { vercelProject?: string; vercelTeam?: string; vercelProjectFrom?: string; neonProject?: string; neonProjectFrom?: string };
+  ids: { vercelProject?: string; vercelTeam?: string; vercelProjectFrom?: string; neonProject?: string; neonProjectFrom?: string; supabaseProject?: string; supabaseProjectFrom?: string };
   /** The variable the app reads its database URL from (DATABASE_URL unless the code says otherwise). */
   databaseVar: string;
   /** Where `databaseVar` came from, for the comment in the plan; undefined for the default. */
@@ -62,7 +63,7 @@ export const ENV_FILES = [".env.example", ".env.sample", ".env.template", ".env.
 
 /** Files whose mere presence is a signal. */
 const MARKER_FILES = [
-  "vercel.json", ".vercel/project.json", ".neon", "supabase/config.toml", "netlify.toml", ".netlify/state.json",
+  "vercel.json", ".vercel/project.json", ".neon", "supabase/config.toml", "supabase/.temp/project-ref", "netlify.toml", ".netlify/state.json",
   "wrangler.toml", "wrangler.json", "wrangler.jsonc", "fly.toml", "railway.json", "railway.toml", "firebase.json",
   "sentry.client.config.ts", "sentry.client.config.js", "sentry.server.config.ts", "sentry.server.config.js",
   "prisma/schema.prisma", "schema.prisma", "drizzle.config.ts", "drizzle.config.js", "drizzle.config.mjs", "drizzle.config.cjs",
@@ -170,6 +171,7 @@ const SUPPORTED: Rule[] = [
   { id: "vercel", name: "Vercel", kind: "provider", deps: ["vercel", "@vercel/"], env: /^VERCEL_/, files: ["vercel.json", ".vercel/project.json"] },
   { id: "neon", name: "Neon", kind: "provider", deps: ["@neondatabase/", "@prisma/adapter-neon", "neonctl"], env: /^NEON_/, files: [".neon"] },
   { id: "clerk", name: "Clerk", kind: "provider", deps: ["@clerk/"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_|NUXT_PUBLIC_)?CLERK_/ },
+  { id: "supabase", name: "Supabase", kind: "provider", deps: ["@supabase/"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_|NUXT_PUBLIC_)?SUPABASE_/, files: ["supabase/config.toml", "supabase/.temp/project-ref"] },
   { id: "next", name: "Next.js", kind: "framework", deps: ["next"] },
   { id: "remix", name: "Remix", kind: "framework", deps: ["@remix-run/"] },
   { id: "sveltekit", name: "SvelteKit", kind: "framework", deps: ["@sveltejs/kit"] },
@@ -181,7 +183,6 @@ const SUPPORTED: Rule[] = [
 
 /** Detected and reported, but not managed yet. Never silently ignored. */
 const UNSUPPORTED: Rule[] = [
-  { id: "supabase", name: "Supabase", kind: "service", deps: ["@supabase/"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_)?SUPABASE_/, files: ["supabase/config.toml"], pointer: `database branches and Auth redirect URLs: ${ROADMAP_ADAPTERS}; issue #16 (https://github.com/MishaBear94/Sponson/issues/16)` },
   { id: "planetscale", name: "PlanetScale", kind: "service", deps: ["@planetscale/"], env: /^PLANETSCALE_/, pointer: `database branches: ${ROADMAP_ADAPTERS}` },
   { id: "turso", name: "Turso", kind: "service", deps: ["@libsql/client"], env: /^TURSO_/, pointer: NEW_ISSUE },
   { id: "auth0", name: "Auth0", kind: "service", deps: ["auth0", "@auth0/"], env: /^AUTH0_/, pointer: "allowed callback URLs: issue #16 (https://github.com/MishaBear94/Sponson/issues/16)" },
@@ -264,6 +265,13 @@ function providerIds(s: Signals, env: IdEnv): StackDetection["ids"] {
   if (neonProject) {
     ids.neonProject = neonProject;
     ids.neonProjectFrom = env.NEON_PROJECT_ID ? "NEON_PROJECT_ID" : ".neon";
+  }
+  // `supabase link` writes the linked project's ref to `supabase/.temp/project-ref`. (`project_id` in
+  // `supabase/config.toml` names the local stack, not the remote project, so it is not used.)
+  const supabaseRef = str(s.files.get("supabase/.temp/project-ref"));
+  if (supabaseRef && /^[a-z]{20}$/.test(supabaseRef)) {
+    ids.supabaseProject = supabaseRef;
+    ids.supabaseProjectFrom = "supabase/.temp/project-ref";
   }
   return ids;
 }

@@ -50,7 +50,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "VercelSeed", "VercelState", "WriteLogEntry", "chaosFor", "clerkSim", "connectionUri", "createBranch",
     "createDeployment", "createSimServer", "defaultChaos", "matchesRule", "neonSim", "page", "providerEntries",
     "refreshDeployments", "route", "router", "simEnv", "startSim", "vercelSim",
-    "SupabaseBranch", "SupabaseProject", "SupabaseState", "SupabaseSeed", "supabaseSim", "SUPABASE_DEMO_PROJECT", "newSupabaseBranch", "supabaseConnectionString", "supabaseAllowList",
+    "SupabaseBranch", "SupabaseProject", "SupabaseAuth", "SupabaseState", "SupabaseSeed", "supabaseSim", "SUPABASE_DEMO_PROJECT", "newSupabaseBranch", "supabaseConnectionString", "supabaseAllowList",
   ],
   "sponson": [
     "CtxFacts", "CtxOverrides", "CtxSource", "DEFAULT_CTX_SOURCES", "RunIO", "SponsonPlugin", "bitbucketPipelinesSource",

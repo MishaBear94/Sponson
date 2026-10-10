@@ -63,7 +63,7 @@ describe("detectStack", () => {
     expect(credentialsFor(d)).toEqual(["VERCEL_TOKEN", "NEON_API_KEY", "CLERK_SECRET_KEY"]);
   });
 
-  it("Next.js + Vercel + Supabase: Supabase is reported as not supported yet, and the plan has no database line", async () => {
+  it("Next.js + Vercel + Supabase: a Supabase preview branch into the env line, the preview URL on the branch's Auth allow-list", async () => {
     const d = await detectStack(
       repo({
         "package.json": pkg({ next: "15", "@supabase/supabase-js": "2", "@supabase/ssr": "0" }),
@@ -71,16 +71,48 @@ describe("detectStack", () => {
         ".env.example": "NEXT_PUBLIC_SUPABASE_URL=\nNEXT_PUBLIC_SUPABASE_ANON_KEY=\nDATABASE_URL=postgresql://postgres:pw@db.abcd.supabase.co:5432/postgres\n",
       }),
     );
-    expect(ids(d)).toEqual(["vercel", "next"]);
-    expect(unsupportedIds(d)).toEqual(["supabase"]);
-    const supa = d.unsupported[0]!;
+    expect(ids(d)).toEqual(["vercel", "supabase", "next"]);
+    expect(unsupportedIds(d)).toEqual([]);
+    const supa = d.found.find((f) => f.id === "supabase")!;
     expect(supa.evidence).toEqual(expect.arrayContaining(["package.json: @supabase/supabase-js", "DATABASE_URL in .env.example points at *.supabase.co"]));
-    expect(supa.pointer).toMatch(/ROADMAP\.md/);
-    const text = expectValidPlan(d, ["env"]);
-    expect(text).toContain('NEXT_PUBLIC_SPONSON_SCOPE: "${ctx.scope}"');
-    expect(text).toMatch(/# Not supported yet, so no line below manages it: Supabase/);
-    expect(text).toMatch(/vercel: \{ project: "prj_xxx" \}\s+# TODO: run `vercel link`/);
+    expect(d.ids.supabaseProject).toBeUndefined();
+    const text = expectValidPlan(d, ["db", "env", "auth_redirect"]);
+    expect(text).toMatch(/supabase: \{ project: "abcdefghijklmnopqrst" \}\s+# TODO: run `supabase link`/);
+    expect(text).toContain("adapter: supabase\n    op: branch");
+    expect(text).toContain("DATABASE_URL: { from: db.connection_string }");
+    expect(text).toContain("NEXT_PUBLIC_SUPABASE_URL: { from: db.api_url }");
+    expect(text).toContain("project: { from: db.project_ref }\n    url: { from: env.preview_url }");
+    expect(text).not.toContain("Not supported yet");
     expect(text).not.toContain("neon");
+    expect(composeStarter(d).todos.map((t) => t.path)).toEqual(["providers.vercel.project", "providers.supabase.project"]);
+    expect(credentialsFor(d)).toEqual(["VERCEL_TOKEN", "SUPABASE_ACCESS_TOKEN"]);
+  });
+
+  it("Supabase: the linked project's ref from supabase/.temp/project-ref; with Neon, Neon stays the database and Supabase is the Auth line", async () => {
+    const linked = { "package.json": pkg({ next: "15", "@supabase/supabase-js": "2" }), ".vercel/project.json": { projectId: "prj_web" }, "supabase/.temp/project-ref": "qwertyuiopasdfghjklz\n" };
+    const d = await detectStack(repo(linked));
+    expect(d.ids).toMatchObject({ supabaseProject: "qwertyuiopasdfghjklz", supabaseProjectFrom: "supabase/.temp/project-ref" });
+    expect(expectValidPlan(d, ["db", "env", "auth_redirect"])).toContain('supabase: { project: "qwertyuiopasdfghjklz" }   # from supabase/.temp/project-ref');
+    expect(composeStarter(d).todos).toEqual([]);
+    // Not a ref (a local stack name): ignored.
+    expect((await detectStack(repo({ ...linked, "supabase/.temp/project-ref": "demo" }))).ids.supabaseProject).toBeUndefined();
+
+    const both = await detectStack(repo({ ...linked, "package.json": pkg({ next: "15", "@supabase/supabase-js": "2", "@neondatabase/serverless": "1" }) }));
+    const text = expectValidPlan(both, ["db", "env", "auth_redirect"]);
+    expect(text).toContain("adapter: neon");
+    expect(text.match(/adapter: supabase/g)).toHaveLength(1); // the auth_redirect line only
+    expect(text).not.toContain("project: { from: db.project_ref }");
+    expect(credentialsFor(both)).toEqual(["VERCEL_TOKEN", "NEON_API_KEY", "SUPABASE_ACCESS_TOKEN"]);
+  });
+
+  it("Supabase without a deploy target: the branch line alone, with a note on where its outputs go", async () => {
+    const d = await detectStack(repo({ "package.json": pkg({ "@supabase/supabase-js": "2" }), "supabase/config.toml": 'project_id = "demo"\n' }));
+    expect(composeStarter(d).assumed).toBe(false);
+    const text = expectValidPlan(d, ["db"]);
+    expect(text).toContain("adapter: supabase");
+    expect(text).toContain("have no deploy target Sponson manages yet");
+    expect(text).not.toContain("vercel");
+    expect(credentialsFor(d)).toEqual(["SUPABASE_ACCESS_TOKEN"]);
   });
 
   it("a bare repository: nothing detected, the Vercel + Neon template with both ids to fill in", async () => {

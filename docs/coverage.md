@@ -66,7 +66,7 @@ Columns:
 | Provider | Side effect | API shape | Generic? | Pri | Now |
 |---|---|---|---|---|---|
 | Neon | Copy-on-write branch per PR, connection string out | REST `/api/v2/projects/{p}/branches`, bearer; object; async operations, `423` while busy | P (async ops) | P0 | **yes** (`neon.branch`) |
-| Supabase | Preview branch per PR (a separate project with its own ref, keys and URL) | Management API `POST /v1/projects/{ref}/branches`, `DELETE /v1/branches/{id}`, bearer PAT; object; async provisioning, migrations run by Supabase | P (async, outputs from a second project) | P0 | no |
+| Supabase | Preview branch per PR (a separate project with its own ref, keys and URL) | Management API `POST /v1/projects/{ref}/branches`, `GET`/`DELETE /v1/branches/{ref}`, bearer PAT; object; async provisioning (`ACTIVE_HEALTHY`), migrations run by Supabase | P (async, outputs from a second project) | P0 | **yes** (`supabase.branch`) |
 | PlanetScale | Branch per PR; password (credential) per branch; deploy request on merge | REST `POST /v1/organizations/{o}/databases/{d}/branches`, `.../branches/{b}/passwords`; service token header; object; branch `ready` async; password plaintext returned once | P (async, once-only secret) | P1 | no |
 | Turso | Database branched from a parent (`seed: {type: database}`), token per DB | Platform API `POST /v1/organizations/{o}/databases`, `.../databases/{d}/auth/tokens`; bearer; object | Y | P1 | no |
 | Xata | Copy-on-write Postgres branch | REST control plane and `xata branch create --from`; API keys. Endpoint paths not confirmed **(unverified)**; the product was re-platformed onto Postgres in 2025 | P (async; API in flux) | P2 | no |
@@ -80,7 +80,7 @@ Columns:
 |---|---|---|---|---|---|
 | Clerk | Preview URL on the instance's redirect allow-list | Backend API `POST /v1/redirect_urls`, `DELETE /v1/redirect_urls/{id}`, bearer secret key; object | Y | P0 | **yes** (`clerk.redirect_allow`) |
 | Auth0 | Preview URL in an application's `callbacks`, `allowed_logout_urls`, `web_origins`, `allowed_origins` | Management API `PATCH /api/v2/clients/{id}`, bearer from client-credentials; **list** (each array replaced whole); no ETag | Y (list mode, token exchange) | P0 | no |
-| Supabase Auth | Preview URL in "Additional Redirect URLs" | Management API `PATCH /v1/projects/{ref}/config/auth` with `uri_allow_list`, bearer; **list** encoded as one comma-separated string; send only that field | Y (list mode over a delimited string) | P0 | no |
+| Supabase Auth | Preview URL in "Additional Redirect URLs" | Management API `PATCH /v1/projects/{ref}/config/auth` with `uri_allow_list`, bearer; **list** encoded as one comma-separated string; send only that field | Y (list mode over a delimited string) | P0 | **yes** (`supabase.auth_redirect`) |
 | Firebase Auth | Preview domain in `authorizedDomains` | Identity Toolkit `PATCH admin/v2/projects/{p}/config?updateMask=authorizedDomains`, Google OAuth; **list** full replace | Y (list mode, Google token) | P1 | no |
 | WorkOS | Redirect URI for AuthKit | `POST /user_management/redirect_uris`, list via `GET`; bearer; object. Delete endpoint not confirmed **(unverified)** | Y | P1 | no |
 | Stytch | Redirect URL per environment | PWA `POST /pwa/v3/projects/{p}/environments/{e}/redirect_urls` (+ get/delete by URL), Basic workspace key; object | Y | P2 | no |
@@ -183,12 +183,13 @@ manage). Weights: P0 = 3, P1 = 2, P2 = 1 (9 P0, 16 P1, 31 P2; total weight 90).
 
 | Measure | Covered | Coverage |
 |---|---|---|
-| Rows | 3 of 56 (Vercel env, Neon branch, Clerk redirect) | **5.4%** |
-| Weighted by priority | 9 of 90 | **10.0%** |
-| P0 rows only | 3 of 9 | 33% |
+| Rows | 5 of 56 (Vercel env, Neon branch, Clerk redirect, Supabase branch, Supabase Auth redirect) | **8.9%** |
+| Weighted by priority | 15 of 90 | **16.7%** |
+| P0 rows only | 5 of 9 | 56% |
 | Secret sources (separate) | 4 of 9 vendors; weighted 7 of 14 | 44%; 50% |
 
-Plainly: Sponson covers the canonical Vercel + Neon + Clerk preview stack and almost nothing else. Three rows (Google
+Plainly: Sponson covers the canonical Vercel + Neon + Clerk preview stack, Supabase (preview branches and Auth
+redirect URLs), and almost nothing else. Three rows (Google
 OAuth clients, Clerk webhooks, Stripe sandboxes; weight 5) have no usable API, so no adapter can reach them; the
 ceiling is 53 rows / 94.4% weighted.
 
@@ -202,8 +203,8 @@ Railway deploys, like `vercel.env`), outputs that exist only once (Stripe webhoo
 instruction-based diffs (LaunchDarkly), GraphQL, or non-bearer signing (SigV4).
 
 **A generic declarative HTTP adapter** (`adapter: http`) for the long tail where each item is a URL, a rule or a record
-and the lifecycle is plain CRUD. Rows marked **Y**: 34 rows not covered today, which would bring coverage to 37 rows
-(66.1%), 58 of 90 weighted (64.4%), without a line of provider code.
+and the lifecycle is plain CRUD. Rows marked **Y**: 33 rows not covered today, which would bring coverage to 38 rows
+(67.9%), 61 of 90 weighted (67.8%), without a line of provider code.
 
 ### What `adapter: http` must support to cover the P0/P1 rows
 
@@ -249,7 +250,7 @@ Ranked by weighted rows covered, then by how much they need more than `adapter: 
 
 | # | Adapter | Rows (Pri) | Why first-class |
 |---|---|---|---|
-| 1 | `supabase` | branch (P0), auth redirect URLs (P0) | Two P0 rows with one credential; preview branches are separate projects provisioned asynchronously, and their URL and keys are outputs the env line needs. |
+| 1 | `supabase` (done: `supabase.branch`, `supabase.auth_redirect`) | branch (P0), auth redirect URLs (P0) | Two P0 rows with one credential; preview branches are separate projects provisioned asynchronously, and their URL and keys are outputs the env line needs. |
 | 2 | `netlify` | env per deploy context (P0) | Second most common preview host; needs the same deploy barrier and redeploy-after-write logic as `vercel.env`. |
 | 3 | `launchdarkly` | flag targeting (P0) | The README's fourth console ([#15](https://github.com/MishaBear94/Sponson/issues/15)); semantic-patch instructions and approval workflows do not fit a request template. |
 | 4 | `stripe` | test-mode webhook endpoint (P0), test objects (P2) | Its signing secret exists only in the create response and must flow into the app's env in the same run; form encoding and `Idempotency-Key`. |

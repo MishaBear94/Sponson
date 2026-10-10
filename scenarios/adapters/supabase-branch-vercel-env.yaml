@@ -1,6 +1,8 @@
-# A Supabase preview branch whose connection string and API URL feed a Vercel env line: references compose
-# across adapters, and the sensitive output never reaches any output. Format: see the top of scenarios/runner.test.ts.
-name: "supabase.branch outputs into a vercel env line: { from: db.connection_string }, destroyed together"
+# A Supabase preview branch whose outputs feed other lines: its connection string and API URL into a Vercel env
+# line, its ref into an auth_redirect line that allows the preview URL on the branch's own Auth config. References
+# compose across adapters, and the sensitive output never reaches any output. Format: see the top of
+# scenarios/runner.test.ts.
+name: "supabase.branch outputs into a vercel env line ({ from: db.connection_string }) and the branch's own redirect allow-list, destroyed together"
 plan: |
   version: 1
   providers:
@@ -22,6 +24,7 @@ plan: |
     - id: callback
       adapter: supabase
       op: auth_redirect
+      project: { from: db.project_ref }
       url: https://pr-42.preview.example.com/auth/callback
       environments: [preview]
 secrets: ["pw_br"]
@@ -30,7 +33,7 @@ steps:
   - run: plan --json
     expect:
       exit: 0
-      plan_lines: { db: create, env: pending, callback: create }
+      plan_lines: { db: create, env: pending, callback: pending }
   - run: apply --json
     expect:
       exit: 0
@@ -38,7 +41,11 @@ steps:
       lines: { db: applied, env: applied, callback: applied }
   - sim:
       vercel_env: { preview: { DATABASE_URL: exists, NEXT_PUBLIC_SUPABASE_URL: exists } }
-      write_order: ["POST /supabase/projects/demoprojectrefabcdef/branches", "POST /vercel"]
+      write_order: ["POST /supabase/projects/demoprojectrefabcdef/branches", "POST /vercel", "PATCH /supabase/projects/br"]
+      state:
+        "supabase.projects.demoprojectrefabcdef.branches": { includes: { name: sponson-preview-pr-42, auth: { site_url: "http://localhost:3000", uri_allow_list: "https://pr-42.preview.example.com/auth/callback" } } }
+        # The parent project's allow-list is not touched.
+        "supabase.projects.demoprojectrefabcdef.auth.uri_allow_list": "http://localhost:3000/**"
   - run: plan --json
     expect:
       exit: 0

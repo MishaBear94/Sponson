@@ -243,7 +243,7 @@ describe("supabase auth_redirect", () => {
         return body;
       });
       try {
-        await expect(redirectOp.destroy({ ...actx, env: { ...actx.env, SUPABASE_API_URL: proxy2.url } }, [{ key: RKEY, id: URL1, hash: "x" }])).rejects.toMatchObject({ code: "PROVIDER_CONFLICT" });
+        await expect(redirectOp.destroy({ ...actx, env: { ...actx.env, SUPABASE_API_URL: proxy2.url } }, [{ key: RKEY, id: `${P}:${URL1}`, hash: "x" }])).rejects.toMatchObject({ code: "PROVIDER_CONFLICT" });
       } finally {
         await proxy2.close();
       }
@@ -288,6 +288,29 @@ describe("supabase auth_redirect", () => {
       { id: "auth_redirect", params: { url: "http://localhost:3000/**" }, keys: ["redirect:http://localhost:3000/**"] },
       { id: "auth_redirect", params: { url: "https://app.example.com/cb" }, keys: ["redirect:https://app.example.com/cb"] },
     ]);
+  });
+
+  it("`project` targets another project's allow-list (a branch's own), keyed by it; a pending project reads nothing", async () => {
+    const actx = h.actx("supabase", provider);
+    const b = await branchOp.apply(actx, { name: "feature-a" }, null);
+    const ref = String(b.outputs.project_ref);
+    const params = { url: URL1, project: ref };
+    const key = `redirect:${ref}:${URL1}`;
+    expect(redirectOp.diff(null, params)[0]).toMatchObject({ key, kind: "create" });
+    expect(redirectOp.diff(null, { url: URL1, project: pendingMarker("db.project_ref") })[0]).toMatchObject({ key: "redirect:(pending)" });
+    expect(await redirectOp.read(actx, { url: URL1, project: pendingMarker("db.project_ref") })).toBeNull();
+
+    const r = await redirectOp.apply(actx, params, null);
+    expect(r.created).toEqual([key]);
+    expect(r.resources[0]!.id).toBe(`${ref}:${URL1}`);
+    expect(await redirectOp.read(actx, params)).toEqual({ resources: r.resources, outputs: { url: URL1 } });
+    // The parent's list is untouched.
+    expect(list()).toBe("http://localhost:3000/**, https://app.example.com/cb");
+    expect(await redirectOp.read(actx, { url: URL1 })).toBeNull();
+
+    // The branch (and with it its allow-list) is deleted first: removing the entry is already done.
+    await branchOp.destroy(actx, b.resources);
+    await redirectOp.destroy(actx, r.resources);
   });
 });
 

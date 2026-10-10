@@ -26,36 +26,47 @@ const SCHEMA_LINE = "# yaml-language-server: $schema=https://raw.githubuserconte
 export const VERCEL_PROJECT_HINT =
   "run `vercel link` (it writes .vercel/project.json; then delete this file and run `sponson init` again), or Vercel dashboard → your project → Settings → General → Project ID";
 export const NEON_PROJECT_HINT = "run `neonctl projects list`, or https://console.neon.tech → your project → Settings → General → Project ID";
+export const SUPABASE_PROJECT_HINT =
+  "run `supabase link` (it writes supabase/.temp/project-ref), or `supabase projects list` (REFERENCE ID), or Supabase dashboard → Project Settings → General → Project ID";
 
 /** Each provider's credential variable, read when Sponson runs (never written into the plan). */
-const CREDENTIALS: Record<string, string> = { vercel: "VERCEL_TOKEN", neon: "NEON_API_KEY", clerk: "CLERK_SECRET_KEY" };
+const CREDENTIALS: Record<string, string> = { vercel: "VERCEL_TOKEN", neon: "NEON_API_KEY", clerk: "CLERK_SECRET_KEY", supabase: "SUPABASE_ACCESS_TOKEN" };
 
 interface Shape {
   vercel: boolean;
   neon: boolean;
   clerk: boolean;
+  /** A Supabase preview branch is the database line (Supabase detected, Neon not). */
+  supabaseDb: boolean;
+  /** The preview URL goes on a Supabase Auth allow-list (Supabase detected, and a preview URL from Vercel). */
+  supabaseAuth: boolean;
+  /** Any line uses the supabase adapter. */
+  supabase: boolean;
   deploy: boolean;
   assumed: boolean;
 }
 
 function shapeOf(d: StackDetection): Shape {
-  const assumed = !has(d, "vercel") && !has(d, "neon");
+  const assumed = !has(d, "vercel") && !has(d, "neon") && !has(d, "supabase");
   const vercel = has(d, "vercel") || assumed;
-  return { vercel, neon: has(d, "neon") || assumed, clerk: has(d, "clerk"), deploy: vercel && d.vercelAutoDeployOff, assumed };
+  const neon = has(d, "neon") || assumed;
+  const supabaseDb = has(d, "supabase") && !neon;
+  const supabaseAuth = has(d, "supabase") && vercel;
+  return { vercel, neon, clerk: has(d, "clerk"), supabaseDb, supabaseAuth, supabase: supabaseDb || supabaseAuth, deploy: vercel && d.vercelAutoDeployOff, assumed };
 }
 
 /** The adapters the starter's lines use, for the "set these credentials" hint. */
 export function credentialsFor(d: StackDetection): string[] {
   const s = shapeOf(d);
-  return (["vercel", "neon", "clerk"] as const).filter((a) => s[a] && (a !== "clerk" || s.vercel)).map((a) => CREDENTIALS[a]!);
+  return (["vercel", "neon", "clerk", "supabase"] as const).filter((a) => s[a] && (a !== "clerk" || s.vercel)).map((a) => CREDENTIALS[a]!);
 }
 
 export function composeStarter(d: StackDetection): Starter {
   const s = shapeOf(d);
   const todos: Todo[] = [];
   const out = [...header(d, s), "version: 1", "environments: [preview, production]", ...providers(d, s, todos), "", "changes:"];
-  // Never empty: without Vercel or Neon the template assumes both.
-  out.push(...dbLine(s), ...envLine(d, s), ...deployLine(s), ...clerkLine(s), ...orphanNotes(s));
+  // Never empty: without Vercel, Neon or Supabase the template assumes Vercel and Neon.
+  out.push(...dbLine(s), ...supabaseBranchLine(s), ...envLine(d, s), ...deployLine(s), ...clerkLine(s), ...supabaseAuthLine(s), ...orphanNotes(s));
   const text = out.join("\n").replace(/\n+$/, "") + "\n";
   return { text, todos, assumed: s.assumed };
 }
@@ -92,6 +103,11 @@ function providers(d: StackDetection, s: Shape, todos: Todo[]): string[] {
     const note = d.ids.neonProjectFrom ? `# from ${d.ids.neonProjectFrom}` : todo(todos, "providers.neon.project", project, NEON_PROJECT_HINT);
     out.push(`  neon: { project: ${q(project)} }   ${note}`);
   }
+  if (s.supabase) {
+    const project = d.ids.supabaseProject ?? "abcdefghijklmnopqrst";
+    const note = d.ids.supabaseProjectFrom ? `# from ${d.ids.supabaseProjectFrom}` : todo(todos, "providers.supabase.project", project, SUPABASE_PROJECT_HINT);
+    out.push(`  supabase: { project: ${q(project)} }   ${note}`);
+  }
   return out.length > 0 ? ["providers:", ...out] : [];
 }
 
@@ -113,11 +129,26 @@ function dbLine(s: Shape): string[] {
   ];
 }
 
+function supabaseBranchLine(s: Shape): string[] {
+  if (!s.supabaseDb) return [];
+  return [
+    "  # One Supabase preview branch per pull request (sponson-preview-pr-<n>; branching must be enabled on the project),",
+    "  # waited for until it is up; deleted by `apply --destroy`.",
+    "  - id: db",
+    "    adapter: supabase",
+    "    op: branch",
+    "    environments: [preview]",
+    "",
+  ];
+}
+
 function envLine(d: StackDetection, s: Shape): string[] {
   if (!s.vercel) return [];
-  const value = s.neon
-    ? `      ${d.databaseVar}: { from: db.connection_string }   # ${d.databaseVarFrom ? `the name ${d.databaseVarFrom} uses; ` : ""}a reference, never a value`
-    : `      ${d.publicPrefix}SPONSON_SCOPE: "\${ctx.scope}"   # an example (pr-42, main, …): replace with the variables your previews need`;
+  const values = s.neon || s.supabaseDb
+    ? [`      ${d.databaseVar}: { from: db.connection_string }   # ${d.databaseVarFrom ? `the name ${d.databaseVarFrom} uses; ` : ""}a reference, never a value`]
+    : [`      ${d.publicPrefix}SPONSON_SCOPE: "\${ctx.scope}"   # an example (pr-42, main, …): replace with the variables your previews need`];
+  // The branch's API keys are not an output yet: its anon/publishable key still has to be set by hand.
+  if (s.supabaseDb) values.push(`      ${d.publicPrefix}SUPABASE_URL: { from: db.api_url }   # the branch's own API URL; set its API key by hand for now`);
   return [
     "  # Preview variables for the current git branch only, so two pull requests never see each other's values.",
     "  - id: env",
@@ -125,7 +156,7 @@ function envLine(d: StackDetection, s: Shape): string[] {
     "    op: env",
     "    target: preview",
     "    values:",
-    value,
+    ...values,
     "    environments: [preview]",
     "",
   ];
@@ -159,9 +190,29 @@ function clerkLine(s: Shape): string[] {
   ];
 }
 
+function supabaseAuthLine(s: Shape): string[] {
+  if (!s.supabaseAuth) return [];
+  const from = s.deploy ? "deploy.preview_url" : "env.preview_url";
+  const note = s.deploy ? "known once the deploy line has finished" : "exists once Vercel has deployed this commit; the next `apply` finishes the line";
+  const whose = s.supabaseDb ? "the preview's own branch (a branch has its own Auth config)" : "the project";
+  return [
+    `  # The preview's URL on the Auth redirect allow-list (Authentication → URL Configuration) of ${whose}.`,
+    "  - id: auth_redirect",
+    "    adapter: supabase",
+    "    op: auth_redirect",
+    ...(s.supabaseDb ? ["    project: { from: db.project_ref }"] : []),
+    `    url: { from: ${from} }   # ${note}`,
+    "    environments: [preview]",
+    "",
+  ];
+}
+
 /** Detected providers that have nothing to connect to, said in the plan instead of silently dropped. */
 function orphanNotes(s: Shape): string[] {
   const out: string[] = [];
+  if (s.supabaseDb && !s.vercel) {
+    out.push("  # The branch's outputs (`{ from: db.connection_string }`, `db.api_url`) have no deploy target Sponson manages yet;", "  # pass them to yours by hand, or follow ROADMAP.md section 2 for Netlify, Railway and Fly.io.");
+  }
   if (s.neon && !s.vercel) {
     out.push("  # The branch's connection string (`{ from: db.connection_string }`) has no deploy target Sponson manages yet;", "  # pass it to yours by hand, or follow ROADMAP.md section 2 for Netlify, Railway and Fly.io.");
   }

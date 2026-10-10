@@ -32,7 +32,7 @@ const NEXT_VERCEL_NEON_CLERK: Files = {
   ".env.local": `DATABASE_URL="postgresql://neondb_owner:${SECRET_PASSWORD}@ep-quiet-sky-a1b2c3.us-east-2.aws.neon.tech/neondb?sslmode=require"\nCLERK_SECRET_KEY=${SECRET_CLERK}\nNEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_public\n`,
 };
 
-/** Next.js on Vercel with Supabase: Vercel is managed, Supabase is reported as not supported yet. */
+/** Next.js on Vercel with Supabase: both managed, a Supabase preview branch as the database. */
 const NEXT_VERCEL_SUPABASE: Files = {
   "package.json": { dependencies: { next: "15.1.0", "@supabase/supabase-js": "^2.45.0", "@supabase/ssr": "^0.5.0" } },
   "vercel.json": { framework: "nextjs" },
@@ -100,24 +100,37 @@ describe("sponson init detects the stack", () => {
     expect(p.json.lines.map((l: any) => [l.id, l.status])).toEqual([["db", "create"], ["env", "pending"], ["callback", "pending"]]);
   });
 
-  it("Next.js + Vercel + Supabase: Supabase reported as not supported yet with a pointer, never silently ignored", async () => {
+  it("Next.js + Vercel + Supabase: a Supabase preview branch feeding the env line, the preview URL on the branch's Auth allow-list; it plans", async () => {
     const cwd = await repoWith(NEXT_VERCEL_SUPABASE);
     const r = await init(cwd, "--json");
     expect(r.code, r.stderr).toBe(0);
-    expect(r.json.detected.found.map((f: any) => f.id)).toEqual(["vercel", "next"]);
-    expect(r.json.detected.unsupported).toEqual([
-      expect.objectContaining({ id: "supabase", name: "Supabase", kind: "service", pointer: expect.stringMatching(/ROADMAP\.md/), evidence: expect.arrayContaining(["package.json: @supabase/supabase-js", "supabase/config.toml"]) }),
+    expect(r.json.detected.found.map((f: any) => f.id)).toEqual(["vercel", "supabase", "next"]);
+    expect(r.json.detected.found[1]).toEqual(expect.objectContaining({ id: "supabase", name: "Supabase", kind: "provider", evidence: expect.arrayContaining(["package.json: @supabase/supabase-js", "supabase/config.toml"]) }));
+    expect(r.json.detected.unsupported).toEqual([]);
+    expect(r.json.detected.todo).toEqual([
+      expect.objectContaining({ path: "providers.vercel.project", placeholder: "prj_xxx", hint: expect.stringMatching(/vercel link/) }),
+      expect.objectContaining({ path: "providers.supabase.project", placeholder: "abcdefghijklmnopqrst", hint: expect.stringMatching(/supabase link/) }),
     ]);
-    expect(r.json.detected.todo).toEqual([expect.objectContaining({ path: "providers.vercel.project", placeholder: "prj_xxx", hint: expect.stringMatching(/vercel link/) })]);
     const { text, ids } = await writtenPlan(cwd);
-    expect(ids).toEqual(["env"]);
-    expect(text).toContain("# Not supported yet, so no line below manages it: Supabase");
+    expect(ids).toEqual(["db", "env", "auth_redirect"]);
+    expect(text).toContain("DATABASE_URL: { from: db.connection_string }");
+    expect(text).toContain("NEXT_PUBLIC_SUPABASE_URL: { from: db.api_url }");
+    expect(text).not.toContain("Not supported yet");
     expect(text).not.toMatch(/neon/);
+    expect(text).not.toContain(SECRET_SUPABASE);
 
-    // and the human summary says the same
+    // and the human summary names the credential to set
     await rm(join(cwd, "release.plan.yaml"));
     const human = await init(cwd);
-    expect(human.stdout).toMatch(/Not supported yet \(no line manages them\):\n {2}Supabase \(package\.json: @supabase\/supabase-js\): database branches/);
+    expect(human.stdout).toContain("Next: set VERCEL_TOKEN, SUPABASE_ACCESS_TOKEN in your environment");
+    expect(human.stdout).not.toContain("Not supported yet");
+
+    // Once the TODOs are filled in, the plan plans against the (fake) cloud: the branch to create, the rest pending.
+    sim = await startSim();
+    await writeFile(join(cwd, "release.plan.yaml"), text.replace('"prj_xxx"', '"prj_demo"').replace('"abcdefghijklmnopqrst"', '"demoprojectrefabcdef"') + "receipts: local\n");
+    const p = await runCli(["plan", "--json", "--branch", "feat/x", "--sha", SHA, "--pr", "42"], { env: cliEnv(sim), cwd });
+    expect(p.code, p.stdout + p.stderr).toBe(0);
+    expect(p.json.lines.map((l: any) => [l.id, l.status])).toEqual([["db", "create"], ["env", "pending"], ["auth_redirect", "pending"]]);
   });
 
   it("SvelteKit + Drizzle + Neon on Netlify: the Neon id from `.neon`, the variable Drizzle reads, Netlify not supported", async () => {

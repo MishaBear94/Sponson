@@ -73,7 +73,7 @@ One release, one plan. Three commands.
 
 | Command | What it does | Writes anything? |
 |---|---|---|
-| `sponson init` | Detects your stack from the repository's files (Vercel, Neon, Clerk, the framework and ORM) and writes a plan for it, with the project ids it can find. Run again to adopt resources the plan does not know about. | the plan file only |
+| `sponson init` | Detects your stack from the repository's files (Vercel, Neon, Clerk, Supabase, the framework and ORM) and writes a plan for it, with the project ids it can find. Run again to adopt resources the plan does not know about. | the plan file only |
 | `sponson plan` | Reads live state, prints the diff and any drift. | no |
 | `sponson apply` | Runs the plan in dependency order. Rolls back what this run created if a line fails. Writes a receipt. | yes |
 

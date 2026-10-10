@@ -37,6 +37,11 @@
  *   S8. The allow-list is comma-separated URLs (verified: Supabase Auth's `URI_ALLOW_LIST`, "a comma separated
  *       list of URIs", https://github.com/supabase/auth#general-config). Whitespace around commas is ignored by
  *       Auth; whether the API stores the string verbatim (here: yes) is unverified.
+ *   S9. A preview branch is a project with its own Auth config, read and written through the same
+ *       /v1/projects/{ref}/config/auth with the branch's ref (`project_ref` is a "Project ref" in the spec,
+ *       verified; branches have "their own Supabase instance and API credentials", verified in
+ *       https://supabase.com/docs/guides/deployment/branching). That the endpoint accepts a branch's ref, and
+ *       what the branch's allow-list starts as (here: empty), are unverified.
  */
 import { Reply, route, router, type CreatedBy, type ProviderSim, type SimCore } from "../provider.js";
 
@@ -53,6 +58,8 @@ export interface SupabaseBranch {
   /** `COMING_UP` until this time, `ACTIVE_HEALTHY` after (chaos `supabase_ready_ms`). */
   readyAt: number;
   db_pass: string;
+  /** A branch is a project with its own Auth config (assumption S9). */
+  auth: SupabaseAuth;
   created_at: string;
   createdAt: number;
   createdBy: CreatedBy;
@@ -61,7 +68,13 @@ export interface SupabaseBranch {
 /** One simulated Supabase project: its branches and its Auth config. */
 export interface SupabaseProject {
   branches: SupabaseBranch[];
-  auth: { site_url: string; uri_allow_list: string | null };
+  auth: SupabaseAuth;
+}
+
+/** The part of a project's Auth config the sim keeps. */
+export interface SupabaseAuth {
+  site_url: string;
+  uri_allow_list: string | null;
 }
 
 /** The simulated Supabase's state: projects by ref. */
@@ -173,18 +186,18 @@ const routes = router<SupabaseState>(
     }),
 
     route("GET", "/projects/:ref/config/auth", ({ state, params }) => {
-      const p = state.projects[params.ref];
-      return p ? new Reply(200, authConfig(p)) : notFound("project");
+      const a = authOf(state, params.ref);
+      return a ? new Reply(200, authConfig(a)) : notFound("project");
     }),
 
     route("PATCH", "/projects/:ref/config/auth", ({ state, params, body }) => {
-      const p = state.projects[params.ref];
-      if (!p) return notFound("project");
+      const a = authOf(state, params.ref);
+      if (!a) return notFound("project");
       const b = (body ?? {}) as { uri_allow_list?: unknown; site_url?: unknown };
       if (b.uri_allow_list !== undefined && b.uri_allow_list !== null && typeof b.uri_allow_list !== "string") return new Reply(400, { message: "uri_allow_list must be a string" });
-      if (b.uri_allow_list !== undefined) p.auth.uri_allow_list = b.uri_allow_list as string | null;
-      if (typeof b.site_url === "string") p.auth.site_url = b.site_url;
-      return new Reply(200, authConfig(p));
+      if (b.uri_allow_list !== undefined) a.uri_allow_list = b.uri_allow_list as string | null;
+      if (typeof b.site_url === "string") a.site_url = b.site_url;
+      return new Reply(200, authConfig(a));
     }),
   ],
   () => notFound("route"),
@@ -214,6 +227,7 @@ export function newSupabaseBranch(core: SimCore, parent: string, name: string, c
     is_default: false,
     readyAt: 0,
     db_pass: `pw_${ref}`,
+    auth: { site_url: "http://localhost:3000", uri_allow_list: null },
     created_at: new Date().toISOString(),
     createdAt: Date.now(),
     createdBy,
@@ -256,8 +270,13 @@ function branchDetail(b: SupabaseBranch) {
   };
 }
 
-function authConfig(p: SupabaseProject) {
-  return { site_url: p.auth.site_url, uri_allow_list: p.auth.uri_allow_list, disable_signup: false, jwt_exp: 3600 };
+/** The Auth config of a project ref: a parent project's, or a preview branch's own (assumption S9). */
+function authOf(state: SupabaseState, ref: string): SupabaseAuth | undefined {
+  return state.projects[ref]?.auth ?? branchByRef(state, ref)?.auth;
+}
+
+function authConfig(a: SupabaseAuth) {
+  return { site_url: a.site_url, uri_allow_list: a.uri_allow_list, disable_signup: false, jwt_exp: 3600 };
 }
 
 function notFound(what: string): Reply {

@@ -11,7 +11,7 @@ silent; needs a live account.
 
 ## Sources
 
-All fetched on 2026-10-10 and treated as data; none is vendored into the repository.
+All fetched on 2026-10-10 (Supabase: 2026-10-11) and treated as data; none is vendored into the repository.
 
 | Provider | Source | Version |
 |---|---|---|
@@ -19,8 +19,10 @@ All fetched on 2026-10-10 and treated as data; none is vendored into the reposit
 | Neon | OpenAPI document, https://neon.tech/api_spec/release/v2.json | `v2` |
 | Clerk | Backend API OpenAPI, https://github.com/clerk/openapi-specs `bapi/2026-05-12.yml` (commit `3b078e5`); the `/redirect_urls` section is identical in `bapi/2021-02-05.yml` | `2026-05-12` |
 | Clerk | Official SDK sources, for the list envelope the spec does not describe: RedirectUrlApi.ts (backend package) in clerk/javascript, redirecturl/client.go in clerk/clerk-sdk-go (v2) | `main` / `v2` on that date |
+| Supabase | Management API OpenAPI document, https://api.supabase.com/api/v1-json (rendered at https://supabase.com/docs/reference/api/introduction) | `1.0.0` as served on that date |
+| Supabase | Docs pages, for what the spec does not say: Auth's `URI_ALLOW_LIST` format (https://github.com/supabase/auth, README "General Config"), the direct connection string (https://supabase.com/docs/guides/database/connecting-to-postgres), the project API URL (https://supabase.com/docs/guides/api), Branching (https://supabase.com/docs/guides/deployment/branching), redirect URL wildcards (https://supabase.com/docs/guides/auth/redirect-urls) | as served on that date |
 
-All three use bearer authentication (`securitySchemes`), which is what the shared HTTP client sends: ✅.
+All four use bearer authentication (`securitySchemes`), which is what the shared HTTP client sends: ✅.
 
 ## Vercel
 
@@ -102,6 +104,43 @@ methods, which is more cautious than needed but not wrong.
 | C2 | bare array; with `paginated=true`, `{ data, total_count }` by `offset`/`limit` | array and parameters verified; envelope from the SDK sources (pinned by the contract suite) |
 | C3 | `RedirectURL` and `DeletedObject` shapes | verified |
 
+## Supabase
+
+Written against the spec from the start (the adapter is newer than this page), so there is no ⚠️ column history: every
+call below was checked before the first commit. Base URL `https://api.supabase.com/v1`; the spec's paths carry the
+`/v1` prefix.
+
+### Calls the adapter makes
+
+| Call | What the adapter sends and reads | Spec | Notes |
+|---|---|---|---|
+| `GET /v1/projects/{ref}/branches` | reads `[].name`, `project_ref`, `is_default` | ✅ | `v1-list-all-branches`: a bare array of `BranchResponse`, no page parameters. The default branch is skipped and never managed. |
+| `POST /v1/projects/{ref}/branches` | `{ branch_name }`; reads `name`, `project_ref` from the `201` | ✅ | `CreateBranchBody` requires only `branch_name`; `git_branch`, `persistent`, `with_data`, `region` and the rest are optional and not sent. |
+| same, refusals | a duplicate name → re-read and claim; any other refusal reported | ❓ | Only `201`, `401`, `403`, `429` and `500` are documented. The adapter checks the list after a `409`, `400` or `422` before reporting (S5). A `500` ("Failed to create database branch") is not retried: the create may have happened, and the intent plus find-by-name recovers it on the next run. |
+| `GET /v1/branches/{branch_id_or_ref}` | the branch's ref; reads `status`, `db_host`, `db_port`, `db_user`, `db_pass` | ✅ fields; ❓ readiness | `BranchDetailResponse`. `status` is the project status enum; `ACTIVE_HEALTHY` is taken as ready and `INIT_FAILED`, `REMOVED`, `GOING_DOWN`, `INACTIVE`, `PAUSING`, `PAUSE_FAILED`, `RESTORE_FAILED` as never-ready. `db_user` and `db_pass` are optional in the spec; without them the line fails with `PROVIDER_RESPONSE` rather than outputting a broken URI. A `404` while the branch comes up is treated as "not yet". The ref form of the path parameter is used: the uuid form is marked deprecated. |
+| `DELETE /v1/branches/{branch_id_or_ref}` | the branch's ref; `404` is success | ✅ path, `200`; ❓ `404` | "By default, deletes immediately" (`force=false` would schedule it). No `404` is documented; an unknown ref's status needs a live run. The parent project's own ref is never sent. |
+| `GET /v1/projects/{ref}/config/auth` | reads `uri_allow_list` (nullable string) | ✅ | `AuthConfigResponse`; `uri_allow_list` is required and nullable. |
+| `PATCH /v1/projects/{ref}/config/auth` | `{ uri_allow_list }` alone; retried as idempotent | ✅ | `UpdateAuthConfigBody` has no required field, so a body with one field touches one field. Sending only that field also avoids the reported failure when re-sending a whole config with auth hooks enabled (supabase/supabase#36861). No ETag or version: the write is unconditional, so the adapter re-reads and repeats (three rounds) when a concurrent writer overwrote it. |
+
+Derived outputs: `api_url` is `https://<ref>.supabase.co` (the project URL format in the API docs) and
+`connection_string` is `postgresql://<db_user>:<db_pass>@<db_host>:<db_port>/postgres`, matching the documented
+direct connection string (`postgres` database; the password percent-encoded). The direct host resolves over IPv6
+unless the project has the IPv4 add-on.
+
+### Sim assumptions (`packages/sim/src/routes/supabase.ts`)
+
+| Id | Assumption | Status |
+|---|---|---|
+| S1 | create takes `{ branch_name }` and answers `201` `BranchResponse` with the branch's own `project_ref` | verified (schema); that `project_ref` is usable before provisioning finishes ❓ (pinned) |
+| S2 | the list is a bare unpaged array, and includes the project's own default branch | array verified; the default branch's presence ❓ (pinned; the adapter skips it either way) |
+| S3 | the detail answers `200` with `COMING_UP` until ready, then `ACTIVE_HEALTHY` | fields and enum verified; the progression and the `200` while coming up ❓ (pinned) |
+| S4 | detail carries `db_user`/`db_pass`; database `postgres`; API URL `https://<ref>.supabase.co` | optional fields verified; that a personal access token gets `db_pass` ❓ (pinned); database name and URL verified in the docs |
+| S5 | a duplicate branch name answers `409` | ❓ (pinned; the adapter accepts `400`/`409`/`422`) |
+| S6 | delete answers `200 { message: "ok" }`, gone from the list at once; unknown ref `404` | `200` and immediacy of the default verified; list visibility and `404` ❓ (pinned) |
+| S7 | `uri_allow_list` nullable string; a one-field PATCH changes one field; no precondition | verified |
+| S8 | the allow-list is comma-separated; stored verbatim | format verified (Auth's `URI_ALLOW_LIST`); verbatim storage ❓ (pinned) |
+| S9 | a branch has its own Auth config at `/v1/projects/{branch ref}/config/auth` | ❓ |
+
 ## What still needs a live account
 
 - Vercel: V1 (propagation of env writes), the deployment list's order, whether `decrypt=true` still decrypts,
@@ -110,5 +149,9 @@ methods, which is more cautious than needed but not wrong.
 - Neon: N1 (list visibility during an asynchronous delete), N2 (which requests answer `423`, endpoint readiness),
   N5 (status of a duplicate branch name).
 - Clerk: C1 (status and wording of a duplicate), C2 (the envelope, confirmed only through the SDKs).
+- Supabase: S1 and S3 (a branch's ref is usable at once; the detail's status while it comes up), S4 (`db_pass` for a
+  personal access token), S5 (status of a duplicate name), S6 (`404` for an unknown ref, list visibility after
+  delete), S8 (verbatim storage of the list), S9 (a branch's own Auth config through the same endpoint). The
+  Supabase block of the contract suite is optional in a live run (branching needs a paid plan).
 
 Run them with `pnpm test:live`; see the header of `scenarios/contract.test.ts`.

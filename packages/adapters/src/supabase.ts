@@ -4,10 +4,11 @@
  *   branch         a preview branch of the project per scope (Supabase Branching): created, waited for until its
  *                  database is up, destroyed with the scope. Its outputs are the branch's own project ref, API URL
  *                  and database connection string (sensitive).
- *   auth_redirect  one URL in the project's Auth redirect allow-list (`uri_allow_list`, one comma-separated
- *                  string): read-modify-write of that string, never touching entries Sponson did not add.
+ *   auth_redirect  one URL in a project's Auth redirect allow-list (`uri_allow_list`, one comma-separated
+ *                  string), the parent's or (param `project`) a branch's own: read-modify-write of that string,
+ *                  never touching entries Sponson did not add.
  *
- * What the code assumes about the API is numbered S1–S8 at the top of packages/sim/src/routes/supabase.ts and
+ * What the code assumes about the API is numbered S1–S9 at the top of packages/sim/src/routes/supabase.ts and
  * checked in docs/api-verification.md.
  */
 import { setTimeout as sleep } from "node:timers/promises";
@@ -39,7 +40,7 @@ interface Client {
 function client(actx: AdapterContext): Client {
   const token = requireEnv(actx.env, ABOUT.credentialEnv, ADAPTER);
   const project = requireProvider(actx, "project", ADAPTER);
-  return { api: clientFor(actx, ADAPTER, { baseUrl: optionalEnv(actx.env, ABOUT.baseUrlEnv) ?? SUPABASE_DEFAULT_API_URL, token }), project: encodeURIComponent(project) };
+  return { api: clientFor(actx, ADAPTER, { baseUrl: optionalEnv(actx.env, ABOUT.baseUrlEnv) ?? SUPABASE_DEFAULT_API_URL, token }), project };
 }
 
 // ---------------------------------------------------------------------------
@@ -82,7 +83,7 @@ function parseBranches(v: unknown, what: string): Branch[] {
 }
 
 async function listBranches(c: Client): Promise<Branch[]> {
-  return c.api.get(`/projects/${c.project}/branches`, (body) => parseBranches(body, "the branch list"));
+  return c.api.get(`/projects/${encodeURIComponent(c.project)}/branches`, (body) => parseBranches(body, "the branch list"));
 }
 
 /** The branch named `name`, refusing the project's default branch: that is the project itself, never a preview. */
@@ -212,7 +213,7 @@ const branch: OpSpec = {
     let b: Branch;
     let created: string[] = [key];
     try {
-      b = await c.api.post(`/projects/${c.project}/branches`, { branch_name: name }, (body) => parseBranches([body], "the created branch")[0]!);
+      b = await c.api.post(`/projects/${encodeURIComponent(c.project)}/branches`, { branch_name: name }, (body) => parseBranches([body], "the created branch")[0]!);
     } catch (e) {
       // It exists already: someone else's, or ours from an attempt whose answer was lost. Not created by this
       // call; the engine claims it when an earlier intent of ours named it.
@@ -226,7 +227,7 @@ const branch: OpSpec = {
     const c = client(actx);
     for (const r of resources) {
       // Never the parent project itself, whatever a ledger says.
-      if (r.id === decodeURIComponent(c.project)) continue;
+      if (r.id === c.project) continue;
       await deleteIgnoringNotFound(c.api, `/branches/${encodeURIComponent(r.id)}`);
     }
   },
@@ -251,15 +252,44 @@ const branch: OpSpec = {
 
 const REDIRECT_PREFIX = "redirect:";
 
-function redirectKey(url: string): string {
-  return `${REDIRECT_PREFIX}${url}`;
+/**
+ * Whose allow-list a line edits: the line's `project` when it sets one (typically a preview branch's own ref,
+ * `{ from: db.project_ref }`: a branch is a project with its own Auth config), else `providers.supabase.project`.
+ */
+interface Target {
+  c: Client;
+  /** The line names the project, so the project is part of the resource key. */
+  explicit: boolean;
 }
 
-function redirectRecord(url: string): ResourceRecord {
-  return { key: redirectKey(url), id: url, hash: sha256(url), label: `Supabase Auth redirect ${url}` };
+function target(actx: AdapterContext, params: Record<string, unknown>): Target {
+  const c = client(actx);
+  if (params.project === undefined || params.project === null || params.project === "") return { c, explicit: false };
+  return { c: { ...c, project: stringParam(params, "project", ADAPTER) }, explicit: true };
 }
 
-const AUTH_CONFIG = (c: Client) => `/projects/${c.project}/config/auth`;
+/** `redirect:<url>` on the provider block's project; `redirect:<ref>:<url>` on a project the line names. */
+function redirectKey(url: string, project?: string): string {
+  return project ? `${REDIRECT_PREFIX}${project}:${url}` : `${REDIRECT_PREFIX}${url}`;
+}
+
+/** The id carries the project (`<ref>:<url>`; a ref has no colon), so destroy knows whose list to edit. */
+function redirectRecord(t: Target, url: string): ResourceRecord {
+  return { key: redirectKey(url, t.explicit ? t.c.project : undefined), id: `${t.c.project}:${url}`, hash: sha256(url), label: `Supabase Auth redirect ${url}` };
+}
+
+/** Destroy's input: the URLs to remove, grouped by project, from the records' ids. */
+function byProject(resources: ResourceRecord[]): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const r of resources) {
+    const i = r.id.indexOf(":");
+    const project = r.id.slice(0, i);
+    out.set(project, (out.get(project) ?? new Set()).add(r.id.slice(i + 1)));
+  }
+  return out;
+}
+
+const AUTH_CONFIG = (c: Client) => `/projects/${encodeURIComponent(c.project)}/config/auth`;
 
 /** `uri_allow_list` from the auth config (assumption S7): a nullable string; null means empty. */
 function parseAllowList(body: unknown): string {
@@ -298,7 +328,7 @@ function urlParam(params: Record<string, unknown>): string {
 }
 
 function conflict(c: Client, what: string): SponsonError {
-  return new SponsonError("PROVIDER_CONFLICT", `supabase: the Auth allow-list of project ${decodeURIComponent(c.project)} changed under every one of ${LIST_ATTEMPTS} attempts to ${what}; another writer is editing it`, { adapter: ADAPTER, project: decodeURIComponent(c.project) });
+  return new SponsonError("PROVIDER_CONFLICT", `supabase: the Auth allow-list of project ${c.project} changed under every one of ${LIST_ATTEMPTS} attempts to ${what}; another writer is editing it`, { adapter: ADAPTER, project: c.project });
 }
 
 /**
@@ -334,15 +364,18 @@ const auth_redirect: OpSpec = {
   outputs: { url: { available: "immediate" } },
 
   async read(actx, params) {
-    if (isPendingMarker(params.url)) return null;
+    // The URL or the project may come from a line not applied yet: nothing to read.
+    if (isPendingMarker(params.url) || isPendingMarker(params.project)) return null;
     const url = urlParam(params);
-    if (!entriesOf(await readAllowList(client(actx))).includes(url)) return null;
-    return { resources: [redirectRecord(url)], outputs: { url } };
+    const t = target(actx, params);
+    if (!entriesOf(await readAllowList(t.c)).includes(url)) return null;
+    return { resources: [redirectRecord(t, url)], outputs: { url } };
   },
 
   diff(live, params) {
-    const url = params.url;
-    const key = isPendingMarker(url) ? `${REDIRECT_PREFIX}(pending)` : redirectKey(String(url));
+    const { url, project } = params;
+    const pending = isPendingMarker(url) || isPendingMarker(project);
+    const key = pending ? `${REDIRECT_PREFIX}(pending)` : redirectKey(String(url), typeof project === "string" && project !== "" ? project : undefined);
     const current = live?.resources.find((r) => r.key === key);
     return [diffValue({ key, label: "Supabase Auth redirect", live: current, desired: url, sensitive: false, liveValue: String(url) })];
   },
@@ -350,24 +383,32 @@ const auth_redirect: OpSpec = {
   async apply(actx, params, live) {
     assertNoPending(params, ADAPTER);
     const url = urlParam(params);
-    const key = redirectKey(url);
-    if (live?.resources.some((r) => r.key === key)) return { resources: live.resources, outputs: live.outputs, created: [] };
-    const c = client(actx);
-    await actx.intend([key]);
+    const t = target(actx, params);
+    const record = redirectRecord(t, url);
+    if (live?.resources.some((r) => r.key === record.key)) return { resources: live.resources, outputs: live.outputs, created: [] };
+    await actx.intend([record.key]);
     // Already listed (someone else's, or ours from a run whose answer was lost): not created by this call.
-    const wrote = await addEntry(c, actx, url);
-    const state: LiveState = { resources: [redirectRecord(url)], outputs: { url } };
-    return { ...state, created: wrote ? [key] : [] };
+    const wrote = await addEntry(t.c, actx, url);
+    const state: LiveState = { resources: [record], outputs: { url } };
+    return { ...state, created: wrote ? [record.key] : [] };
   },
 
   async destroy(actx, resources) {
-    if (resources.length === 0) return;
-    await removeEntries(client(actx), actx, new Set(resources.map((r) => r.id)));
+    const base = client(actx);
+    for (const [project, urls] of byProject(resources)) {
+      try {
+        await removeEntries({ ...base, project }, actx, urls);
+      } catch (e) {
+        // A branch's project deleted first takes its allow-list with it: already gone.
+        if (!isProviderError(e, "PROVIDER_NOT_FOUND")) throw e;
+      }
+    }
   },
 
-  /** Every URL on the allow-list. */
+  /** Every URL on the provider block's project's allow-list. */
   async listScope(actx) {
-    return entriesOf(await readAllowList(client(actx))).map(redirectRecord);
+    const t: Target = { c: client(actx), explicit: false };
+    return entriesOf(await readAllowList(t.c)).map((url) => redirectRecord(t, url));
   },
 
   /** One line per allowed URL. */
