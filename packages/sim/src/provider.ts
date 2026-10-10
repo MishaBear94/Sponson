@@ -31,6 +31,8 @@ export interface RouteRequest {
   /** The path with the provider prefix stripped, e.g. `/v10/projects/prj_demo/env`. */
   path: string;
   body: unknown;
+  /** Request headers, lower-cased names (Node's `IncomingMessage.headers`, multi-valued ones joined). */
+  headers?: Record<string, string>;
 }
 
 /** One `<provider>.<rest>` drift key, as `ProviderSim.drift` receives it: a change "a human made in the console". */
@@ -54,6 +56,12 @@ export interface DriftRequest {
 export interface ProviderSim<S, Seed> {
   /** Env var names the adapter reads its credential and base URL from, and the token the sim hands out. */
   env: { token: string; url: string; testToken: string };
+  /**
+   * How the provider expects its token in `Authorization`: `bearer` (`Bearer <token>`, the default) or `raw` (the
+   * token alone, as LaunchDarkly documents). The sim refuses the other form with 401, so an adapter that sends the
+   * wrong one fails its tests.
+   */
+  auth?: "bearer" | "raw";
   /** Seed used when a reset does not name this provider. */
   defaultSeed: Seed;
   /** Fresh state from a seed (`undefined`: empty). Called on every reset, in registry order. */
@@ -87,6 +95,8 @@ export interface RouteContext<S, Params = Record<string, string>> {
   params: Params;
   url: URL;
   body: unknown;
+  /** Request headers, lower-cased names; empty when the caller passed none. */
+  headers: Record<string, string>;
 }
 
 /** One route of a simulated provider. Build it with `route`; serve a list of them with `router`. */
@@ -129,7 +139,7 @@ export function router<S>(routes: Array<Route<S>>, fallback: () => Reply): (core
       const m = pattern.exec(req.path);
       if (!m) continue;
       const params = Object.fromEntries(names.map((n, i) => [n, decodeURIComponent(m[i + 1]!)]));
-      return r.handle({ core, state, params, url: req.url, body: req.body });
+      return r.handle({ core, state, params, url: req.url, body: req.body, headers: req.headers ?? {} });
     }
     return fallback();
   };

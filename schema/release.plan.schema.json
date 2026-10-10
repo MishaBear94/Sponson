@@ -20,6 +20,15 @@
       "type": "object",
       "additionalProperties": { "type": "object" },
       "properties": {
+        "launchdarkly": {
+          "type": "object",
+          "description": "LaunchDarkly project key and environment key (usually a preview or test environment) whose flag targets the lines manage.",
+          "required": ["project", "environment"],
+          "properties": {
+            "project": { "type": "string", "minLength": 1 },
+            "environment": { "type": "string", "minLength": 1 }
+          }
+        },
         "vercel": {
           "type": "object",
           "description": "Vercel project (`prj_…`) and, for team projects, the team id (`team_…`).",
@@ -157,7 +166,7 @@
       "required": ["id", "adapter", "op"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk. Plugins (SPONSON_PLUGINS) add more." },
+        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk, launchdarkly. Plugins (SPONSON_PLUGINS) add more." },
         "op": { "type": "string", "minLength": 1 },
         "environments": { "$ref": "#/$defs/nameList", "description": "Environments this line applies to. Absent: all." },
         "depends_on": { "type": "array", "items": { "$ref": "#/$defs/id" }, "description": "Ordering without a data dependency. Prefer `from:` references." }
@@ -179,6 +188,10 @@
         {
           "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "clerk" }, "op": { "const": "redirect_allow" } } },
           "then": { "$ref": "#/$defs/op_clerk_redirect_allow" }
+        },
+        {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "launchdarkly" }, "op": { "const": "flag_target" } } },
+          "then": { "$ref": "#/$defs/op_launchdarkly_flag_target" }
         }
       ]
     },
@@ -259,6 +272,25 @@
         "environments": true,
         "depends_on": true,
         "url": { "$ref": "#/$defs/stringOrRef", "description": "The URL to allow. Usually `{ from: <vercel.env line>.preview_url }`." }
+      },
+      "additionalProperties": false
+    },
+    "op_launchdarkly_flag_target": {
+      "description": "launchdarkly.flag_target: one flag variation served to one context key in the provider block's environment. Outputs: variation_id, variation_name, variation_value.",
+      "required": ["flag"],
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "flag": { "$ref": "#/$defs/stringOrRef", "description": "The flag key." },
+        "key": { "$ref": "#/$defs/stringOrRef", "description": "The context key to target. Defaults to the scope (pr-42); usually `{ from: <vercel.env line>.preview_url }`." },
+        "context_kind": { "$ref": "#/$defs/stringOrRef", "description": "The context kind of `key`. Defaults to user." },
+        "variation": {
+          "description": "The variation to serve, by name or by value. Defaults to true. `{ keep: true }` keeps the live one.",
+          "anyOf": [{ "$ref": "#/$defs/literal" }, { "$ref": "#/$defs/fromRef" }, { "$ref": "#/$defs/keepRef" }]
+        }
       },
       "additionalProperties": false
     }

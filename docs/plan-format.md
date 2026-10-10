@@ -227,6 +227,7 @@ The base URL override replaces the provider's API base URL (the test suites poin
 | `neon` | [`neon.branch`](#neonbranch) | `NEON_API_KEY` | `NEON_API_URL` |
 | `vercel` | [`vercel.env`](#vercelenv), [`vercel.deploy`](#verceldeploy) | `VERCEL_TOKEN` | `VERCEL_API_URL` |
 | `clerk` | [`clerk.redirect_allow`](#clerkredirect_allow) | `CLERK_SECRET_KEY` | `CLERK_API_URL` |
+| `launchdarkly` | [`launchdarkly.flag_target`](#launchdarklyflag_target) | `LAUNCHDARKLY_ACCESS_TOKEN` | `LAUNCHDARKLY_API_URL` |
 <!-- generated:adapters:end -->
 
 A missing credential fails the line with `PROVIDER_AUTH`. Every resource has a key that identifies it within the
@@ -293,6 +294,30 @@ One URL on the Clerk instance's redirect allow-list (the instance `CLERK_SECRET_
 A URL that is already on the list is taken over, not duplicated. Destroy removes the URL. For drift and adoption,
 every URL on the instance's list is in scope.
 
+### `launchdarkly.flag_target`
+
+Serves one variation of a LaunchDarkly feature flag to one individual target, a context key of a context kind, in one
+environment: typically a flag turned on for a pull request's preview. Requires `providers.launchdarkly.project` (the
+project key) and `providers.launchdarkly.environment` (the environment key, usually a preview or test environment).
+The flag must already exist; Sponson never creates or deletes flags, and never turns a flag on or off.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `flag` | string | (required) | The flag key. An unknown flag, or an environment the project lacks, is `PROVIDER_NOT_FOUND`. |
+| `key` | string | `${ctx.scope}` (`pr-42`) | The context key to target, e.g. `{ from: <vercel.env line>.preview_url }`. |
+| `context_kind` | string | `user` | The context kind of `key` (for a URL, a kind such as `url` that your application evaluates). |
+| `variation` | any | `true` | The variation to serve, by name (`"Treatment"`) or by value (`true`, `"treatment"`, `42`). One that matches no variation, or more than one, is `PARAM_INVALID` at plan time. `{ keep: true }` keeps whatever variation the target is served. |
+
+The resource key is `target:<flag>:<context_kind>:<key>`; the project and environment are the provider block, which
+the ledger keys every resource by, so the same target in another environment is another resource. The resource's hash
+covers the variation (by its id): a human who moves the target to another variation in the LaunchDarkly console makes
+`changed` drift, refused until `--reconcile`; a human who removes it makes `missing` drift, and the next apply adds it
+back. A target that already exists is taken over, not duplicated; one in another variation is moved (a single
+semantic patch removes it from the old variation and adds it to the new one). Destroy removes exactly this target,
+from whichever variation serves it; the flag's other targets and rules are untouched. An environment that requires
+approvals for flag changes fails the line with `PROVIDER_INVALID` (Sponson does not open approval requests). For drift
+and adoption, every individual target of the line's flag in the environment is in scope.
+
 ### Outputs
 
 The outputs each built-in op declares. `immediate` outputs exist once the line is applied; `external` ones only after
@@ -309,6 +334,9 @@ the named event. Sensitive outputs are never displayed, logged or written to rec
 | `vercel.deploy` | `preview_url` | immediate | no |
 | `vercel.deploy` | `deployment_id` | immediate | no |
 | `clerk.redirect_allow` | `id` | immediate | no |
+| `launchdarkly.flag_target` | `variation_id` | immediate | no |
+| `launchdarkly.flag_target` | `variation_name` | immediate | no |
+| `launchdarkly.flag_target` | `variation_value` | immediate | no |
 <!-- generated:outputs:end -->
 
 ## What is checked when

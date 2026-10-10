@@ -43,10 +43,18 @@ async function handle(state: SimState, req: IncomingMessage, res: ServerResponse
     return send(res, r.status, r.body);
   }
 
-  // Any non-empty bearer token is accepted; missing-token bugs must surface as 401.
-  const auth = req.headers.authorization ?? "";
-  if (!/^Bearer\s+\S+$/.test(auth)) return send(res, 401, { error: "unauthorized" });
+  // Any non-empty token in the provider's form is accepted; missing-token bugs must surface as 401.
+  if (!authorised(req.headers.authorization ?? "", AUTH[url.pathname.match(/^\/[^/]+/)?.[0] ?? ""] ?? "bearer")) return send(res, 401, { error: "unauthorized" });
   await serveProvider(state, req, res, { method, url, raw, body });
+}
+
+/** `/<provider>` → how that provider expects its token. */
+const AUTH: Record<string, "bearer" | "raw"> = Object.fromEntries(providerEntries().map(([name, p]) => [`/${name}`, p.auth ?? "bearer"]));
+
+/** `Bearer <token>`, or for a `raw` provider the token alone (and not a bearer header). */
+function authorised(header: string, scheme: "bearer" | "raw"): boolean {
+  if (scheme === "bearer") return /^Bearer\s+\S+$/.test(header);
+  return /^\S+$/.test(header) && !/^Bearer$/i.test(header);
 }
 
 /** An authenticated provider request: latency, chaos, the write log, then the provider's routes. */
@@ -67,7 +75,7 @@ async function serveProvider(state: SimState, req: IncomingMessage, res: ServerR
   const logged: WriteLogEntry = { ...entry };
   if (isWrite) state.writes.push(logged);
 
-  const r = dispatch(state, method, url, body);
+  const r = dispatch(state, method, url, body, headersOf(req));
   // A refused write (409, 423, 404, …) did not change anything.
   if (r.status >= 400) logged.failed = true;
   if (action?.kind === "drop") {
@@ -79,11 +87,11 @@ async function serveProvider(state: SimState, req: IncomingMessage, res: ServerR
 }
 
 /** `/<provider>/…` → that provider's routes, with the prefix stripped from the path. */
-function dispatch(state: SimState, method: string, url: URL, body: unknown): Reply {
+function dispatch(state: SimState, method: string, url: URL, body: unknown, headers: Record<string, string>): Reply {
   const prefix = url.pathname.match(/^\/[^/]+(?=\/)/)?.[0];
   const routes = prefix === undefined ? undefined : ROUTES[prefix];
   if (prefix === undefined || !routes) return new Reply(404, { error: "not found" });
-  return routes(state, { method, url, path: url.pathname.slice(prefix.length), body });
+  return routes(state, { method, url, path: url.pathname.slice(prefix.length), body, headers });
 }
 
 /** The control endpoints tests and scenarios drive the sim with. */
@@ -109,6 +117,13 @@ const control = router<SimState>(
   ],
   () => new Reply(404, { error: "not found" }),
 );
+
+/** The request's headers as strings (multi-valued ones joined with `, `). */
+function headersOf(req: IncomingMessage): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(req.headers)) if (v !== undefined) out[k] = Array.isArray(v) ? v.join(", ") : v;
+  return out;
+}
 
 /** A request body: empty is `undefined`; null when it is not JSON. */
 function parseJson(raw: string): { body: unknown } | null {

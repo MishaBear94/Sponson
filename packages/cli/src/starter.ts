@@ -34,6 +34,7 @@ interface Shape {
   vercel: boolean;
   neon: boolean;
   clerk: boolean;
+  launchdarkly: boolean;
   deploy: boolean;
   assumed: boolean;
 }
@@ -41,7 +42,7 @@ interface Shape {
 function shapeOf(d: StackDetection): Shape {
   const assumed = !has(d, "vercel") && !has(d, "neon");
   const vercel = has(d, "vercel") || assumed;
-  return { vercel, neon: has(d, "neon") || assumed, clerk: has(d, "clerk"), deploy: vercel && d.vercelAutoDeployOff, assumed };
+  return { vercel, neon: has(d, "neon") || assumed, clerk: has(d, "clerk"), launchdarkly: has(d, "launchdarkly"), deploy: vercel && d.vercelAutoDeployOff, assumed };
 }
 
 /** The adapters the starter's lines use, for the "set these credentials" hint. */
@@ -55,7 +56,7 @@ export function composeStarter(d: StackDetection): Starter {
   const todos: Todo[] = [];
   const out = [...header(d, s), "version: 1", "environments: [preview, production]", ...providers(d, s, todos), "", "changes:"];
   // Never empty: without Vercel or Neon the template assumes both.
-  out.push(...dbLine(s), ...envLine(d, s), ...deployLine(s), ...clerkLine(s), ...orphanNotes(s));
+  out.push(...dbLine(s), ...envLine(d, s), ...deployLine(s), ...clerkLine(s), ...flagLine(s), ...orphanNotes(s));
   const text = out.join("\n").replace(/\n+$/, "") + "\n";
   return { text, todos, assumed: s.assumed };
 }
@@ -155,6 +156,29 @@ function clerkLine(s: Shape): string[] {
     "    op: redirect_allow",
     `    url: { from: ${from} }   # ${note}`,
     "    environments: [preview]",
+    "",
+  ];
+}
+
+/**
+ * LaunchDarkly: a commented example, because nothing in the repository names the flag, the project or the
+ * environment, and a guessed flag key would fail every plan.
+ */
+function flagLine(s: Shape): string[] {
+  if (!s.launchdarkly) return [];
+  const from = s.deploy ? "deploy.preview_url" : "env.preview_url";
+  const key = s.vercel ? [`  #   context_kind: url              # the context kind your app evaluates the preview URL as`, `  #   key: { from: ${from} }`] : [`  #   # key: defaults to the scope (pr-42); context_kind to user`];
+  return [
+    "  # LaunchDarkly was detected. To turn a flag on for each preview, add under `providers:`",
+    "  #   launchdarkly: { project: <project key>, environment: <environment key> }   # a preview or test environment",
+    "  # (LAUNCHDARKLY_ACCESS_TOKEN is read from the environment) and uncomment this line:",
+    "  # - id: flag",
+    "  #   adapter: launchdarkly",
+    "  #   op: flag_target",
+    "  #   flag: <flag key>",
+    ...key,
+    "  #   variation: true",
+    "  #   environments: [preview]",
     "",
   ];
 }

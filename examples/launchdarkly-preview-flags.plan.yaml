@@ -1,0 +1,42 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/MishaBear94/Sponson/main/schema/release.plan.schema.json
+#
+# Feature flags turned on for each pull request's preview, and off again when it closes
+# (`sponson apply --destroy`). Sponson adds individual targets to flags that already exist
+# in LaunchDarkly; it never creates, deletes, or switches flags. LAUNCHDARKLY_ACCESS_TOKEN
+# is read from the environment.
+version: 1
+providers:
+  vercel: { project: prj_acme_web }
+  # A project key and an environment key. Use a preview or test environment: one that
+  # requires approvals for flag changes refuses Sponson's writes.
+  launchdarkly: { project: acme-web, environment: preview }
+
+changes:
+  - id: env
+    adapter: vercel
+    op: env
+    target: preview
+    values:
+      LAUNCHDARKLY_CLIENT_SIDE_ID: { secret: "env://LAUNCHDARKLY_PREVIEW_CLIENT_SIDE_ID" }
+    environments: [preview]
+
+  # The new checkout, served `true` to the preview deployment. The app evaluates flags with a
+  # context of kind `url` whose key is its own URL, so the target is the preview URL: it exists
+  # once Vercel has deployed this commit, and the next `apply` finishes the line.
+  - id: checkout
+    adapter: launchdarkly
+    op: flag_target
+    flag: new-checkout
+    context_kind: url
+    key: { from: env.preview_url }
+    variation: true
+    environments: [preview]
+
+  # A multivariate flag, by variation name. `key` defaults to the scope (`pr-42`) and
+  # `context_kind` to `user`: the app sends the pull request as a user key in previews.
+  - id: pricing
+    adapter: launchdarkly
+    op: flag_target
+    flag: pricing-page
+    variation: Treatment
+    environments: [preview]
