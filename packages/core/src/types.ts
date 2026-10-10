@@ -288,11 +288,15 @@ export interface OpSpec {
   /** Fill in defaults (e.g. a branch name) given the context. Returns a new params object. */
   defaults?(params: ResolvedParams, ctx: Ctx): ResolvedParams;
   /**
-   * The deployment environment this change writes to, when the op targets one explicitly
-   * (Vercel env `target`). The engine requires approval when any line writes to `production`,
-   * whatever the run's environment is. Return null when the op is not environment-specific.
+   * The deployment environment this change writes to, when the op targets one explicitly: from the line's params
+   * (Vercel env `target`) or from the provider block the line writes through (`provider`, the `providers.<adapter>`
+   * block as `providerFor` narrows it: a LaunchDarkly block naming a production environment). The engine requires
+   * approval when any line writes to `production`, whatever the run's environment is. Return null when the op is not
+   * environment-specific. Pure, called before any provider call; throw PLAN_INVALID for a block it cannot judge.
+   * The engine always passes `provider`; it is optional only so that callers written for the two-argument form
+   * still compile.
    */
-  writesEnvironment?(params: ResolvedParams, ctx: Ctx): string | null;
+  writesEnvironment?(params: ResolvedParams, ctx: Ctx, provider?: Record<string, unknown>): string | null;
   /**
    * The shared provider object this line's resources live in, when its writes are read-modify-write of something
    * other scopes write too: one callback array on an Auth0 application, Supabase's `uri_allow_list`, a Firebase

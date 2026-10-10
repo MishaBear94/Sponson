@@ -21,7 +21,7 @@ import { SponsonError, canonicalJson, type AdapterContext, type DiffSide, type L
 import { ABSENT, SENSITIVE, assertNoPending, desiredSide, paramError } from "./common.js";
 import { isObject, type ApiClient } from "./http.js";
 import { failedWith, httpClient, write } from "./http-adapter-client.js";
-import { ADAPTER, apiBlock, at, fieldTokens, fillPath, firstMarker, isKeep, parseListItem, pointerTokens, projection, setAt, stateHash, type ListItemSpec, type ListShape } from "./http-adapter-spec.js";
+import { ADAPTER, apiBlock, apiEnvironment, at, fieldTokens, fillPath, firstMarker, isKeep, parseListItem, pointerTokens, projection, setAt, stateHash, type ListItemSpec, type ListShape } from "./http-adapter-spec.js";
 
 /** Read-modify-write rounds before giving up on a collection that keeps changing under us. */
 export const MAX_ATTEMPTS = 3;
@@ -309,6 +309,7 @@ export const listItem: OpSpec = {
   outputs: {},
   providerFor: apiBlock,
   lockOn: parentLock,
+  writesEnvironment: apiEnvironment,
 
   async read(actx, params) {
     const spec = parseListItem(params);

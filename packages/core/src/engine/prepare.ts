@@ -32,6 +32,7 @@ export function prepare(opts: RunOptions): Prepared {
   const ordered = orderChanges(changesFor(plan, ctx.env), plan.changes);
   checkRecreate(opts.recreate ?? [], ordered, ctx.env);
   const ops = new Map<string, OpSpec>();
+  const providers = new Map<string, Record<string, unknown>>();
   const params = new Map<string, Record<string, unknown>>();
   const refs = new Set<string>();
   const productionLines: string[] = [];
@@ -39,7 +40,7 @@ export function prepare(opts: RunOptions): Prepared {
   for (const c of ordered) {
     const op = specialize(registry.op(c.adapter, c.op), c);
     // A provider block the op cannot use (an unknown API name) must fail here, before any provider call.
-    providerOf(plan.providers[c.adapter] ?? {}, op, c);
+    providers.set(c.id, providerOf(plan.providers[c.adapter] ?? {}, op, c));
     ops.set(c.id, op);
   }
 
@@ -61,7 +62,8 @@ export function prepare(opts: RunOptions): Prepared {
     if (op.defaults) p = op.defaults(p, ctx);
     params.set(c.id, p);
     for (const r of secretRefs(p)) refs.add(r);
-    if (ctx.env !== "production" && op.writesEnvironment?.(p, ctx) === "production") productionLines.push(c.id);
+    // The provider block counts too: a LaunchDarkly block naming a production environment writes production.
+    if (ctx.env !== "production" && op.writesEnvironment?.(p, ctx, providers.get(c.id)!) === "production") productionLines.push(c.id);
   }
 
   return {

@@ -166,9 +166,11 @@ export interface ApiConfig {
   auth: Auth;
   headers: Record<string, string>;
   encoding: "json" | "form";
+  /** The API is a production system: lines through it need Sponson's approval (`writesEnvironment`). */
+  production: boolean;
 }
 
-const API_KEYS = ["base_url", "base_url_env", "auth", "headers", "encoding"];
+const API_KEYS = ["base_url", "base_url_env", "auth", "headers", "encoding", "production"];
 
 /**
  * Variable names the engine masks everywhere (packages/core/src/engine/run-context.ts, CREDENTIAL_NAME). A
@@ -216,6 +218,20 @@ function parseHeaders(v: unknown, where: string): Record<string, string> {
   return v as Record<string, string>;
 }
 
+function parseProduction(v: unknown, where: string): boolean {
+  if (v === undefined || typeof v === "boolean") return v ?? false;
+  throw planError("must be true (lines through this API write production and need approval) or false", where);
+}
+
+/**
+ * `OpSpec.writesEnvironment` for both ops: `production` when the line's API block says `production: true` (a live
+ * Stripe account, a production tenant), so the run needs approval whatever its environment; otherwise not
+ * environment-specific. `provider` is the block `apiBlock` narrowed to, already checked.
+ */
+export function apiEnvironment(_params: Record<string, unknown>, _ctx: unknown, provider?: Record<string, unknown>): "production" | null {
+  return provider?.production === true ? "production" : null;
+}
+
 /** One API block, checked. `where` names it in messages (`providers.http.statsig`). */
 export function parseApi(block: Record<string, unknown>, where: string): ApiConfig {
   const base = block.base_url;
@@ -227,6 +243,7 @@ export function parseApi(block: Record<string, unknown>, where: string): ApiConf
     auth: parseAuth(block.auth, `${where}.auth`),
     headers: parseHeaders(block.headers, `${where}.headers`),
     encoding: parseEncoding(block.encoding, `${where}.encoding`),
+    production: parseProduction(block.production, `${where}.production`),
   };
   if (block.base_url_env !== undefined) cfg.baseUrlEnv = envName(block.base_url_env, `${where}.base_url_env`, false);
   return cfg;

@@ -80,7 +80,8 @@ Root-level suites (`scenarios/`, `property/`) import the packages by name; `vite
    it (`changesFor`); order them by references and `depends_on` (`orderChanges` in `graph.ts`, which also reports
    `REF_CYCLE` and `REF_FILTERED`); look up each op in the registry; check every `from:` names a declared output;
    interpolate `${ctx.*}` (`interpolate` in `ctx.ts`); apply op defaults; collect `secret:` references; decide whether
-   approval is required (`--env production`, or an op's `writesEnvironment()` says `production`).
+   approval is required (`--env production`, or an op's `writesEnvironment()` says `production`, judging the line's
+   params and the provider block it writes through: a LaunchDarkly block naming a production environment).
 4. **Load** (`engine/run-context.ts`, `RunContext`): register every credential-looking environment variable with the
    redactor; read this scope's receipt and build the `Ledger` from it; list the other scopes' ledgers in this
    environment (resources they manage are *foreign*); inherit the head branch's scope when this is a pull request

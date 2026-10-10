@@ -1,0 +1,41 @@
+# A LaunchDarkly line under --env preview whose provider block names a production LaunchDarkly environment writes
+# production: apply needs approval before anything is written. Format: see the top of scenarios/runner.test.ts.
+name: "a launchdarkly line against a production LaunchDarkly environment needs --approved-by, even under --env preview"
+plan: |
+  version: 1
+  providers:
+    launchdarkly: { project: demo, environment: production }
+  changes:
+    - id: flag
+      adapter: launchdarkly
+      op: flag_target
+      flag: new-checkout
+      key: pr-42
+steps:
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { flag: create }, stdout: ['/"requiresApproval":\s*true/'] }
+  - run: apply --json
+    expect: { exit: 2, error: ENV_NOT_APPROVED, writes: 0, stdout: ["writes to production although the environment is preview"] }
+  - sim:
+      state:
+        "launchdarkly.projects.demo.flags.new-checkout.environments.production.targets": { length: 0 }
+  - run: apply --approved-by alice --json
+    expect: { exit: 0, status: complete, lines: { flag: applied } }
+  - sim:
+      state:
+        "launchdarkly.projects.demo.flags.new-checkout.environments.production.targets": { length: 1 }
+  # The same target in a preview environment: no approval needed.
+  - plan: |
+      version: 1
+      providers:
+        launchdarkly: { project: demo, environment: preview }
+      changes:
+        - id: flag
+          adapter: launchdarkly
+          op: flag_target
+          flag: new-checkout
+          key: pr-42
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { flag: create }, stdout: ['/"requiresApproval":\s*false/'] }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { flag: applied } }

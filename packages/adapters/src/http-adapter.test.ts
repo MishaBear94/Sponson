@@ -351,6 +351,13 @@ describe("http: malformed specs name the field", () => {
     expect(() => providerFor({ demo: { ...API, encoding: "xml" } }, GATE)).toThrow(/`json`/);
     expect(() => providerFor({ demo: { ...API, retries: 3 } }, GATE)).toThrow(/unknown key `retries`/);
     expect(providerFor({ demo: API, other: { base_url: "https://x.test" } }, GATE)).toEqual(API);
+    expect(() => providerFor({ demo: { ...API, production: "yes" } }, GATE)).toThrow(/production: must be true/);
+    // An API block marked production makes every line through it need approval.
+    const ctx = { env: "preview", git: { branch: "b", sha: "s", short_sha: "s" }, pr: { number: null }, scope: "branch-b" };
+    expect(resource.writesEnvironment!(GATE, ctx, providerFor({ demo: { ...API, production: true } }, GATE))).toBe("production");
+    expect(listItem.writesEnvironment!(GATE, ctx, { ...API, production: true })).toBe("production");
+    expect(resource.writesEnvironment!(GATE, ctx, API)).toBeNull();
+    expect(resource.writesEnvironment!(GATE, ctx)).toBeNull();
     try {
       providerFor({ demo: API }, { ...GATE, api: "nope" });
     } catch (e) {

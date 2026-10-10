@@ -204,9 +204,24 @@ A line may not reference a line that the filter removed: that is `REF_FILTERED`,
 change.
 
 **Approval.** A run needs an approver (`--approved-by <who>` or `SPONSON_APPROVED_BY`) when it can write to
-production: when `--env production`, or when any active line writes to production whatever the run's environment
-(`vercel.env` with `target: production`). Without one, `apply` is refused with `ENV_NOT_APPROVED` before any provider
-is called. `plan --json` reports `requiresApproval: true` in both cases. A blank name is no name.
+production: when `--env production`, or when any active line writes to production whatever the run's environment.
+An op decides that from the line or from the provider block it writes through, before any provider call:
+
+| Op | Writes production when |
+|---|---|
+| `vercel.env` | `target: production` (or no `target` under `--env production`) |
+| `vercel.deploy` | `--env production` |
+| `launchdarkly.flag_target` | `providers.launchdarkly.production: true`, or, without that key, an `environment` key containing `prod` in any case (`production`, `prod-eu`); `production: false` opts a key such as `preprod` out |
+| `http.resource`, `http.list_item` | the line's API block says `production: true` |
+
+Without an approver, `apply` is refused with `ENV_NOT_APPROVED` before any provider is called. `plan --json` reports
+`requiresApproval: true` in both cases. A blank name is no name.
+
+The other ops never decide by themselves: `neon.branch`, `supabase.branch` and `planetscale.branch` create preview
+branches, never the production one. Lines that write a production object through a credential or a name the plan
+cannot judge (a Clerk production instance's `sk_live_` key, a `planetscale.password` on the production branch, the
+parent project's `supabase.auth_redirect` allow-list) are gated only when they run under `--env production`: give
+such lines `environments: [production]`.
 
 YAML anchors and aliases are allowed but produce the warning `YAML_ANCHOR`: repeated lines are easier to review.
 
@@ -364,6 +379,12 @@ environment: typically a flag turned on for a pull request's preview. Requires `
 project key) and `providers.launchdarkly.environment` (the environment key, usually a preview or test environment).
 The flag must already exist; Sponson never creates or deletes flags, and never turns a flag on or off.
 
+A block whose environment is production needs [approval](/reference/plan-format#environments) for every run, even under `--env preview`:
+`production: true` in the block says so; without the key, an environment key containing `prod` (any case) counts as
+production, and `production: false` says a key such as `preprod` is not. The provider block is part of each target's
+identity, so set `production` before the first apply (adding it later re-identifies the targets, as editing any
+provider key does).
+
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
 | `flag` | string | (required) | The flag key. An unknown flag, or an environment the project lacks, is `PROVIDER_NOT_FOUND`. |
@@ -453,6 +474,7 @@ providers:
 | `auth` | map | `{ bearer_env: NAME }` (`Authorization: Bearer`), `{ header: X-Api-Key, value_env: NAME }` (the value in that header), or `{ basic: { user_env: NAME, password_env: NAME } }`. Always variable NAMES, never values; the credential's name must end in `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `_KEY` or `APIKEY` so that its value is masked in every output. Unset: `PROVIDER_AUTH`. |
 | `headers` | map: header → string | Optional static headers (an API version pin). `Authorization`, `Accept` and `Content-Type` are Sponson's. |
 | `encoding` | `json` \| `form` | Request bodies as JSON (default) or `application/x-www-form-urlencoded`, nested as `a[b]=c` and `a[0]=c`. Answers are read as JSON either way. |
+| `production` | boolean | Optional. `true` for a production system (a live Stripe account, a production tenant): every line through this API needs [approval](/reference/plan-format#environments), whatever the run's environment. |
 
 A malformed block, or a line naming an API that is not configured, is `PLAN_INVALID` before any request is sent;
 a malformed line is `PARAM_INVALID` naming the field. Paths take `{id}` (the object's id, once known) and

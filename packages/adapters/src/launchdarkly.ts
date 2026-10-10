@@ -262,8 +262,28 @@ function part(v: unknown): string {
   return markerKind(v) !== null ? "(pending)" : String(v);
 }
 
+/** A LaunchDarkly environment key that names a production environment unless the block says otherwise. */
+const PRODUCTION_KEY = /prod/i;
+
+/**
+ * Whether the block's environment is production, for Sponson's approval gate: `production: true|false` when the block
+ * says, else whether the environment key looks like one (`production`, `prod`, `prod-eu`). A key that only looks like
+ * one (`preprod`) opts out with `production: false`. Only `providers.launchdarkly` decides; LaunchDarkly's own
+ * "critical environment" setting is not read, since the gate runs before any provider call.
+ */
+function writesEnvironment(_params: ResolvedParams, _ctx: unknown, provider: Record<string, unknown> = {}): "production" | null {
+  const declared = provider.production;
+  if (declared !== undefined && typeof declared !== "boolean") {
+    throw new SponsonError("PLAN_INVALID", `${ADAPTER}: providers.launchdarkly.production must be true or false`, { adapter: ADAPTER, key: "providers.launchdarkly.production" });
+  }
+  const production = declared ?? (typeof provider.environment === "string" && PRODUCTION_KEY.test(provider.environment));
+  return production ? "production" : null;
+}
+
 const flag_target: OpSpec = {
   outputs: { variation_id: { available: "immediate" }, variation_name: { available: "immediate" }, variation_value: { available: "immediate" } },
+
+  writesEnvironment,
 
   /** The target key defaults to the scope (`pr-42`); the context kind to `user`; the variation to `true`. */
   defaults(params, ctx) {

@@ -62,7 +62,8 @@
           "required": ["project", "environment"],
           "properties": {
             "project": { "type": "string", "minLength": 1 },
-            "environment": { "type": "string", "minLength": 1 }
+            "environment": { "type": "string", "minLength": 1 },
+            "production": { "type": "boolean", "description": "Whether the environment is production, for Sponson's approval gate (--approved-by). Absent: production when the environment key contains `prod` (any case). Set false for a key such as `preprod` that only looks like one." }
           }
         },
         "http": {
@@ -385,7 +386,8 @@
           ]
         },
         "headers": { "type": "object", "description": "Static headers sent with every request (an API version pin).", "additionalProperties": { "type": "string" } },
-        "encoding": { "enum": ["json", "form"], "description": "Request bodies as JSON (default) or application/x-www-form-urlencoded (`a[b]=c`)." }
+        "encoding": { "enum": ["json", "form"], "description": "Request bodies as JSON (default) or application/x-www-form-urlencoded (`a[b]=c`)." },
+        "production": { "type": "boolean", "description": "true when the API is a production system (a live Stripe account, a production tenant): every line through it needs approval (--approved-by), whatever the run's environment." }
       }
     },
     "httpPath": { "type": "string", "pattern": "^/", "description": "A path relative to the API's base_url. `{id}` is the object's id; `{name}` is `vars.name`." },

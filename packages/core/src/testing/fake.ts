@@ -97,7 +97,8 @@ export class FakeCloud {
             token: { available: "immediate", sensitive: true, once: true },
           },
           defaults: (p, ctx) => ({ ...p, name: p.name ?? `item-${ctx.scope}` }),
-          writesEnvironment: (p) => (typeof p.target === "string" ? p.target : null),
+          // From the line (`target`), or from the provider block (`providers.fake.production: true`).
+          writesEnvironment: (p, _ctx, provider) => (typeof p.target === "string" ? p.target : provider?.production === true ? "production" : null),
           async read(_actx, p) {
             cloud.reads++;
             cloud.maybeFail("read", String(p.name));

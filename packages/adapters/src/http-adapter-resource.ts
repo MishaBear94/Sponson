@@ -15,7 +15,7 @@ import { SponsonError, canonicalJson, sha256, type AdapterContext, type ApplyRes
 import { ABSENT, SENSITIVE, assertNoPending, desiredSide, paramError } from "./common.js";
 import { isObject, listAll, type ApiClient } from "./http.js";
 import { failedWith, httpClient, idOf, itemOf, literalOf, write } from "./http-adapter-client.js";
-import { ADAPTER, apiBlock, at, bodyOf, deepMerge, fieldTokens, fillPath, firstMarker, isKeep, parseResource, pointerTokens, projection, resourceOutputs, stateHash, type FindSpec, type ResourceSpec } from "./http-adapter-spec.js";
+import { ADAPTER, apiBlock, apiEnvironment, at, bodyOf, deepMerge, fieldTokens, fillPath, firstMarker, isKeep, parseResource, pointerTokens, projection, resourceOutputs, stateHash, type FindSpec, type ResourceSpec } from "./http-adapter-spec.js";
 
 /** An object as found: its provider id and its body. */
 interface Located {
@@ -226,6 +226,7 @@ export const resource: OpSpec = {
   outputs: { id: { available: "immediate" } },
   outputsFor: resourceOutputs,
   providerFor: apiBlock,
+  writesEnvironment: apiEnvironment,
 
   async read(actx, params) {
     const spec = parseResource(params);
