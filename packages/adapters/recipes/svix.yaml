@@ -1,0 +1,100 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Svix API recipes (Svix as the webhook sender). Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md
+# "Adding a recipe".
+provider: svix
+title: Svix
+category: webhooks
+verified_on: "2026-10-11"
+docs:
+  - title: Svix API reference (OpenAPI document)
+    url: https://api.svix.com/api/v1/openapi.json
+  - title: Svix API reference
+    url: https://api.svix.com/docs
+  - title: Entities overview (ids and uids)
+    url: https://docs.svix.com/overview
+api:
+  base_url: https://api.us.svix.com
+  base_url_env: SVIX_API_URL
+  auth: { bearer_env: SVIX_AUTH_TOKEN }
+assumptions:
+  - id: SV1
+    verified: true
+    text: "`POST /api/v1/app/{app_id}/endpoint` creates an endpoint from `url` (required), `uid`, `description`, `eventTypes`, `channels`, `disabled`, `metadata` and an optional `secret`, answering 201 with the endpoint (`id` `ep_…`, `uid`, `url`, …); requests carry `Authorization: Bearer <token>`."
+    source: https://api.svix.com/api/v1/openapi.json
+  - id: SV2
+    verified: true
+    text: "`GET`, `PATCH` (partial update) and `DELETE` (204) `/api/v1/app/{app_id}/endpoint/{endpoint_id}` take the endpoint's id or its uid, and `{app_id}` takes the application's id or uid."
+    source: https://api.svix.com/api/v1/openapi.json
+  - id: SV3
+    verified: true
+    text: "A uid is 1–256 characters of letters, digits, `-`, `_` and `.`, unique among the application's endpoints, so it names the endpoint for every later request and a create whose answer was lost is found by it."
+    source: https://api.svix.com/api/v1/openapi.json
+  - id: SV4
+    verified: true
+    text: "The endpoint's signing secret is generated when `secret` is null (recommended) and is readable at any time with `GET …/endpoint/{endpoint_id}/secret` (`{ key }`): it is not a once-only value, and this recipe does not output it (an endpoint answer does not carry it)."
+    source: https://api.svix.com/api/v1/openapi.json
+  - id: SV5
+    verified: true
+    text: "The API is served per region (`api.us.svix.com`, `api.eu.svix.com`, `api.ca.svix.com`, `api.au.svix.com`), and POST requests accept an `idempotency-key` header."
+    source: https://api.svix.com/api/v1/openapi.json
+  - id: SV6
+    verified: false
+    text: "A create with a uid that exists already answers 409 (the specification lists 409 for every operation without saying when), after which the endpoint is found by its uid and claimed only if an earlier intent of the same scope named it."
+  - id: SV7
+    verified: false
+    text: "`description` is answered as sent (default empty), `disabled` as a boolean and `eventTypes` as the list sent, so they compare without drift on every plan; accounts outside the US region set `base_url` in the provider block."
+ops:
+  endpoint:
+    kind: resource
+    title: Application endpoint
+    summary: An endpoint of a Svix application delivering to an environment's URL, named by a uid such as `preview-pr-42`. Its URL, description, event type filter and disabled flag are compared for drift; its signing secret stays readable in Svix (SV4).
+    covers: [svix-endpoint]
+    params:
+      app_id:
+        type: string
+        required: true
+        description: The application's id (`app_…`) or uid.
+        example: acme-customer
+      uid:
+        type: string
+        required: true
+        pattern: "^[a-zA-Z0-9\\-_.]{1,256}$"
+        description: The endpoint's uid, unique in the application; its identity.
+        example: "sponson-${ctx.env}-${ctx.scope}"
+      url:
+        type: string
+        required: true
+        pattern: "^https?://\\S+$"
+        description: The URL messages are delivered to.
+        example: "https://${ctx.scope}.preview.example.com/api/webhooks"
+      description:
+        type: string
+        default: ""
+        description: A note shown in the Svix dashboard and the application portal.
+      event_types:
+        type: list
+        description: Event type names to deliver (all when left out); at least one when set.
+      disabled:
+        type: boolean
+        default: false
+        description: Whether deliveries are paused.
+      secret:
+        type: string
+        description: "A signing secret to use instead of a generated one (`whsec_…`); sent on create only. Use `{ secret: … }`."
+    http:
+      read: { path: "/api/v1/app/{app_id}/endpoint/{uid}" }
+      create:
+        path: "/api/v1/app/{app_id}/endpoint"
+        body: { uid: { param: uid }, secret: { param: secret } }
+        idempotency_key: true
+      update: { method: PATCH, path: "/api/v1/app/{app_id}/endpoint/{id}" }
+      delete: { path: "/api/v1/app/{app_id}/endpoint/{id}" }
+      fields:
+        url: { param: url }
+        description: { param: description }
+        disabled: { param: disabled }
+        eventTypes: { param: event_types }
+    sim:
+      id_from: uid
+    live:
+      params: { app_id: SPONSON_LIVE_SVIX_APP_ID }

@@ -30,7 +30,10 @@ const cases = loadRecipes().flatMap((r) => Object.entries(r.ops).map(([name, op]
 /** The example values with `${ctx.*}` filled as for PR 42, as the engine would hand them over. */
 function exampleLine(r: Recipe, name: string, op: RecipeOp): Record<string, unknown> {
   const params = Object.fromEntries(Object.entries(op.params).flatMap(([p, s]) => (s.example === undefined ? [] : [[p, s.example]])));
-  const text = JSON.stringify(params).replace(/\$\{ctx\.scope\}/g, "pr-42").replace(/\$\{ctx\.env\}/g, "preview");
+  const text = JSON.stringify(params)
+    .replace(/\$\{ctx\.scope\}/g, "pr-42")
+    .replace(/\$\{ctx\.env\}/g, "preview")
+    .replace(/\$\{ctx\.git\.sha\}/g, "0123456789abcdef0123456789abcdef01234567");
   return { recipe: `${r.provider}.${name}`, ...(JSON.parse(text) as Record<string, unknown>) };
 }
 

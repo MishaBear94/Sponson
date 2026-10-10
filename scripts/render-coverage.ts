@@ -19,7 +19,7 @@ function nowCell(row: CoverageRow): string {
   if (row.covered_by === "manual") return "no (no API)";
   if (isManualStep(row)) return "manual step (`manual.step`)";
   const refs = coverRefs(row);
-  if (refs.length === 0) return "no";
+  if (refs.length === 0) return row.note ? `no (${row.note})` : "no";
   return `**yes** (${refs.map(refText).join(", ")}${row.note ? `: ${row.note}` : ""})`;
 }
 

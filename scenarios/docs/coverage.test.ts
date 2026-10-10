@@ -118,7 +118,8 @@ describe("docs/coverage.md states the numbers the data gives", async () => {
     for (const r of rows.filter((x) => x.counted !== false)) {
       const line = doc.split("\n").find((l) => l.startsWith(`| ${r.provider} | `) && l.includes(r.side_effect.slice(0, 20).replace(/\|/g, "\\|")));
       expect(line, `the table row of ${r.id}`).toBeDefined();
-      expect(line!.endsWith("| no |") || line!.endsWith("| no (no API) |"), `${r.id}: ${line}`).toBe(!covered(r));
+      // Uncovered: `no`, `no (no API)`, or `no (<note>)` saying what is missing.
+      expect(/\| no( \(.*\))? \|$/.test(line!), `${r.id}: ${line}`).toBe(!covered(r));
     }
   });
 });

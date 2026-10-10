@@ -304,14 +304,14 @@ categories:
         api_shape: "`POST /repos/{o}/{r}/hooks`, `DELETE .../hooks/{id}`; bearer; object; secret write-only (caller supplies it)"
         generic: Y
         priority: P2
-        covered_by: null
+        covered_by: recipe:github.repo_webhook
       - id: svix-endpoint
         provider: Svix (as a sender)
         side_effect: Endpoint per environment on an application
         api_shape: "`POST /api/v1/app/{app}/endpoint` with caller-chosen `uid`; bearer; object, idempotent by `uid`; secret readable via `GET .../secret`"
         generic: Y
         priority: P2
-        covered_by: null
+        covered_by: recipe:svix.endpoint
       - id: clerk-webhook
         provider: Clerk webhooks
         side_effect: Preview URL as a webhook endpoint
@@ -329,21 +329,26 @@ categories:
         api_shape: "`POST /api-keys` (token returned once), `POST /webhooks`; bearer; object"
         generic: Y
         priority: P2
-        covered_by: null
+        covered_by:
+          - recipe:resend.api_key
+          - recipe:resend.webhook
       - id: postmark-server-webhook
         provider: Postmark
         side_effect: Server per environment, webhook per server
         api_shape: Account API `POST /servers` (`X-Postmark-Account-Token`), Server API `POST /webhooks` (`X-Postmark-Server-Token`); object
-        generic: Y
+        generic: P (the webhook API takes the server's own token, an output of the server line)
         priority: P2
         covered_by: null
+        note: "server: recipe `postmark.server`; webhook: recipe `postmark_server.webhook`, on a server whose token is configured. Not chained in one plan: a created server's token cannot be a credential"
       - id: sendgrid-webhook
         provider: SendGrid
         side_effect: Event webhook or inbound-parse host per environment
         api_shape: "`POST /v3/user/webhooks/event/settings`, `POST /v3/user/webhooks/parse/settings`; bearer; object"
         generic: Y
         priority: P2
-        covered_by: null
+        covered_by:
+          - recipe:sendgrid.event_webhook
+          - recipe:sendgrid.parse_setting
   - id: observability
     title: Observability per release
     rows:
@@ -353,21 +358,24 @@ categories:
         api_shape: "`POST /api/0/organizations/{o}/releases/`, `POST .../releases/{v}/deploys/`; bearer; object; environments appear on first event"
         generic: Y (destroy = leave; history)
         priority: P1
-        covered_by: null
+        covered_by:
+          - recipe:sentry.release
+          - recipe:sentry.deploy
       - id: datadog-marker
         provider: Datadog
         side_effect: Deployment marker / synthetic test against the preview URL
         api_shape: "`datadog-ci deployment mark`; `POST /api/v1/synthetics/tests/api`; `DD-API-KEY` + `DD-APPLICATION-KEY` headers; object"
-        generic: Y
+        generic: P (two credential headers on every read; deployment events listed by POST)
         priority: P2
         covered_by: null
+        note: "blocked for recipes: reads need two credentials at once (`DD-API-KEY` + `DD-APPLICATION-KEY`); deployment events are listed by POST"
       - id: honeycomb-marker
         provider: Honeycomb
         side_effect: Marker per deploy in the environment's dataset
         api_shape: "`POST /1/markers/{dataset}`, `X-Honeycomb-Team` header; object"
         generic: Y
         priority: P2
-        covered_by: null
+        covered_by: recipe:honeycomb.marker
   - id: dns
     title: DNS and preview domains
     rows:

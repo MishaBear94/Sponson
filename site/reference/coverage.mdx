@@ -114,25 +114,25 @@ the tables below are generated from it: edit the data, then run `pnpm docs:gen`.
 | Provider | Side effect | API shape | Generic? | Pri | Now |
 |---|---|---|---|---|---|
 | Stripe | Test-mode webhook endpoint pointing at the preview URL; its signing secret into the app's env | `POST /v1/webhook_endpoints` (form-encoded), `DELETE /v1/webhook_endpoints/{id}`; bearer; object; `Idempotency-Key`; **`secret` returned only on create** | P (once-only secret must flow into an env line in the same run) | P0 | no |
-| GitHub | Repository webhook to the preview URL | `POST /repos/{o}/{r}/hooks`, `DELETE .../hooks/{id}`; bearer; object; secret write-only (caller supplies it) | Y | P2 | no |
-| Svix (as a sender) | Endpoint per environment on an application | `POST /api/v1/app/{app}/endpoint` with caller-chosen `uid`; bearer; object, idempotent by `uid`; secret readable via `GET .../secret` | Y | P2 | no |
+| GitHub | Repository webhook to the preview URL | `POST /repos/{o}/{r}/hooks`, `DELETE .../hooks/{id}`; bearer; object; secret write-only (caller supplies it) | Y | P2 | **yes** (recipe [`github.repo_webhook`](/reference/recipes#github-repo_webhook)) |
+| Svix (as a sender) | Endpoint per environment on an application | `POST /api/v1/app/{app}/endpoint` with caller-chosen `uid`; bearer; object, idempotent by `uid`; secret readable via `GET .../secret` | Y | P2 | **yes** (recipe [`svix.endpoint`](/reference/recipes#svix-endpoint)) |
 | Clerk webhooks | Preview URL as a webhook endpoint | Clerk's Backend API only creates/deletes the Svix app and a dashboard link; **no endpoint API** through Clerk | N | P1 | no (no API) |
 
 ### Email: sending domains, webhooks, test inboxes
 
 | Provider | Side effect | API shape | Generic? | Pri | Now |
 |---|---|---|---|---|---|
-| Resend | Restricted API key or webhook per environment (domains are long-lived; test addresses like `delivered@resend.dev` need no API) | `POST /api-keys` (token returned once), `POST /webhooks`; bearer; object | Y | P2 | no |
-| Postmark | Server per environment, webhook per server | Account API `POST /servers` (`X-Postmark-Account-Token`), Server API `POST /webhooks` (`X-Postmark-Server-Token`); object | Y | P2 | no |
-| SendGrid | Event webhook or inbound-parse host per environment | `POST /v3/user/webhooks/event/settings`, `POST /v3/user/webhooks/parse/settings`; bearer; object | Y | P2 | no |
+| Resend | Restricted API key or webhook per environment (domains are long-lived; test addresses like `delivered@resend.dev` need no API) | `POST /api-keys` (token returned once), `POST /webhooks`; bearer; object | Y | P2 | **yes** (recipe [`resend.api_key`](/reference/recipes#resend-api_key), recipe [`resend.webhook`](/reference/recipes#resend-webhook)) |
+| Postmark | Server per environment, webhook per server | Account API `POST /servers` (`X-Postmark-Account-Token`), Server API `POST /webhooks` (`X-Postmark-Server-Token`); object | P (the webhook API takes the server's own token, an output of the server line) | P2 | no (server: recipe `postmark.server`; webhook: recipe `postmark_server.webhook`, on a server whose token is configured. Not chained in one plan: a created server's token cannot be a credential) |
+| SendGrid | Event webhook or inbound-parse host per environment | `POST /v3/user/webhooks/event/settings`, `POST /v3/user/webhooks/parse/settings`; bearer; object | Y | P2 | **yes** (recipe [`sendgrid.event_webhook`](/reference/recipes#sendgrid-event_webhook), recipe [`sendgrid.parse_setting`](/reference/recipes#sendgrid-parse_setting)) |
 
 ### Observability per release
 
 | Provider | Side effect | API shape | Generic? | Pri | Now |
 |---|---|---|---|---|---|
-| Sentry | Release for the commit, deploy record for the environment; finalize | `POST /api/0/organizations/{o}/releases/`, `POST .../releases/{v}/deploys/`; bearer; object; environments appear on first event | Y (destroy = leave; history) | P1 | no |
-| Datadog | Deployment marker / synthetic test against the preview URL | `datadog-ci deployment mark`; `POST /api/v1/synthetics/tests/api`; `DD-API-KEY` + `DD-APPLICATION-KEY` headers; object | Y | P2 | no |
-| Honeycomb | Marker per deploy in the environment's dataset | `POST /1/markers/{dataset}`, `X-Honeycomb-Team` header; object | Y | P2 | no |
+| Sentry | Release for the commit, deploy record for the environment; finalize | `POST /api/0/organizations/{o}/releases/`, `POST .../releases/{v}/deploys/`; bearer; object; environments appear on first event | Y (destroy = leave; history) | P1 | **yes** (recipe [`sentry.release`](/reference/recipes#sentry-release), recipe [`sentry.deploy`](/reference/recipes#sentry-deploy)) |
+| Datadog | Deployment marker / synthetic test against the preview URL | `datadog-ci deployment mark`; `POST /api/v1/synthetics/tests/api`; `DD-API-KEY` + `DD-APPLICATION-KEY` headers; object | P (two credential headers on every read; deployment events listed by POST) | P2 | no (blocked for recipes: reads need two credentials at once (`DD-API-KEY` + `DD-APPLICATION-KEY`); deployment events are listed by POST) |
+| Honeycomb | Marker per deploy in the environment's dataset | `POST /1/markers/{dataset}`, `X-Honeycomb-Team` header; object | Y | P2 | **yes** (recipe [`honeycomb.marker`](/reference/recipes#honeycomb-marker)) |
 
 ### DNS and preview domains
 
@@ -193,18 +193,18 @@ Counted over the 56 side-effect rows of the matrix (rows marked `n/a` have nothi
 
 | Measure | Covered | Coverage |
 |---|---|---|
-| Rows | 11 of 56 | **19.6%** |
-| Weighted by priority | 29 of 90 | **32.2%** |
+| Rows | 17 of 56 | **30.4%** |
+| Weighted by priority | 36 of 90 | **40.0%** |
 | P0 rows only | 7 of 9 | 77.8% |
-| Rows an API reaches (all but `manual`) | 11 of 53 | 20.8% |
-| Weighted, rows an API reaches | 29 of 85 | 34.1% |
+| Rows an API reaches (all but `manual`) | 17 of 53 | 32.1% |
+| Weighted, rows an API reaches | 36 of 85 | 42.4% |
 | Secret sources (separate) | 4 of 9 vendors; weighted 7 of 14 | 44.4%; 50.0% |
 
-Covered: Vercel (`vercel.env`, `vercel.deploy`); Netlify (`netlify.env`); Cloudflare Pages / Workers (`cloudflare.pages_env`); Neon (`neon.branch`); Supabase (`supabase.branch`); PlanetScale (`planetscale.branch`, `planetscale.password`); Turso (recipe [`turso.database_branch`](/reference/recipes#turso-database_branch)); Clerk (`clerk.redirect_allow`); Supabase Auth (`supabase.auth_redirect`); LaunchDarkly (`launchdarkly.flag_target`); Cloudflare DNS (recipe [`cloudflare.dns_cname`](/reference/recipes#cloudflare-dns_cname)).
+Covered: Vercel (`vercel.env`, `vercel.deploy`); Netlify (`netlify.env`); Cloudflare Pages / Workers (`cloudflare.pages_env`); Neon (`neon.branch`); Supabase (`supabase.branch`); PlanetScale (`planetscale.branch`, `planetscale.password`); Turso (recipe [`turso.database_branch`](/reference/recipes#turso-database_branch)); Clerk (`clerk.redirect_allow`); Supabase Auth (`supabase.auth_redirect`); LaunchDarkly (`launchdarkly.flag_target`); GitHub (recipe [`github.repo_webhook`](/reference/recipes#github-repo_webhook)); Svix (as a sender) (recipe [`svix.endpoint`](/reference/recipes#svix-endpoint)); Resend (recipe [`resend.api_key`](/reference/recipes#resend-api_key), recipe [`resend.webhook`](/reference/recipes#resend-webhook)); SendGrid (recipe [`sendgrid.event_webhook`](/reference/recipes#sendgrid-event_webhook), recipe [`sendgrid.parse_setting`](/reference/recipes#sendgrid-parse_setting)); Sentry (recipe [`sentry.release`](/reference/recipes#sentry-release), recipe [`sentry.deploy`](/reference/recipes#sentry-deploy)); Honeycomb (recipe [`honeycomb.marker`](/reference/recipes#honeycomb-marker)); Cloudflare DNS (recipe [`cloudflare.dns_cname`](/reference/recipes#cloudflare-dns_cname)).
 
 Automated coverage counts only rows an op manages without a person. Rows no API reaches (`manual`, or a `manual.step` line that records the step a person does; weight 5): Google OAuth clients (no public API for standard OAuth web clients); Clerk webhooks (Clerk's API manages the Svix app, not its endpoints); Stripe sandboxes (no public API for account sandboxes). They cap coverage at 53 rows, 85 of 90 weighted (94.4%).
 
-Recipe candidates, rows the generic adapter can express fully (`Y`) that nothing covers yet: 30 (Render, Heroku, Prisma Postgres, Auth0, Firebase Auth, WorkOS, Stytch, Okta, Kinde, PostHog, Statsig, GrowthBook, Unleash, Flagsmith, ConfigCat, Split (Harness FME), GitHub, Svix (as a sender), Resend, Postmark, SendGrid, Sentry, Datadog, Honeycomb, Vercel domains, Firebase Storage (GCS bucket), Upstash Redis, Upstash QStash, Inngest, Stripe test-mode objects).
+Recipe candidates, rows the generic adapter can express fully (`Y`) that nothing covers yet: 22 (Render, Heroku, Prisma Postgres, Auth0, Firebase Auth, WorkOS, Stytch, Okta, Kinde, PostHog, Statsig, GrowthBook, Unleash, Flagsmith, ConfigCat, Split (Harness FME), Vercel domains, Firebase Storage (GCS bucket), Upstash Redis, Upstash QStash, Inngest, Stripe test-mode objects).
 
 ## Strategy
 

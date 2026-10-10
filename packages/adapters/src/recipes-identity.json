@@ -10,6 +10,134 @@
     "key": "/zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records?type=CNAME&name.exact=pr-42.preview.example.com[name=pr-42.preview.example.com,type=CNAME]",
     "id": "DELETE /zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records/ID"
   },
+  "github.repo_webhook": {
+    "provider": {
+      "base_url": "https://api.github.com",
+      "base_url_env": "GITHUB_API_URL",
+      "auth": {
+        "bearer_env": "GITHUB_TOKEN"
+      },
+      "headers": {
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "sponson"
+      }
+    },
+    "key": "/repos/acme/app/hooks?per_page=100[/config/url=https://pr-42.preview.example.com/api/github]",
+    "id": "DELETE /repos/acme/app/hooks/ID"
+  },
+  "honeycomb.marker": {
+    "provider": {
+      "base_url": "https://api.honeycomb.io",
+      "base_url_env": "HONEYCOMB_API_URL",
+      "auth": {
+        "header": "X-Honeycomb-Team",
+        "value_env": "HONEYCOMB_API_KEY"
+      }
+    },
+    "key": "/1/markers/__all__[message=deploy pr-42 0123456789abcdef0123456789abcdef01234567,type=deploy]",
+    "id": "DELETE /1/markers/__all__/ID"
+  },
+  "postmark.server": {
+    "provider": {
+      "base_url": "https://api.postmarkapp.com",
+      "base_url_env": "POSTMARK_API_URL",
+      "auth": {
+        "header": "X-Postmark-Account-Token",
+        "value_env": "POSTMARK_ACCOUNT_TOKEN"
+      }
+    },
+    "key": "/servers?count=500&offset=0&name=sponson-preview-pr-42[Name=sponson-preview-pr-42]",
+    "id": "DELETE /servers/ID"
+  },
+  "postmark_server.webhook": {
+    "provider": {
+      "base_url": "https://api.postmarkapp.com",
+      "base_url_env": "POSTMARK_API_URL",
+      "auth": {
+        "header": "X-Postmark-Server-Token",
+        "value_env": "POSTMARK_SERVER_TOKEN"
+      }
+    },
+    "key": "/webhooks[Url=https://pr-42.preview.example.com/api/postmark]",
+    "id": "DELETE /webhooks/ID"
+  },
+  "resend.api_key": {
+    "provider": {
+      "base_url": "https://api.resend.com",
+      "base_url_env": "RESEND_API_URL",
+      "auth": {
+        "bearer_env": "RESEND_API_KEY"
+      }
+    },
+    "key": "/api-keys[name=sponson-preview-pr-42]",
+    "id": "DELETE /api-keys/ID"
+  },
+  "resend.webhook": {
+    "provider": {
+      "base_url": "https://api.resend.com",
+      "base_url_env": "RESEND_API_URL",
+      "auth": {
+        "bearer_env": "RESEND_API_KEY"
+      }
+    },
+    "key": "/webhooks[endpoint=https://pr-42.preview.example.com/api/resend]",
+    "id": "DELETE /webhooks/ID"
+  },
+  "sendgrid.event_webhook": {
+    "provider": {
+      "base_url": "https://api.sendgrid.com",
+      "base_url_env": "SENDGRID_API_URL",
+      "auth": {
+        "bearer_env": "SENDGRID_API_KEY"
+      }
+    },
+    "key": "/v3/user/webhooks/event/settings/all[url=https://pr-42.preview.example.com/api/sendgrid/events]",
+    "id": "DELETE /v3/user/webhooks/event/settings/ID"
+  },
+  "sendgrid.parse_setting": {
+    "provider": {
+      "base_url": "https://api.sendgrid.com",
+      "base_url_env": "SENDGRID_API_URL",
+      "auth": {
+        "bearer_env": "SENDGRID_API_KEY"
+      }
+    },
+    "key": "/v3/user/webhooks/parse/settings/pr-42.parse.example.com",
+    "id": "DELETE /v3/user/webhooks/parse/settings/pr-42.parse.example.com"
+  },
+  "sentry.release": {
+    "provider": {
+      "base_url": "https://sentry.io/api/0",
+      "base_url_env": "SENTRY_API_URL",
+      "auth": {
+        "bearer_env": "SENTRY_AUTH_TOKEN"
+      }
+    },
+    "key": "/organizations/acme/releases/app%400123456789abcdef0123456789abcdef01234567/",
+    "id": "KEEP /organizations/acme/releases/app%400123456789abcdef0123456789abcdef01234567/"
+  },
+  "sentry.deploy": {
+    "provider": {
+      "base_url": "https://sentry.io/api/0",
+      "base_url_env": "SENTRY_API_URL",
+      "auth": {
+        "bearer_env": "SENTRY_AUTH_TOKEN"
+      }
+    },
+    "key": "/organizations/acme/releases/app%400123456789abcdef0123456789abcdef01234567/deploys/[environment=preview,name=sponson-pr-42]",
+    "id": "KEEP /organizations/acme/releases/app%400123456789abcdef0123456789abcdef01234567/deploys/ID/"
+  },
+  "svix.endpoint": {
+    "provider": {
+      "base_url": "https://api.us.svix.com",
+      "base_url_env": "SVIX_API_URL",
+      "auth": {
+        "bearer_env": "SVIX_AUTH_TOKEN"
+      }
+    },
+    "key": "/api/v1/app/acme-customer/endpoint/sponson-preview-pr-42",
+    "id": "DELETE /api/v1/app/acme-customer/endpoint/ID"
+  },
   "turso.database_branch": {
     "provider": {
       "base_url": "https://api.turso.tech/v1",

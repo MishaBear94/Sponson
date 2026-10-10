@@ -1,0 +1,148 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Sentry Web API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: sentry
+title: Sentry
+category: observability
+verified_on: "2026-10-11"
+docs:
+  - title: Create a New Release for an Organization
+    url: https://docs.sentry.io/api/releases/create-a-new-release-for-an-organization/
+  - title: Retrieve an Organization's Release
+    url: https://docs.sentry.io/api/releases/retrieve-an-organizations-release/
+  - title: Update an Organization's Release
+    url: https://docs.sentry.io/api/releases/update-an-organizations-release/
+  - title: Delete an Organization's Release
+    url: https://docs.sentry.io/api/releases/delete-an-organizations-release/
+  - title: Create a Deploy
+    url: https://docs.sentry.io/api/releases/create-a-deploy/
+  - title: List a Release's Deploys
+    url: https://docs.sentry.io/api/releases/list-a-releases-deploys/
+  - title: Release Management (sentry-cli)
+    url: https://docs.sentry.io/cli/releases/
+api:
+  base_url: https://sentry.io/api/0
+  base_url_env: SENTRY_API_URL
+  auth: { bearer_env: SENTRY_AUTH_TOKEN }
+assumptions:
+  - id: SE1
+    verified: true
+    text: "`POST /api/0/organizations/{organization_id_or_slug}/releases/` creates a release from `version` and `projects` (both required), `ref`, `url`, `dateReleased` and commit data, with a bearer token holding `project:releases`, `project:write`, `project:admin` or `org:ci`; it answers 201 (or 208)."
+    source: https://docs.sentry.io/api/releases/create-a-new-release-for-an-organization/
+  - id: SE2
+    verified: true
+    text: "A version is one release across the organization's projects, and `GET /api/0/organizations/{org}/releases/{version}/` answers it (404 when there is none), so the version names the release."
+    source: https://docs.sentry.io/api/releases/retrieve-an-organizations-release/
+  - id: SE3
+    verified: true
+    text: "`PUT /api/0/organizations/{org}/releases/{version}/` updates `ref`, `url`, `dateReleased` and commit data (the documentation says an omitted `dateReleased` is the current time), and answers the release."
+    source: https://docs.sentry.io/api/releases/update-an-organizations-release/
+  - id: SE4
+    verified: true
+    text: "`DELETE /api/0/organizations/{org}/releases/{version}/` permanently removes a release and its files (`project:releases` or `project:admin`). The recipe keeps releases on destroy: one version is shared by every environment it is deployed to."
+    source: https://docs.sentry.io/api/releases/delete-an-organizations-release/
+  - id: SE5
+    verified: true
+    text: "`POST /api/0/organizations/{org}/releases/{version}/deploys/` records a deploy of the release from `environment` (required), `name`, `url`, `dateStarted`, `dateFinished` (default now) and `projects` (default: all of the release's)."
+    source: https://docs.sentry.io/api/releases/create-a-deploy/
+  - id: SE6
+    verified: true
+    text: "`GET /api/0/organizations/{org}/releases/{version}/deploys/` lists the release's deploys; deploys cannot be deleted, so the deploy op never deletes (`destroy: never`)."
+    source: https://docs.sentry.io/cli/releases/
+  - id: SE7
+    verified: true
+    text: "The release's `dateReleased` defaults to the current time on create, so a release this recipe creates is finalized at once."
+    source: https://docs.sentry.io/api/releases/create-a-new-release-for-an-organization/
+  - id: SE8
+    verified: false
+    text: "A create for a version that exists answers 208 with the existing release (not an error), so a release another tool made (sentry-cli in the build) is taken over without a second write; the recipe keeps it on destroy either way."
+  - id: SE9
+    verified: false
+    text: "The deploy list answers a bare array of `{ id, environment, name, url, dateStarted, dateFinished }` with string ids, all of a release's deploys on the first page; `environment` and `name` together identify the deploy this recipe recorded."
+  - id: SE10
+    verified: false
+    text: "Release `url` is answered as sent (null when unset); organizations hosted in another region (`de.sentry.io`) or self-hosted Sentry set `base_url` in the provider block."
+ops:
+  release:
+    kind: resource
+    title: Release
+    summary: "A release for the commit, such as `app@${ctx.git.sha}`, in the given projects, finalized when created (SE7). Named by its version; a console edit of its URL is drift. Kept on destroy (shared history: preview and production deploy the same version); `destroy: delete` on the line removes it."
+    covers: [sentry-release]
+    destroy: keep
+    params:
+      organization:
+        type: string
+        required: true
+        description: The organization's slug or id.
+        example: acme
+      version:
+        type: string
+        required: true
+        pattern: "^[^/\\s]+$"
+        description: The release's version (no slashes or whitespace), such as `app@<sha>`.
+        example: "app@${ctx.git.sha}"
+      project:
+        type: string
+        required: true
+        description: The slug of the project the release belongs to (a release of several projects is a hand-written `http` line).
+        example: web
+      url:
+        type: string
+        description: A link for the release (its commit or build).
+        example: "https://github.com/acme/app/commit/${ctx.git.sha}"
+      ref:
+        type: string
+        description: A commit reference, sent on create.
+    http:
+      read: { path: "/organizations/{organization}/releases/{version}/" }
+      create:
+        path: "/organizations/{organization}/releases/"
+        body: { version: { param: version }, projects: [{ param: project }], ref: { param: ref } }
+      update: { method: PUT }
+      id_path: /version
+      fields:
+        url: { param: url }
+    sim:
+      id_from: version
+    live:
+      params: { organization: SPONSON_LIVE_SENTRY_ORG, project: SPONSON_LIVE_SENTRY_PROJECT }
+  deploy:
+    kind: resource
+    title: Deploy of a release to an environment
+    summary: "The record that a release was deployed to an environment (`preview`, named for the scope), which Sentry shows on the release and uses for deploy notifications. Located by environment and name among the release's deploys. Sentry has no way to change or delete a deploy, so nothing is compared for drift and destroy leaves it (`destroy: never`)."
+    covers: [sentry-release]
+    destroy: never
+    params:
+      organization:
+        type: string
+        required: true
+        description: The organization's slug or id.
+        example: acme
+      version:
+        type: string
+        required: true
+        pattern: "^[^/\\s]+$"
+        description: "The deployed release's version; the release must exist (`{ from: <release line>.id }` orders the lines)."
+        example: "app@${ctx.git.sha}"
+      environment:
+        type: string
+        required: true
+        description: The environment deployed to.
+        example: "${ctx.env}"
+      name:
+        type: string
+        required: true
+        description: The deploy's name, which with the environment identifies it among the release's deploys.
+        example: "sponson-${ctx.scope}"
+      url:
+        type: string
+        description: A link to the deployment (the preview URL), sent on create.
+    http:
+      find:
+        path: "/organizations/{organization}/releases/{version}/deploys/"
+        match: { environment: { param: environment }, name: { param: name } }
+      create:
+        path: "/organizations/{organization}/releases/{version}/deploys/"
+        body: { url: { param: url } }
+      delete: { path: "/organizations/{organization}/releases/{version}/deploys/{id}/" }
+    live:
+      params: { organization: SPONSON_LIVE_SENTRY_ORG, version: SPONSON_LIVE_SENTRY_VERSION }

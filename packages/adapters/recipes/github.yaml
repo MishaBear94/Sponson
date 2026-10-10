@@ -1,0 +1,116 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# GitHub REST API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: github
+title: GitHub
+category: webhooks
+verified_on: "2026-10-11"
+docs:
+  - title: REST API endpoints for repository webhooks
+    url: https://docs.github.com/en/rest/repos/webhooks
+  - title: Authenticating to the REST API
+    url: https://docs.github.com/en/rest/authentication/authenticating-to-the-rest-api
+  - title: Getting started with the REST API (headers, API versions)
+    url: https://docs.github.com/en/rest/using-the-rest-api/getting-started-with-the-rest-api
+api:
+  base_url: https://api.github.com
+  base_url_env: GITHUB_API_URL
+  auth: { bearer_env: GITHUB_TOKEN }
+  headers: { X-GitHub-Api-Version: "2022-11-28", User-Agent: sponson }
+assumptions:
+  - id: GH1
+    verified: true
+    text: "`POST /repos/{owner}/{repo}/hooks` creates a repository webhook from `name: web`, `config` (`url`, `content_type`, `secret`, `insecure_ssl`), `events` and `active`, answering 201 with the hook (its integer `id` and `config`), authenticated with `Authorization: Bearer <token>`."
+    source: https://docs.github.com/en/rest/repos/webhooks
+  - id: GH2
+    verified: true
+    text: "`GET /repos/{owner}/{repo}/hooks` answers a bare array of hooks, each with `config.url`; it pages with `per_page` (at most 100) and `page`."
+    source: https://docs.github.com/en/rest/repos/webhooks
+  - id: GH3
+    verified: true
+    text: "`PATCH /repos/{owner}/{repo}/hooks/{hook_id}` updates `config`, `events` (replacing the list) and `active`; a secret set before is removed unless the same or a new one is sent, so every update sends the config's `url` and `secret` again."
+    source: https://docs.github.com/en/rest/repos/webhooks
+  - id: GH4
+    verified: true
+    text: "`DELETE /repos/{owner}/{repo}/hooks/{hook_id}` answers 204, and 404 when the hook is gone."
+    source: https://docs.github.com/en/rest/repos/webhooks
+  - id: GH5
+    verified: true
+    text: "Each hook should have a unique config, and hooks may share one only when their events do not overlap. The recipe takes the URL as the hook's identity; two hooks with the same URL make `find` refuse (PARAM_INVALID) instead of guessing."
+    source: https://docs.github.com/en/rest/repos/webhooks
+  - id: GH6
+    verified: false
+    text: "The secret is write-only: answers carry it masked or not at all, so it is sent on create and update but never compared, and a secret changed in the plan reaches GitHub only with the next change of a compared field. Keep it in a secret manager and reference it with `{ secret: … }`."
+  - id: GH7
+    verified: false
+    text: "A repository has at most 100 hooks for this purpose (GitHub limits hooks per event), so the first page of `?per_page=100` holds the one `find` looks for."
+  - id: GH8
+    verified: false
+    text: "`config.content_type` and `config.insecure_ssl` are answered as sent (`json`/`form`, the strings `\"0\"`/`\"1\"`), and `Accept: application/json` is served like `application/vnd.github+json`."
+  - id: GH9
+    verified: false
+    text: "The token needs the repository permission Webhooks (write) or the classic `admin:repo_hook` scope; the `GITHUB_TOKEN` of GitHub Actions does not have it, so use a GitHub App token or a fine-grained token. `GITHUB_API_URL` (set by Actions) points at GitHub Enterprise Server where that is the host."
+ops:
+  repo_webhook:
+    kind: resource
+    title: Repository webhook
+    summary: A repository webhook delivering to an environment's URL, such as the preview deployment's `/api/github` handler. Located by its URL; a console edit of its events, its active flag, its content type or its TLS check is drift. The secret is sent but not compared (GH6).
+    covers: [github-webhook]
+    params:
+      owner:
+        type: string
+        required: true
+        description: The repository's owner (user or organization).
+        example: acme
+      repo:
+        type: string
+        required: true
+        description: The repository's name.
+        example: app
+      url:
+        type: string
+        required: true
+        pattern: "^https?://\\S+$"
+        description: The URL GitHub delivers to; it identifies the hook in the repository.
+        example: "https://${ctx.scope}.preview.example.com/api/github"
+      events:
+        type: list
+        default: [push]
+        description: The events that trigger a delivery (`["*"]` for all).
+      active:
+        type: boolean
+        default: true
+        description: Whether deliveries are sent.
+      content_type:
+        type: string
+        default: json
+        enum: [json, form]
+        description: The payload's media type.
+      insecure_ssl:
+        type: string
+        default: "0"
+        enum: ["0", "1"]
+        description: '"1" skips verifying the TLS certificate of the URL.'
+      secret:
+        type: string
+        description: "The secret deliveries are signed with (write-only; GH6). Use `{ secret: … }`."
+    http:
+      find:
+        path: "/repos/{owner}/{repo}/hooks?per_page=100"
+        match: { /config/url: { param: url } }
+      create:
+        path: "/repos/{owner}/{repo}/hooks"
+        body: { name: web, config: { secret: { param: secret } } }
+      update:
+        method: PATCH
+        path: "/repos/{owner}/{repo}/hooks/{id}"
+        body: { config: { url: { param: url }, secret: { param: secret } } }
+      delete: { path: "/repos/{owner}/{repo}/hooks/{id}" }
+      fields:
+        active: { param: active }
+        events: { param: events }
+        /config/content_type: { param: content_type }
+        /config/insecure_ssl: { param: insecure_ssl }
+    sim:
+      numeric_ids: true
+    live:
+      params: { owner: SPONSON_LIVE_GITHUB_OWNER, repo: SPONSON_LIVE_GITHUB_REPO }

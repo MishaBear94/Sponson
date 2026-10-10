@@ -44,6 +44,17 @@ names are set.
 | Recipe | Op | What it manages | Credential |
 |---|---|---|---|
 | [`cloudflare.dns_cname`](/reference/recipes#cloudflare-dns_cname) | `resource` | DNS CNAME record | `CLOUDFLARE_API_TOKEN` (bearer) |
+| [`github.repo_webhook`](/reference/recipes#github-repo_webhook) | `resource` | Repository webhook | `GITHUB_TOKEN` (bearer) |
+| [`honeycomb.marker`](/reference/recipes#honeycomb-marker) | `resource` | Deploy marker | `HONEYCOMB_API_KEY` (header `X-Honeycomb-Team`) |
+| [`postmark.server`](/reference/recipes#postmark-server) | `resource` | Server | `POSTMARK_ACCOUNT_TOKEN` (header `X-Postmark-Account-Token`) |
+| [`postmark_server.webhook`](/reference/recipes#postmark_server-webhook) | `resource` | Webhook of a server | `POSTMARK_SERVER_TOKEN` (header `X-Postmark-Server-Token`) |
+| [`resend.api_key`](/reference/recipes#resend-api_key) | `resource` | API key | `RESEND_API_KEY` (bearer) |
+| [`resend.webhook`](/reference/recipes#resend-webhook) | `resource` | Webhook | `RESEND_API_KEY` (bearer) |
+| [`sendgrid.event_webhook`](/reference/recipes#sendgrid-event_webhook) | `resource` | Event Webhook | `SENDGRID_API_KEY` (bearer) |
+| [`sendgrid.parse_setting`](/reference/recipes#sendgrid-parse_setting) | `resource` | Inbound Parse setting | `SENDGRID_API_KEY` (bearer) |
+| [`sentry.release`](/reference/recipes#sentry-release) | `resource` | Release | `SENTRY_AUTH_TOKEN` (bearer) |
+| [`sentry.deploy`](/reference/recipes#sentry-deploy) | `resource` | Deploy of a release to an environment | `SENTRY_AUTH_TOKEN` (bearer) |
+| [`svix.endpoint`](/reference/recipes#svix-endpoint) | `resource` | Application endpoint | `SVIX_AUTH_TOKEN` (bearer) |
 | [`turso.database_branch`](/reference/recipes#turso-database_branch) | `resource` | Database branch | `TURSO_API_TOKEN` (bearer) |
 
 ## Cloudflare
@@ -127,6 +138,766 @@ fields:
   comment: { param: comment }
 outputs:
   hostname: /name
+```
+
+## GitHub
+
+Recipe file: [`packages/adapters/recipes/github.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/github.yaml). Verified on 2026-10-11 against:
+
+- [REST API endpoints for repository webhooks](https://docs.github.com/en/rest/repos/webhooks)
+- [Authenticating to the REST API](https://docs.github.com/en/rest/authentication/authenticating-to-the-rest-api)
+- [Getting started with the REST API (headers, API versions)](https://docs.github.com/en/rest/using-the-rest-api/getting-started-with-the-rest-api)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.github.com` |
+| `base_url_env` | `GITHUB_API_URL` |
+| Credential | `GITHUB_TOKEN` (bearer) |
+| `headers` | &#123;"X-GitHub-Api-Version":"2022-11-28","User-Agent":"sponson"&#125; |
+
+Assumptions:
+
+- **GH1** (verified, [source](https://docs.github.com/en/rest/repos/webhooks)): `POST /repos/{owner}/{repo}/hooks` creates a repository webhook from `name: web`, `config` (`url`, `content_type`, `secret`, `insecure_ssl`), `events` and `active`, answering 201 with the hook (its integer `id` and `config`), authenticated with `Authorization: Bearer <token>`.
+- **GH2** (verified, [source](https://docs.github.com/en/rest/repos/webhooks)): `GET /repos/{owner}/{repo}/hooks` answers a bare array of hooks, each with `config.url`; it pages with `per_page` (at most 100) and `page`.
+- **GH3** (verified, [source](https://docs.github.com/en/rest/repos/webhooks)): `PATCH /repos/{owner}/{repo}/hooks/{hook_id}` updates `config`, `events` (replacing the list) and `active`; a secret set before is removed unless the same or a new one is sent, so every update sends the config's `url` and `secret` again.
+- **GH4** (verified, [source](https://docs.github.com/en/rest/repos/webhooks)): `DELETE /repos/{owner}/{repo}/hooks/{hook_id}` answers 204, and 404 when the hook is gone.
+- **GH5** (verified, [source](https://docs.github.com/en/rest/repos/webhooks)): Each hook should have a unique config, and hooks may share one only when their events do not overlap. The recipe takes the URL as the hook's identity; two hooks with the same URL make `find` refuse (PARAM_INVALID) instead of guessing.
+- **GH6** **(unverified)**: The secret is write-only: answers carry it masked or not at all, so it is sent on create and update but never compared, and a secret changed in the plan reaches GitHub only with the next change of a compared field. Keep it in a secret manager and reference it with `{ secret: … }`.
+- **GH7** **(unverified)**: A repository has at most 100 hooks for this purpose (GitHub limits hooks per event), so the first page of `?per_page=100` holds the one `find` looks for.
+- **GH8** **(unverified)**: `config.content_type` and `config.insecure_ssl` are answered as sent (`json`/`form`, the strings `"0"`/`"1"`), and `Accept: application/json` is served like `application/vnd.github+json`.
+- **GH9** **(unverified)**: The token needs the repository permission Webhooks (write) or the classic `admin:repo_hook` scope; the `GITHUB_TOKEN` of GitHub Actions does not have it, so use a GitHub App token or a fine-grained token. `GITHUB_API_URL` (set by Actions) points at GitHub Enterprise Server where that is the host.
+
+### `github.repo_webhook`
+
+**Repository webhook** (`http.resource`). A repository webhook delivering to an environment's URL, such as the preview deployment's `/api/github` handler. Located by its URL; a console edit of its events, its active flag, its content type or its TLS check is drift. The secret is sent but not compared (GH6).
+
+Covers: `github-webhook` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `owner` | string | yes | — | The repository's owner (user or organization). |
+| `repo` | string | yes | — | The repository's name. |
+| `url` | string | yes | — | The URL GitHub delivers to; it identifies the hook in the repository. Matches `^https?://\\S+$`. |
+| `events` | list | no | `["push"]` | The events that trigger a delivery (`["*"]` for all). |
+| `active` | boolean | no | `true` | Whether deliveries are sent. |
+| `content_type` | string | no | `json` | The payload's media type. One of `json`, `form`. |
+| `insecure_ssl` | string | no | `0` | "1" skips verifying the TLS certificate of the URL. One of `0`, `1`. |
+| `secret` | string | no | — | The secret deliveries are signed with (write-only; GH6). Use `{ secret: … }`. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: repo_webhook
+  adapter: http
+  op: resource
+  recipe: github.repo_webhook
+  owner: acme
+  repo: app
+  url: https://${ctx.scope}.preview.example.com/api/github
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /repos/{owner}/{repo}/hooks?per_page=100
+  match:
+    /config/url: { param: url }
+create:
+  path: /repos/{owner}/{repo}/hooks
+  body:
+    name: web
+    config:
+      secret: { param: secret }
+update:
+  method: PATCH
+  path: /repos/{owner}/{repo}/hooks/{id}
+  body:
+    config:
+      url: { param: url }
+      secret: { param: secret }
+delete:
+  path: /repos/{owner}/{repo}/hooks/{id}
+fields:
+  active: { param: active }
+  events: { param: events }
+  /config/content_type: { param: content_type }
+  /config/insecure_ssl: { param: insecure_ssl }
+```
+
+## Honeycomb
+
+Recipe file: [`packages/adapters/recipes/honeycomb.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/honeycomb.yaml). Verified on 2026-10-11 against:
+
+- [Create a Marker](https://docs.honeycomb.io/api/markers/create-a-marker)
+- [List All Markers](https://docs.honeycomb.io/api/markers)
+- [Update a Marker](https://docs.honeycomb.io/api/markers/update-a-marker)
+- [Delete a Marker](https://docs.honeycomb.io/api/markers/delete-a-marker)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.honeycomb.io` |
+| `base_url_env` | `HONEYCOMB_API_URL` |
+| Credential | `HONEYCOMB_API_KEY` (header `X-Honeycomb-Team`) |
+
+Assumptions:
+
+- **HC1** (verified, [source](https://docs.honeycomb.io/api/markers/create-a-marker)): `POST /1/markers/{datasetSlug}` creates a marker from `start_time`, `end_time` (Unix seconds), `message`, `type` and `url` (all optional; `start_time` defaults to the request's arrival), answering 201 with the marker and its `id`; `__all__` as the dataset slug makes an environment-wide marker. Requests carry a Configuration Key with the Manage Markers permission in `X-Honeycomb-Team`.
+- **HC2** (verified, [source](https://docs.honeycomb.io/api/markers)): `GET /1/markers/{datasetSlug}` answers a bare array of the dataset's markers (`id`, `message`, `type`, `url`, `start_time`, `end_time`, `created_at`, `updated_at`, `color`).
+- **HC3** (verified, [source](https://docs.honeycomb.io/api/markers/update-a-marker)): `PUT /1/markers/{datasetSlug}/{markerId}` replaces the marker: a field left out of the body is erased.
+- **HC4** (verified, [source](https://docs.honeycomb.io/api/markers/delete-a-marker)): `DELETE /1/markers/{datasetSlug}/{markerId}` removes the marker and answers it (200).
+- **HC5** (verified, [source](https://docs.honeycomb.io/api/markers/create-a-marker)): The API is served from `api.honeycomb.io` (US) and `api.eu1.honeycomb.io` (EU); EU teams set `base_url` in the provider block.
+- **HC6** **(unverified)**: Message and type identify the marker this recipe created among the dataset's markers (Honeycomb does not require them to be unique: two equal ones make `find` refuse with PARAM_INVALID), and the list holds every marker of the dataset in one answer.
+- **HC7** **(unverified)**: An update (a changed `url`) re-sends message, type and url but not `start_time`, which Honeycomb then sets to the time of the update (HC3), moving the marker; markers are rarely edited.
+- **HC8** **(unverified)**: A deleted marker answers 404 to DELETE, which destroy treats as already gone.
+
+### `honeycomb.marker`
+
+**Deploy marker** (`http.resource`). A marker on an environment's dataset (or on every dataset of the environment with `__all__`) for a deploy, such as `deploy pr-42 0123abc`. Located by its message and type; a console edit of its URL is drift. Destroying the scope removes it; write `destroy: keep` to keep the deploy history.
+
+Covers: `honeycomb-marker` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `dataset` | string | yes | — | The dataset's slug, or `__all__` for an environment-wide marker. |
+| `message` | string | yes | — | The marker's text; with its type, its identity (HC6). |
+| `type` | string | no | `deploy` | The marker's type, which groups markers (and their color). |
+| `url` | string | no | — | The link opened from the marker (the preview or the build). |
+
+```yaml
+# under changes: (no provider block needed)
+- id: marker
+  adapter: http
+  op: resource
+  recipe: honeycomb.marker
+  dataset: __all__
+  message: deploy ${ctx.scope} ${ctx.git.sha}
+  url: https://${ctx.scope}.preview.example.com
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /1/markers/{dataset}
+  match:
+    message: { param: message }
+    type: { param: type }
+create:
+  path: /1/markers/{dataset}
+update:
+  method: PUT
+  path: /1/markers/{dataset}/{id}
+delete:
+  path: /1/markers/{dataset}/{id}
+fields:
+  url: { param: url }
+```
+
+## Postmark (Account API)
+
+Recipe file: [`packages/adapters/recipes/postmark.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/postmark.yaml). Verified on 2026-10-11 against:
+
+- [Servers API](https://postmarkapp.com/developer/api/servers-api)
+- [API overview (authentication)](https://postmarkapp.com/developer/api/overview)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.postmarkapp.com` |
+| `base_url_env` | `POSTMARK_API_URL` |
+| Credential | `POSTMARK_ACCOUNT_TOKEN` (header `X-Postmark-Account-Token`) |
+
+Assumptions:
+
+- **PM1** (verified, [source](https://postmarkapp.com/developer/api/servers-api)): The Servers API authenticates with the account token in `X-Postmark-Account-Token` (account owner only) and takes and answers JSON.
+- **PM2** (verified, [source](https://postmarkapp.com/developer/api/servers-api)): `POST /servers` creates a server from `Name` (required), `Color`, `DeliveryType` (`Live` or `Sandbox`, fixed after creation), `InboundHookUrl`, `TrackOpens`, `TrackLinks` and more, answering the server with its integer `ID`, its settings and `ApiTokens` (the server's tokens).
+- **PM3** (verified, [source](https://postmarkapp.com/developer/api/servers-api)): `GET /servers?count=&offset=&name=` answers `{ TotalCount, Servers: [...] }`; `name` is a substring search (`MyServer` also matches `MyServer Production`), so the recipe matches the exact `Name` among the results.
+- **PM4** (verified, [source](https://postmarkapp.com/developer/api/servers-api)): `PUT /servers/{serverid}` changes the settings sent (everything but `DeliveryType`); `GET /servers/{serverid}` answers the server with its `ApiTokens`, so the server token stays readable.
+- **PM5** (verified, [source](https://postmarkapp.com/developer/api/servers-api)): `DELETE /servers/{serverid}` removes a server, but is not enabled for every account: where Postmark support has not enabled it, destroy fails and the line needs `destroy: keep`.
+- **PM6** **(unverified)**: Server names are unique in the account (a second create with the same name is refused), and an account has fewer than 500 servers, so the first page of `count=500` holds the one `find` looks for.
+- **PM7** **(unverified)**: `Color`, `TrackOpens`, `TrackLinks` and `InboundHookUrl` are answered as sent (`InboundHookUrl` empty when unset), so they compare without drift.
+
+### `postmark.server`
+
+**Server** (`http.resource`). A Postmark server per environment, such as `sponson-preview-pr-42`, with its inbound webhook URL and tracking settings. Its token is a sensitive output for the app's environment (`{ from: <line>.server_token }`). Located by its name; a console edit of its color, tracking or inbound hook URL is drift. Webhooks of the server's message streams need the server's own token: see `postmark_server.webhook`.
+
+Covers: — in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`, `server_token` (sensitive). On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `name` | string | yes | — | The server's name, unique in the account (PM6); its identity. |
+| `color` | string | no | `Blue` | The server's color in the Postmark dashboard. One of `Purple`, `Blue`, `Turquoise`, `Green`, `Red`, `Yellow`, `Grey`, `Orange`. |
+| `delivery_type` | string | no | `Sandbox` | `Sandbox` accepts mail without delivering it; fixed once the server exists (sent on create only). One of `Live`, `Sandbox`. |
+| `inbound_hook_url` | string | no | `` | The URL inbound mail is posted to (empty for none). |
+| `track_opens` | boolean | no | `false` | Track opens of outbound mail. |
+| `track_links` | string | no | `None` | Track link clicks of outbound mail. One of `None`, `HtmlAndText`, `HtmlOnly`, `TextOnly`. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: server
+  adapter: http
+  op: resource
+  recipe: postmark.server
+  name: sponson-${ctx.env}-${ctx.scope}
+  inbound_hook_url: https://${ctx.scope}.preview.example.com/api/postmark/inbound
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /servers?count=500&offset=0&name={name}
+  list_path: /Servers
+  match:
+    Name: { param: name }
+create:
+  path: /servers
+  body:
+    DeliveryType: { param: delivery_type }
+update:
+  method: PUT
+  path: /servers/{id}
+delete:
+  path: /servers/{id}
+id_path: /ID
+fields:
+  Color: { param: color }
+  InboundHookUrl: { param: inbound_hook_url }
+  TrackOpens: { param: track_opens }
+  TrackLinks: { param: track_links }
+outputs:
+  server_token:
+    path: /ApiTokens/0
+    sensitive: true
+```
+
+## Postmark (Server API)
+
+Recipe file: [`packages/adapters/recipes/postmark_server.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/postmark_server.yaml). Verified on 2026-10-11 against:
+
+- [Webhooks API](https://postmarkapp.com/developer/api/webhooks-api)
+- [API overview (authentication)](https://postmarkapp.com/developer/api/overview)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.postmarkapp.com` |
+| `base_url_env` | `POSTMARK_API_URL` |
+| Credential | `POSTMARK_SERVER_TOKEN` (header `X-Postmark-Server-Token`) |
+
+Assumptions:
+
+- **PS1** (verified, [source](https://postmarkapp.com/developer/api/webhooks-api)): The Webhooks API authenticates with a server's token in `X-Postmark-Server-Token`, so it manages the webhooks of that one server.
+- **PS2** (verified, [source](https://postmarkapp.com/developer/api/webhooks-api)): `POST /webhooks` creates a webhook from `Url` (required), `MessageStream` (default `outbound`), `HttpAuth`, `HttpHeaders` and `Triggers` (`Open { Enabled, PostFirstOpenOnly }`, `Click`, `Delivery`, `Bounce { Enabled, IncludeContent }`, `SpamComplaint { Enabled, IncludeContent }`, `SubscriptionChange`, each with `Enabled`), answering the webhook with its integer `ID`.
+- **PS3** (verified, [source](https://postmarkapp.com/developer/api/webhooks-api)): `GET /webhooks` (optionally `?MessageStream=`) answers `{ Webhooks: [...] }` with each webhook's `ID`, `Url`, `MessageStream` and `Triggers`.
+- **PS4** (verified, [source](https://postmarkapp.com/developer/api/webhooks-api)): `PUT /webhooks/{Id}` changes `Url`, `HttpAuth`, `HttpHeaders` and `Triggers` (not `MessageStream`), re-verifying the endpoint when the URL or the triggers change; `DELETE /webhooks/{Id}` removes it.
+- **PS5** (verified, [source](https://postmarkapp.com/developer/api/webhooks-api)): Postmark tests the endpoint when a webhook is created; `Verify: false` saves it without the test (a preview that is not deployed yet would fail it).
+- **PS6** **(unverified)**: A URL identifies one webhook of the server (two webhooks with the same URL, on different streams, make `find` refuse with PARAM_INVALID), and every trigger's `Enabled` is answered as a boolean even when it was not sent.
+- **PS7** **(unverified)**: `PostFirstOpenOnly` and `IncludeContent` are left at Postmark's defaults; only which events are delivered is compared.
+
+### `postmark_server.webhook`
+
+**Webhook of a server** (`http.resource`). A webhook of one Postmark server delivering to an environment's URL, such as the preview's `/api/postmark` handler, with the events it enables. Located by its URL; a console edit of an event's `Enabled` is drift. It works with a server whose token is in `POSTMARK_SERVER_TOKEN` (a shared staging server, say): a server the same plan creates per environment has its token only as an output, which cannot be a credential.
+
+Covers: — in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `url` | string | yes | — | The URL events are posted to; its identity (PS6). Matches `^https?://\\S+$`. |
+| `message_stream` | string | no | `outbound` | The message stream whose events are delivered (sent on create only). |
+| `verify` | boolean | no | `false` | Have Postmark test the URL when the webhook is created (PS5). |
+| `delivery` | boolean | no | `true` | Deliver `Delivery` events. |
+| `bounce` | boolean | no | `true` | Deliver `Bounce` events. |
+| `spam_complaint` | boolean | no | `true` | Deliver `SpamComplaint` events. |
+| `open` | boolean | no | `false` | Deliver `Open` events. |
+| `click` | boolean | no | `false` | Deliver `Click` events. |
+| `subscription_change` | boolean | no | `false` | Deliver `SubscriptionChange` events. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: webhook
+  adapter: http
+  op: resource
+  recipe: postmark_server.webhook
+  url: https://${ctx.scope}.preview.example.com/api/postmark
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /webhooks
+  list_path: /Webhooks
+  match:
+    Url: { param: url }
+create:
+  path: /webhooks
+  body:
+    MessageStream: { param: message_stream }
+    Verify: { param: verify }
+update:
+  method: PUT
+  path: /webhooks/{id}
+delete:
+  path: /webhooks/{id}
+id_path: /ID
+fields:
+  /Triggers/Delivery/Enabled: { param: delivery }
+  /Triggers/Bounce/Enabled: { param: bounce }
+  /Triggers/SpamComplaint/Enabled: { param: spam_complaint }
+  /Triggers/Open/Enabled: { param: open }
+  /Triggers/Click/Enabled: { param: click }
+  /Triggers/SubscriptionChange/Enabled: { param: subscription_change }
+```
+
+## Resend
+
+Recipe file: [`packages/adapters/recipes/resend.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/resend.yaml). Verified on 2026-10-11 against:
+
+- [Create API key](https://resend.com/docs/api-reference/api-keys/create-api-key)
+- [List API keys](https://resend.com/docs/api-reference/api-keys/list-api-keys)
+- [Delete API key](https://resend.com/docs/api-reference/api-keys/delete-api-key)
+- [Create webhook](https://resend.com/docs/api-reference/webhooks/create-webhook)
+- [Retrieve webhook](https://resend.com/docs/api-reference/webhooks/get-webhook)
+- [List webhooks](https://resend.com/docs/api-reference/webhooks/list-webhooks)
+- [Update webhook](https://resend.com/docs/api-reference/webhooks/update-webhook)
+- [Delete webhook](https://resend.com/docs/api-reference/webhooks/delete-webhook)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.resend.com` |
+| `base_url_env` | `RESEND_API_URL` |
+| Credential | `RESEND_API_KEY` (bearer) |
+
+Assumptions:
+
+- **RS1** (verified, [source](https://resend.com/docs/api-reference/api-keys/create-api-key)): `POST /api-keys` creates an API key from `name` (at most 50 characters), `permission` (`full_access` or `sending_access`) and `domain_id` (with `sending_access` only), answering `{ id, token }`; requests carry `Authorization: Bearer <key>`.
+- **RS2** (verified, [source](https://resend.com/docs/api-reference/api-keys/list-api-keys)): `GET /api-keys` answers `{ object: list, has_more, data: [{ id, name, created_at, last_used_at }] }`, every key when no `limit` is sent, and never the token: the token is shown only in the create answer, so it is a once-only output.
+- **RS3** (verified, [source](https://resend.com/docs/api-reference/api-keys/delete-api-key)): `DELETE /api-keys/{api_key_id}` removes a key; there is no endpoint to read or change one key, so its permission and domain are sent on create and never compared.
+- **RS4** (verified, [source](https://resend.com/docs/api-reference/webhooks/create-webhook)): `POST /webhooks` creates a webhook from `endpoint` and `events` (both required), answering `{ object, id, signing_secret }`.
+- **RS5** (verified, [source](https://resend.com/docs/api-reference/webhooks/get-webhook)): `GET /webhooks/{webhook_id}` answers the webhook with `status` (`enabled`/`disabled`), `endpoint`, `events` and `signing_secret`: the secret stays readable, so it is an ordinary sensitive output.
+- **RS6** (verified, [source](https://resend.com/docs/api-reference/webhooks/list-webhooks)): `GET /webhooks` answers `{ object: list, has_more, data: [{ id, created_at, status, endpoint, events }] }`, every webhook when no `limit` is sent.
+- **RS7** (verified, [source](https://resend.com/docs/api-reference/webhooks/update-webhook)): `PATCH /webhooks/{webhook_id}` changes `endpoint`, `events` and `status`; `DELETE` on the same path removes the webhook.
+- **RS8** **(unverified)**: Key names and webhook endpoints are not unique in Resend: the recipe takes the name (keys) and the endpoint URL (webhooks) as the identity, and refuses (PARAM_INVALID) when two match, so give each environment its own name and URL.
+- **RS9** **(unverified)**: Creating a key or a webhook needs a `full_access` key; a deleted object answers 404.
+
+### `resend.api_key`
+
+**API key** (`http.resource`). A restricted API key per environment, such as `sponson-preview-pr-42` allowed only to send from one domain. Its token is a once-only output: pass it to the app's environment line in the same run (`{ from: <line>.token }`); later runs keep what that line holds, and `apply --recreate <line>` issues a new one. Only its existence is compared for drift: Resend shows no permission or domain for a key.
+
+Covers: `resend-key-webhook` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`, `token` (sensitive, [once](/reference/plan-format#once-only-outputs): only from the create). On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `name` | string | yes | — | The key's name, unique among the account's keys (RS8); its identity. Matches `^.{1,50}$`. |
+| `permission` | string | no | `sending_access` | What the key may do. One of `full_access`, `sending_access`. |
+| `domain_id` | string | no | — | With `sending_access`, the only domain the key may send from. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: api_key
+  adapter: http
+  op: resource
+  recipe: resend.api_key
+  name: sponson-${ctx.env}-${ctx.scope}
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /api-keys
+  list_path: /data
+  match:
+    name: { param: name }
+create:
+  path: /api-keys
+  body:
+    permission: { param: permission }
+    domain_id: { param: domain_id }
+delete:
+  path: /api-keys/{id}
+outputs:
+  token:
+    path: /token
+    sensitive: true
+    once: true
+```
+
+### `resend.webhook`
+
+**Webhook** (`http.resource`). A webhook delivering an environment's email events to its URL, such as the preview's `/api/resend` handler. Located by its endpoint URL; a console edit of its events is drift (its enabled/disabled status is left to the console: the create request takes none). Its signing secret is a sensitive output, readable on every run.
+
+Covers: `resend-key-webhook` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`, `signing_secret` (sensitive). On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `endpoint` | string | yes | — | The URL events are delivered to; its identity (RS8). Matches `^https://\\S+$`. |
+| `events` | list | yes | — | The event types to deliver, such as `email.delivered` and `email.bounced`. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: webhook
+  adapter: http
+  op: resource
+  recipe: resend.webhook
+  endpoint: https://${ctx.scope}.preview.example.com/api/resend
+  events:
+    - email.delivered
+    - email.bounced
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /webhooks
+  list_path: /data
+  match:
+    endpoint: { param: endpoint }
+read:
+  path: /webhooks/{id}
+create:
+  path: /webhooks
+update:
+  method: PATCH
+  path: /webhooks/{id}
+delete:
+  path: /webhooks/{id}
+fields:
+  events: { param: events }
+outputs:
+  signing_secret:
+    path: /signing_secret
+    sensitive: true
+```
+
+## SendGrid
+
+Recipe file: [`packages/adapters/recipes/sendgrid.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/sendgrid.yaml). Verified on 2026-10-11 against:
+
+- [Create an Event Webhook](https://www.twilio.com/docs/sendgrid/api-reference/webhooks/create-an-event-webhook)
+- [Get all Event Webhooks](https://www.twilio.com/docs/sendgrid/api-reference/webhooks/get-all-event-webhooks)
+- [Get an Event Webhook](https://www.twilio.com/docs/sendgrid/api-reference/webhooks/get-an-event-webhook)
+- [Update an Event Webhook](https://www.twilio.com/docs/sendgrid/api-reference/webhooks/update-an-event-webhook)
+- [Delete an Event Webhook](https://www.twilio.com/docs/sendgrid/api-reference/webhooks/delete-an-event-webhook)
+- [Create a parse setting](https://www.twilio.com/docs/sendgrid/api-reference/settings-inbound-parse/create-a-parse-setting)
+- [Retrieve a specific parse setting](https://www.twilio.com/docs/sendgrid/api-reference/settings-inbound-parse/retrieve-a-specific-parse-setting)
+- [Update a parse setting](https://www.twilio.com/docs/sendgrid/api-reference/settings-inbound-parse/update-a-parse-setting)
+- [Delete a parse setting](https://www.twilio.com/docs/sendgrid/api-reference/settings-inbound-parse/delete-a-parse-setting)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.sendgrid.com` |
+| `base_url_env` | `SENDGRID_API_URL` |
+| Credential | `SENDGRID_API_KEY` (bearer) |
+
+Assumptions:
+
+- **SG1** (verified, [source](https://www.twilio.com/docs/sendgrid/api-reference/webhooks/create-an-event-webhook)): `POST /v3/user/webhooks/event/settings` creates an Event Webhook from `url` (required), `enabled`, one boolean per event type (`processed`, `delivered`, `dropped`, `deferred`, `bounce`, `open`, `click`, `spam_report`, `unsubscribe`, `group_unsubscribe`, `group_resubscribe`) and `friendly_name`, answering 201 with the webhook and its string `id`; requests carry the API key as `Authorization: Bearer`. EU regional subusers use `https://api.eu.sendgrid.com`.
+- **SG2** (verified, [source](https://www.twilio.com/docs/sendgrid/api-reference/webhooks/create-an-event-webhook)): Each URL can be used by only one Event Webhook (a second create answers 400 naming the existing id), so the URL identifies the webhook; the number of webhooks is limited by the plan (400 beyond it).
+- **SG3** (verified, [source](https://www.twilio.com/docs/sendgrid/api-reference/webhooks/get-all-event-webhooks)): `GET /v3/user/webhooks/event/settings/all` answers `{ max_allowed, webhooks: [...] }` with every webhook's settings and `id`.
+- **SG4** (verified, [source](https://www.twilio.com/docs/sendgrid/api-reference/webhooks/update-an-event-webhook)): `PATCH /v3/user/webhooks/event/settings/{id}` requires `url` and updates the fields sent; `DELETE` on the same path answers 204, and 404 for an unknown id. Without an id these paths act on the oldest webhook, which the recipe never does (its paths always carry the id).
+- **SG5** (verified, [source](https://www.twilio.com/docs/sendgrid/api-reference/webhooks/create-an-event-webhook)): Signature verification and its public key are set through a separate endpoint and are not part of the webhook's create or update; this recipe does not manage them.
+- **SG6** (verified, [source](https://www.twilio.com/docs/sendgrid/api-reference/settings-inbound-parse/create-a-parse-setting)): `POST /v3/user/webhooks/parse/settings` creates an Inbound Parse setting from `url`, `hostname`, `spam_check` and `send_raw`, answering 201 with those four fields bare; `GET`, `PATCH` and `DELETE` (204) `/v3/user/webhooks/parse/settings/{hostname}` read, update and remove it. The hostname must be on a domain authenticated in SendGrid, with an MX record pointing at SendGrid.
+- **SG7** **(unverified)**: A PATCH that leaves out an event flag keeps its current value (the documentation's examples send only `url`); the recipe sends every flag it compares anyway.
+- **SG8** **(unverified)**: A parse setting for a hostname that exists already is refused with an error status (not documented which); the next run then finds it by its hostname.
+
+### `sendgrid.event_webhook`
+
+**Event Webhook** (`http.resource`). An Event Webhook delivering an environment's email events to its URL, such as the preview's `/api/sendgrid/events` handler. Located by its URL (unique in SendGrid); a console edit of its enabled flag, an event flag or its friendly name is drift.
+
+Covers: `sendgrid-webhook` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `url` | string | yes | — | The URL events are posted to; its identity (SG2). Matches `^https?://\\S+$`. |
+| `enabled` | boolean | no | `true` | Whether events are posted. |
+| `friendly_name` | string | no | — | A label for the webhook (not unique). |
+| `processed` | boolean | no | `false` | Post `processed` events. |
+| `delivered` | boolean | no | `true` | Post `delivered` events. |
+| `dropped` | boolean | no | `true` | Post `dropped` events. |
+| `deferred` | boolean | no | `false` | Post `deferred` events. |
+| `bounce` | boolean | no | `true` | Post `bounce` events. |
+| `open` | boolean | no | `false` | Post `open` events. |
+| `click` | boolean | no | `false` | Post `click` events. |
+| `spam_report` | boolean | no | `true` | Post `spam_report` events. |
+| `unsubscribe` | boolean | no | `false` | Post `unsubscribe` events. |
+| `group_unsubscribe` | boolean | no | `false` | Post `group_unsubscribe` events. |
+| `group_resubscribe` | boolean | no | `false` | Post `group_resubscribe` events. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: event_webhook
+  adapter: http
+  op: resource
+  recipe: sendgrid.event_webhook
+  url: https://${ctx.scope}.preview.example.com/api/sendgrid/events
+  friendly_name: sponson ${ctx.env} ${ctx.scope}
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /v3/user/webhooks/event/settings/all
+  list_path: /webhooks
+  match:
+    url: { param: url }
+create:
+  path: /v3/user/webhooks/event/settings
+update:
+  method: PATCH
+  path: /v3/user/webhooks/event/settings/{id}
+  body:
+    url: { param: url }
+delete:
+  path: /v3/user/webhooks/event/settings/{id}
+fields:
+  enabled: { param: enabled }
+  friendly_name: { param: friendly_name }
+  processed: { param: processed }
+  delivered: { param: delivered }
+  dropped: { param: dropped }
+  deferred: { param: deferred }
+  bounce: { param: bounce }
+  open: { param: open }
+  click: { param: click }
+  spam_report: { param: spam_report }
+  unsubscribe: { param: unsubscribe }
+  group_unsubscribe: { param: group_unsubscribe }
+  group_resubscribe: { param: group_resubscribe }
+```
+
+### `sendgrid.parse_setting`
+
+**Inbound Parse setting** (`http.resource`). An Inbound Parse host per environment, such as `pr-42.parse.example.com`, posting the mail it receives to the environment's URL. Named by its hostname; a console edit of its URL, spam check or raw flag is drift. The hostname's domain must be authenticated in SendGrid and its MX record point at SendGrid (a wildcard record serves every environment).
+
+Covers: `sendgrid-webhook` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `hostname` | string | yes | — | The host mail is received for, lower-case; its identity. Matches `^[a-z0-9.-]+$`. |
+| `url` | string | yes | — | The URL parsed mail is posted to. Matches `^https?://\\S+$`. |
+| `spam_check` | boolean | no | `false` | Check mail for spam before posting it. |
+| `send_raw` | boolean | no | `false` | Post the original MIME message. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: parse_setting
+  adapter: http
+  op: resource
+  recipe: sendgrid.parse_setting
+  hostname: ${ctx.scope}.parse.example.com
+  url: https://${ctx.scope}.preview.example.com/api/sendgrid/inbound
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+read:
+  path: /v3/user/webhooks/parse/settings/{hostname}
+create:
+  path: /v3/user/webhooks/parse/settings
+  body:
+    hostname: { param: hostname }
+update:
+  method: PATCH
+id_path: /hostname
+fields:
+  url: { param: url }
+  spam_check: { param: spam_check }
+  send_raw: { param: send_raw }
+```
+
+## Sentry
+
+Recipe file: [`packages/adapters/recipes/sentry.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/sentry.yaml). Verified on 2026-10-11 against:
+
+- [Create a New Release for an Organization](https://docs.sentry.io/api/releases/create-a-new-release-for-an-organization/)
+- [Retrieve an Organization's Release](https://docs.sentry.io/api/releases/retrieve-an-organizations-release/)
+- [Update an Organization's Release](https://docs.sentry.io/api/releases/update-an-organizations-release/)
+- [Delete an Organization's Release](https://docs.sentry.io/api/releases/delete-an-organizations-release/)
+- [Create a Deploy](https://docs.sentry.io/api/releases/create-a-deploy/)
+- [List a Release's Deploys](https://docs.sentry.io/api/releases/list-a-releases-deploys/)
+- [Release Management (sentry-cli)](https://docs.sentry.io/cli/releases/)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://sentry.io/api/0` |
+| `base_url_env` | `SENTRY_API_URL` |
+| Credential | `SENTRY_AUTH_TOKEN` (bearer) |
+
+Assumptions:
+
+- **SE1** (verified, [source](https://docs.sentry.io/api/releases/create-a-new-release-for-an-organization/)): `POST /api/0/organizations/{organization_id_or_slug}/releases/` creates a release from `version` and `projects` (both required), `ref`, `url`, `dateReleased` and commit data, with a bearer token holding `project:releases`, `project:write`, `project:admin` or `org:ci`; it answers 201 (or 208).
+- **SE2** (verified, [source](https://docs.sentry.io/api/releases/retrieve-an-organizations-release/)): A version is one release across the organization's projects, and `GET /api/0/organizations/{org}/releases/{version}/` answers it (404 when there is none), so the version names the release.
+- **SE3** (verified, [source](https://docs.sentry.io/api/releases/update-an-organizations-release/)): `PUT /api/0/organizations/{org}/releases/{version}/` updates `ref`, `url`, `dateReleased` and commit data (the documentation says an omitted `dateReleased` is the current time), and answers the release.
+- **SE4** (verified, [source](https://docs.sentry.io/api/releases/delete-an-organizations-release/)): `DELETE /api/0/organizations/{org}/releases/{version}/` permanently removes a release and its files (`project:releases` or `project:admin`). The recipe keeps releases on destroy: one version is shared by every environment it is deployed to.
+- **SE5** (verified, [source](https://docs.sentry.io/api/releases/create-a-deploy/)): `POST /api/0/organizations/{org}/releases/{version}/deploys/` records a deploy of the release from `environment` (required), `name`, `url`, `dateStarted`, `dateFinished` (default now) and `projects` (default: all of the release's).
+- **SE6** (verified, [source](https://docs.sentry.io/cli/releases/)): `GET /api/0/organizations/{org}/releases/{version}/deploys/` lists the release's deploys; deploys cannot be deleted, so the deploy op never deletes (`destroy: never`).
+- **SE7** (verified, [source](https://docs.sentry.io/api/releases/create-a-new-release-for-an-organization/)): The release's `dateReleased` defaults to the current time on create, so a release this recipe creates is finalized at once.
+- **SE8** **(unverified)**: A create for a version that exists answers 208 with the existing release (not an error), so a release another tool made (sentry-cli in the build) is taken over without a second write; the recipe keeps it on destroy either way.
+- **SE9** **(unverified)**: The deploy list answers a bare array of `{ id, environment, name, url, dateStarted, dateFinished }` with string ids, all of a release's deploys on the first page; `environment` and `name` together identify the deploy this recipe recorded.
+- **SE10** **(unverified)**: Release `url` is answered as sent (null when unset); organizations hosted in another region (`de.sentry.io`) or self-hosted Sentry set `base_url` in the provider block.
+
+### `sentry.release`
+
+**Release** (`http.resource`). A release for the commit, such as `app@${ctx.git.sha}`, in the given projects, finalized when created (SE7). Named by its version; a console edit of its URL is drift. Kept on destroy (shared history: preview and production deploy the same version); `destroy: delete` on the line removes it.
+
+Covers: `sentry-release` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: left in place by default (`destroy: delete` on the line removes it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `organization` | string | yes | — | The organization's slug or id. |
+| `version` | string | yes | — | The release's version (no slashes or whitespace), such as `app@<sha>`. Matches `^[^/\\s]+$`. |
+| `project` | string | yes | — | The slug of the project the release belongs to (a release of several projects is a hand-written `http` line). |
+| `url` | string | no | — | A link for the release (its commit or build). |
+| `ref` | string | no | — | A commit reference, sent on create. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: release
+  adapter: http
+  op: resource
+  recipe: sentry.release
+  organization: acme
+  version: app@${ctx.git.sha}
+  project: web
+  url: https://github.com/acme/app/commit/${ctx.git.sha}
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+read:
+  path: /organizations/{organization}/releases/{version}/
+create:
+  path: /organizations/{organization}/releases/
+  body:
+    version: { param: version }
+    projects:
+      - { param: project }
+    ref: { param: ref }
+update:
+  method: PUT
+id_path: /version
+fields:
+  url: { param: url }
+```
+
+### `sentry.deploy`
+
+**Deploy of a release to an environment** (`http.resource`). The record that a release was deployed to an environment (`preview`, named for the scope), which Sentry shows on the release and uses for deploy notifications. Located by environment and name among the release's deploys. Sentry has no way to change or delete a deploy, so nothing is compared for drift and destroy leaves it (`destroy: never`).
+
+Covers: `sentry-release` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: left in place: the provider offers no way to delete it (`destroy: delete` is refused).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `organization` | string | yes | — | The organization's slug or id. |
+| `version` | string | yes | — | The deployed release's version; the release must exist (`{ from: <release line>.id }` orders the lines). Matches `^[^/\\s]+$`. |
+| `environment` | string | yes | — | The environment deployed to. |
+| `name` | string | yes | — | The deploy's name, which with the environment identifies it among the release's deploys. |
+| `url` | string | no | — | A link to the deployment (the preview URL), sent on create. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: deploy
+  adapter: http
+  op: resource
+  recipe: sentry.deploy
+  organization: acme
+  version: app@${ctx.git.sha}
+  environment: ${ctx.env}
+  name: sponson-${ctx.scope}
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /organizations/{organization}/releases/{version}/deploys/
+  match:
+    environment: { param: environment }
+    name: { param: name }
+create:
+  path: /organizations/{organization}/releases/{version}/deploys/
+  body:
+    url: { param: url }
+delete:
+  path: /organizations/{organization}/releases/{version}/deploys/{id}/
+```
+
+## Svix
+
+Recipe file: [`packages/adapters/recipes/svix.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/svix.yaml). Verified on 2026-10-11 against:
+
+- [Svix API reference (OpenAPI document)](https://api.svix.com/api/v1/openapi.json)
+- [Svix API reference](https://api.svix.com/docs)
+- [Entities overview (ids and uids)](https://docs.svix.com/overview)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.us.svix.com` |
+| `base_url_env` | `SVIX_API_URL` |
+| Credential | `SVIX_AUTH_TOKEN` (bearer) |
+
+Assumptions:
+
+- **SV1** (verified, [source](https://api.svix.com/api/v1/openapi.json)): `POST /api/v1/app/{app_id}/endpoint` creates an endpoint from `url` (required), `uid`, `description`, `eventTypes`, `channels`, `disabled`, `metadata` and an optional `secret`, answering 201 with the endpoint (`id` `ep_…`, `uid`, `url`, …); requests carry `Authorization: Bearer <token>`.
+- **SV2** (verified, [source](https://api.svix.com/api/v1/openapi.json)): `GET`, `PATCH` (partial update) and `DELETE` (204) `/api/v1/app/{app_id}/endpoint/{endpoint_id}` take the endpoint's id or its uid, and `{app_id}` takes the application's id or uid.
+- **SV3** (verified, [source](https://api.svix.com/api/v1/openapi.json)): A uid is 1–256 characters of letters, digits, `-`, `_` and `.`, unique among the application's endpoints, so it names the endpoint for every later request and a create whose answer was lost is found by it.
+- **SV4** (verified, [source](https://api.svix.com/api/v1/openapi.json)): The endpoint's signing secret is generated when `secret` is null (recommended) and is readable at any time with `GET …/endpoint/{endpoint_id}/secret` (`{ key }`): it is not a once-only value, and this recipe does not output it (an endpoint answer does not carry it).
+- **SV5** (verified, [source](https://api.svix.com/api/v1/openapi.json)): The API is served per region (`api.us.svix.com`, `api.eu.svix.com`, `api.ca.svix.com`, `api.au.svix.com`), and POST requests accept an `idempotency-key` header.
+- **SV6** **(unverified)**: A create with a uid that exists already answers 409 (the specification lists 409 for every operation without saying when), after which the endpoint is found by its uid and claimed only if an earlier intent of the same scope named it.
+- **SV7** **(unverified)**: `description` is answered as sent (default empty), `disabled` as a boolean and `eventTypes` as the list sent, so they compare without drift on every plan; accounts outside the US region set `base_url` in the provider block.
+
+### `svix.endpoint`
+
+**Application endpoint** (`http.resource`). An endpoint of a Svix application delivering to an environment's URL, named by a uid such as `preview-pr-42`. Its URL, description, event type filter and disabled flag are compared for drift; its signing secret stays readable in Svix (SV4).
+
+Covers: `svix-endpoint` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `app_id` | string | yes | — | The application's id (`app_…`) or uid. |
+| `uid` | string | yes | — | The endpoint's uid, unique in the application; its identity. Matches `^[a-zA-Z0-9\\-_.]{1,256}$`. |
+| `url` | string | yes | — | The URL messages are delivered to. Matches `^https?://\\S+$`. |
+| `description` | string | no | `` | A note shown in the Svix dashboard and the application portal. |
+| `event_types` | list | no | — | Event type names to deliver (all when left out); at least one when set. |
+| `disabled` | boolean | no | `false` | Whether deliveries are paused. |
+| `secret` | string | no | — | A signing secret to use instead of a generated one (`whsec_…`); sent on create only. Use `&#123; secret: … &#125;`. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: endpoint
+  adapter: http
+  op: resource
+  recipe: svix.endpoint
+  app_id: acme-customer
+  uid: sponson-${ctx.env}-${ctx.scope}
+  url: https://${ctx.scope}.preview.example.com/api/webhooks
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+read:
+  path: /api/v1/app/{app_id}/endpoint/{uid}
+create:
+  path: /api/v1/app/{app_id}/endpoint
+  body:
+    uid: { param: uid }
+    secret: { param: secret }
+  idempotency_key: true
+update:
+  method: PATCH
+  path: /api/v1/app/{app_id}/endpoint/{id}
+delete:
+  path: /api/v1/app/{app_id}/endpoint/{id}
+fields:
+  url: { param: url }
+  description: { param: description }
+  disabled: { param: disabled }
+  eventTypes: { param: event_types }
 ```
 
 ## Turso

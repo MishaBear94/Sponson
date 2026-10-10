@@ -32,7 +32,7 @@ function credentialVars(r: Recipe): string[] {
 
 /** `${ctx.*}` as the CLI fills it for `scope`. */
 function interpolate<T>(v: T, scope: string): T {
-  return JSON.parse(JSON.stringify(v).replace(/\$\{ctx\.scope\}/g, scope).replace(/\$\{ctx\.env\}/g, "preview")) as T;
+  return JSON.parse(JSON.stringify(v).replace(/\$\{ctx\.scope\}/g, scope).replace(/\$\{ctx\.env\}/g, "preview").replace(/\$\{ctx\.git\.sha\}/g, SHA)) as T;
 }
 
 /** The op's example params (live: with the `live.params` variables' values over them). */

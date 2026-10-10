@@ -1,0 +1,99 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Postmark Account API recipes (account token). The Server API, which takes a server's own token, is
+# postmark_server.yaml. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: postmark
+title: Postmark (Account API)
+category: email
+verified_on: "2026-10-11"
+docs:
+  - title: Servers API
+    url: https://postmarkapp.com/developer/api/servers-api
+  - title: API overview (authentication)
+    url: https://postmarkapp.com/developer/api/overview
+api:
+  base_url: https://api.postmarkapp.com
+  base_url_env: POSTMARK_API_URL
+  auth: { header: X-Postmark-Account-Token, value_env: POSTMARK_ACCOUNT_TOKEN }
+assumptions:
+  - id: PM1
+    verified: true
+    text: "The Servers API authenticates with the account token in `X-Postmark-Account-Token` (account owner only) and takes and answers JSON."
+    source: https://postmarkapp.com/developer/api/servers-api
+  - id: PM2
+    verified: true
+    text: "`POST /servers` creates a server from `Name` (required), `Color`, `DeliveryType` (`Live` or `Sandbox`, fixed after creation), `InboundHookUrl`, `TrackOpens`, `TrackLinks` and more, answering the server with its integer `ID`, its settings and `ApiTokens` (the server's tokens)."
+    source: https://postmarkapp.com/developer/api/servers-api
+  - id: PM3
+    verified: true
+    text: "`GET /servers?count=&offset=&name=` answers `{ TotalCount, Servers: [...] }`; `name` is a substring search (`MyServer` also matches `MyServer Production`), so the recipe matches the exact `Name` among the results."
+    source: https://postmarkapp.com/developer/api/servers-api
+  - id: PM4
+    verified: true
+    text: "`PUT /servers/{serverid}` changes the settings sent (everything but `DeliveryType`); `GET /servers/{serverid}` answers the server with its `ApiTokens`, so the server token stays readable."
+    source: https://postmarkapp.com/developer/api/servers-api
+  - id: PM5
+    verified: true
+    text: "`DELETE /servers/{serverid}` removes a server, but is not enabled for every account: where Postmark support has not enabled it, destroy fails and the line needs `destroy: keep`."
+    source: https://postmarkapp.com/developer/api/servers-api
+  - id: PM6
+    verified: false
+    text: "Server names are unique in the account (a second create with the same name is refused), and an account has fewer than 500 servers, so the first page of `count=500` holds the one `find` looks for."
+  - id: PM7
+    verified: false
+    text: "`Color`, `TrackOpens`, `TrackLinks` and `InboundHookUrl` are answered as sent (`InboundHookUrl` empty when unset), so they compare without drift."
+ops:
+  server:
+    kind: resource
+    title: Server
+    summary: "A Postmark server per environment, such as `sponson-preview-pr-42`, with its inbound webhook URL and tracking settings. Its token is a sensitive output for the app's environment (`{ from: <line>.server_token }`). Located by its name; a console edit of its color, tracking or inbound hook URL is drift. Webhooks of the server's message streams need the server's own token: see `postmark_server.webhook`."
+    covers: []
+    params:
+      name:
+        type: string
+        required: true
+        description: The server's name, unique in the account (PM6); its identity.
+        example: "sponson-${ctx.env}-${ctx.scope}"
+      color:
+        type: string
+        default: Blue
+        enum: [Purple, Blue, Turquoise, Green, Red, Yellow, Grey, Orange]
+        description: The server's color in the Postmark dashboard.
+      delivery_type:
+        type: string
+        default: Sandbox
+        enum: [Live, Sandbox]
+        description: "`Sandbox` accepts mail without delivering it; fixed once the server exists (sent on create only)."
+      inbound_hook_url:
+        type: string
+        default: ""
+        description: The URL inbound mail is posted to (empty for none).
+        example: "https://${ctx.scope}.preview.example.com/api/postmark/inbound"
+      track_opens:
+        type: boolean
+        default: false
+        description: Track opens of outbound mail.
+      track_links:
+        type: string
+        default: None
+        enum: [None, HtmlAndText, HtmlOnly, TextOnly]
+        description: Track link clicks of outbound mail.
+    http:
+      find:
+        path: "/servers?count=500&offset=0&name={name}"
+        list_path: /Servers
+        match: { Name: { param: name } }
+      create:
+        path: /servers
+        body: { DeliveryType: { param: delivery_type } }
+      update: { method: PUT, path: "/servers/{id}" }
+      delete: { path: "/servers/{id}" }
+      id_path: /ID
+      fields:
+        Color: { param: color }
+        InboundHookUrl: { param: inbound_hook_url }
+        TrackOpens: { param: track_opens }
+        TrackLinks: { param: track_links }
+      outputs:
+        server_token: { path: /ApiTokens/0, sensitive: true }
+    sim:
+      numeric_ids: true
