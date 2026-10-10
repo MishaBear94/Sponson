@@ -27,6 +27,7 @@ All fetched on 2026-10-10 (LaunchDarkly, PlanetScale, Supabase, Netlify: 2026-10
 | Netlify | Docs, fetched 2026-10-11: API guide https://docs.netlify.com/api-and-cli-guides/api-guides/get-started-with-api/, env vars https://docs.netlify.com/build/environment-variables/overview/ and …/get-started/, Secrets Controller https://docs.netlify.com/build/environment-variables/secrets-controller/, deploy overview https://docs.netlify.com/deploy/deploy-overview/ | as served on that date |
 | Cloudflare | OpenAPI document, https://github.com/cloudflare/api-schemas (`openapi.json`); API reference https://developers.cloudflare.com/api/resources/pages/subresources/projects/methods/get/ and [`…/methods/edit/`](https://developers.cloudflare.com/api/resources/pages/subresources/projects/methods/edit/); the Pages and fundamentals pages cited below | fetched 2026-10-11 |
 | Algolia | Search API reference https://www.algolia.com/doc/rest-api/search/, generated from https://github.com/algolia/api-clients-automation (`specs/search`: `spec.yml`, `operationIndex.yml`, `getTask.yml`, `settings.yml`, `listIndices.yml`); copy guide https://www.algolia.com/doc/guides/sending-and-managing-data/manage-indices-and-apps/manage-indices/how-to/copy-indices; CLI authentication https://www.algolia.com/doc/tools/cli/authentication | fetched 2026-10-11 |
+| Xata | OpenAPI document https://api.xata.tech/openapi.json; docs https://xata.io/docs/cli, https://xata.io/docs/cli/branch, https://xata.io/docs/platform/branch | fetched 2026-10-11 |
 
 Vercel, Neon and Clerk use bearer authentication (`securitySchemes`), which is what the shared HTTP client sends
 by default: ✅. LaunchDarkly takes the access token as the whole `Authorization` value, without `Bearer`; the adapter
@@ -345,6 +346,31 @@ Deploy Previews cannot be rebuilt through any documented call (the docs describe
 | AL7 | the index list without `page` is unpaginated | ✅ verified (not used by the adapter) |
 | AL8 | a copy is published within minutes | ❓ (the wait is bounded by `SPONSON_ALGOLIA_TASK_TIMEOUT_MS`) |
 
+## Xata
+
+### Calls the adapter makes
+
+| Call | What the adapter sends and reads | Spec | Notes |
+|---|---|---|---|
+| base URL and auth | `https://api.xata.tech`, `Authorization: Bearer <XATA_API_KEY>` | ✅ | Spec security scheme `apiKey`; the CLI reads `XATA_API_KEY` (XA1). |
+| `GET /organizations/{org}/projects/{project}/branches` | `branches[].id`, `.name` | ✅ | Unpaginated (XA3). Name uniqueness is not documented ❓: more than one match is refused. |
+| `POST` of the same path | `{ mode: "inherit", parentID, name }`; reads `id`, `name` | ✅ | `201`, no `409` documented (XA2), hence the lookup by name before every create. |
+| `GET …/branches/{branchID}` | `status.statusType` until it ends in `HEALTHY`; one ending in `FAULT` fails | ✅ field, ❓ spelling | The CLI's `branch wait-ready` "blocks until the branch is healthy" (XA5). |
+| `GET …/branches/{branchID}/credentials?username=xata` | `connectionString` | ✅ | (XA6). The branch's own `connectionString` field is deprecated; not used. |
+| `DELETE …/branches/{branchID}` | answer not read; `404` is gone | ✅ | Permanent (XA4). |
+
+### Sim assumptions (`packages/sim/src/routes/xata.ts`)
+
+| Id | Assumption | Status |
+|---|---|---|
+| XA1 | base URL, bearer API key, `XATA_API_KEY` | ✅ verified |
+| XA2 | create a child by `parentID` with `mode: inherit`; `201` with the branch | ✅ verified |
+| XA3 | the list is `{ branches }`, unpaginated; names may repeat | list ✅; uniqueness ❓ |
+| XA4 | detail with `status`; `404`; permanent `DELETE` (`204`) | ✅ verified |
+| XA5 | ready when healthy, broken on a fault | field ✅; enum spelling ❓ (pinned) |
+| XA6 | credentials readable at any time | endpoint ✅; "any time" inferred |
+| XA7 | ready within minutes | ❓ (bounded by `SPONSON_XATA_READY_TIMEOUT_MS`) |
+
 ## What still needs a live account
 
 - Vercel: V1 (propagation of env writes), the deployment list's order, whether `decrypt=true` still decrypts,
@@ -369,5 +395,7 @@ Deploy Previews cannot be rebuilt through any documented call (the docs describe
   unknown project), CF7 (a write is readable at once).
 - Algolia: AL5 (whether a copy's destination is visible before its task is published), AL6 (status of deleting a
   missing index), AL8 (how long a copy takes).
+- Xata: XA3 (whether branch names are unique), XA5 (the spelling of `statusType`), XA6 (credentials of a branch still
+  coming up), XA7 (how long a branch takes).
 
 Run them with `pnpm test:live`; see the header of `scenarios/contract.test.ts`.

@@ -15,6 +15,7 @@ export * from "./routes/rest.js";
 export * from "./routes/supabase.js";
 export * from "./routes/cloudflare.js";
 export * from "./routes/algolia.js";
+export * from "./routes/xata.js";
 export { createSimServer } from "./server.js";
 
 /**

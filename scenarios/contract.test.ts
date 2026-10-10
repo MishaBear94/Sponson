@@ -48,7 +48,7 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CLERK_DEFAULT_API_URL, CLOUDFLARE_DEFAULT_API_URL, algoliaAdapter, LAUNCHDARKLY_DEFAULT_API_URL, NETLIFY_DEFAULT_API_URL, PLANETSCALE_DEFAULT_API_URL, SUPABASE_DEFAULT_API_URL, clerkAdapter, cloudflareAdapter, launchdarklyAdapter, neonAdapter, netlifyAdapter, planetscaleAdapter, supabaseAdapter, vercelAdapter } from "@sponson/adapters";
+import { CLERK_DEFAULT_API_URL, CLOUDFLARE_DEFAULT_API_URL, algoliaAdapter, xataAdapter, LAUNCHDARKLY_DEFAULT_API_URL, NETLIFY_DEFAULT_API_URL, PLANETSCALE_DEFAULT_API_URL, SUPABASE_DEFAULT_API_URL, clerkAdapter, cloudflareAdapter, launchdarklyAdapter, neonAdapter, netlifyAdapter, planetscaleAdapter, supabaseAdapter, vercelAdapter } from "@sponson/adapters";
 import type { AdapterContext, Ctx } from "@sponson/core";
 import { SUPABASE_DEMO_PROJECT, simEnv, startSim, type SimHandle } from "@sponson/sim";
 import { cliEnv, runCli, workspace, type CliRun, type Workspace } from "./support.js";
@@ -626,4 +626,40 @@ describe.skipIf(LIVE && !AL_LIVE)(`contract: algolia (${LIVE ? "@live" : "sim"})
     expect(await op.read(alctx(), params())).toBeNull();
     await op.destroy(alctx(), live!.resources);
   });
+});
+
+/**
+ * Xata (`assumption XA…`, packages/sim/src/routes/xata.ts). Live only with XATA_API_KEY, SPONSON_LIVE_XATA_ORG,
+ * SPONSON_LIVE_XATA_PROJECT and SPONSON_LIVE_XATA_PARENT (a branch id to copy); it creates the branch
+ * `sponson-contract-<tag>` (billed while it exists) and deletes it in `afterAll`.
+ */
+const XA_LIVE = ["XATA_API_KEY", "SPONSON_LIVE_XATA_ORG", "SPONSON_LIVE_XATA_PROJECT", "SPONSON_LIVE_XATA_PARENT"].every((k) => process.env[k]);
+describe.skipIf(LIVE && !XA_LIVE)(`contract: xata (${LIVE ? "@live" : "sim"})`, () => {
+  const op = xataAdapter.ops.branch!;
+  const params = { name: `sponson-contract-${tag}`, parent_id: LIVE ? process.env.SPONSON_LIVE_XATA_PARENT! : "br_main" };
+  const xactx = (): AdapterContext => {
+    const ctx: Ctx = { env: "preview", git: { branch, sha, short_sha: sha.slice(0, 7) }, pr: { number: pr }, scope: `pr-${pr}` };
+    const provider = LIVE ? { organization: process.env.SPONSON_LIVE_XATA_ORG!, project: process.env.SPONSON_LIVE_XATA_PROJECT! } : { organization: "acme", project: "app" };
+    return { ctx, provider, env: { ...env, SPONSON_XATA_POLL_MS: LIVE ? "2000" : "1" }, log: () => {}, intend: async () => {}, redact: (t) => t };
+  };
+  let made: { key: string; id: string; hash: string } | undefined;
+
+  afterAll(async () => {
+    if (made) await op.destroy(xactx(), [made]).catch(() => {});
+  }, 120_000);
+
+  it("assumption XA2, XA5, XA6: a child branch comes up healthy, and its connection string is readable again later", async () => {
+    const r = await op.apply(xactx(), params, null);
+    made = r.resources[0];
+    expect(String(r.outputs.connection_string)).toMatch(/^postgres(ql)?:\/\//);
+    const live = await op.read(xactx(), params);
+    expect(live!.outputs.connection_string).toBe(r.outputs.connection_string);
+    expect(op.diff(live, params)[0]!.kind).toBe("unchanged");
+  }, 15 * 60_000);
+
+  it("assumption XA4: a deleted branch is gone from the list when DELETE returns", async () => {
+    await op.destroy(xactx(), [made!]);
+    expect(await op.read(xactx(), params)).toBeNull();
+    made = undefined;
+  }, 120_000);
 });

@@ -144,8 +144,8 @@ const index: OpSpec = {
   async destroy(actx, resources) {
     const api = client(actx);
     // Deleting an index that does not exist is ignored (AL6); a 404 is gone all the same.
-    // An intent whose answer was lost has no id yet: the key names the index all the same.
-    for (const r of resources) await deleteIgnoringNotFound(api, `/1/indexes/${enc(r.id || r.key.slice(PREFIX.length))}`);
+    // An intent the engine could not locate has no id: nothing is known to exist under it (the engine reports it).
+    for (const r of resources) if (r.id !== "") await deleteIgnoringNotFound(api, `/1/indexes/${enc(r.id)}`);
   },
 };
 

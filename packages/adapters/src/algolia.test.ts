@@ -38,8 +38,9 @@ describe("algolia index", () => {
     await op.destroy(actx(), r.resources);
     expect(Object.keys(h.sim.state.algolia.indices)).toEqual(["products"]);
     await op.destroy(actx(), r.resources); // already gone is success (AL6)
-    // An intent whose answer was lost has no id: the key names the index.
-    await op.destroy(actx(), [{ key: KEY, id: "", hash: "" }]);
+    // An intent the engine could not locate has no id: nothing is deleted on a guess.
+    await op.destroy(actx(), [{ key: "index:products", id: "", hash: "" }]);
+    expect(Object.keys(h.sim.state.algolia.indices)).toEqual(["products"]);
   });
 
   it("copies only the scope it is given", async () => {

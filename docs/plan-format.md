@@ -234,6 +234,7 @@ The base URL override replaces the provider's API base URL (the test suites poin
 | `netlify` | [`netlify.env`](#netlifyenv) | `NETLIFY_AUTH_TOKEN` | `NETLIFY_API_URL` |
 | `cloudflare` | [`cloudflare.pages_env`](#cloudflarepages_env) | `CLOUDFLARE_API_TOKEN` | `CLOUDFLARE_API_URL` |
 | `algolia` | [`algolia.index`](#algoliaindex) | `ALGOLIA_API_KEY` | `ALGOLIA_API_URL` |
+| `xata` | [`xata.branch`](#xatabranch) | `XATA_API_KEY` | `XATA_API_URL` |
 <!-- generated:adapters:end -->
 
 A missing credential fails the line with `PROVIDER_AUTH`. Every resource has a key that identifies it within the
@@ -655,6 +656,26 @@ and settings ACLs.
 later copies nothing, and an edit of the copy's records or settings is not drift; a deleted copy is `missing` and
 is copied again. Destroy deletes the copy, never the template. Not listed for drift or adoption.
 
+### `xata.branch`
+
+A copy-on-write Postgres branch per scope on the Xata platform, a child of a parent branch
+(`POST /organizations/{org}/projects/{project}/branches`, `mode: inherit`). A new branch takes a moment to come up:
+`apply` polls it until its status is healthy (a fault fails the line; not healthy within
+`SPONSON_XATA_READY_TIMEOUT_MS`, ten minutes by default, is `WAIT_TIMEOUT`, and the next run finds the branch by
+name), then reads its credentials. Requires `providers.xata.organization` and `providers.xata.project` (ids) and
+`XATA_API_KEY`.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | string | (required) | The branch's name, such as `${ctx.scope}`; its identity (key `branch:<name>`). Xata does not keep names unique, so two branches with this name are refused (`PARAM_INVALID`), never guessed between. |
+| `parent_id` | string | (required) | The id of the branch to copy (`XATA_BRANCH_ID` of the parent), not its name. |
+
+Outputs: `branch_id`, and `connection_string` (sensitive), read from the credentials endpoint on every run, so a
+dependent added later gets it too. **Drift**: only existence. The parent is used when the branch is created and a
+branch cannot be moved, so changing `parent_id` later changes nothing; a deleted branch is `missing` and is created
+again (with a new connection string, passed on in that run). Destroy deletes the branch, never the parent. Not
+listed for drift or adoption.
+
 ### Outputs
 
 The outputs each built-in op declares. `immediate` outputs exist once the line is applied; `external` ones only after
@@ -694,6 +715,8 @@ the named event. Sensitive outputs are never displayed, logged or written to rec
 | `netlify.env` | `deploy_preview_url` | external (`deploy`) | no |
 | `cloudflare.pages_env` | (none) | | |
 | `algolia.index` | `name` | immediate | no |
+| `xata.branch` | `branch_id` | immediate | no |
+| `xata.branch` | `connection_string` | immediate | yes |
 <!-- generated:outputs:end -->
 
 ### Once-only outputs

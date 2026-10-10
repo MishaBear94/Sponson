@@ -138,10 +138,11 @@ categories:
       - id: xata-branch
         provider: Xata
         side_effect: Copy-on-write Postgres branch
-        api_shape: REST control plane and `xata branch create --from`; API keys. Endpoint paths not confirmed **(unverified)**; the product was re-platformed onto Postgres in 2025
-        generic: P (async; API in flux)
+        api_shape: "REST `POST https://api.xata.tech/organizations/{o}/projects/{p}/branches` `{mode: inherit, parentID, name}`, `DELETE .../branches/{id}`; bearer API key; object; branch comes up asynchronously (`status.statusType`); credentials from `GET .../branches/{id}/credentials` (OpenAPI at api.xata.tech/openapi.json; re-platformed onto Postgres in 2025)"
+        generic: P (async readiness, credentials in a second request)
         priority: P2
-        covered_by: null
+        covered_by: xata.branch
+        note: "waits until the branch is healthy; only its existence is compared for drift"
       - id: mongodb-atlas-user
         provider: MongoDB Atlas
         side_effect: No branching; per-PR database user and database name on a shared cluster (cluster per PR is slow and costly)
