@@ -237,6 +237,17 @@ const pagesEnv: OpSpec = {
     return typeof params.target === "string" ? params.target : targetFor(ctx);
   },
 
+  /**
+   * The environment's `env_vars` map is read-modify-write on one project object that every scope (and a run of the
+   * other environment, for the other map) writes, so the engine serialises writers with a parent lock (ADR 0019).
+   */
+  lockOn(params, provider) {
+    const { account, project } = provider;
+    if (typeof account !== "string" || account === "" || typeof project !== "string" || project === "") return null;
+    const target = typeof params.target === "string" && params.target !== "" ? params.target : "preview";
+    return `cloudflare:${account}:pages:${project}:${target}:env`;
+  },
+
   async read(actx, params) {
     const scope = envScope(params);
     assertRunEnvironment(scope, actx.ctx);

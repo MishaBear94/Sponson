@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { beforeEach, describe, expect, it } from "vitest";
 import { LockHeldError, LockLostError, type Receipt, type ReceiptStore } from "../types.js";
 import { GitBranchReceiptStore, receiptsBranch } from "./git.js";
-import { parseReceipt, serialize } from "./layout.js";
+import { PARENT_LOCKS_ENVIRONMENT, parentLockScope, parseReceipt, serialize } from "./layout.js";
 import { LocalReceiptStore } from "./local.js";
 
 const exec = promisify(execFile);
@@ -126,6 +126,39 @@ describe.each(backends)("%s store", (_name, backend) => {
     expect((await other.readLock("preview", "pr-1"))?.holder).toBe("b");
   });
 
+  it("parent-object locks (ADR 0019) are exclusive across actors, separate from scope locks, and release only for the holder", async () => {
+    const app = "auth0:acme:client:abc";
+    const other = await actor();
+    expect(await store.acquireParentLock!(app, "run-a", 60_000)).toBeNull();
+    const held = await other.acquireParentLock!(app, "run-b", 60_000).catch((e) => e);
+    expect(held).toBeInstanceOf(LockHeldError);
+    expect((held as LockHeldError).lock.holder).toBe("run-a");
+    // Another parent, and every scope, are unaffected.
+    expect(await other.acquireParentLock!("auth0:acme:client:xyz", "run-b", 60_000)).toBeNull();
+    expect(await other.acquireLock("preview", "pr-1", "run-b", 60_000)).toBeNull();
+    expect((await other.readParentLock!(app))?.holder).toBe("run-a");
+    await expect(other.renewParentLock!(app, "run-b", 60_000)).rejects.toBeInstanceOf(LockLostError);
+    await other.releaseParentLock!(app, "run-b"); // not the holder: no-op
+    expect((await store.readParentLock!(app))?.holder).toBe("run-a");
+    await store.renewParentLock!(app, "run-a", 120_000);
+    await store.releaseParentLock!(app, "run-a");
+    expect(await other.readParentLock!(app)).toBeNull();
+    expect(await other.acquireParentLock!(app, "run-b", 60_000)).toBeNull();
+    // Lock-only: no scope appears in any environment's listing.
+    expect(await store.list("preview")).toEqual([]);
+   }, 60_000);
+
+  it("an expired parent lock is taken over by exactly one of several concurrent successors", async () => {
+    const app = "supabase:proj:uri_allow_list";
+    await store.acquireParentLock!(app, "crashed", -1000);
+    const actors = await Promise.all(Array.from({ length: _name === "local" ? 6 : 3 }, () => actor()));
+    const results = await Promise.allSettled(actors.map((a, i) => a.acquireParentLock!(app, `h${i}`, 60_000)));
+    const won = results.flatMap((r, i) => (r.status === "fulfilled" ? [i] : []));
+    expect(won).toHaveLength(1);
+    expect((results[won[0]!] as PromiseFulfilledResult<unknown>).value).toMatchObject({ holder: "crashed" });
+    expect((await store.readParentLock!(app))?.holder).toBe(`h${won[0]}`);
+  });
+
   it("rejects a newer version with an upgrade hint", async () => {
     await store.write(receipt("pr-1", "run-1"));
     await store.write({ ...receipt("pr-1", "run-2"), version: 3 as 2 });
@@ -235,6 +268,18 @@ describe("git-branch store", () => {
     expect(tree).toContain("preview/pr-7/run-1.json");
     // Nothing else is created: no shared branch.
     expect(await refs(remote)).toEqual([`refs/heads/${ref}`]);
+  });
+
+  it("keeps each parent-object lock on its own lock-only branch, sponson-receipts/_locks/<hash>", async () => {
+    const remote = await bareRemote();
+    const store = await gitStore(remote);
+    await store.acquireParentLock("auth0:acme:client:abc", "run-a", 60_000);
+    const branch = receiptsBranch(PARENT_LOCKS_ENVIRONMENT, parentLockScope("auth0:acme:client:abc"));
+    expect(branch).toMatch(/^sponson-receipts\/_locks\/[0-9a-f]{32}$/);
+    const { stdout } = await exec("git", ["--git-dir", remote, "ls-tree", "-r", "--name-only", branch]);
+    expect(stdout.trim().split("\n").sort()).toEqual(["README.md", `_locks/${parentLockScope("auth0:acme:client:abc")}/lock.json`]);
+    const readme = await exec("git", ["--git-dir", remote, "show", `${branch}:README.md`]);
+    expect(readme.stdout).toContain("parent-object lock");
   });
 
   it("branch names stay valid git refs for any scope, and distinct scopes get distinct branches", () => {

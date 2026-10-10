@@ -25,7 +25,8 @@
  *        by a body with no required fields, but not stated. Pinned: the adapter also re-reads and refuses to go on
  *        if a variable it did not send disappeared.
  *   CF5. No precondition (ETag / If-Match) exists for that PATCH — verified (only path parameters, no 412). Two
- *        writers of the same key race; last write wins.
+ *        writers of the same key race; last write wins. Sponson's own writers take turns through the parent lock
+ *        (`lockOn`, ADR 0019).
  *   CF6. Failures answer `4XX { success: false, errors: [{ code, message }], result: null }` — verified (schema
  *        `pages_api-response-common-failure`). An unknown project answers `404` with code `8000007` — unverified:
  *        the schema declares only `4XX`; the status and code come from Wrangler's error reports.

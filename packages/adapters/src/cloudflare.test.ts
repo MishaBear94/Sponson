@@ -176,6 +176,14 @@ describe("cloudflare pages_env", () => {
     ]);
   });
 
+  it("locks the environment's env_vars map of the project (ADR 0019); no identity without the provider block", () => {
+    expect(op.lockOn!(params({ vars: { A: "1" } }), provider)).toBe("cloudflare:acc_demo:pages:demo:preview:env");
+    expect(op.lockOn!({ target: "production" }, provider)).toBe("cloudflare:acc_demo:pages:demo:production:env");
+    expect(op.lockOn!({}, provider)).toBe("cloudflare:acc_demo:pages:demo:preview:env");
+    expect(op.lockOn!({}, { project: "demo" })).toBeNull();
+    expect(op.lockOn!({}, { account: "acc_demo", project: "" })).toBeNull();
+  });
+
   it("names what is wrong: the token, the provider block, the params, an unknown project", async () => {
     const p = params({ vars: { A: "1" } });
     await expect(op.read({ ...actx, env: {} }, p)).rejects.toMatchObject({ code: "PROVIDER_AUTH" });

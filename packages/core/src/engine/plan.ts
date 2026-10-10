@@ -107,9 +107,14 @@ async function planLine(rc: RunContext, prepared: Prepared, walk: PlanWalk, c: C
     line.status = "pending";
     line.waitingOn = wait.line;
     if (wait.event) line.waitingFor = wait.event;
-  } else if (inspection.diffs.some((d) => d.kind === "create")) line.status = "create";
+  } else if (inspection.diffs.some((d) => d.kind === "create") || recreating(rc, inspection)) line.status = "create";
   else if (inspection.diffs.some((d) => d.kind === "update")) line.status = "update";
   return line;
+}
+
+/** The run recreates this existing line (`recreate`), so its `once` outputs will flow again. */
+function recreating(rc: RunContext, inspection: Inspection): boolean {
+  return inspection.live !== null && (rc.opts.recreate ?? []).includes(inspection.change.id);
 }
 
 /** The line's outputs as they are live right now, including external ones whose event already happened. */
@@ -122,6 +127,8 @@ async function knownOutputs(rc: RunContext, walk: PlanWalk, inspection: Inspecti
     if (ext) values = { ...values, ...ext };
   }
   rc.guardOutputs(values, op.outputs);
-  walk.outputs.set(c.id, { values: values as LineOutputs["values"], specs: op.outputs });
+  // A resource that exists and that apply would not create again has shown its `once` outputs already.
+  const spent = live !== null && !inspection.diffs.some((d) => d.kind === "create") && !recreating(rc, inspection);
+  walk.outputs.set(c.id, { values: values as LineOutputs["values"], specs: op.outputs, spent });
   return planOutputs(values, op.outputs);
 }

@@ -102,7 +102,10 @@
                   "contributing/adr/0013-rollback-undoes-only-this-run",
                   "contributing/adr/0014-secrets-are-references",
                   "contributing/adr/0015-adapters-describe-themselves",
-                  "contributing/adr/0016-one-receipts-ref-per-scope"
+                  "contributing/adr/0016-one-receipts-ref-per-scope",
+                  "contributing/adr/0017-generic-http-adapter",
+                  "contributing/adr/0018-once-only-outputs",
+                  "contributing/adr/0019-parent-object-locks"
                 ]
               },
               "contributing/security",

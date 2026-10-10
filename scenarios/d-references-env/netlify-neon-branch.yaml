@@ -1,0 +1,49 @@
+name: "netlify: a Neon branch's connection string as the pull request's value, and its Deploy Preview's URL for Clerk"
+plan: |
+  version: 1
+  providers:
+    netlify: { site: site_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      parent: main
+      environments: [preview]
+    - id: env
+      adapter: netlify
+      op: env
+      values:
+        DATABASE_URL: { from: db.connection_string }
+      environments: [preview]
+    - id: callback
+      adapter: clerk
+      op: redirect_allow
+      url: { from: env.deploy_preview_url }
+      environments: [preview]
+seed:
+  netlify:
+    sites:
+      site_demo:
+        name: demo-site
+        account: acme
+        pushes: [{ sha: "0123456789abcdef0123456789abcdef01234567", branch: feat/x, pr: 42 }]
+steps:
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { db: applied, env: applied, callback: applied }
+      outputs: { env: { deploy_preview_url: https://deploy-preview-42--demo-site.netlify.app } }
+  - sim:
+      write_order: ["POST /neon/projects/proj_demo/branches", "POST /netlify/accounts/acct_acme/env", "POST /clerk/redirect_urls"]
+      state:
+        "netlify.sites.site_demo.envs": { includes: { key: DATABASE_URL } }
+      clerk_redirects: { "https://deploy-preview-42--demo-site.netlify.app": exists }
+  - run: apply --json
+    expect: { exit: 0, writes: 0 }
+  - run: apply --destroy --json
+    expect: { exit: 0, status: complete }
+  - sim:
+      state:
+        "netlify.sites.site_demo.envs": { length: 0 }

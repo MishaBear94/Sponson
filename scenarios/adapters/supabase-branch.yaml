@@ -1,0 +1,76 @@
+# The Supabase adapter's `branch` op end to end through the CLI against the sim. Format: see the top of
+# scenarios/runner.test.ts.
+name: "supabase.branch: create, apply twice without writes, replaced refused until --reconcile, deleted recreated, destroy"
+plan: |
+  version: 1
+  providers:
+    supabase: { project: demoprojectrefabcdef }
+  changes:
+    - id: db
+      adapter: supabase
+      op: branch
+      environments: [preview]
+# The branch's database password, as the sim hands it out: never in any output.
+secrets: ["pw_br"]
+# A new branch is COMING_UP for a moment: apply waits for ACTIVE_HEALTHY.
+chaos: { supabase_ready_ms: 200 }
+steps:
+  - run: plan --json
+    expect:
+      exit: 0
+      plan_lines: { db: create }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { db: applied }
+  - sim:
+      write_order: ["POST /supabase/projects/demoprojectrefabcdef/branches"]
+      state:
+        "supabase.projects.demoprojectrefabcdef.branches": { includes: { name: sponson-preview-pr-42, is_default: false } }
+  - run: apply --json
+    expect:
+      exit: 0
+      writes: 0
+      lines: { db: unchanged }
+  # A human deletes the branch and creates one with the same name in the dashboard: a new ref, not Sponson's.
+  - chaos:
+      drift: { "supabase.branch.sponson-preview-pr-42": recreate }
+  - run: plan --json
+    expect:
+      exit: 1
+      drift: [{ kind: changed, line: db }]
+      plan_lines: { db: blocked }
+  - run: apply --json
+    expect:
+      exit: 1
+      status: failed
+      lines: { db: blocked }
+      errors: { db: "reconcile" }
+  - run: apply --reconcile --json
+    expect:
+      exit: 0
+      status: complete
+  # Deleted outside Sponson: missing drift never blocks; the next apply recreates it.
+  - chaos:
+      drift: { "supabase.branch.sponson-preview-pr-42": delete }
+  - run: plan --json
+    expect:
+      exit: 0
+      drift: [{ kind: missing, line: db }]
+      plan_lines: { db: create }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { db: applied }
+  - run: apply --destroy --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { db: destroyed }
+  - sim:
+      write_order: ["POST /supabase/projects/demoprojectrefabcdef/branches", "DELETE /supabase/branches/"]
+      state:
+        # Only the project's own default branch is left.
+        "supabase.projects.demoprojectrefabcdef.branches": { length: 1 }

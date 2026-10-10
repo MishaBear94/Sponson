@@ -15,8 +15,8 @@ built-in secret sources (listed in [docs/plan-format.md](docs/plan-format.md#sec
 The fake cloud encodes numbered assumptions about each provider at the top of its routes file. Every adapter call
 and every assumption has been checked against the providers' published API specifications
 ([docs/api-verification.md](docs/api-verification.md)); each assumption is marked verified or unverified there and
-in its routes file. What remains needs a live account: V1, N1, N2 and C2 are pinned by `scenarios/contract.test.ts`,
-and the live run (`pnpm test:live`) has never been done against real accounts. Every item here is: write an
+in its routes file. What remains needs a live account: V1, N1, N2, C2 and PS1, PS4, PS5, PS7, PS8 are pinned by
+`scenarios/contract.test.ts`, and the live run (`pnpm test:live`) has never been done against real accounts. Every item here is: write an
 `assumption <id>:` test in the contract suite, run it against a throwaway account, and if it fails fix the sim
 first, then the adapter.
 
@@ -26,6 +26,7 @@ first, then the adapter.
 | Clerk C1 (status and wording of a duplicate redirect URL; the adapter re-reads after any 400/422) ([#11](https://github.com/MishaBear94/Sponson/issues/11)) | `packages/sim/src/routes/clerk.ts` | **good first issue** |
 | Neon N1 (does a branch being deleted still list?), N2 (which requests answer 423 during a create) and N5 (status of a duplicate branch name) ([#12](https://github.com/MishaBear94/Sponson/issues/12)) | `packages/sim/src/routes/neon.ts` | help wanted |
 | Vercel V2 (deployment list order), V3 (does the deprecated `?decrypt=true` still decrypt; `sensitive`-type vars are never returned — decide how they should diff), V4 (`created` for updated entries, `ENV_CONFLICT`), V5 (branch auto-cancel; a `gitSource` deployment built from the project's `link`), V6 (`until` on the env list) ([#13](https://github.com/MishaBear94/Sponson/issues/13)) | `packages/sim/src/routes/vercel.ts` | help wanted |
+| PlanetScale PS4 (how long a new branch takes to be ready), PS5 (status of a duplicate branch name), PS7 (deletion timing), PS9 (duplicate password names), PS12 (a password on a branch still provisioning): run the PlanetScale block of `pnpm test:live` against a throwaway database | `packages/sim/src/routes/planetscale.ts` | help wanted |
 | A scheduled (weekly) CI job that runs the live contract suite with repository secrets, and opens an issue when an assumption breaks ([#14](https://github.com/MishaBear94/Sponson/issues/14)) | `.github/workflows/` | help wanted |
 
 ## 2. More adapters
@@ -35,13 +36,21 @@ and registers them. The checklist is in CONTRIBUTING.md.
 
 [docs/coverage.md](docs/coverage.md) measures which providers' per-environment state is covered today and ranks what to build next.
 
+Many rows need no adapter at all: the generic `http` adapter ([ADR 0017](docs/adr/0017-generic-http-adapter.md),
+[plan format](docs/plan-format.md#the-generic-http-adapter)) manages plain CRUD objects and list entries of any JSON
+REST API from the plan. The items below are those whose lifecycle needs more (asynchronous provisioning, a deploy
+barrier, instruction-based updates, an output that exists only once), or that are common enough to deserve a
+tested, documented first-class op. Next for the `http` adapter itself: preconditions (ETag) for list writes,
+polling until ready, an OAuth2 client-credentials token, and pagination by page number or `Link` header.
+
 | Item | Notes | Label |
 |------|-------|-------|
-| **Feature flags: LaunchDarkly** — `flag_target`: turn a flag on for a preview (target the preview URL or a context key), off again on destroy ([#15](https://github.com/MishaBear94/Sponson/issues/15)) | The README's fourth console. Decide the resource key (project + environment + flag + target) | adapter, help wanted |
-| Feature flags: a second provider (Statsig, Unleash, PostHog or GrowthBook) | Reuse whatever shape LaunchDarkly settles on | adapter |
-| Identity callbacks beyond Clerk: Auth0 (allowed callback URLs on an application), Supabase Auth redirect URLs ([#16](https://github.com/MishaBear94/Sponson/issues/16)) | Small, close to `clerk.ts` | adapter, **good first issue** |
-| Database branches: Supabase branching, PlanetScale branches | Close to `neon.ts`; output a connection string marked `sensitive` | adapter |
-| Deploy-target env vars: Netlify, Railway, Fly.io secrets | Close to `vercel.ts`'s `env` op, without the deploy barrier at first | adapter |
+| Feature flags: LaunchDarkly rules — serve a variation to contexts whose `url` matches (an `addRule` clause), beside the individual targets `launchdarkly.flag_target` manages ([#15](https://github.com/MishaBear94/Sponson/issues/15)) | Rules are ordered and have no client-chosen identity; needs a rule `ref` or description to find ours | adapter |
+| Feature flags: a second provider (Statsig, Unleash, PostHog or GrowthBook) | Reuse `launchdarkly.flag_target`'s shape: key `target:<flag>:<context kind>:<key>` under a provider block naming the project and environment; the hash covers the variation | adapter |
+| Identity callbacks beyond Clerk and Supabase Auth: Auth0 (allowed callback URLs on an application) ([#16](https://github.com/MishaBear94/Sponson/issues/16)) | Small, close to `clerk.ts` | adapter, **good first issue** |
+| PlanetScale: deploy requests on merge, and PlanetScale Postgres (roles instead of passwords) | `packages/adapters/src/planetscale.ts`; a password-like credential is a [once-only output](docs/adr/0018-once-only-outputs.md) | adapter |
+| Supabase follow-ups: a branch's API keys (`GET /v1/projects/{ref}/api-keys`) and pooler connection string (`/config/database/pooler`, IPv4) as outputs; `git_branch` and `with_data` on create | `supabase.branch` outputs only the direct (IPv6) connection string and the API URL today | adapter, **good first issue** |
+| Deploy-target env vars: Railway, Fly.io secrets | Close to `vercel.ts`'s and `netlify.ts`'s `env` ops, without the deploy barrier at first | adapter |
 | Cloudflare, after `pages_env`: Workers secrets per script, a Pages deployment op (redeploy after a variable write, and the branch alias URL from the deployment's `aliases` as an output), DNS records for preview hostnames | Pages variables shipped as `cloudflare.pages_env`; the alias URL is not computed from the branch name because Cloudflare does not document how long names are shortened | adapter |
 
 ## 3. More secret sources
@@ -62,7 +71,6 @@ The CLI-backed sources (e.g. `aws-sm://`) show how to call a CLI through the inj
 | **Garbage-collect abandoned scopes** — scopes whose pull request closed (or branch was deleted) without the Action's destroy running | Find them from receipts plus the GitHub API; destroy from the ledger. Must not add a fourth command lightly: compare `apply --destroy --scope <s>` and an Action mode | **ADR** |
 | **Remove receipts branches of destroyed scopes** — since [ADR 0016](docs/adr/0016-one-receipts-ref-per-scope.md) each scope has its own `sponson-receipts/<env>/<scope>` branch, and nothing deletes it after destroy | Keep the history long enough that a late deployment event for a destroyed PR stays stale; likely part of the garbage-collection work above | **ADR** |
 | **Hosted approval inbox as a `ReceiptStore`** — production approvals requested and granted outside CI, with the approver recorded in the receipt | Implements `ReceiptStore` (`packages/core/src/types.ts`); the store contract tests in `packages/core/src/receipts/stores.test.ts` must pass against it | **ADR** |
-| **Writes to a shared parent object across scopes** — two pull requests adding their preview URL to the same Auth0 application's callback list both read-modify-write one array; scope locks do not serialise them, so one write can be lost until the next apply re-adds it (`missing` drift) | Options: a lock per provider object, or provider preconditions (ETag) in the adapter contract | **ADR** |
 | An S3 / R2 receipt store for teams that cannot push to the repository | Same store contract; conditional writes for fencing | **ADR**, help wanted |
 | `sponson plan --json` diff for Vercel `sensitive`-type variables (see V3) | Today they would always diff as `update` against the real API | help wanted |
 

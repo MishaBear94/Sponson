@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { LedgerEntry, Receipt, ReceiptLine } from "../types.js";
-import { Lease } from "./lease.js";
+import { Lease, withParentLock } from "./lease.js";
 import type { Ledger } from "./ledger.js";
 import { prepare, requireApproval, type Prepared } from "./prepare.js";
 import { receiptSkeleton, rereadLine, toRecord } from "./receipt.js";
@@ -32,7 +32,7 @@ export async function destroyRun(opts: RunOptions): Promise<ApplyResultSummary> 
     }
 
     await locateIntents(rc, prepared);
-    for (const group of groups(rc.ledger).reverse()) await destroyGroup(rc, prepared, receipt, group);
+    for (const group of groups(rc.ledger).reverse()) await destroyGroup(rc, prepared, receipt, group, lease.holder);
 
     receipt.ledger = rc.ledger.toJSON();
     receipt.status = Object.values(receipt.lines).some((l) => l.status === "destroy_failed") ? "failed" : "complete";
@@ -49,7 +49,7 @@ export async function destroyRun(opts: RunOptions): Promise<ApplyResultSummary> 
  * Destroy one line's resources: what Sponson created is deleted, adopted ones are forgotten, and an intent
  * nobody could locate fails the line (it may exist, and only a human can tell).
  */
-async function destroyGroup(rc: RunContext, prepared: Prepared, receipt: Receipt, group: LedgerEntry[]): Promise<void> {
+async function destroyGroup(rc: RunContext, prepared: Prepared, receipt: Receipt, group: LedgerEntry[], holder: string): Promise<void> {
   const head = group[0]!;
   const line: ReceiptLine = receipt.lines[head.line] ?? { id: head.line, adapter: head.adapter, op: head.op, status: "destroyed", createdBy: "sponson", resources: [], outputs: head.outputs ?? {} };
   receipt.lines[head.line] = line;
@@ -71,17 +71,21 @@ async function destroyGroup(rc: RunContext, prepared: Prepared, receipt: Receipt
     }
     return;
   }
-  await deleteOurs(rc, prepared, line, head, ours);
+  await deleteOurs(rc, prepared, line, head, ours, holder);
   line.resources = rc.ledger.all().filter((x) => x.line === head.line).map(toRecord);
 }
 
-/** Delete what Sponson created for one line; a failure is recorded on the line, never thrown. */
-async function deleteOurs(rc: RunContext, prepared: Prepared, line: ReceiptLine, head: LedgerEntry, ours: LedgerEntry[]): Promise<void> {
+/**
+ * Delete what Sponson created for one line; a failure is recorded on the line, never thrown. Resources inside a
+ * shared parent object are removed holding its lease (ADR 0019), found from the ledger, not the plan.
+ */
+async function deleteOurs(rc: RunContext, prepared: Prepared, line: ReceiptLine, head: LedgerEntry, ours: LedgerEntry[], holder: string): Promise<void> {
   try {
     const op = rc.opts.registry.op(head.adapter, head.op);
     const actx = rc.adapterContext(head.adapter, head.provider);
     actx.log(`destroy ${head.line}`);
-    await op.destroy(actx, ours.map(toRecord));
+    const parent = ours.find((e) => e.parent)?.parent;
+    await withParentLock(rc.opts, holder, parent, rc.warnings, () => op.destroy(actx, ours.map(toRecord)));
     for (const e of ours) rc.ledger.delete(e);
     const survivors = await stillPresent(rc, prepared, head, ours);
     if (survivors.length) {

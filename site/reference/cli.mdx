@@ -74,6 +74,10 @@ Options:
                             to production (or $SPONSON_APPROVED_BY)
   --reconcile               overwrite values changed outside Sponson since the
                             last apply
+  --recreate <line>         delete and create again what this line created, so a
+                            value its provider shows only on create reaches its
+                            dependents (repeatable, or comma-separated)
+                            (default: [])
   --wait                    poll for deploys and locks instead of stopping with
                             status partial
   --wait-timeout <seconds>  give up waiting after this long (default: 600)

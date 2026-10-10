@@ -104,8 +104,10 @@ describe("neon branch", () => {
   });
 
   it("waits out 423 Locked while the previous create's operations run", async () => {
-    await h.chaos({ neon_op_ms: 30 }); // within the harness backoff budget (5ms base, 4 retries)
-    const actx = h.actx("neon");
+    // A window wide enough that the second create lands in it even on a loaded machine, and a backoff (50ms base,
+    // 4 retries: at least 375ms in all) that outlasts it.
+    await h.chaos({ neon_op_ms: 200 });
+    const actx = h.actx("neon", undefined, { env: { ...h.env, SPONSON_HTTP_RETRY_BASE_MS: "50" } });
     await op.apply(actx, params(), null);
     const r = await op.apply(actx, { ...params(), name: "sponson/preview/pr-42-analytics" }, null);
     expect(r.created).toEqual(["branch:sponson/preview/pr-42-analytics"]);
