@@ -5,6 +5,9 @@
  *   site/index.mdx, quickstart.mdx, concepts.mdx   README.md, split by its `##` sections
  *   site/guides/github-actions.mdx                 action/README.md
  *   site/guides/agents.mdx                         README.md "For agents" + SKILL.md
+ *   site/integrations/*.mdx                        integrations/README.md and each integration's README, with the
+ *                                                  CI template next to it embedded where `<!-- sponson:embed <file> -->`
+ *                                                  stands
  *   site/reference/*.mdx                           docs/plan-format.md, docs/errors.md, examples/ (README and every
  *                                                  plan, embedded), docs/api-verification.md when it exists,
  *                                                  docs/coverage.md, and
@@ -49,15 +52,40 @@ const README_SECTIONS: Record<string, string | null> = {
   "Verification without a cloud account": "concepts",
   Status: "concepts",
   // The site's navigation replaces these.
+  Integrations: null,
   Documentation: null,
   Contributing: null,
   License: null,
 };
 
+/** integrations/<dir>/README.md → its page, in navigation order. `""` is integrations/README.md itself. */
+const INTEGRATIONS: ReadonlyArray<readonly [dir: string, route: string, meta: PageMeta]> = [
+  ["", "integrations/overview", { title: "Integrations", sidebarTitle: "Overview", description: "Run Sponson from GitLab CI/CD, CircleCI, Bitbucket Pipelines and agent tools." }],
+  ["gitlab", "integrations/gitlab-ci", { title: "GitLab CI/CD", description: "Merge request pipelines: plan, apply, finish after the deploy, destroy when the environment stops." }],
+  ["circleci", "integrations/circleci", { title: "CircleCI", description: "Plan and apply on pull request branches, destroy through the API, production behind a hold job." }],
+  ["bitbucket", "integrations/bitbucket-pipelines", { title: "Bitbucket Pipelines", description: "Pull request pipelines, a custom destroy pipeline, and production as a manual deployment step." }],
+  ["agents", "integrations/agent-tools", { title: "Agent tools", description: "The MCP server and the skill in Claude Code, Cursor, Codex CLI, Windsurf and VS Code." }],
+];
+
+function integrationSource(dir: string): string {
+  return dir ? `integrations/${dir}/README.md` : "integrations/README.md";
+}
+
+/** The README and its directory both route to the integration's page, the way `examples` does. */
+function integrationFilePages(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [dir, route] of INTEGRATIONS) {
+    out[integrationSource(dir)] = route;
+    out[dir ? `integrations/${dir}` : "integrations"] = route;
+  }
+  return out;
+}
+
 /** Whole files that are one page each. */
 const FILE_PAGES: Record<string, string> = {
   "SKILL.md": "guides/agents",
   "action/README.md": "guides/github-actions",
+  ...integrationFilePages(),
   "docs/plan-format.md": "reference/plan-format",
   "docs/errors.md": "reference/errors",
   "docs/api-verification.md": "reference/api-verification",
@@ -419,6 +447,29 @@ async function readmePages(router: Router): Promise<Map<string, string[]>> {
   return out;
 }
 
+/** `<!-- sponson:embed <file> -->` → the file next to the README, as a fenced block under its own heading. */
+async function embedTemplates(md: string, source: string): Promise<string> {
+  let out = md;
+  for (const m of md.matchAll(/^<!-- sponson:embed (\S+) -->$/gm)) {
+    const file = m[1]!;
+    const text = (await read(posix.join(posix.dirname(source), file))).trimEnd();
+    const lang = /\.ya?ml$/.test(file) ? "yaml" : "text";
+    // A replacer function: the template's own `$` must not be read as a replacement pattern.
+    out = out.replace(m[0], () => `## The template: ${file}\n\n\`\`\`${lang} ${file}\n${text}\n\`\`\``);
+  }
+  return out;
+}
+
+async function integrationPages(router: Router): Promise<GeneratedFile[]> {
+  const out: GeneratedFile[] = [];
+  for (const [dir, route, meta] of INTEGRATIONS) {
+    const source = integrationSource(dir);
+    const md = await embedTemplates(stripTitle(await read(source)), source);
+    out.push(page(route, meta, [source], toMdx(md, source, router)));
+  }
+  return out;
+}
+
 async function examplesPage(router: Router): Promise<GeneratedFile> {
   const md = stripTitle(await read("examples/README.md"));
   const plans = (await readdir(join(REPO, "examples"))).filter((f) => f.endsWith(".plan.yaml")).sort();
@@ -478,6 +529,7 @@ async function navigation(): Promise<unknown> {
         groups: [
           { group: "Get started", pages: ["index", "quickstart", "concepts"] },
           { group: "Guides", pages: ["guides/github-actions", "guides/agents", ...HAND_WRITTEN] },
+          { group: "Integrations", pages: INTEGRATIONS.map(([, route]) => route) },
         ],
       },
       { tab: "Reference", groups: [{ group: "Reference", pages: reference }] },
@@ -540,6 +592,7 @@ export async function generate(): Promise<GeneratedFile[]> {
     if (!existsSync(join(REPO, source))) continue;
     files.push(page(route, META[route]!, [source], toMdx(stripTitle(await read(source)), source, router)));
   }
+  files.push(...(await integrationPages(router)));
   files.push(await examplesPage(router));
   files.push(await cliPage());
   files.push(...(await adrPages(router)));

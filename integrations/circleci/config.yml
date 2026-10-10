@@ -1,0 +1,135 @@
+# Sponson on CircleCI. Copy into .circleci/config.yml (or merge the jobs and workflows into yours).
+# integrations/circleci/README.md lists the environment variables to set and how receipts are pushed.
+#
+#   push to a branch with an open pull request   sponson-plan, sponson-apply, sponson-finish (waits for the deploy)
+#   pull request merged or closed                CircleCI has no such trigger: start the sponson-destroy workflow
+#                                                through the API with the pipeline parameters below (README.md)
+#   push to main                                 hold (an approval job), then sponson-production
+#
+# Replace 0.4.0 everywhere with the Sponson version you have reviewed. The flags are explicit so the template works
+# with any version; Sponson releases after 0.4.0 also read the same variables by themselves.
+
+version: 2.1
+
+parameters:
+  # Set both through the API to destroy a closed pull request's preview resources.
+  sponson-destroy-pr:
+    type: string
+    default: ""
+  sponson-destroy-branch:
+    type: string
+    default: ""
+
+executors:
+  node:
+    docker:
+      - image: cimg/node:lts
+
+commands:
+  sponson-setup:
+    steps:
+      - checkout
+      - run:
+          name: Receipts remote
+          # Receipts are pushed to orphan branches sponson-receipts/<env>/<scope>. CircleCI's checkout key is
+          # read-only, so SPONSON_GIT_TOKEN is a token that may push to this repository (README.md).
+          command: |
+            echo "export SPONSON_RECEIPTS_REMOTE=\"https://x-access-token:${SPONSON_GIT_TOKEN}@github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}.git\"" >> "$BASH_ENV"
+  sponson-pr-only:
+    steps:
+      - run:
+          name: Skip branches without a pull request
+          command: |
+            if [ -z "$CIRCLE_PULL_REQUEST" ]; then echo "no open pull request: nothing to plan"; circleci-agent step halt; fi
+
+jobs:
+  sponson-plan:
+    executor: node
+    steps:
+      - sponson-pr-only
+      - sponson-setup
+      - run:
+          name: sponson plan
+          command: npx -y sponson@0.4.0 plan --env preview --pr "${CIRCLE_PULL_REQUEST##*/}" --branch "$CIRCLE_BRANCH" --sha "$CIRCLE_SHA1"
+
+  sponson-apply:
+    executor: node
+    steps:
+      - sponson-pr-only
+      - sponson-setup
+      - run:
+          name: sponson apply
+          command: npx -y sponson@0.4.0 apply --env preview --pr "${CIRCLE_PULL_REQUEST##*/}" --branch "$CIRCLE_BRANCH" --sha "$CIRCLE_SHA1"
+
+  sponson-finish:
+    executor: node
+    steps:
+      - sponson-pr-only
+      - sponson-setup
+      - run:
+          name: sponson apply --wait (finish the lines that needed the deploy)
+          no_output_timeout: 20m
+          command: npx -y sponson@0.4.0 apply --wait --wait-timeout 900 --env preview --pr "${CIRCLE_PULL_REQUEST##*/}" --branch "$CIRCLE_BRANCH" --sha "$CIRCLE_SHA1"
+
+  sponson-destroy:
+    executor: node
+    steps:
+      - sponson-setup
+      - run:
+          name: sponson apply --destroy
+          environment:
+            DESTROY_PR: << pipeline.parameters.sponson-destroy-pr >>
+            DESTROY_BRANCH: << pipeline.parameters.sponson-destroy-branch >>
+          command: npx -y sponson@0.4.0 apply --destroy --env preview --pr "$DESTROY_PR" --branch "$DESTROY_BRANCH" --sha "$CIRCLE_SHA1"
+
+  sponson-production:
+    executor: node
+    steps:
+      - sponson-setup
+      - run:
+          name: Who approved the hold job
+          # CircleCI exposes no approver variable: read it from the API (CIRCLE_TOKEN, README.md).
+          command: |
+            approver_id=$(curl -fsS -H "Circle-Token: $CIRCLE_TOKEN" "https://circleci.com/api/v2/workflow/$CIRCLE_WORKFLOW_ID/job" \
+              | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{const j=JSON.parse(s).items.find((i)=>i.name==="hold");process.stdout.write(j?.approved_by??"")})')
+            [ -n "$approver_id" ] || { echo "no approval recorded for the hold job"; exit 1; }
+            login=$(curl -fsS -H "Circle-Token: $CIRCLE_TOKEN" "https://circleci.com/api/v2/user/$approver_id" | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>process.stdout.write(JSON.parse(s).login??""))')
+            echo "export SPONSON_APPROVED_BY=\"${login:-$approver_id}\"" >> "$BASH_ENV"
+      - run:
+          name: sponson apply --env production
+          command: npx -y sponson@0.4.0 apply --env production --pr "" --branch "$CIRCLE_BRANCH" --sha "$CIRCLE_SHA1"
+
+workflows:
+  sponson-preview:
+    when:
+      equal: ["", << pipeline.parameters.sponson-destroy-pr >>]
+    jobs:
+      - sponson-plan:
+          context: sponson-preview
+      - sponson-apply:
+          context: sponson-preview
+          requires: [sponson-plan]
+      # Your own deploy jobs go here, if CircleCI deploys the app; make sponson-finish require them.
+      - sponson-finish:
+          context: sponson-preview
+          requires: [sponson-apply]
+
+  sponson-destroy:
+    when:
+      not:
+        equal: ["", << pipeline.parameters.sponson-destroy-pr >>]
+    jobs:
+      - sponson-destroy:
+          context: sponson-preview
+
+  sponson-production:
+    when:
+      and:
+        - equal: [main, << pipeline.git.branch >>]
+        - equal: ["", << pipeline.parameters.sponson-destroy-pr >>]
+    jobs:
+      - hold:
+          type: approval
+      - sponson-production:
+          context: sponson-production
+          requires: [hold]

@@ -46,6 +46,16 @@
               "guides/adopting",
               "guides/production-approvals"
             ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/overview",
+              "integrations/gitlab-ci",
+              "integrations/circleci",
+              "integrations/bitbucket-pipelines",
+              "integrations/agent-tools"
+            ]
           }
         ]
       },

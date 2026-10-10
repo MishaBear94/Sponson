@@ -203,6 +203,20 @@ The action comments the plan and the receipt on the pull request. See [action/RE
 
 Every command (`init` included) takes `--json`, and every outcome, failures included, is one JSON document: `{ ok, command, ... }` or `{ ok: false, command, error: { code, message } }`. That holds for a mistyped flag (`USAGE`), a plan error, a provider failure (`PROVIDER_*`) and an unexpected crash (`INTERNAL`) alike, and the MCP tools return the same envelope as the first line of every result. `ok` is true exactly when the exit code is 0. Pending, secret and sensitive values are `null` next to an explicit `state`, never placeholder text; display strings exist only in the human-readable output. Secrets are masked in every form a provider may echo them (raw, JSON-escaped, URL-encoded, base64, the password inside a connection string) before anything is printed, logged or written to a receipt, and JSON is masked field by field so redaction can never change its structure.
 
+## Integrations
+
+Copy-paste setups beside the [GitHub Action](action/README.md), each with its prerequisites, the variables to set and
+the token that lets it push receipts ([overview](integrations/README.md)):
+
+- [GitLab CI/CD](integrations/gitlab/README.md): merge request pipelines; the review environment's `on_stop` job
+  destroys the preview when the merge request is merged or closed.
+- [CircleCI](integrations/circleci/README.md): pull request branches, destroy through the API, production behind a
+  hold job.
+- [Bitbucket Pipelines](integrations/bitbucket/README.md): pull request pipelines, a custom destroy pipeline,
+  production as a manual deployment step.
+- [Agent tools](integrations/agents/README.md): the MCP server configuration for Claude Code, Cursor, Codex CLI,
+  Windsurf and VS Code, and where SKILL.md goes in each.
+
 ## How it works
 
 ```text
@@ -239,7 +253,7 @@ What the fake cannot prove is that the real APIs behave as assumed. The assumpti
 
 ## Status
 
-Format, engine, the [built-in adapters](docs/plan-format.md#built-in-ops) and [secret schemes](docs/plan-format.md#secret-schemes), local and git-branch receipt stores, CLI, MCP server, GitHub Action. Not yet: feature-flag targeting, social-login callbacks beyond Clerk, a hosted approval inbox, garbage collection of scopes whose PR closed without the action running.
+Format, engine, the [built-in adapters](docs/plan-format.md#built-in-ops) and [secret schemes](docs/plan-format.md#secret-schemes), local and git-branch receipt stores, CLI, MCP server, GitHub Action, [templates](integrations/README.md) for GitLab CI/CD, CircleCI and Bitbucket Pipelines (not yet run on those hosts). Not yet: feature-flag targeting, social-login callbacks beyond Clerk, a hosted approval inbox, garbage collection of scopes whose PR closed without the action running.
 
 ## Documentation
 

@@ -51,8 +51,8 @@ const PUBLIC_API: Record<string, string[]> = {
     "refreshDeployments", "route", "router", "simEnv", "startSim", "vercelSim",
   ],
   "sponson": [
-    "CtxFacts", "CtxOverrides", "CtxSource", "DEFAULT_CTX_SOURCES", "RunIO", "SponsonPlugin", "detectCtx",
-    "githubActionsSource", "localGitSource", "run", "sponsonEnvSource",
+    "CtxFacts", "CtxOverrides", "CtxSource", "DEFAULT_CTX_SOURCES", "RunIO", "SponsonPlugin", "bitbucketPipelinesSource",
+    "circleCiSource", "detectCtx", "githubActionsSource", "gitlabCiSource", "localGitSource", "run", "sponsonEnvSource",
   ],
 };
 

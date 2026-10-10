@@ -7,7 +7,10 @@ export { run, type RunIO } from "./main.js";
 export {
   detectCtx,
   DEFAULT_CTX_SOURCES,
+  bitbucketPipelinesSource,
+  circleCiSource,
   githubActionsSource,
+  gitlabCiSource,
   localGitSource,
   sponsonEnvSource,
   type CtxFacts,
