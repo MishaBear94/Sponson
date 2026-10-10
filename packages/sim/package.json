@@ -1,6 +1,6 @@
 {
   "name": "@sponson/sim",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Local fake cloud for Sponson: Vercel, Neon and Clerk API subsets with chaos injection.",
   "license": "Apache-2.0",
   "repository": {
