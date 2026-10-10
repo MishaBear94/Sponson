@@ -7,8 +7,8 @@ to know it is done. Items marked **good first issue** need no prior knowledge of
 Want one? Comment on its issue (or open one from the item) so nobody duplicates work. Something missing?
 Open a feature or adapter request.
 
-Status as of 0.2.0: format, engine, three adapters (Neon branches, Vercel env + deploy, Clerk redirect URLs),
-three secret sources, local and git-branch receipt stores, CLI, MCP server, GitHub Action.
+Status as of 0.2.0: format, engine, the built-in adapters ([listed here](docs/plan-format.md#built-in-ops)),
+built-in secret sources (listed in [docs/plan-format.md](docs/plan-format.md#secret-schemes)), local and git-branch receipt stores, CLI, MCP server, GitHub Action.
 
 ## 1. Prove the sim against the real APIs
 
@@ -43,8 +43,8 @@ and registers them. The checklist is in CONTRIBUTING.md.
 
 ## 3. More secret sources
 
-A secret source is an object with a `scheme` and `resolve(ref, env)` (`packages/adapters/src/secrets.ts`); the
-`doppler://` and `op://` sources show how to call a CLI through the injectable `Exec` so tests need no binary.
+A secret source is an object with a `scheme`, `resolve(ref, env)`, and the `form` and `resolvedBy` the generated docs read (`packages/adapters/src/secrets.ts`); the
+The CLI-backed sources (e.g. `aws-sm://`) show how to call a CLI through the injectable `Exec` so tests need no binary.
 
 | Item | Label |
 |------|-------|
@@ -66,7 +66,7 @@ A secret source is an object with a `scheme` and `resolve(ref, env)` (`packages/
 
 | Item | Label |
 |------|-------|
-| Raise the CI coverage thresholds (`.github/workflows/ci.yml`, job `coverage`) as coverage rises: pick an uncovered branch from `pnpm test:coverage` and test it | **good first issue** |
+| Raise the coverage thresholds (`vitest.config.ts`, enforced by `pnpm test:coverage` in CI) as coverage rises: pick an uncovered branch from `pnpm test:coverage` and test it | **good first issue** |
 | Windows in the CI matrix (paths in the local receipt store, `git` and `node` spawning) | help wanted |
 | Turn the property suite's counterexamples into scenarios automatically (print a ready-to-save YAML) | help wanted |
 | A `sponson` devcontainer / Codespaces config with the sim started | **good first issue** |

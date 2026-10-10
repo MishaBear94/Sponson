@@ -15,11 +15,11 @@ can be tampered with, a way past production approval)? Do not open an issue: fol
 ## First contribution in 10 minutes
 
 ```bash
-git clone https://github.com/MishaBear94/Sponson.git && cd sponson
+git clone https://github.com/MishaBear94/Sponson.git && cd Sponson
 nvm use                    # Node 24 (.nvmrc); Node 22 works too
 corepack enable            # provides the pnpm version pinned in package.json
 pnpm install
-pnpm test                  # ~2 min: unit, 50+ scenarios, journeys, property suite, tooling — all against the sim
+pnpm test                  # ~2 min: unit, scenarios, journeys, property suite, tooling — all against the sim
 ```
 
 Then pick something:
@@ -156,7 +156,7 @@ the checklist is short:
 2. **Register it** with `.addSecretSource(…)` in `createRegistry()` (`packages/adapters/src/index.ts`).
 3. **A unit test** in `packages/adapters/src/secrets.test.ts`: resolution, a missing value, the tool or service being unavailable.
 4. **A scenario or journey proving the value never leaks** (invariant 1) — stdout, stderr, receipts and plan text — like `scenarios/e-secrets/aws-sm-value-never-leaks.yaml`, plus the unavailable case.
-5. **A changeset** and `pnpm docs:gen`; then `pnpm typecheck && pnpm lint && pnpm test`.
+5. **A changeset** and `pnpm docs:gen`; remove the item from `ROADMAP.md` if it was listed there; then `pnpm typecheck && pnpm lint && pnpm test`.
 
 ## Adding a scenario
 
@@ -194,7 +194,7 @@ The [PR template](https://github.com/MishaBear94/Sponson/blob/main/.github/PULL_
 - for adapters, the rules above, sim routes with numbered assumptions, a scenario, and the docs and schema step;
 - a changeset for any user-visible change;
 - docs updated where behaviour changed, and an ADR when one is needed (see below) — or a line saying why not;
-- which invariants (listed below) the change could affect, and how they are still checked.
+- which invariants (listed above) the change could affect, and how they are still checked.
 
 Keep a PR to one concern. Review rules (one approval; a maintainer's for security-sensitive code) are in
 [MAINTAINERS.md](https://github.com/MishaBear94/Sponson/blob/main/MAINTAINERS.md).

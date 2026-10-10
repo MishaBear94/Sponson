@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/MishaBear94/Sponson/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MishaBear94/Sponson/actions/workflows/ci.yml)
 [![license: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![node: >=20](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
+[![node: >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
 
 Sponson is the plan for everything that ships beside the code.
 
@@ -81,10 +81,19 @@ One release, one plan. Three commands.
 
 ## Quick start
 
+Sponson is not published to npm yet; run it from source:
+
 ```bash
-npx sponson init          # writes release.plan.yaml, adds .sponson/ to .gitignore
-npx sponson plan          # read-only diff
-npx sponson apply         # creates the branch, injects the variable, waits for the deploy
+git clone https://github.com/MishaBear94/Sponson ~/sponson && (cd ~/sponson && pnpm install && pnpm build)
+alias sponson="node ~/sponson/packages/cli/dist/bin.js"
+```
+
+Then, in your app's repository:
+
+```bash
+sponson init          # writes release.plan.yaml, adds .sponson/ to .gitignore
+sponson plan          # read-only diff
+sponson apply         # creates the branch, injects the variable, waits for the deploy
 ```
 
 Third-party adapters and secret sources load as plugins: `SPONSON_PLUGINS=sponson-adapter-x,./local-adapter.mjs`, each module exporting `register(registry)`.
@@ -113,7 +122,7 @@ jobs:
       - uses: actions/checkout@v4
         # full history lets Sponson recognise a late build of an older commit
         with: { ref: "${{ github.event.deployment.sha || github.sha }}", fetch-depth: 0 }
-      - uses: MishaBear94/Sponson/action@v1
+      - uses: MishaBear94/Sponson/action@<commit-sha>
         with:
           command: ${{ github.event.action == 'closed' && 'destroy' || 'apply' }}
 ```

@@ -30,8 +30,11 @@ inputs:
     description: "Path to release.plan.yaml (default: repository root)."
     required: false
   version:
-    description: Version of the `sponson` npm package to run.
-    default: latest
+    description: >-
+      `source` (default): build and run Sponson from this action's own checkout, so the code that runs is exactly
+      the action ref you pinned and nothing is fetched from a package registry. Or an npm version of the `sponson`
+      package (e.g. `0.3.0`) — only once it is published from this repository.
+    default: source
   node-version:
     description: Node.js version to run the CLI with.
     default: "22"
@@ -143,7 +146,17 @@ runs:
         [ -n "$SCOPE_PR" ] && args+=(--pr "$SCOPE_PR")
         [ -n "$SCOPE_BRANCH" ] && args+=(--branch "$SCOPE_BRANCH")
         [ -n "$SCOPE_SHA" ] && args+=(--sha "$SCOPE_SHA")
-        npx -y "sponson@$INPUT_VERSION" "${cmd[@]}" "${args[@]}" > "$RUNNER_TEMP/sponson-result.json"
+        if [ "$INPUT_VERSION" = "source" ]; then
+          # The action's checkout is this repository at the ref the caller pinned: build it, trust no registry.
+          root="$GITHUB_ACTION_PATH/.."
+          if ! ( cd "$root" && corepack enable && pnpm install --frozen-lockfile && pnpm build ) >&2; then
+            echo "::error::building Sponson from the action's checkout failed"; exit 1
+          fi
+          sponson=(node "$root/packages/cli/dist/bin.js")
+        else
+          sponson=(npx -y "sponson@$INPUT_VERSION")
+        fi
+        "${sponson[@]}" "${cmd[@]}" "${args[@]}" > "$RUNNER_TEMP/sponson-result.json"
         code=$?
         cat "$RUNNER_TEMP/sponson-result.json"
         # A random delimiter: output that happened to contain a fixed one could forge further step outputs.

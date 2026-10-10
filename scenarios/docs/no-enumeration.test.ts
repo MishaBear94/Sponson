@@ -19,7 +19,7 @@ import { REPO } from "./plans.js";
 
 /** Every doc a contributor or user reads as current, plus the schema and package descriptions. */
 async function docs(): Promise<Array<{ path: string; text: string }>> {
-  const paths = ["README.md", "CONTRIBUTING.md", "SKILL.md", "ARCHITECTURE.md", "docs/plan-format.md", "docs/errors.md", "schema/release.plan.schema.json"];
+  const paths = ["README.md", "CONTRIBUTING.md", "ROADMAP.md", "SKILL.md", "ARCHITECTURE.md", "docs/plan-format.md", "docs/errors.md", "schema/release.plan.schema.json", ".github/ISSUE_TEMPLATE/bug_report.yml"];
   for (const pkg of await readdir(join(REPO, "packages"))) paths.push(`packages/${pkg}/README.md`);
   paths.push(`${SITE}/README.md`);
   for (const page of await sitePages()) {

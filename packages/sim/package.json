@@ -9,7 +9,7 @@
     "directory": "packages/sim"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "type": "module",
   "main": "./src/index.ts",

@@ -2,6 +2,10 @@
 
 Runs `sponson plan`, `sponson apply` or `sponson apply --destroy` from `release.plan.yaml` and comments the result on the pull request. One action, one command, three triggers.
 
+**Pin the action to a commit.** Replace `<commit-sha>` with the full SHA of the Sponson commit you have reviewed
+(`git rev-parse HEAD` in a checkout). Release tags will exist from the first release; a SHA is the only reference
+nobody can move under you.
+
 ## Inputs
 
 | input | default | meaning |
@@ -10,7 +14,7 @@ Runs `sponson plan`, `sponson apply` or `sponson apply --destroy` from `release.
 | `env` | `preview` | environment; `production` is never inferred from the branch |
 | `approved-by` | | required when a line writes to production; take it from the environment approval (below), never from an agent |
 | `plan` | `release.plan.yaml` | path to the plan |
-| `version` | `latest` | version of the `sponson` npm package |
+| `version` | `source` | `source` builds Sponson from this action's own checkout (exactly the ref you pinned; nothing is fetched from a registry); or an npm version of `sponson` once one is published from this repository |
 | `node-version` | `22` | Node.js version |
 | `github-token` | `${{ github.token }}` | pushes receipts and comments on the PR |
 
@@ -82,14 +86,14 @@ jobs:
 
       - name: Destroy preview resources
         if: github.event_name == 'pull_request' && github.event.action == 'closed'
-        uses: MishaBear94/Sponson/action@v1
+        uses: MishaBear94/Sponson/action@<commit-sha>
         with:
           command: destroy
           env: preview
 
       - name: Apply preview resources
         if: github.event_name != 'pull_request' || github.event.action != 'closed'
-        uses: MishaBear94/Sponson/action@v1
+        uses: MishaBear94/Sponson/action@<commit-sha>
         with:
           command: apply
           env: preview
@@ -119,7 +123,7 @@ jobs:
             if (by.length === 0) core.setFailed("no approval recorded for the production environment");
             core.setOutput("by", by.join(", "));
 
-      - uses: MishaBear94/Sponson/action@v1
+      - uses: MishaBear94/Sponson/action@<commit-sha>
         with:
           command: apply
           env: production
@@ -133,7 +137,7 @@ On a push the action passes no scope flags; the CLI reads the GitHub context (`G
 ### Plan only on pull requests
 
 ```yaml
-      - uses: MishaBear94/Sponson/action@v1
+      - uses: MishaBear94/Sponson/action@<commit-sha>
         with:
           command: plan
         env:

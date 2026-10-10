@@ -9,9 +9,9 @@ callback URLs. Sponson does not need to recreate them. `sponson init` adopts the
 ## Run init
 
 ```bash
-npx sponson init            # first run: writes a starter release.plan.yaml
-npx sponson init            # later runs: appends lines for resources no scope manages
-npx sponson plan            # nothing live changes: adopted lines are unchanged
+sponson init            # first run: writes a starter release.plan.yaml
+sponson init            # later runs: appends lines for resources no scope manages
+sponson plan            # nothing live changes: adopted lines are unchanged
 ```
 
 `sponson plan` lists resources the plan does not know about as `unmanaged` drift, and never touches them. To adopt
