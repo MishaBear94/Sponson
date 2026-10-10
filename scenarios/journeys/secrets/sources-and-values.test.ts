@@ -1,5 +1,5 @@
 /**
- * Secret sources (env, doppler, op via fake executables on PATH) and awkward secret values.
+ * Secret sources (env, doppler, op, aws-sm via fake executables on PATH) and awkward secret values.
  *
  * Promises: README "Secrets are references ... redacted from every byte of output. A literal that looks like a
  * secret is rejected at parse time"; README "Every command takes --json"; SKILL.md rule 3 and rule 6
@@ -40,6 +40,32 @@ describe("secret sources via fake CLIs on PATH", () => {
     expect(all).not.toContain(dop);
     expect(all).not.toContain("line-one-of-op-secret");
     expect(t.stdout).toMatch(/STRIPE_KEY.*unchanged|= env/);
+  });
+
+  it("control: aws-sm:// whole and #key values reach the provider and never any output (stdout, stderr, --json, receipts)", async () => {
+    const whole = "fake_ts_awsWhole_5Kq9Zx";
+    const keyed = "fake_ts_awsKeyed_8Lm2Np";
+    const w = await world(PLAN_ENV(`      STRIPE_KEY: { secret: "aws-sm://prod/stripe" }\n      SIGNING_KEY: { secret: "aws-sm://prod/app#SIGNING_KEY" }`), {
+      env: { AWS_REGION: "eu-west-1" },
+    });
+    // Answers like `aws secretsmanager get-secret-value --query SecretString --output json`: a JSON string.
+    const app = JSON.stringify(JSON.stringify({ SIGNING_KEY: keyed, OTHER: "fake_ts_awsOther_unused" }));
+    await w.fakeBin(
+      "aws",
+      `#!/bin/sh\n[ "$1 $2 $3" = "secretsmanager get-secret-value --secret-id" ] || { echo "bad args: $*" >&2; exit 2; }\n` +
+        `[ "$AWS_REGION" = "eu-west-1" ] || { echo "no region" >&2; exit 2; }\n` +
+        `case "$4" in prod/stripe) printf '%s\\n' '"${whole}"' ;; prod/app) printf '%s\\n' '${app}' ;; *) echo "ResourceNotFoundException: $4" >&2; exit 254 ;; esac\n`,
+    );
+    const r = await w.cli("apply --json");
+    const t = await w.cli("plan");
+    const j = await w.cli("plan --json");
+    expect(r.json?.receipt?.lines?.env?.status, r.stdout + r.stderr).toBe("applied");
+    const envs = w.sim.state.vercel.projects.prj_demo!.envs;
+    expect(envs.find((e) => e.key === "STRIPE_KEY")?.value).toBe(whole);
+    expect(envs.find((e) => e.key === "SIGNING_KEY")?.value).toBe(keyed);
+    const all = r.stdout + r.stderr + t.stdout + t.stderr + j.stdout + j.stderr + (await w.receiptsText());
+    for (const v of [whole, keyed, "fake_ts_awsOther_unused"]) expect(all).not.toContain(v);
+    expect(t.stdout).toMatch(/= env/);
   });
 
   it("D9: a secret that rotates between resolve() and fingerprint() records a fingerprint for a value that was never written; plan then claims `unchanged`", async () => {

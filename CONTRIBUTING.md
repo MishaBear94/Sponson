@@ -39,7 +39,7 @@ Useful elsewhere: [ROADMAP.md](ROADMAP.md) (what is next), [CHANGELOG.md](CHANGE
 ```
 packages/core       plan model, parser, engine (engine/: ledger, inspect, plan, apply, destroy, lease, receipt),
                     receipt stores, adapter interfaces, error codes (errors.ts: ERROR_CODES)
-packages/adapters   neon, vercel, clerk adapters; env / doppler / op secret sources; the stable authoring helpers (common.ts)
+packages/adapters   neon, vercel, clerk adapters; env / doppler / op / aws-sm secret sources; the stable authoring helpers (common.ts)
 packages/sim        local fake cloud: provider-neutral core (state.ts, server.ts, chaos.ts) + one routes file per provider
 packages/cli        `sponson` CLI, MCP server, plugin loading
 scenarios/          YAML scenarios + runner, MCP and contract suites; support.ts is the shared harness

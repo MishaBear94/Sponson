@@ -31,7 +31,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "ApiClient", "ApiClientOptions", "CLERK_DEFAULT_API_URL", "DEFAULT_RETRIES", "DEFAULT_RETRY_BASE_MS",
     "DEFAULT_TIMEOUT_MS", "Exec", "HTTP_ERROR_BODY_LIMIT", "MAX_PAGES", "MAX_RETRY_WAIT_MS", "NEON_DEFAULT_API_URL",
     "Page", "ProviderErrorCode", "ProviderErrorDetails", "Shape", "ShapeError", "VERCEL_DEFAULT_API_URL", "apiClient",
-    "assertNoPending", "backoffMs", "classifyStatus", "clerkAdapter", "clientFor", "createRegistry", "defaultExec",
+    "assertNoPending", "awsSecretsManagerSource", "backoffMs", "classifyStatus", "clerkAdapter", "clientFor", "createRegistry", "defaultExec",
     "deleteIgnoringNotFound", "desiredSide", "diffValue", "dopplerSecretSource", "envSecretSource", "excerptOf",
     "isObject", "isProviderError", "isTransient", "listAll", "neonAdapter", "obj", "opSecretSource", "paramError",
     "records", "requireEnv", "requireProvider", "retryAfterMs", "stringParam", "vercelAdapter", "withQuery",

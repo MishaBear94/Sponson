@@ -67,7 +67,7 @@ One release, one plan. Three commands.
 | `sponson plan` | Reads live state, prints the diff and any drift. | no |
 | `sponson apply` | Runs the plan in dependency order. Rolls back what this run created if a line fails. Writes a receipt. | yes |
 
-- **Secrets are references.** `{ secret: "env://NAME" }`, `doppler://`, `op://`. Values are resolved inside `apply`, handed to the adapter, and redacted from every byte of output. A literal that looks like a secret is rejected at parse time.
+- **Secrets are references.** `{ secret: "env://NAME" }`, `doppler://`, `op://`, `aws-sm://`. Values are resolved inside `apply`, handed to the adapter, and redacted from every byte of output. A literal that looks like a secret is rejected at parse time.
 - **References cross lines.** `{ from: db.connection_string }` reads another line's output. Outputs that only exist after an external event (a deploy) stop the run with status `partial`; the next `apply` continues from there. Same command, no flags.
 - **Drift is reported, never silently overwritten.** Something changed in a console since the last apply? `plan` says so; `apply` refuses that line until you pass `--reconcile`. Something exists that the plan does not mention? It is listed and left alone.
 - **Receipts are the agent's memory.** Each run writes what actually happened to an orphan branch `sponson/receipts` in your repo: a ledger of every resource the scope owns (kept across failed, refused and crashed runs), what each line did, and which commits were applied. Creates are recorded before they are sent, so even a write whose response was lost is never forgotten. The agent reads the receipt, not its own last tool call.
@@ -147,7 +147,7 @@ Receipts live on an orphan git branch so CI runs, which start from nothing, can 
 This repository was built and accepted entirely against a local fake cloud, because no real Vercel, Neon or Clerk account was available during development.
 
 - `packages/sim` serves the API subsets the adapters use, with a chaos endpoint: latency, failing or hanging the next N requests matching a rule, `429` with `Retry-After`, lost responses after a successful write, pagination, Neon's asynchronous operations, deployment lifecycles, and console-style drift (edit, delete, delete-and-recreate).
-- `scenarios/*/` holds 53 YAML scenarios across nine categories — mid-run failure, concurrency, drift, references, secrets, the deploy barrier, destroy, mistakes agents make, mistakes humans make.
+- `scenarios/*/` holds 54 YAML scenarios across nine categories — mid-run failure, concurrency, drift, references, secrets, the deploy barrier, destroy, mistakes agents make, mistakes humans make.
 - `scenarios/journeys/` holds long system tests along six independent dimensions: a week of a team's CI lifecycle, many actors at once on real git receipts (including SIGKILL mid-apply), providers misbehaving like real clouds, an agent driving Sponson only through MCP and JSON, humans editing consoles and refactoring plans, and every channel a secret could leak through (including the receipts branch history and PR comments).
 - `property/` generates random plans, failures (including lost responses) and drift, and checks eight invariants — among them that `plan` writes nothing and that nothing Sponson created survives a successful destroy — 1000 cases per run.
 
@@ -155,7 +155,7 @@ What the fake cannot prove is that the real APIs behave as assumed. The assumpti
 
 ## Status
 
-Format, engine, three adapters (Neon branches, Vercel env + deploy, Clerk redirect URLs), three secret sources, local and git-branch receipt stores, CLI, MCP server, GitHub Action. Not yet: feature-flag targeting, social-login callbacks beyond Clerk, a hosted approval inbox, garbage collection of scopes whose PR closed without the action running.
+Format, engine, three adapters (Neon branches, Vercel env + deploy, Clerk redirect URLs), four secret sources, local and git-branch receipt stores, CLI, MCP server, GitHub Action. Not yet: feature-flag targeting, social-login callbacks beyond Clerk, a hosted approval inbox, garbage collection of scopes whose PR closed without the action running.
 
 ## Documentation
 
