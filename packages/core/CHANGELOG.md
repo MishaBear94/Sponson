@@ -1,5 +1,14 @@
 # @sponson/core
 
+## 0.4.0
+
+### Patch Changes
+
+- b028881: Internal: drift judgement in `inspectLine` and ownership in apply's ledger update are named steps (`judge`, `created`/`stillOurs`); behaviour is unchanged. Lint now caps cyclomatic complexity at 20.
+- eec4766: Internal: the git receipt store's plumbing (working clone, git invocations, push outcomes) moved to `receipts/git-workdir.ts`; the store keeps locks, fencing, retries and migration. Behaviour is unchanged.
+- 9b6c97a: Internal: scope drift, destroy, receipt parsing and listing, `init`'s plan editing, the sims' chaos selection and request handling are split into named steps; behaviour is unchanged. Lint caps cyclomatic complexity at 15.
+- 53e7446: npm metadata: every package has keywords and its homepage is the documentation site (https://sponson.mintlify.site); the package READMEs link to it, and the CLI's README states the Node.js 22 requirement its `engines` already declared.
+
 ## 0.3.0
 
 ### Minor Changes

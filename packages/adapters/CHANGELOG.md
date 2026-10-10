@@ -1,5 +1,22 @@
 # @sponson/adapters
 
+## 0.4.0
+
+### Minor Changes
+
+- 8f1b9c2: `ApiClient` gains `put()`, retried after a 502/503/504 or a dropped connection like GET, and `post()`/`patch()` take `{ idempotent: true }` for writes that set state rather than add to it (a PATCH replacing a whole list), so they are retried the same way. `WriteOptions` joins the stable authoring API.
+
+### Patch Changes
+
+- 78eef8a: Security: the `doppler://` and `aws-sm://` secret sources refused nothing that looked like a command-line option, so a reference such as `doppler://p/c/--help` passed `--help` to the CLI. Every CLI-backed source now declares which arguments come from the reference, and one starting with `-` is refused with SECRET_UNRESOLVED before the CLI runs.
+- 510ebe8: Internal: the HTTP client's retry loop and response decoding are separate (`decode`); behaviour is unchanged.
+- 53e7446: npm metadata: every package has keywords and its homepage is the documentation site (https://sponson.mintlify.site); the package READMEs link to it, and the CLI's README states the Node.js 22 requirement its `engines` already declared.
+- Updated dependencies [b028881]
+- Updated dependencies [eec4766]
+- Updated dependencies [9b6c97a]
+- Updated dependencies [53e7446]
+  - @sponson/core@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes

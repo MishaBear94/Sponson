@@ -1,5 +1,16 @@
 # @sponson/sim
 
+## 0.4.0
+
+### Minor Changes
+
+- 88b9982: Simulated providers declare their HTTP API as a route table: `route(method, path, handler)` per endpoint, with `:name` path segments passed URI-decoded and typed in `params`, served by `router(routes, fallback)`. The Vercel, Neon and Clerk sims and the `pnpm new:adapter` template use it.
+
+### Patch Changes
+
+- 9b6c97a: Internal: scope drift, destroy, receipt parsing and listing, `init`'s plan editing, the sims' chaos selection and request handling are split into named steps; behaviour is unchanged. Lint caps cyclomatic complexity at 15.
+- 53e7446: npm metadata: every package has keywords and its homepage is the documentation site (https://sponson.mintlify.site); the package READMEs link to it, and the CLI's README states the Node.js 22 requirement its `engines` already declared.
+
 ## 0.3.0
 
 ### Minor Changes
