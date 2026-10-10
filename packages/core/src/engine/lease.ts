@@ -113,10 +113,26 @@ export class Lease {
     }
   }
 
-  async release(): Promise<void> {
+  /**
+   * Stop renewing and release the lock, retrying a failed release a few times. Returns a warning when it still
+   * failed: the scope then stays locked until the lease expires, and the user must be told, not left to find out
+   * from the next run's LOCK_HELD.
+   */
+  async release(): Promise<string | undefined> {
     this.released = true;
     if (this.timer) clearTimeout(this.timer);
-    await this.opts.store.releaseLock(this.opts.ctx.env, this.opts.ctx.scope, this.holder).catch(() => {});
+    let last: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await this.opts.store.releaseLock(this.opts.ctx.env, this.opts.ctx.scope, this.holder);
+        return undefined;
+      } catch (e) {
+        last = e;
+        await sleep(200 * 2 ** attempt);
+      }
+    }
+    const until = new Date(this.validUntil).toISOString();
+    return `Could not release the lock for ${this.opts.ctx.env}/${this.opts.ctx.scope} (${last instanceof Error ? last.message : String(last)}); it stays held until about ${until}, and runs on this scope get LOCK_HELD until then.`;
   }
 }
 

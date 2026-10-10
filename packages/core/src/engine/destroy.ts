@@ -40,7 +40,8 @@ export async function destroyRun(opts: RunOptions): Promise<ApplyResultSummary> 
     await lease.write(receipt);
     return { receipt, drift: [], warnings: rc.warnings };
   } finally {
-    await lease.release();
+    const warning = await lease.release();
+    if (warning) rc.warnings.push(warning);
   }
 }
 

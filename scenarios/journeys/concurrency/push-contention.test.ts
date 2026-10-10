@@ -32,10 +32,12 @@ describe("push contention across scopes", () => {
     const summary: Record<number, string> = {};
     for (const [i, r] of runs.entries()) summary[prs[i]!] = r.code === 0 ? "ok" : `exit ${r.code}: ${r.json?.error?.code ?? ""} ${r.json?.error?.message ?? r.stderr.trim().split("\n").pop()}`;
     expect(summary).toEqual(Object.fromEntries(prs.map((p) => [p, "ok"])));
-    for (const pr of prs) {
+    for (const [i, pr] of prs.entries()) {
       const latest = await remoteFile(remote, `preview/pr-${pr}/latest.json`);
       expect(latest, `receipt for pr-${pr}`).not.toBeNull();
-      expect(await remoteFile(remote, `preview/pr-${pr}/lock.json`), `stale lock for pr-${pr}`).toBeNull();
+      // On failure, show what that run reported (warnings, stderr): a stale lock must be explained, not guessed at.
+      const said = `warnings: ${JSON.stringify(runs[i]!.json?.warnings ?? [])}\nstderr: ${runs[i]!.stderr.slice(-2000)}`;
+      expect(await remoteFile(remote, `preview/pr-${pr}/lock.json`), `stale lock for pr-${pr}\n${said}`).toBeNull();
     }
     expect(neonBranches(sim).filter((n) => n.startsWith("sponson/")).sort()).toEqual(prs.map((p) => `sponson/preview/pr-${p}`).sort());
   }, STORE_BUDGET_MS + 60_000); // only the product's own budget may give up first, never the test's timer

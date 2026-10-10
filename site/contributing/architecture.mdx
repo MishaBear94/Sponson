@@ -182,7 +182,8 @@ and refuses newer versions (`RECEIPT_VERSION`).
   its own view of when the lease runs out (measured from when each acquire/renew was *sent*) and stops itself
   (`LOCK_LOST`) once less than TTL/5 is left — before another run could legitimately take the lock. Receipt writes
   do not use that guess: the store fences them atomically, so a run whose renewals lagged but whose lock nobody took
-  still records everything it did.
+  still records everything it did. Releasing the lock is retried; if it still fails, the run's warnings say so and
+  until when the scope stays locked.
 - **Succession**: when a pull request scope runs and the head branch's own scope (`branch-<name>`) has a ledger
   (an agent applied locally before the PR existed), the PR scope inherits those entries. After a successful apply it
   rewrites the predecessor's receipt without them and with `supersededBy`, so exactly one scope owns each resource.

@@ -35,7 +35,8 @@ export async function applyRun(opts: RunOptions): Promise<ApplyResultSummary> {
     await rc.resolveSecrets(prepared);
     return await run.execute();
   } finally {
-    await lease.release();
+    const warning = await lease.release();
+    if (warning) rc.warnings.push(warning);
   }
 }
 

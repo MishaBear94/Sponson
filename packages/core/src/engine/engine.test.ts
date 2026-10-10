@@ -369,6 +369,15 @@ describe("locks", () => {
     expect(stored?.ledger.every((e) => e.createdBy === "sponson" && e.id !== "")).toBe(true);
   });
 
+  it("a lock that cannot be released is reported, never silently left behind", async () => {
+    const stuck = new Proxy(store, {
+      get: (t, k) => (k === "releaseLock" ? () => Promise.reject(new Error("push refused")) : typeof t[k as keyof typeof t] === "function" ? (t[k as keyof typeof t] as (...a: unknown[]) => unknown).bind(t) : t[k as keyof typeof t]),
+    });
+    const { receipt, warnings } = await applyRun(opts(PLAN, { store: stuck }));
+    expect(receipt.status).toBe("complete");
+    expect(warnings.join("\n")).toMatch(/Could not release the lock for preview\/pr-42 \(push refused\); it stays held until/);
+  });
+
   it("never has two renewals in flight, however slow the store is", async () => {
     let inFlight = 0;
     let maxInFlight = 0;
