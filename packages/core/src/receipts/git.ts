@@ -1,12 +1,11 @@
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, rmdir, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, readdir, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import { SponsonError } from "../errors.js";
 import { LockHeldError, LockLostError, type LockInfo, type Receipt, type ReceiptStore } from "../types.js";
+import { GitCommandError, GitWorkdir, isMissingRef, stripCredentials, type PushOutcome } from "./git-workdir.js";
 import { latestPath, lockExpired, lockPath, parseLock, parseReceipt, receiptDir, runPath, safeSegment, serialize } from "./layout.js";
 
 const exec = promisify(execFile);
@@ -69,8 +68,6 @@ export interface GitBranchStoreOptions {
   fallbackDir?: string;
 }
 
-type PushOutcome = "ok" | { kind: "race" | "rejected"; detail: string };
-
 interface Fence {
   holder: string;
   ttlMs: number;
@@ -99,13 +96,10 @@ export class GitBranchReceiptStore implements ReceiptStore {
   readonly kind = "git-branch";
   private readonly refPrefix: string;
   private readonly legacyBranch: string | null;
-  /** The working clone. When this store owns it, it is created on first use with mkdtemp (owner-only, unpredictable). */
-  private workdir: string;
-  private readonly ownsWorkdir: boolean;
+  /** The working clone and the git plumbing on it. */
+  private readonly wd: GitWorkdir;
   private readonly budgetMs: number;
   private readonly fallbackDir: string;
-  private readonly remoteForMessages: string;
-  private initialized = false;
   private queue: Promise<unknown> = Promise.resolve();
   private readonly fences = new Map<string, Fence>();
   /** Where the tree of the last `sync` came from when it was not the scope's own branch (the legacy branch). */
@@ -118,13 +112,8 @@ export class GitBranchReceiptStore implements ReceiptStore {
     const envBudget = Number(process.env.SPONSON_STORE_BUDGET_MS);
     this.budgetMs = options.budgetMs ?? (Number.isFinite(envBudget) && envBudget > 0 ? envBudget : DEFAULT_BUDGET_MS);
     this.fallbackDir = options.fallbackDir ?? join(process.cwd(), ".sponson", "unpushed");
-    this.remoteForMessages = stripCredentials(options.remote);
-    this.ownsWorkdir = options.workdir === undefined;
-    this.workdir = options.workdir ?? "";
-    this.workdirPrefix = `sponson-receipts-${createHash("sha256").update(options.remote).digest("hex").slice(0, 12)}-`;
+    this.wd = new GitWorkdir(options.remote, options.workdir);
   }
-
-  private readonly workdirPrefix: string;
 
   /** How many pushes of this instance lost a race for their ref and were retried (for diagnostics and tests). */
   get refRaceCount(): number {
@@ -133,7 +122,7 @@ export class GitBranchReceiptStore implements ReceiptStore {
 
   /** The working clone this instance uses (for diagnostics and tests). */
   get workingClone(): string {
-    return this.workdir;
+    return this.wd.path;
   }
 
   /** The `origin` remote URL of the repository at `cwd`, or null; the CLI's default receipts remote. */
@@ -151,7 +140,7 @@ export class GitBranchReceiptStore implements ReceiptStore {
       const branch = await this.sync(environment, scope);
       const rel = latestPath(environment, scope);
       try {
-        return parseReceipt(await readFile(join(this.workdir, rel), "utf8"), `${this.source ?? branch}:${rel}`);
+        return parseReceipt(await readFile(this.wd.file(rel), "utf8"), `${this.source ?? branch}:${rel}`);
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
         throw e;
@@ -171,9 +160,9 @@ export class GitBranchReceiptStore implements ReceiptStore {
         for (;;) {
           const branch = await this.sync(environment, scope);
           if (opts.holder !== undefined) await this.assertHolder(environment, scope, opts.holder, null);
-          await this.put(runPath(environment, scope, runId), serialize(receipt));
-          await this.put(latestPath(environment, scope), serialize(receipt));
-          const outcome = await this.tryCommitAndPush(branch, `receipt ${environment}/${scope} ${runId} (${receipt.status})`);
+          await this.wd.put(runPath(environment, scope, runId), serialize(receipt));
+          await this.wd.put(latestPath(environment, scope), serialize(receipt));
+          const outcome = await this.wd.commitAndPush(branch, `receipt ${environment}/${scope} ${runId} (${receipt.status})`);
           if (outcome === "ok") break;
           await retry.backoff(outcome);
         }
@@ -194,14 +183,14 @@ export class GitBranchReceiptStore implements ReceiptStore {
    */
   async list(environment: string): Promise<Array<{ scope: string; receipt: Receipt }>> {
     return this.exclusive(async () => {
-      await this.init();
+      await this.wd.init();
       for (let attempt = 1; ; attempt++) {
         try {
           return await this.listOnce(environment);
         } catch (e) {
           // A branch deleted between ls-remote and fetch: look again (a few times; then report it).
-          if (attempt < 3 && e instanceof GitCommandError && /couldn't find remote ref/i.test(e.stderr || e.message)) continue;
-          if (e instanceof GitCommandError) throw this.classifyRemoteError(e.stderr || e.message, null);
+          if (attempt < 3 && isMissingRef(e)) continue;
+          if (e instanceof GitCommandError) throw this.wd.remoteError(e.stderr || e.message, `${this.refPrefix}/*`);
           throw e;
         }
       }
@@ -217,9 +206,9 @@ export class GitBranchReceiptStore implements ReceiptStore {
         // Seen in the tree we are about to push on top of: if it is live, it really is held by that holder.
         if (existing && !lockExpired(existing)) throw new LockHeldError(existing);
         const now = Date.now();
-        await this.put(lockPath(environment, scope), serialize({ holder, acquiredAt: new Date(now).toISOString(), expiresAt: new Date(now + ttlMs).toISOString() }));
+        await this.wd.put(lockPath(environment, scope), serialize({ holder, acquiredAt: new Date(now).toISOString(), expiresAt: new Date(now + ttlMs).toISOString() }));
         const latestRunId = await this.latestRunIdInTree(environment, scope);
-        const outcome = await this.tryCommitAndPush(branch, `lock ${environment}/${scope} ${holder}`);
+        const outcome = await this.wd.commitAndPush(branch, `lock ${environment}/${scope} ${holder}`);
         if (outcome === "ok") {
           this.fences.set(receiptDir(environment, scope), { holder, ttlMs, latestRunId });
           return existing;
@@ -235,8 +224,8 @@ export class GitBranchReceiptStore implements ReceiptStore {
       for (;;) {
         const branch = await this.sync(environment, scope);
         const cur = await this.assertHolder(environment, scope, holder, ttlMs);
-        if (cur) await this.put(lockPath(environment, scope), serialize({ ...cur, expiresAt: new Date(Date.now() + ttlMs).toISOString() }));
-        const outcome = await this.tryCommitAndPush(branch, `renew ${environment}/${scope} ${holder}`);
+        if (cur) await this.wd.put(lockPath(environment, scope), serialize({ ...cur, expiresAt: new Date(Date.now() + ttlMs).toISOString() }));
+        const outcome = await this.wd.commitAndPush(branch, `renew ${environment}/${scope} ${holder}`);
         if (outcome === "ok") {
           const fence = this.fences.get(receiptDir(environment, scope));
           if (fence && fence.holder === holder) fence.ttlMs = ttlMs;
@@ -262,8 +251,8 @@ export class GitBranchReceiptStore implements ReceiptStore {
         const branch = await this.sync(environment, scope);
         const existing = await this.lockInTree(environment, scope);
         if (!existing || existing.holder !== holder) break; // not ours (any more): nothing to do
-        await rm(join(this.workdir, lockPath(environment, scope)), { force: true });
-        const outcome = await this.tryCommitAndPush(branch, `unlock ${environment}/${scope} ${holder}`);
+        await rm(this.wd.file(lockPath(environment, scope)), { force: true });
+        const outcome = await this.wd.commitAndPush(branch, `unlock ${environment}/${scope} ${holder}`);
         if (outcome === "ok") break;
         await retry.backoff(outcome);
       }
@@ -276,13 +265,7 @@ export class GitBranchReceiptStore implements ReceiptStore {
    * store: an MCP server builds one per tool call. Using the store again afterwards starts a fresh clone.
    */
   async close(): Promise<void> {
-    return this.exclusive(async () => {
-      if (this.ownsWorkdir && this.workdir) {
-        await rm(this.workdir, { recursive: true, force: true });
-        this.workdir = ""; // the next use makes a fresh mkdtemp directory, never a recreated, known path
-      }
-      this.initialized = false;
-    });
+    return this.exclusive(() => this.wd.close());
   }
 
   // -------------------------------------------------------------------------
@@ -311,9 +294,9 @@ export class GitBranchReceiptStore implements ReceiptStore {
               ? `the remote rejected the push (${outcome.detail})`
               : `lost the race for the branch ref ${attempts} times in ${elapsed}ms (budget ${this.budgetMs}ms, SPONSON_STORE_BUDGET_MS)`;
           // A hook or branch protection refusing the push is a policy decision, not contention.
-          throw new SponsonError(outcome.kind === "rejected" ? "STORE_REJECTED" : "STORE_CONTENDED", stripCredentials(`Could not push ${what} to ${branch} at ${this.remoteForMessages}: ${why}.`), {
+          throw new SponsonError(outcome.kind === "rejected" ? "STORE_REJECTED" : "STORE_CONTENDED", stripCredentials(`Could not push ${what} to ${branch} at ${this.wd.remoteForMessages}: ${why}.`), {
             branch,
-            remote: this.remoteForMessages,
+            remote: this.wd.remoteForMessages,
             attempts,
             elapsedMs: elapsed,
             budgetMs: this.budgetMs,
@@ -325,12 +308,12 @@ export class GitBranchReceiptStore implements ReceiptStore {
   }
 
   private async lockInTree(environment: string, scope: string): Promise<LockInfo | null> {
-    return parseLock(await readFile(join(this.workdir, lockPath(environment, scope)), "utf8").catch(() => ""));
+    return parseLock(await readFile(this.wd.file(lockPath(environment, scope)), "utf8").catch(() => ""));
   }
 
   private async latestRunIdInTree(environment: string, scope: string): Promise<string | null> {
     try {
-      const r = JSON.parse(await readFile(join(this.workdir, latestPath(environment, scope)), "utf8")) as { runId?: unknown };
+      const r = JSON.parse(await readFile(this.wd.file(latestPath(environment, scope)), "utf8")) as { runId?: unknown };
       return typeof r.runId === "string" ? r.runId : "?";
     } catch (e) {
       return (e as NodeJS.ErrnoException).code === "ENOENT" ? null : "?";
@@ -345,65 +328,16 @@ export class GitBranchReceiptStore implements ReceiptStore {
    */
   private async assertHolder(environment: string, scope: string, holder: string, ttlMs: number | null): Promise<LockInfo | null> {
     const rel = lockPath(environment, scope);
-    const exists = await stat(join(this.workdir, rel)).then(() => true, () => false);
+    const exists = await stat(this.wd.file(rel)).then(() => true, () => false);
     const cur = await this.lockInTree(environment, scope);
     if (cur && cur.holder === holder) return cur;
     const fence = this.fences.get(receiptDir(environment, scope));
     if (!exists && fence && fence.holder === holder && [fence.latestRunId, null].includes(await this.latestRunIdInTree(environment, scope))) {
       const now = Date.now();
-      await this.put(rel, serialize({ holder, acquiredAt: new Date(now).toISOString(), expiresAt: new Date(now + (ttlMs ?? fence.ttlMs)).toISOString() }));
+      await this.wd.put(rel, serialize({ holder, acquiredAt: new Date(now).toISOString(), expiresAt: new Date(now + (ttlMs ?? fence.ttlMs)).toISOString() }));
       return null;
     }
     throw new LockLostError(holder, cur);
-  }
-
-  private async git(args: string[], input?: Buffer): Promise<string> {
-    return (await this.gitRaw(args, input)).toString("utf8");
-  }
-
-  private gitRaw(args: string[], input?: Buffer): Promise<Buffer> {
-    return new Promise((resolve, reject) => {
-      const child = execFile(
-        "git",
-        ["-c", "user.name=sponson", "-c", "user.email=sponson@localhost", "-c", "commit.gpgsign=false", ...args],
-        { cwd: this.workdir, maxBuffer: 64 * 1024 * 1024, encoding: "buffer", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
-        (err, stdout, stderr) => {
-          if (!err) return resolve(stdout);
-          const clean = new GitCommandError(stripCredentials(err.message), stripCredentials(stderr.toString("utf8")));
-          clean.stack = stripCredentials(err.stack ?? "");
-          reject(clean);
-        },
-      );
-      // git may exit before reading its input (an error): that is reported through the callback, not as EPIPE.
-      child.stdin?.on("error", () => {});
-      if (input) child.stdin?.end(input);
-      else child.stdin?.end();
-    });
-  }
-
-  private async put(rel: string, content: string): Promise<void> {
-    const abs = join(this.workdir, rel);
-    await mkdir(dirname(abs), { recursive: true });
-    await writeFile(abs, content, "utf8");
-  }
-
-  private async init(): Promise<void> {
-    if (this.initialized) return;
-    // A directory under the shared temp dir with a predictable name could be pre-created (or symlinked) by another
-    // user; mkdtemp makes a fresh, owner-only directory with an unguessable name.
-    if (this.ownsWorkdir && !this.workdir) this.workdir = await mkdtemp(join(tmpdir(), this.workdirPrefix));
-    await mkdir(this.workdir, { recursive: true });
-    const isRepo = await stat(join(this.workdir, ".git")).then(() => true, () => false);
-    if (!isRepo) {
-      // reftable stores refs in its own files, so refs that differ only by case (scopes `branch-Feature` and
-      // `branch-feature`) coexist even on a case-insensitive filesystem, where recent git otherwise refuses to fetch
-      // them at all. Older git (before 2.45) has no reftable — and no such refusal; position-named list refs suffice.
-      await this.git(["init", "-q", "--ref-format=reftable"]).catch(() => this.git(["init", "-q"]));
-      await this.git(["remote", "add", "origin", this.options.remote]);
-    } else {
-      await this.git(["remote", "set-url", "origin", this.options.remote]);
-    }
-    this.initialized = true;
   }
 
   /**
@@ -411,21 +345,15 @@ export class GitBranchReceiptStore implements ReceiptStore {
    * locally (seeded from the legacy branch); it reaches the remote with the first push. Returns the branch name.
    */
   private async sync(environment: string, scope: string): Promise<string> {
-    await this.init();
+    await this.wd.init();
     const branch = receiptsBranch(environment, scope, this.refPrefix);
     this.source = null;
-    try {
-      await this.git(["fetch", "-q", "--depth=1", "origin", `refs/heads/${branch}`]);
-    } catch (e) {
-      const msg = e instanceof GitCommandError ? e.stderr || e.message : String(e);
-      if (/couldn't find remote ref/i.test(msg)) {
-        await this.startOrphan(environment, scope, branch);
-        return branch;
-      }
-      throw this.classifyRemoteError(msg, branch);
+    if (!(await this.wd.fetchBranch(branch))) {
+      await this.startOrphan(environment, scope, branch);
+      return branch;
     }
-    await this.git(["checkout", "-q", "-f", "-B", branch, "FETCH_HEAD"]);
-    await this.git(["clean", "-qfdx"]);
+    await this.wd.git(["checkout", "-q", "-f", "-B", branch, "FETCH_HEAD"]);
+    await this.wd.git(["clean", "-qfdx"]);
     return branch;
   }
 
@@ -435,14 +363,14 @@ export class GitBranchReceiptStore implements ReceiptStore {
    * first push for the scope publishes them on its own branch.
    */
   private async startOrphan(environment: string, scope: string, branch: string): Promise<void> {
-    await this.git(["symbolic-ref", "HEAD", `refs/heads/${branch}`]);
-    await this.git(["update-ref", "-d", `refs/heads/${branch}`]).catch(() => {});
-    await this.git(["rm", "-rfq", "--cached", "--ignore-unmatch", "."]).catch(() => {});
-    for (const entry of await readdir(this.workdir)) if (entry !== ".git") await rm(join(this.workdir, entry), { recursive: true, force: true });
-    await this.put("README.md", RECEIPTS_README);
+    await this.wd.git(["symbolic-ref", "HEAD", `refs/heads/${branch}`]);
+    await this.wd.git(["update-ref", "-d", `refs/heads/${branch}`]).catch(() => {});
+    await this.wd.git(["rm", "-rfq", "--cached", "--ignore-unmatch", "."]).catch(() => {});
+    for (const entry of await readdir(this.wd.path)) if (entry !== ".git") await rm(this.wd.file(entry), { recursive: true, force: true });
+    await this.wd.put("README.md", RECEIPTS_README);
     const migrated = await this.seedFromLegacy(environment, scope);
-    await this.git(["add", "-A"]);
-    await this.git(["commit", "-qm", migrated ? `Start receipts for ${environment}/${scope} (from ${this.legacyBranch})` : `Start receipts for ${environment}/${scope}`]);
+    await this.wd.git(["add", "-A"]);
+    await this.wd.git(["commit", "-qm", migrated ? `Start receipts for ${environment}/${scope} (from ${this.legacyBranch})` : `Start receipts for ${environment}/${scope}`]);
   }
 
   /**
@@ -452,24 +380,18 @@ export class GitBranchReceiptStore implements ReceiptStore {
    */
   private async seedFromLegacy(environment: string, scope: string): Promise<boolean> {
     if (this.legacyBranch === null) return false;
-    try {
-      await this.git(["fetch", "-q", "--depth=1", "origin", `refs/heads/${this.legacyBranch}`]);
-    } catch (e) {
-      const msg = e instanceof GitCommandError ? e.stderr || e.message : String(e);
-      if (/couldn't find remote ref/i.test(msg)) return false;
-      throw this.classifyRemoteError(msg, this.legacyBranch);
-    }
+    if (!(await this.wd.fetchBranch(this.legacyBranch))) return false;
     const dir = receiptDir(environment, scope);
     const lockFile = lockPath(environment, scope);
-    const files = (await this.git(["ls-tree", "-r", "--name-only", "FETCH_HEAD", "--", `${dir}/`])).split("\n").filter(Boolean);
+    const files = (await this.wd.git(["ls-tree", "-r", "--name-only", "FETCH_HEAD", "--", `${dir}/`])).split("\n").filter(Boolean);
     if (files.length === 0) return false;
-    const legacyLock = files.includes(lockFile) ? parseLock(await this.git(["show", `FETCH_HEAD:${lockFile}`])) : null;
+    const legacyLock = files.includes(lockFile) ? parseLock(await this.wd.git(["show", `FETCH_HEAD:${lockFile}`])) : null;
     const liveLock = legacyLock !== null && !lockExpired(legacyLock);
     if (!liveLock && !files.some((f) => f !== lockFile)) return false;
-    await this.git(["checkout", "-q", "FETCH_HEAD", "--", `${dir}/`]);
+    await this.wd.git(["checkout", "-q", "FETCH_HEAD", "--", `${dir}/`]);
     if (!liveLock) {
-      await this.git(["rm", "-q", "--cached", "--ignore-unmatch", "--", lockFile]);
-      await rm(join(this.workdir, lockFile), { force: true });
+      await this.wd.git(["rm", "-q", "--cached", "--ignore-unmatch", "--", lockFile]);
+      await rm(this.wd.file(lockFile), { force: true });
     }
     this.source = this.legacyBranch;
     return true;
@@ -479,7 +401,7 @@ export class GitBranchReceiptStore implements ReceiptStore {
     const envSeg = refSegment(environment);
     const prefix = `refs/heads/${this.refPrefix}/${envSeg}/`;
     const legacyRef = this.legacyBranch === null ? null : `refs/heads/${this.legacyBranch}`;
-    const advertised = (await this.git(["ls-remote", "origin", `${prefix}*`, ...(legacyRef ? [legacyRef] : [])]))
+    const advertised = (await this.wd.git(["ls-remote", "origin", `${prefix}*`, ...(legacyRef ? [legacyRef] : [])]))
       .split("\n")
       .map((l) => l.split("\t")[1]?.trim())
       .filter((r): r is string => !!r);
@@ -491,12 +413,12 @@ export class GitBranchReceiptStore implements ReceiptStore {
     // refs `…/branch-Feature` and `…/branch-feature` would be one file, and one scope would silently vanish.
     const local = (i: number) => `refs/sponson-list/${envSeg}/${i}`;
     const legacyLocal = "refs/sponson-list-legacy";
-    await this.git(["update-ref", "-d", legacyLocal]).catch(() => undefined);
-    for (const ref of (await this.git(["for-each-ref", "--format=%(refname)", `refs/sponson-list/${envSeg}/`])).split("\n").filter(Boolean)) {
-      await this.git(["update-ref", "-d", ref]);
+    await this.wd.git(["update-ref", "-d", legacyLocal]).catch(() => undefined);
+    for (const ref of (await this.wd.git(["for-each-ref", "--format=%(refname)", `refs/sponson-list/${envSeg}/`])).split("\n").filter(Boolean)) {
+      await this.wd.git(["update-ref", "-d", ref]);
     }
     const refspecs = [...scopeRefs.map((r, i) => `+${r}:${local(i)}`), ...(hasLegacy ? [`+${legacyRef}:${legacyLocal}`] : [])];
-    await this.git(["fetch", "-q", "--depth=1", "origin", ...refspecs]);
+    await this.wd.git(["fetch", "-q", "--depth=1", "origin", ...refspecs]);
 
     const envDir = safeSegment(environment);
     const wanted: Array<{ scope: string; object: string }> = [];
@@ -512,103 +434,16 @@ export class GitBranchReceiptStore implements ReceiptStore {
         if (!own.has(scope)) wanted.push({ scope, object: `${legacyLocal}:${envDir}/${scope}/latest.json` });
       }
     }
-    return readableReceipts(wanted, await this.catFiles(wanted.map((w) => w.object)));
+    return readableReceipts(wanted, await this.wd.catFiles(wanted.map((w) => w.object)));
   }
 
   /** The scope directories of one environment on the fetched legacy branch. */
   private async legacyScopes(legacyLocal: string, envDir: string): Promise<string[]> {
-    const dirs = (await this.git(["ls-tree", "-d", "--name-only", legacyLocal, "--", `${envDir}/`])).split("\n").filter(Boolean);
+    const dirs = (await this.wd.git(["ls-tree", "-d", "--name-only", legacyLocal, "--", `${envDir}/`])).split("\n").filter(Boolean);
     return dirs.map((d) => d.slice(envDir.length + 1));
   }
 
-  /** Read many blobs in one `git cat-file --batch`; null for each one that does not exist. */
-  private async catFiles(objects: string[]): Promise<Array<string | null>> {
-    if (objects.length === 0) return [];
-    const raw = await this.gitRaw(["cat-file", "--batch"], Buffer.from(objects.map((o) => `${o}\n`).join(""), "utf8"));
-    const out: Array<string | null> = [];
-    let pos = 0;
-    for (let i = 0; i < objects.length; i++) {
-      const nl = raw.indexOf(0x0a, pos);
-      if (nl < 0) break;
-      const header = raw.subarray(pos, nl).toString("utf8");
-      pos = nl + 1;
-      const m = /^[0-9a-f]+ (\w+) (\d+)$/.exec(header);
-      if (!m) {
-        out.push(null); // "<object> missing" (or ambiguous)
-        continue;
-      }
-      const size = Number(m[2]);
-      out.push(m[1] === "blob" ? raw.subarray(pos, pos + size).toString("utf8") : null);
-      pos += size + 1;
-    }
-    return out;
-  }
 
-  /** Anything other than "the branch does not exist": the repository is unreachable or we may not read it. */
-  private classifyRemoteError(msg: string, branch: string | null): Error {
-    const last = stripCredentials(msg.trim().split("\n").filter(Boolean).pop() ?? "");
-    const details = { remote: this.remoteForMessages, branch: branch ?? `${this.refPrefix}/*` };
-    if (/repository not found|not found|\b404\b/i.test(msg)) {
-      return new SponsonError(
-        "STORE_PERMISSION",
-        `Receipts remote ${this.remoteForMessages} was not found, or these credentials cannot see it (GitHub answers 404 for a private repository the token has no access to). (${last})`,
-        details,
-      );
-    }
-    if (/unable to access|could not resolve host|authentication failed|could not read username|terminal prompts disabled|\b40[13]\b|denied|does not appear to be a git repository|could not read from remote/i.test(msg)) {
-      return new SponsonError("STORE_PERMISSION", `Cannot reach receipts remote ${this.remoteForMessages}: ${last}`, details);
-    }
-    return new Error(stripCredentials(msg));
-  }
-
-  /** Commit the working tree and push. A ref race or a server-side rejection is returned for the caller to retry. */
-  private async tryCommitAndPush(branch: string, message: string): Promise<PushOutcome> {
-    await this.git(["add", "-A"]);
-    const status = await this.git(["status", "--porcelain"]);
-    if (status.trim() !== "") await this.git(["commit", "-qm", message]);
-    try {
-      await this.git(["push", "-q", "origin", `HEAD:refs/heads/${branch}`]);
-      return "ok";
-    } catch (e) {
-      if (!(e instanceof GitCommandError)) throw e;
-      const msg = `${e.stderr}\n${e.message}`;
-      if (/\(fetch first\)|non-fast-forward|stale info|cannot lock ref|failed to update ref|incorrect old value|failed to lock|unable to update local ref/i.test(msg)) {
-        return { kind: "race", detail: "non-fast-forward" };
-      }
-      if (/\b40[134]\b|permission to .* denied|access denied|not permitted|authentication failed|could not read username|terminal prompts disabled|repository not found|unable to access/i.test(msg)) {
-        throw new SponsonError(
-          "STORE_PERMISSION",
-          stripCredentials(`Push to ${branch} was denied. In GitHub Actions, add \`permissions: { contents: write }\` to the workflow. (${msg.trim().split("\n").filter(Boolean).pop()})`),
-          { branch, remote: this.remoteForMessages },
-        );
-      }
-      if (/remote rejected|hook declined|\[rejected\]|rejected/i.test(msg)) {
-        const said = msg
-          .split("\n")
-          .filter((l) => l.trim().startsWith("remote:") || l.includes("remote rejected"))
-          .map((l) => l.trim())
-          .join("; ")
-          .slice(0, 300);
-        return { kind: "rejected", detail: stripCredentials(said || "rejected") };
-      }
-      throw new Error(stripCredentials(e.message));
-    }
-  }
-}
-
-/** A failed `git` invocation, with credentials already stripped from every field. */
-class GitCommandError extends Error {
-  constructor(
-    message: string,
-    readonly stderr: string,
-  ) {
-    super(message);
-  }
-}
-
-/** Remote URLs may carry a token (`https://x-access-token:...@github.com/...`); never let one into an error message. */
-function stripCredentials(text: string): string {
-  return text.replace(/\/\/[^/@\s]+@/g, "//[REDACTED]@");
 }
 
 /** Name the kept receipt in whatever error ended the write. */

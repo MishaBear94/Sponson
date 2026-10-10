@@ -159,7 +159,9 @@ and `lock.json` (`receipts/layout.ts`). `GitBranchReceiptStore` (`receipts/git.t
 per environment and scope, `sponson-receipts/<env>/<scope>` (`receiptsBranch()`), so unrelated scopes never race for
 a ref, and uses git's non-fast-forward rejection as compare-and-swap. A scope with no branch yet is read from the
 legacy shared branch `sponson/receipts` and moves to its own branch with its first write
-([ADR 0016](docs/adr/0016-one-receipts-ref-per-scope.md)). `LocalReceiptStore` (`receipts/local.ts`) uses `link(2)`
+([ADR 0016](docs/adr/0016-one-receipts-ref-per-scope.md)). The store holds the policy (locks, fencing, retries,
+migration); the git plumbing under it (the working clone, credential-free errors, what a push's failure means) is
+`GitWorkdir` in `receipts/git-workdir.ts`. `LocalReceiptStore` (`receipts/local.ts`) uses `link(2)`
 and a short-lived mutex. `parseReceipt()` migrates version 1 receipts in memory
 and refuses newer versions (`RECEIPT_VERSION`).
 
