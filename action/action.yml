@@ -56,9 +56,12 @@ outputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-node@v4
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: ${{ inputs.node-version }}
+        # This step runs in the caller's repository; Sponson runs through npx and must not start caching (or
+        # failing on a missing lock file for) the caller's own dependencies.
+        package-manager-cache: false
 
     # Resolve the PR/branch/sha for the scope.
     # pull_request: the PR itself. deployment_status: only an OPEN pull request associated with the deployed
@@ -66,7 +69,7 @@ runs:
     # applying would re-create a preview that `destroy` already removed or that nothing will ever destroy.
     # A production deployment never drives a preview apply. push: no flags; the CLI reads the GitHub context.
     - id: scope
-      uses: actions/github-script@v7
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
       env:
         SPONSON_ENV: ${{ inputs.env }}
       with:
@@ -148,7 +151,7 @@ runs:
 
     - id: comment
       if: steps.scope.outputs.skip != 'true' && (github.event_name == 'pull_request' || steps.scope.outputs.pr != '')
-      uses: actions/github-script@v7
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
       env:
         RESULT_PATH: ${{ runner.temp }}/sponson-result.json
         SPONSON_ENV: ${{ inputs.env }}

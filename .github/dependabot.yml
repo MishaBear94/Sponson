@@ -20,7 +20,8 @@ updates:
     # Majors arrive as individual PRs so each can be read against its changelog.
 
   - package-ecosystem: github-actions
-    directory: /
+    # Workflows, and the composite action users run (its pinned SHAs must not go stale either).
+    directories: ["/", "/action"]
     schedule:
       interval: monthly
     labels: ["dependencies", "area/ci"]

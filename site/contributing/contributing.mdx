@@ -87,7 +87,9 @@ CI (`.github/workflows/ci.yml`) runs typecheck, lint and tests on Node 22 and 24
 job, and a packaging job that builds from clean, packs every package and installs the tarballs into an empty
 project. The coverage thresholds are configured once, in `vitest.config.ts`, and CI runs the same
 `pnpm test:coverage` you do: if it passes locally, the coverage job passes. Use it to see what a change leaves
-uncovered.
+uncovered. CodeQL (`.github/workflows/codeql.yml`) scans the TypeScript and the workflows on every pull request. Every
+third-party action is pinned to a commit SHA with its version in a comment (`uses: owner/action@<sha> # vX.Y.Z`);
+pin new ones the same way — Dependabot keeps the pins current, including in `action/action.yml`.
 
 ## Adding an adapter
 
