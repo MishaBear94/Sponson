@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/sponson/sponson/main/schema/release.plan.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/MishaBear94/Sponson/main/schema/release.plan.schema.json
 #
 # Sponson starts the deployment itself, after the variables are written, so nothing waits on
 # an external event and one `apply` runs to the end. Use this when automatic preview

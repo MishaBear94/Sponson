@@ -21,7 +21,7 @@ file. Editors with the YAML language server (VS Code's YAML extension, Neovim's 
 from a comment on the first line:
 
 ```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/sponson/sponson/main/schema/release.plan.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/MishaBear94/Sponson/main/schema/release.plan.schema.json
 ```
 
 Inside this repository you can point at the file instead: `$schema=../schema/release.plan.schema.json` (relative to

@@ -109,7 +109,7 @@ jobs:
       - uses: actions/checkout@v4
         # full history lets Sponson recognise a late build of an older commit
         with: { ref: "${{ github.event.deployment.sha || github.sha }}", fetch-depth: 0 }
-      - uses: sponson/sponson/action@v1
+      - uses: MishaBear94/Sponson/action@v1
         with:
           command: ${{ github.event.action == 'closed' && 'destroy' || 'apply' }}
 ```
@@ -169,7 +169,7 @@ Editors with the YAML language server validate and complete the plan file from i
 line of `release.plan.yaml`:
 
 ```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/sponson/sponson/main/schema/release.plan.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/MishaBear94/Sponson/main/schema/release.plan.schema.json
 ```
 
 ## Contributing

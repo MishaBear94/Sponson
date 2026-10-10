@@ -1,21 +1,21 @@
 # Code owners are requested for review automatically. Their approval counts toward the review rule in
 # MAINTAINERS.md. Later rules win, so keep the catch-all first.
 #
-# TODO (maintainer): replace the handles below with real users or teams (e.g. @sponson/maintainers),
-# then uncomment. Keep this file in sync with MAINTAINERS.md. GitHub ignores handles without write access.
+# Keep this file in sync with MAINTAINERS.md. GitHub ignores handles without write access; when the project
+# gains reviewers or a team (e.g. @org/sponson-maintainers), add them next to the paths they review.
 
-# *                                   @MarkovWangRR
+*                                   @MishaBear94
 
 # Security-sensitive: a maintainer must approve (see MAINTAINERS.md, "Review rules").
-# /packages/core/src/redact.ts        @MarkovWangRR
-# /packages/core/src/engine/          @MarkovWangRR
-# /packages/core/src/receipts/        @MarkovWangRR
-# /packages/adapters/src/secrets.ts   @MarkovWangRR
-# /packages/cli/src/output.ts         @MarkovWangRR
-# /packages/cli/src/registry.ts       @MarkovWangRR
-# /action/                            @MarkovWangRR
-# /.github/workflows/                 @MarkovWangRR
+/packages/core/src/redact.ts        @MishaBear94
+/packages/core/src/engine/          @MishaBear94
+/packages/core/src/receipts/        @MishaBear94
+/packages/adapters/src/secrets.ts   @MishaBear94
+/packages/cli/src/output.ts         @MishaBear94
+/packages/cli/src/registry.ts       @MishaBear94
+/action/                            @MishaBear94
+/.github/workflows/                 @MishaBear94
 
-# Per-adapter reviewers: add the author of an adapter for its files.
-# /packages/adapters/src/neon.*       @MarkovWangRR
-# /packages/sim/src/routes/neon.ts    @MarkovWangRR
+# Per-adapter reviewers: add the author of an adapter for its files, e.g.
+# /packages/adapters/src/neon.*       @neon-adapter-author
+# /packages/sim/src/routes/neon.ts    @neon-adapter-author

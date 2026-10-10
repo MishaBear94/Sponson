@@ -10,7 +10,7 @@ can be tampered with, a way past production approval)? Do not open an issue: fol
 ## First contribution in 10 minutes
 
 ```bash
-git clone https://github.com/sponson/sponson.git && cd sponson
+git clone https://github.com/MishaBear94/Sponson.git && cd sponson
 nvm use                    # Node 24 (.nvmrc); Node 22 works too
 corepack enable            # provides the pnpm version pinned in package.json
 pnpm install
@@ -19,7 +19,7 @@ pnpm test                  # ~2 min: unit, 50+ scenarios, journeys, property sui
 
 Then pick something:
 
-- **An issue labelled [`good first issue`](https://github.com/sponson/sponson/labels/good%20first%20issue)**,
+- **An issue labelled [`good first issue`](https://github.com/MishaBear94/Sponson/labels/good%20first%20issue)**,
   or one of the items marked so in [ROADMAP.md](ROADMAP.md). Comment on it so nobody duplicates the work.
 - **A new adapter** (a provider Sponson should manage): `pnpm new:adapter <name>` generates a working adapter,
   its unit tests, its sim routes and a scenario, and registers them. Run its tests, then turn the example op into

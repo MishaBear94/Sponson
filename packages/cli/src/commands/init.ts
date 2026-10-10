@@ -110,7 +110,7 @@ async function starterPlan(io: IO): Promise<string> {
   }
   const neon = io.env.NEON_PROJECT_ID ?? "proj_xxx";
   const vercelLine = team ? `{ project: ${q(project ?? "prj_xxx")}, team: ${q(team)} }` : `{ project: ${q(project ?? "prj_xxx")} }`;
-  return `# release.plan.yaml — everything that ships beside the code. See https://github.com/sponson/sponson
+  return `# release.plan.yaml — everything that ships beside the code. See https://github.com/MishaBear94/Sponson
 version: 1
 environments: [preview, production]
 providers:

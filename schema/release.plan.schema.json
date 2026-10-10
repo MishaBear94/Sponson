@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/sponson/sponson/main/schema/release.plan.schema.json",
+  "$id": "https://raw.githubusercontent.com/MishaBear94/Sponson/main/schema/release.plan.schema.json",
   "title": "Sponson release plan (release.plan.yaml)",
   "description": "One release, one plan. Specification: docs/plan-format.md. Rules a JSON Schema cannot express (unique ids, references to existing ids, declared environments) are enforced by `sponson plan`.",
   "type": "object",

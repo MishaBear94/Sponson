@@ -1,9 +1,5 @@
 # Contributor Covenant Code of Conduct
 
-> **TODO (maintainer):** replace `[INSERT CONTACT METHOD]` below with a monitored address
-> (for example `conduct@<your-domain>`) before announcing the project. Until then, report
-> privately to a maintainer listed in [MAINTAINERS.md](MAINTAINERS.md).
-
 ## Our Pledge
 
 We as members, contributors, and leaders pledge to make participation in our
@@ -64,7 +60,9 @@ representative at an online or offline event.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the community leaders responsible for enforcement at
-[INSERT CONTACT METHOD].
+the project lead, [@MishaBear94](https://github.com/MishaBear94), privately — through the contact options on
+their GitHub profile, or by opening a private security advisory on this repository and marking it as a conduct
+report if no other private channel is available. Reports are handled confidentially; do not open a public issue.
 All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the

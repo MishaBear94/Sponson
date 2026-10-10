@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/sponson/sponson/main/schema/release.plan.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/MishaBear94/Sponson/main/schema/release.plan.schema.json
 #
 # A Next.js app on Vercel with a Neon Postgres database. Every pull request gets its own
 # database branch, and that pull request's preview deployments get its connection string.

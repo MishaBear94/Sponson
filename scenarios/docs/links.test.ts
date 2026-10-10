@@ -2,7 +2,7 @@
  * The prose docs point into the code and into each other. When a file moves or a heading is renamed, these pointers
  * break silently; this suite makes them fail: every relative Markdown link must resolve to a file, every `#anchor`
  * must name a heading of its target, and every repo path written in backticks (`packages/core/src/engine/apply.ts`)
- * must exist. Links to this repository on GitHub (`https://github.com/sponson/sponson/blob/main/<path>#anchor`, used
+ * must exist. Links to this repository on GitHub (`https://github.com/MishaBear94/Sponson/blob/main/<path>#anchor`, used
  * by files that are read outside the repo, such as SKILL.md and package READMEs) are checked like relative ones.
  */
 import { access, readdir } from "node:fs/promises";
@@ -35,7 +35,7 @@ const exists = (p: string) => access(p).then(() => true, () => false);
 const REPO_PATH = /`((?:packages|scenarios|property|schema|scripts|examples|docs|action)\/[A-Za-z0-9_./<>*-]+)`/g;
 
 /** This repository on GitHub; links under it are checked against the working tree. */
-const GITHUB_BLOB = "https://github.com/sponson/sponson/blob/main/";
+const GITHUB_BLOB = "https://github.com/MishaBear94/Sponson/blob/main/";
 
 /** The anchors GitHub generates for a Markdown file's headings (outside code fences), duplicates suffixed `-1`, `-2`. */
 async function anchorsOf(file: string): Promise<Set<string>> {

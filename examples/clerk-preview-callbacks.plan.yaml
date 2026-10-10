@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/sponson/sponson/main/schema/release.plan.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/MishaBear94/Sponson/main/schema/release.plan.schema.json
 #
 # Each preview deployment's URL is allowed as a Clerk redirect URL. The URL exists only
 # after Vercel has deployed, so the first `apply` stops with status `partial` and the

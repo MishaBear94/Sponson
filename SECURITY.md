@@ -20,7 +20,7 @@ The GitHub Action (`action/`) follows the version of the `sponson` package it ru
 **Do not open a public issue, discussion or pull request.**
 
 Use GitHub's private vulnerability reporting: on the repository, go to **Security → Advisories → Report a
-vulnerability** (`https://github.com/sponson/sponson/security/advisories/new`). If that is unavailable to you,
+vulnerability** (`https://github.com/MishaBear94/Sponson/security/advisories/new`). If that is unavailable to you,
 contact a maintainer listed in [MAINTAINERS.md](MAINTAINERS.md) and ask for a private channel; do not include
 details in the first message.
 

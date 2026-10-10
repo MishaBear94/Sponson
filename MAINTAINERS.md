@@ -4,11 +4,11 @@ Sponson is small and intends to stay easy to run. This document says who decides
 
 ## Maintainers
 
-> **TODO (maintainer):** confirm this list and the contact handles; keep it in sync with `.github/CODEOWNERS`.
+Keep this list in sync with `.github/CODEOWNERS`.
 
 | Name | GitHub | Areas |
 |------|--------|-------|
-| Markov Wong | [@MarkovWangRR](https://github.com/MarkovWangRR) | everything (lead maintainer) |
+| Markov Wong | [@MishaBear94](https://github.com/MishaBear94) | everything (lead maintainer) |
 
 Emeritus maintainers are listed here when they step back; they keep their credit, not their merge rights.
 

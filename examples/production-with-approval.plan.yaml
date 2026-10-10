@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/sponson/sponson/main/schema/release.plan.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/MishaBear94/Sponson/main/schema/release.plan.schema.json
 #
 # Preview and production in one file. Lines are filtered by `environments:`; `--env` picks
 # the environment (default preview; production is never inferred from a branch name).

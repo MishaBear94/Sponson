@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/sponson/sponson/main/schema/release.plan.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/MishaBear94/Sponson/main/schema/release.plan.schema.json
 #
 # A project that existed before Sponson. These lines are what `sponson init` appends when it
 # adopts unmanaged resources: values are never copied into the plan, only `{ keep: true }`

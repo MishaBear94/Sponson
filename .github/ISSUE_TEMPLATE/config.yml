@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Report a security vulnerability
-    url: https://github.com/sponson/sponson/security/advisories/new
+    url: https://github.com/MishaBear94/Sponson/security/advisories/new
     about: Secret leaks, receipt tampering, production approval bypass — report privately, never in a public issue. See SECURITY.md.
   - name: Ask a question or share an idea
-    url: https://github.com/sponson/sponson/discussions
+    url: https://github.com/MishaBear94/Sponson/discussions
     about: Usage questions and open-ended ideas belong in Discussions.

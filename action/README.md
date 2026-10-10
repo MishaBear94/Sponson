@@ -82,14 +82,14 @@ jobs:
 
       - name: Destroy preview resources
         if: github.event_name == 'pull_request' && github.event.action == 'closed'
-        uses: sponson/sponson/action@v1
+        uses: MishaBear94/Sponson/action@v1
         with:
           command: destroy
           env: preview
 
       - name: Apply preview resources
         if: github.event_name != 'pull_request' || github.event.action != 'closed'
-        uses: sponson/sponson/action@v1
+        uses: MishaBear94/Sponson/action@v1
         with:
           command: apply
           env: preview
@@ -119,7 +119,7 @@ jobs:
             if (by.length === 0) core.setFailed("no approval recorded for the production environment");
             core.setOutput("by", by.join(", "));
 
-      - uses: sponson/sponson/action@v1
+      - uses: MishaBear94/Sponson/action@v1
         with:
           command: apply
           env: production
@@ -133,7 +133,7 @@ On a push the action passes no scope flags; the CLI reads the GitHub context (`G
 ### Plan only on pull requests
 
 ```yaml
-      - uses: sponson/sponson/action@v1
+      - uses: MishaBear94/Sponson/action@v1
         with:
           command: plan
         env:

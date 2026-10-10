@@ -32,7 +32,7 @@ permissions:
 
 jobs:
   version-pr:
-    if: github.event_name == 'push' && github.repository == 'sponson/sponson'
+    if: github.event_name == 'push' && github.repository == 'MishaBear94/Sponson'
     runs-on: ubuntu-latest
     permissions:
       contents: write
