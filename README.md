@@ -82,7 +82,13 @@ One release, one plan. Three commands.
 
 ## Quick start
 
-Sponson is not published to npm yet; run it from source:
+Install the CLI from npm (Node.js 22 or later):
+
+```bash
+npm install -g sponson    # or run it without installing: npx sponson <command>
+```
+
+To run an unreleased commit instead, build it from source:
 
 ```bash
 git clone https://github.com/MishaBear94/Sponson ~/sponson && (cd ~/sponson && pnpm install && pnpm build)

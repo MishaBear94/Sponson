@@ -33,7 +33,7 @@ inputs:
     description: >-
       `source` (default): install and run Sponson from this action's own checkout, so the code that runs is exactly
       the action ref you pinned and nothing is fetched from a package registry. Or an npm version of the `sponson`
-      package (e.g. `0.3.0`) — only once it is published from this repository.
+      package (e.g. `0.4.0`), fetched with npx.
     default: source
   node-version:
     description: Node.js version to run the CLI with.

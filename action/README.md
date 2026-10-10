@@ -14,7 +14,7 @@ nobody can move under you.
 | `env` | `preview` | environment; `production` is never inferred from the branch |
 | `approved-by` | | required when a line writes to production; take it from the environment approval (below), never from an agent |
 | `plan` | `release.plan.yaml` | path to the plan |
-| `version` | `source` | `source` runs Sponson from this action's own checkout (exactly the ref you pinned; nothing is fetched from a registry); or an npm version of `sponson` once one is published from this repository |
+| `version` | `source` | `source` runs Sponson from this action's own checkout (exactly the ref you pinned; nothing is fetched from a registry); or an npm version of `sponson` (e.g. `0.4.0`), fetched with `npx` |
 | `node-version` | `22` | Node.js version |
 | `github-token` | `${{ github.token }}` | pushes receipts and comments on the PR |
 
