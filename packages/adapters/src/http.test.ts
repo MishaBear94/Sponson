@@ -146,6 +146,30 @@ describe("retries", () => {
     }
   });
 
+  it("sends a custom Content-Type for a write that asks for one, JSON-encoding the body either way", async () => {
+    const got: Array<{ type: string | undefined; auth: string | undefined; body: string }> = [];
+    server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        got.push({ type: req.headers["content-type"], auth: req.headers.authorization, body: Buffer.concat(chunks).toString("utf8") });
+        reply(res, 200, "{}");
+      });
+    });
+    await new Promise<void>((r) => server!.listen(0, "127.0.0.1", r));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const raw = apiClient({ adapter: "acme", baseUrl: url, token: "api-123", authHeader: "header:authorization", redact: (t) => t, env: FAST });
+    const semantic = "application/json; domain-model=launchdarkly.semanticpatch";
+    await raw.patch("/x", { instructions: [] }, undefined, { contentType: semantic });
+    await raw.post("/x", { a: 1 }, undefined, { contentType: semantic });
+    await raw.patch("/x", { a: 1 });
+    expect(got).toEqual([
+      { type: semantic, auth: "api-123", body: '{"instructions":[]}' },
+      { type: semantic, auth: "api-123", body: '{"a":1}' },
+      { type: "application/json", auth: "api-123", body: '{"a":1}' },
+    ]);
+  });
+
   it("gives up after SPONSON_HTTP_RETRIES with PROVIDER_TRANSIENT and the attempt count", async () => {
     const url = await serve((_q, res) => reply(res, 504, "{}"));
     const e = await failure(client(url, { ...FAST, SPONSON_HTTP_RETRIES: "2" }).delete("/x"));

@@ -105,6 +105,12 @@ export interface WriteOptions {
    * otherwise only refusals (429, 423) are, since the first attempt may have taken effect.
    */
   idempotent?: boolean;
+  /**
+   * The `Content-Type` of the body, instead of `application/json`. The body is still sent JSON-encoded; use it for
+   * a JSON dialect a provider tells apart by media type (LaunchDarkly's semantic patch:
+   * `application/json; domain-model=launchdarkly.semanticpatch`).
+   */
+  contentType?: string;
 }
 
 /** Methods whose repetition is harmless, so 5xx and network errors are retried. */
@@ -234,12 +240,12 @@ export function apiClient(opts: ApiClientOptions): ApiClient {
       ...extra,
     });
 
-  async function once(method: string, path: string, body: unknown, idempotent: boolean): Promise<{ status: number; text: string } | Attempt> {
+  async function once(method: string, path: string, body: unknown, idempotent: boolean, contentType = "application/json"): Promise<{ status: number; text: string } | Attempt> {
     const controller = new AbortController();
     const init: RequestInit =
       body === undefined
         ? { method, headers: { ...headers }, signal: controller.signal }
-        : { method, headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify(body), signal: controller.signal };
+        : { method, headers: { ...headers, "content-type": contentType }, body: JSON.stringify(body), signal: controller.signal };
     const timer = setTimeout(() => controller.abort(), policy.timeoutMs);
     try {
       const res = await fetch(base + path, init);
@@ -262,7 +268,7 @@ export function apiClient(opts: ApiClientOptions): ApiClient {
   async function call<T>(method: string, path: string, body: unknown, shape?: Shape<T>, write?: WriteOptions): Promise<T> {
     const idempotent = write?.idempotent ?? IDEMPOTENT.has(method);
     for (let attempt = 1; ; attempt++) {
-      const r = await once(method, path, body, idempotent);
+      const r = await once(method, path, body, idempotent, write?.contentType);
       if (r instanceof Attempt) {
         if (r.retryable && attempt <= policy.retries) {
           await sleep(Math.min(MAX_RETRY_WAIT_MS, r.waitMs ?? backoffMs(attempt, policy.baseMs)));
