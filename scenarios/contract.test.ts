@@ -15,12 +15,21 @@
  * even when an assertion fails. It never touches the production target.
  *
  * Each `assumption <id>:` test pins the API assumption with that id, listed at the top of the sim's provider
- * file (packages/sim/src/routes/{vercel,neon,clerk}.ts). If one fails live, fix the sim first, then the adapter.
+ * file (packages/sim/src/routes/{vercel,neon,clerk,planetscale}.ts). If one fails live, fix the sim first, then the
+ * adapter.
+ *
+ * PlanetScale has its own block, live only when its credentials are set too (it is skipped in a live run without
+ * them, so the Vercel/Neon/Clerk suite does not need a PlanetScale account):
+ *
+ *   PLANETSCALE_SERVICE_TOKEN_ID=... PLANETSCALE_SERVICE_TOKEN=... \
+ *   SPONSON_LIVE_PLANETSCALE_ORG=... SPONSON_LIVE_PLANETSCALE_DATABASE=... (a throwaway Vitess database with a `main` branch)
+ *
+ * It creates one development branch and a password on it, and deletes both in `afterAll`.
  */
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CLERK_DEFAULT_API_URL, clerkAdapter, neonAdapter, vercelAdapter } from "@sponson/adapters";
+import { CLERK_DEFAULT_API_URL, PLANETSCALE_DEFAULT_API_URL, clerkAdapter, neonAdapter, planetscaleAdapter, vercelAdapter } from "@sponson/adapters";
 import type { AdapterContext, Ctx } from "@sponson/core";
 import { startSim, type SimHandle } from "@sponson/sim";
 import { cliEnv, runCli, workspace, type CliRun, type Workspace } from "./support.js";
@@ -160,5 +169,100 @@ describe(`contract (${LIVE ? "@live" : "sim"})`, () => {
     expect(await neon.read(actx("neon"), neon.defaults!({}, actx("neon").ctx))).toBeNull();
     const clerk = clerkAdapter.ops.redirect_allow!;
     expect(await clerk.read(actx("clerk"), { url: callbackUrl })).toBeNull();
+  }, 120_000);
+});
+
+// ---------------------------------------------------------------------------
+// PlanetScale (assumptions PS1… in packages/sim/src/routes/planetscale.ts)
+// ---------------------------------------------------------------------------
+
+const PS_MISSING = ["PLANETSCALE_SERVICE_TOKEN_ID", "PLANETSCALE_SERVICE_TOKEN", "SPONSON_LIVE_PLANETSCALE_ORG", "SPONSON_LIVE_PLANETSCALE_DATABASE"].filter((k) => !process.env[k]);
+const PS_LIVE = LIVE && PS_MISSING.length === 0;
+
+describe.skipIf(LIVE && !PS_LIVE)(`contract planetscale (${PS_LIVE ? "@live" : "sim"})`, () => {
+  const psBranch = `sponson-contract-${tag}`;
+  let psSim: SimHandle | null = null;
+  let psEnv: NodeJS.ProcessEnv;
+  let psProvider: { organization: string; database: string };
+  let base: string;
+  let auth: string;
+
+  beforeAll(async () => {
+    if (PS_LIVE) {
+      psEnv = { ...process.env };
+      psProvider = { organization: process.env.SPONSON_LIVE_PLANETSCALE_ORG!, database: process.env.SPONSON_LIVE_PLANETSCALE_DATABASE! };
+    } else {
+      psSim = await startSim();
+      psEnv = { ...cliEnv(psSim), SPONSON_PLANETSCALE_POLL_MS: "10" };
+      psProvider = { organization: "acme", database: "app" };
+    }
+    base = `${psEnv.PLANETSCALE_API_URL ?? PLANETSCALE_DEFAULT_API_URL}/organizations/${psProvider.organization}/databases/${psProvider.database}`;
+    auth = `${psEnv.PLANETSCALE_SERVICE_TOKEN_ID}:${psEnv.PLANETSCALE_SERVICE_TOKEN}`;
+  });
+
+  afterAll(async () => {
+    // Deleting the branch deletes its password too; already gone is fine.
+    await fetch(`${base}/branches/${psBranch}`, { method: "DELETE", headers: { authorization: auth } }).catch(() => {});
+    await psSim?.close();
+  }, 120_000);
+
+  function psActx(): AdapterContext {
+    const ctx: Ctx = { env: "preview", git: { branch, sha, short_sha: sha.slice(0, 7) }, pr: { number: pr }, scope: `pr-${pr}` };
+    return { ctx, provider: psProvider, env: psEnv, log: () => {}, intend: async () => {}, redact: (t) => t };
+  }
+
+  async function getBranch(): Promise<{ status: number; body: Record<string, unknown> }> {
+    const res = await fetch(`${base}/branches/${psBranch}`, { headers: { authorization: auth } });
+    return { status: res.status, body: res.status === 200 ? ((await res.json()) as Record<string, unknown>) : {} };
+  }
+
+  it("assumption PS1: a service token is sent as `Authorization: <id>:<token>`; as a bearer token it is refused", async () => {
+    const ok = await fetch(`${base}/branches`, { headers: { authorization: auth } });
+    expect(ok.status).toBe(200);
+    const bearer = await fetch(`${base}/branches`, { headers: { authorization: `Bearer ${psEnv.PLANETSCALE_SERVICE_TOKEN}` } });
+    expect(bearer.status).toBe(401);
+  });
+
+  it("assumption PS4: a created branch answers 201 not ready, and becomes ready later", async () => {
+    const res = await fetch(`${base}/branches`, { method: "POST", headers: { authorization: auth, "content-type": "application/json" }, body: JSON.stringify({ name: psBranch, parent_branch: "main" }) });
+    expect(res.status).toBe(201);
+    expect((await res.json()) as Record<string, unknown>).toMatchObject({ name: psBranch, ready: false });
+    const deadline = Date.now() + 10 * 60_000;
+    for (;;) {
+      const b = await getBranch();
+      expect(b.status).toBe(200);
+      if (b.body.ready === true) break;
+      expect(Date.now()).toBeLessThan(deadline);
+      await new Promise((r) => setTimeout(r, PS_LIVE ? 5000 : 10));
+    }
+  }, 11 * 60_000);
+
+  it("assumption PS5: creating a branch whose name exists answers 422 (the adapter also accepts 409)", async () => {
+    const res = await fetch(`${base}/branches`, { method: "POST", headers: { authorization: auth, "content-type": "application/json" }, body: JSON.stringify({ name: psBranch, parent_branch: "main" }) });
+    expect(res.status).toBe(422);
+  });
+
+  it("assumption PS8: a password's plaintext is in the create answer and in no read", async () => {
+    const op = planetscaleAdapter.ops.password!;
+    const params = op.defaults!({ branch: psBranch }, psActx().ctx);
+    const r = await op.apply(psActx(), params, null);
+    expect(String(r.outputs.connection_string)).toMatch(/^mysql:\/\/[^:]+:[^@]+@[^/]+\//);
+    expect(typeof r.outputs.password).toBe("string");
+    const list = await fetch(`${base}/branches/${psBranch}/passwords`, { headers: { authorization: auth } });
+    const data = ((await list.json()) as { data: Array<Record<string, unknown>> }).data;
+    expect(data.length).toBeGreaterThan(0);
+    for (const p of data) expect(p.plain_text ?? null).toBeNull();
+    const live = await op.read(psActx(), params);
+    expect(live?.outputs).not.toHaveProperty("connection_string");
+    expect(live?.outputs).not.toHaveProperty("password");
+  });
+
+  it("assumption PS7: a deleted branch is gone when DELETE returns", async () => {
+    const op = planetscaleAdapter.ops.branch!;
+    const params = { name: psBranch, parent: "main" };
+    const live = await op.read(psActx(), params);
+    expect(live).not.toBeNull();
+    await op.destroy(psActx(), live!.resources);
+    expect(await op.read(psActx(), params)).toBeNull();
   }, 120_000);
 });

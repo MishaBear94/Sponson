@@ -10,6 +10,7 @@ The format is specified in [docs/plan-format.md](../docs/plan-format.md).
 | File | Shows |
 |---|---|
 | [nextjs-neon-preview.plan.yaml](nextjs-neon-preview.plan.yaml) | a database branch per pull request, wired into preview variables |
+| [nextjs-planetscale-preview.plan.yaml](nextjs-planetscale-preview.plan.yaml) | a PlanetScale branch and password per pull request; a once-only output |
 | [vercel-shared-and-branch-vars.plan.yaml](vercel-shared-and-branch-vars.plan.yaml) | project-wide, per-branch and production variables; `${ctx.*}` |
 | [clerk-preview-callbacks.plan.yaml](clerk-preview-callbacks.plan.yaml) | a value that exists only after the deploy; `partial` runs |
 | [explicit-deploy.plan.yaml](explicit-deploy.plan.yaml) | Sponson starting the deploy; `depends_on` |
@@ -40,6 +41,20 @@ Every Vercel variable is shown as `(secret)` in the diff: the adapter treats all
 
 `env` is `pending` until `db` exists; one `apply` creates both, in that order. Closing the pull request and running
 `sponson apply --destroy` deletes the variables and then the branch.
+
+## nextjs-planetscale-preview.plan.yaml
+
+The same shape with PlanetScale. `db` creates a development branch `sponson-preview-<scope>` from `main` and waits
+until PlanetScale reports it ready; `dbpw` creates a password on it; `env` writes the password's `connection_string`
+to `DATABASE_URL`. On the first plan, `dbpw` and `env` are `pending`; one `apply` creates all three, in that order.
+
+PlanetScale shows a password's plaintext only when it is created, so `connection_string` is a
+[once-only output](../docs/plan-format.md#once-only-outputs). `env` receives it in the run that creates the password.
+On every later run, `env` keeps the value it holds: the plan shows all three lines unchanged and `apply` writes nothing.
+If `DATABASE_URL` is deleted in Vercel, `env` is refused with `OUTPUT_UNAVAILABLE`, because no later run can read the
+value again. Sponson does not rotate the password on its own. To get a new one, delete the password in PlanetScale:
+the next `apply` creates a new password and writes its connection string. `sponson apply --destroy` deletes the
+variable, then the password, then the branch.
 
 ## vercel-shared-and-branch-vars.plan.yaml
 

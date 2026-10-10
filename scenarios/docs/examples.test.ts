@@ -37,6 +37,8 @@ function seedFor(file: string, plan: Plan): Partial<SimSeed> {
   const seed: Partial<SimSeed> = {};
   if (plan.providers.vercel) seed.vercel = { projects: { [project(plan, "vercel")]: { envs: [] } } };
   if (plan.providers.neon) seed.neon = { projects: { [project(plan, "neon")]: { branches: [{ name: "main" }] } } };
+  const ps = plan.providers.planetscale;
+  if (ps) seed.planetscale = { organizations: { [String(ps.organization)]: { [String(ps.database)]: [{ name: "main", production: true }] } } };
   return { ...seed, ...(SEEDS[file]?.(plan) ?? {}) };
 }
 

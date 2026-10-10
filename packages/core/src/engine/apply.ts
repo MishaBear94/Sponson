@@ -304,7 +304,8 @@ class ApplyRun {
   private setOutputs(c: Change, values: Record<string, unknown>): void {
     const op = this.prepared.ops.get(c.id)!;
     this.rc.guardOutputs(values, op.outputs);
-    this.outputs.set(c.id, { values: values as LineOutputs["values"], specs: op.outputs });
+    // The line's resource exists now: a `once` output it did not return in this run was shown in an earlier one.
+    this.outputs.set(c.id, { values: values as LineOutputs["values"], specs: op.outputs, spent: true });
     const pub = publicOutputs(values, op.outputs);
     const line = this.receipt.lines[c.id];
     if (line) line.outputs = pub;

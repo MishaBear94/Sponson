@@ -40,6 +40,13 @@ const NEXT_VERCEL_SUPABASE: Files = {
   ".env.local": `NEXT_PUBLIC_SUPABASE_URL=https://abcd.supabase.co\nSUPABASE_SERVICE_ROLE_KEY=${SECRET_SUPABASE}\n`,
 };
 
+/** Next.js on Vercel (linked) with PlanetScale's serverless driver; a real database URL in .env.local. */
+const NEXT_VERCEL_PLANETSCALE: Files = {
+  "package.json": { dependencies: { next: "15.1.0", "@planetscale/database": "^1.19.0" } },
+  ".vercel/project.json": { projectId: "prj_demo" },
+  ".env.local": `DATABASE_URL="mysql://abc123:${SECRET_PASSWORD}@aws.connect.psdb.cloud/app?ssl={"rejectUnauthorized":true}"\n`,
+};
+
 /** SvelteKit + Drizzle on Neon (context file from `neonctl set-context`), deployed somewhere Sponson does not manage. */
 const SVELTEKIT_NEON_NETLIFY: Files = {
   "package.json": { dependencies: { "@sveltejs/kit": "^2.0.0", "drizzle-orm": "^0.36.0", "@neondatabase/serverless": "^1.0.0" } },
@@ -133,6 +140,26 @@ describe("sponson init detects the stack", () => {
     expect(text).toContain("has no deploy target Sponson manages yet");
   });
 
+  it("Next.js + Vercel + PlanetScale: branch → password → env by reference, the two PlanetScale ids TODOs, and it plans", async () => {
+    const cwd = await repoWith(NEXT_VERCEL_PLANETSCALE);
+    const r = await init(cwd);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^Detected: Vercel \(\.vercel\/project\.json\), PlanetScale \(package\.json: @planetscale\/database/m);
+    expect(r.stdout).toMatch(/To fill in:\n {2}providers\.planetscale\.organization \(now "my-org"\): the name slugs[^\n]*\n {2}providers\.planetscale\.database \(now "my-db"\)/);
+    expect(r.stdout).toContain("Next: set VERCEL_TOKEN, PLANETSCALE_SERVICE_TOKEN_ID, PLANETSCALE_SERVICE_TOKEN in your environment");
+    expect(r.stdout).not.toContain("Not supported yet");
+    const { text, ids } = await writtenPlan(cwd);
+    expect(ids).toEqual(["db", "dbpw", "env"]);
+    expect(text).toContain("DATABASE_URL: { from: dbpw.connection_string }");
+    expect(text).not.toContain(SECRET_PASSWORD);
+
+    sim = await startSim();
+    await writeFile(join(cwd, "release.plan.yaml"), text.replace('"my-org"', '"acme"').replace('"my-db"', '"app"') + "receipts: local\n");
+    const p = await runCli(["plan", "--json", "--branch", "feat/x", "--sha", SHA, "--pr", "42"], { env: cliEnv(sim), cwd });
+    expect(p.code, p.stdout + p.stderr).toBe(0);
+    expect(p.json.lines.map((l: any) => [l.id, l.status])).toEqual([["db", "create"], ["dbpw", "pending"], ["env", "pending"]]);
+  });
+
   it("a bare repository: the Vercel + Neon template, explained, with both ids to fill in", async () => {
     const cwd = await repoWith({});
     const r = await init(cwd);
@@ -148,7 +175,7 @@ describe("sponson init detects the stack", () => {
   });
 
   it("a secret value in .env.local never appears in the written plan or in any output", async () => {
-    for (const files of [NEXT_VERCEL_NEON_CLERK, NEXT_VERCEL_SUPABASE]) {
+    for (const files of [NEXT_VERCEL_NEON_CLERK, NEXT_VERCEL_SUPABASE, NEXT_VERCEL_PLANETSCALE]) {
       for (const args of [[], ["--json"]]) {
         const cwd = await repoWith(files);
         const r = await init(cwd, ...args);

@@ -20,7 +20,10 @@ All fetched on 2026-10-10 and treated as data; none is vendored into the reposit
 | Clerk | Backend API OpenAPI, https://github.com/clerk/openapi-specs `bapi/2026-05-12.yml` (commit `3b078e5`); the `/redirect_urls` section is identical in `bapi/2021-02-05.yml` | `2026-05-12` |
 | Clerk | Official SDK sources, for the list envelope the spec does not describe: RedirectUrlApi.ts (backend package) in clerk/javascript, redirecturl/client.go in clerk/clerk-sdk-go (v2) | `main` / `v2` on that date |
 
-All three use bearer authentication (`securitySchemes`), which is what the shared HTTP client sends: ✅.
+| PlanetScale | OpenAPI document, https://planetscale.com/docs/openapi.yaml (fetched 2026-10-11); service tokens, https://planetscale.com/docs/api/reference/service-tokens; CLI references https://planetscale.com/docs/cli/service-tokens.md, https://planetscale.com/docs/cli/branch.md, https://planetscale.com/docs/cli/password.md; Node.js connection string, https://planetscale.com/docs/vitess/tutorials/connect-nodejs-app | `v1` |
+
+Vercel, Neon and Clerk use bearer authentication (`securitySchemes`), which is what the shared HTTP client sends: ✅.
+PlanetScale service tokens are not bearer tokens; see below.
 
 ## Vercel
 
@@ -102,6 +105,48 @@ methods, which is more cautious than needed but not wrong.
 | C2 | bare array; with `paginated=true`, `{ data, total_count }` by `offset`/`limit` | array and parameters verified; envelope from the SDK sources (pinned by the contract suite) |
 | C3 | `RedirectURL` and `DeletedObject` shapes | verified |
 
+## PlanetScale
+
+Paths are relative to `https://api.planetscale.com/v1` (the spec's `servers`) and, below the first row, to
+`/organizations/{organization}/databases/{database}`.
+
+### Calls the adapter makes
+
+| Call | What the adapter sends and reads | Spec | Notes |
+|---|---|---|---|
+| every request | `Authorization: <PLANETSCALE_SERVICE_TOKEN_ID>:<PLANETSCALE_SERVICE_TOKEN>` | ✅ | Service tokens page; the spec's `securitySchemes` lists only OAuth. Variable names as in the CLI docs. Accesses needed: `create_branch`, `read_branch`, `delete_branch`, `connect_branch`, `delete_branch_password` (each endpoint's "Service Token Accesses"). |
+| `GET /branches` (`list_branches`) | `page` from `next_page`; reads `data[].id`, `name`, `parent_branch`, `production`, `ready` | ✅ | Default `per_page` 25. Used by `listScope` only. |
+| `GET /branches/{branch}` (`get_branch`) | by **name**; `404` → absent; reads `id`, `name`, `parent_branch`, `production`, `ready` | ✅ | `state` (`pending` … `ready`) is also returned; the adapter relies on the boolean `ready`. |
+| `POST /branches` (`create_branch`) | `{ name, parent_branch }`; `201` | ✅ | `parent_branch` is optional in the spec (defaults to the database's default branch); the adapter always sends it, after checking it exists with `get_branch`. |
+| same, duplicate name | any `409` or `422` → `get_branch` by name, claim it if found | ❓ | The spec lists `422` and no `409`; the wording is undocumented (PS5). |
+| `DELETE /branches/{branch}` (`delete_branch`) | by name, after `get_branch` confirmed the id the ledger recorded; `404` is success | ✅ path and `204`; ❓ timing | Whether deletion is synchronous needs a live run (PS7). |
+| `GET /branches/{branch}/passwords` (`list_passwords`) | `page` from `next_page`; reads `data[].id`, `name`, `role`, `username`, `access_host_url` | ✅ | `plain_text` is "Null except in the response from the create endpoint". The `q` search is not used (its matching rules are undocumented); the adapter filters names itself. |
+| `POST /branches/{branch}/passwords` (`create_password`) | `{ name, role }`; reads `id`, `role`, `username`, `access_host_url`, `plain_text` | ✅ | Roles `reader`, `writer`, `admin`, `readwriter`. `name` is "optional"; uniqueness is not documented (PS9). |
+| `DELETE /branches/{branch}/passwords/{id}` (`delete_password`) | `404` is success | ✅ | `204`. |
+| connection string | `mysql://<username>:<plain_text>@<access_host_url>/<database>?ssl={"rejectUnauthorized":true}` | ✅ | The Node.js tutorial's form; Prisma's `sslaccept=strict` via `connection_params`. |
+
+Not used: `PATCH …/passwords/{id}` takes only `name` and `cidrs` (✅), so a role cannot change in place (PS10), and
+the adapter never calls `…/passwords/{id}/renew`, which would rotate the plaintext.
+
+### Sim assumptions (`packages/sim/src/routes/planetscale.ts`)
+
+| Id | Assumption | Status |
+|---|---|---|
+| PS1 | `Authorization: <id>:<token>`; the sim refuses `Bearer` | verified (pinned by the contract suite) |
+| PS2 | paths under organization and database; branches addressed by name | verified |
+| PS3 | `{ data, next_page }`, `?page=`, 25 per page | verified |
+| PS4 | a created branch is `ready: false` at first and becomes ready later | fields verified; initial state through the CLI's `--wait` only; duration ❓ (pinned) |
+| PS5 | a duplicate branch name answers `422` | ❓ (the adapter accepts `409` or `422`) |
+| PS6 | an unknown parent answers `404` | ❓ (the adapter checks the parent first) |
+| PS7 | branch deletion is synchronous and takes the passwords with it | `204` verified; timing ❓ |
+| PS8 | `plain_text` only in the create answer | verified (pinned) |
+| PS9 | password names are not unique | ❓ (the adapter refuses two of one name) |
+| PS10 | a password's role cannot change in place | verified |
+| PS11 | password delete `204`; `404` when gone | `204` verified; `404` ❓ |
+| PS12 | a password on a branch that is not ready is refused | ❓ (the adapter waits for `ready` first, so either answer is fine) |
+| PS13 | error bodies are `{ code, message }` | ❓ (never read by the adapter) |
+| PS14 | branch name characters | ❓ (the default name uses only `a-z`, `0-9`, `-`) |
+
 ## What still needs a live account
 
 - Vercel: V1 (propagation of env writes), the deployment list's order, whether `decrypt=true` still decrypts,
@@ -110,5 +155,8 @@ methods, which is more cautious than needed but not wrong.
 - Neon: N1 (list visibility during an asynchronous delete), N2 (which requests answer `423`, endpoint readiness),
   N5 (status of a duplicate branch name).
 - Clerk: C1 (status and wording of a duplicate), C2 (the envelope, confirmed only through the SDKs).
+- PlanetScale: PS4 (a new branch is not ready at first; how long provisioning takes), PS5 (status of a duplicate
+  branch name), PS7 (deletion timing), PS9 (duplicate password names), PS12 (a password on a branch still
+  provisioning), and PS1 and PS8 end to end.
 
 Run them with `pnpm test:live`; see the header of `scenarios/contract.test.ts`.

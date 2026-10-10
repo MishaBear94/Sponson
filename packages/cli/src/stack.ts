@@ -38,7 +38,7 @@ export interface UnsupportedFinding extends Finding {
 }
 
 export interface StackDetection {
-  /** What Sponson can use, in a fixed order: providers (vercel, neon, clerk), then frameworks, then ORMs. */
+  /** What Sponson can use, in a fixed order: providers (vercel, neon, planetscale, clerk), then frameworks, then ORMs. */
   found: Finding[];
   /** Detected but not managed by any built-in adapter. Never silently dropped. */
   unsupported: UnsupportedFinding[];
@@ -169,6 +169,7 @@ interface Rule {
 const SUPPORTED: Rule[] = [
   { id: "vercel", name: "Vercel", kind: "provider", deps: ["vercel", "@vercel/"], env: /^VERCEL_/, files: ["vercel.json", ".vercel/project.json"] },
   { id: "neon", name: "Neon", kind: "provider", deps: ["@neondatabase/", "@prisma/adapter-neon", "neonctl"], env: /^NEON_/, files: [".neon"] },
+  { id: "planetscale", name: "PlanetScale", kind: "provider", deps: ["@planetscale/"], env: /^PLANETSCALE_/ },
   { id: "clerk", name: "Clerk", kind: "provider", deps: ["@clerk/"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_|NUXT_PUBLIC_)?CLERK_/ },
   { id: "next", name: "Next.js", kind: "framework", deps: ["next"] },
   { id: "remix", name: "Remix", kind: "framework", deps: ["@remix-run/"] },
@@ -182,7 +183,6 @@ const SUPPORTED: Rule[] = [
 /** Detected and reported, but not managed yet. Never silently ignored. */
 const UNSUPPORTED: Rule[] = [
   { id: "supabase", name: "Supabase", kind: "service", deps: ["@supabase/"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_)?SUPABASE_/, files: ["supabase/config.toml"], pointer: `database branches and Auth redirect URLs: ${ROADMAP_ADAPTERS}; issue #16 (https://github.com/MishaBear94/Sponson/issues/16)` },
-  { id: "planetscale", name: "PlanetScale", kind: "service", deps: ["@planetscale/"], env: /^PLANETSCALE_/, pointer: `database branches: ${ROADMAP_ADAPTERS}` },
   { id: "turso", name: "Turso", kind: "service", deps: ["@libsql/client"], env: /^TURSO_/, pointer: NEW_ISSUE },
   { id: "auth0", name: "Auth0", kind: "service", deps: ["auth0", "@auth0/"], env: /^AUTH0_/, pointer: "allowed callback URLs: issue #16 (https://github.com/MishaBear94/Sponson/issues/16)" },
   { id: "netlify", name: "Netlify", kind: "service", deps: ["@netlify/", "netlify-cli"], env: /^NETLIFY_/, files: ["netlify.toml", ".netlify/state.json"], pointer: `deploy-target env vars: ${ROADMAP_ADAPTERS}` },

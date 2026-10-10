@@ -131,6 +131,15 @@ export interface OutputSpec {
   event?: string;
   /** Sensitive outputs are never displayed, logged, or written to receipts. */
   sensitive?: boolean;
+  /**
+   * The provider reveals this value only in the response that creates the resource (a database password's
+   * plaintext): `read` never returns it and Sponson never stores it, so declare it `sensitive` too. It reaches
+   * dependent lines in the run that creates the resource. In any later run, a `from:` reference to it resolves to
+   * `{ keep: true }`: a dependent that already holds the value keeps it, and one that would have to write it is
+   * refused with OUTPUT_UNAVAILABLE instead of receiving an empty value. Nothing is ever re-created to get the value
+   * back. See docs/adr/0017-once-only-outputs.md.
+   */
+  once?: boolean;
 }
 
 /** One concrete thing in the provider. */
@@ -362,6 +371,8 @@ export interface AdapterAbout {
   credentialEnv: string;
   /** Environment variable that overrides the API base URL (the sim and tests use it), when there is one. */
   baseUrlEnv?: string;
+  /** Further variables the credential needs, when one is not enough (PlanetScale: the service token's id). */
+  extraCredentialEnv?: readonly string[];
 }
 
 /**

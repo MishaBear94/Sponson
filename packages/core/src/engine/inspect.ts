@@ -1,10 +1,11 @@
+import { isSponsonError } from "../errors.js";
 import { resolveParams, type LineOutputs, type ResolveResult } from "../resolve.js";
 import type { Change, DiffSide, Drift, LiveState, OpSpec, ResourceDiff, ResourceRecord } from "../types.js";
 import type { RunContext } from "./run-context.js";
 
 /** Why apply would refuse a line, before writing anything. */
 export interface Refusal {
-  code: "DRIFT_CHANGED" | "OWNED_BY_OTHER_SCOPE" | "SECRET_UNRESOLVED";
+  code: "DRIFT_CHANGED" | "OWNED_BY_OTHER_SCOPE" | "SECRET_UNRESOLVED" | "OUTPUT_UNAVAILABLE";
   message: string;
 }
 
@@ -31,8 +32,10 @@ export async function inspectLine(rc: RunContext, change: Change, op: OpSpec, pa
   const resolved = resolveParams(params, outputs, rc.secrets.values);
   const live = await op.read(rc.adapterContext(change.adapter, provider), resolved.params);
   if (live) rc.guardOutputs(live.outputs, op.outputs);
-  const diffs = op.diff(live, resolved.params).map((d) => scrubDiff(rc, d));
+  const spent = diffOrSpent(change, op, live, resolved);
+  const diffs = spent.diffs.map((d) => scrubDiff(rc, d));
   const inspection: Inspection = { change, op, provider, resolved, live, diffs, drift: [], desired: new Set(diffs.map((d) => d.key)) };
+  if (spent.refusal) inspection.refusal = spent.refusal;
 
   const missingSecret = resolved.secrets.find((s) => rc.secrets.failures.has(s.ref));
   if (missingSecret) {
@@ -48,6 +51,24 @@ export async function inspectLine(rc: RunContext, change: Change, op: OpSpec, pa
     if (verdict.refusal) inspection.refusal ??= verdict.refusal;
   }
   return inspection;
+}
+
+/**
+ * The line's diffs. A spent `once` output reaches the line as `{ keep: true }`; when the line has nothing to keep
+ * (its adapter rejects the keep marker as PARAM_INVALID, as `diffValue` does), it would need the value itself,
+ * which no later run can have: that is a refusal naming the output, not a parameter error.
+ */
+function diffOrSpent(change: Change, op: OpSpec, live: LiveState | null, resolved: ResolveResult): { diffs: ResourceDiff[]; refusal?: Refusal } {
+  try {
+    return { diffs: op.diff(live, resolved.params) };
+  } catch (e) {
+    const spent = resolved.spent[0];
+    if (!spent || !isSponsonError(e) || e.code !== "PARAM_INVALID") throw e;
+    const message =
+      `\`${change.id}\` needs \`${spent.ref}\`, which the provider reveals only when \`${spent.line}\` creates its resource, and that happened in an earlier run. ` +
+      `Nothing was written. To pass a new value on, make \`${spent.line}\` create a new one: delete it in the provider (the next apply re-creates it) or give it a new name in the plan.`;
+    return { diffs: [], refusal: { code: "OUTPUT_UNAVAILABLE", message } };
+  }
 }
 
 /** What one diffed resource means against the ledger: drift to report, and why apply must refuse it. */

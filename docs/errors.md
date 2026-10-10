@@ -49,6 +49,7 @@ exactly when the exit code is 0.
 | `STORE_REJECTED` | 1 | The receipt store kept rejecting the receipt; a fallback copy was kept. |  |
 | `WAIT_TIMEOUT` | 1 | An external event did not happen within the wait timeout. |  |
 | `OWNED_BY_OTHER_SCOPE` | 1 | Another scope in this environment manages the resource. |  |
+| `OUTPUT_UNAVAILABLE` | 1 | A line needs an output its provider reveals only when the resource is created (a password), and that resource was created in an earlier run; nothing is re-created to get it back. |  |
 | `INTERNAL` | 1 | An unexpected error. |  |
 | `PROVIDER_TRANSIENT` | 1 | The provider failed transiently (after retries). |  |
 | `PROVIDER_CONFLICT` | 1 | The provider reported a conflict. |  |

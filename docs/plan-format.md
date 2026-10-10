@@ -227,6 +227,7 @@ The base URL override replaces the provider's API base URL (the test suites poin
 | `neon` | [`neon.branch`](#neonbranch) | `NEON_API_KEY` | `NEON_API_URL` |
 | `vercel` | [`vercel.env`](#vercelenv), [`vercel.deploy`](#verceldeploy) | `VERCEL_TOKEN` | `VERCEL_API_URL` |
 | `clerk` | [`clerk.redirect_allow`](#clerkredirect_allow) | `CLERK_SECRET_KEY` | `CLERK_API_URL` |
+| `planetscale` | [`planetscale.branch`](#planetscalebranch), [`planetscale.password`](#planetscalepassword) | `PLANETSCALE_SERVICE_TOKEN_ID` + `PLANETSCALE_SERVICE_TOKEN` | `PLANETSCALE_API_URL` |
 <!-- generated:adapters:end -->
 
 A missing credential fails the line with `PROVIDER_AUTH`. Every resource has a key that identifies it within the
@@ -293,6 +294,65 @@ One URL on the Clerk instance's redirect allow-list (the instance `CLERK_SECRET_
 A URL that is already on the list is taken over, not duplicated. Destroy removes the URL. For drift and adoption,
 every URL on the instance's list is in scope.
 
+### `planetscale.branch`
+
+A development branch of a PlanetScale database (Vitess / MySQL), one per scope. Requires
+`providers.planetscale.organization` and `providers.planetscale.database`; the credential is a service token, two
+variables sent together as `Authorization: <PLANETSCALE_SERVICE_TOKEN_ID>:<PLANETSCALE_SERVICE_TOKEN>`. The token
+needs the `create_branch`, `read_branch`, `delete_branch`, `connect_branch` and `delete_branch_password` accesses on
+the database.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | string | `sponson-${ctx.env}-${ctx.scope}`, lowercased, anything but letters, digits and dashes turned into `-` | Branch name; the branch's identity (key `branch:<name>`). |
+| `parent` | string | `main` | Parent branch, by name. Used only when the branch is created; a different parent on an existing branch is not a change. An unknown parent is `PARAM_INVALID`. |
+
+PlanetScale provisions a new branch asynchronously: `apply` polls it every `SPONSON_PLANETSCALE_POLL_MS` (default
+2000) until it reports `ready`, for at most `SPONSON_PLANETSCALE_READY_TIMEOUT_MS` (default 600000), then fails with
+`WAIT_TIMEOUT` (the run's rollback deletes the branch it created). A create that meets a branch of the same name (the
+answer to an earlier create of ours was lost, or someone else made it) takes that branch instead of failing; whether
+it is Sponson's is decided by the ledger's intent, as for every adapter. Outputs: `name` (pass it to
+`planetscale.password`) and `branch_id`.
+
+A branch deleted in the console is `missing` drift and re-created by the next apply; one deleted and re-created
+under the same name is `changed` drift (a new id), refused until `--reconcile`, which takes it over as adopted.
+Destroy deletes the branch by name, and only if it is still the one the ledger recorded. For drift and adoption,
+every non-production branch of the database is in scope.
+
+### `planetscale.password`
+
+A password (credential) on a PlanetScale branch, and the connection string built from it.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `branch` | string | (required) | The branch, by name. Usually `{ from: <planetscale.branch line>.name }`. |
+| `name` | string | `sponson-${ctx.env}-${ctx.scope}`, as for the branch | The password's name on that branch; with the branch, its identity (key `password:<branch>/<name>`). |
+| `role` | `reader` \| `writer` \| `readwriter` \| `admin` | `admin` (as `pscale password create`) | The password's database role. |
+| `connection_params` | string | `ssl={"rejectUnauthorized":true}` | The query of `connection_string` (the form PlanetScale documents for Node.js drivers). Prisma wants `sslaccept=strict`. |
+
+`connection_string` is `mysql://<username>:<password>@<access host>/<database>?<connection_params>`. Before
+creating the password, `apply` waits for the branch to be ready (an earlier run may have left it provisioning).
+
+**The plaintext exists once.** PlanetScale returns a password's plaintext only in the answer that creates it; no
+later request can read it, and Sponson never stores it. So `password` and `connection_string` are sensitive
+[once-only outputs](#once-only-outputs):
+
+- In the run that creates the password, they reach the lines that reference them, like any output. Put those
+  lines in the same plan (a `vercel.env` line with `DATABASE_URL: { from: dbpw.connection_string }`).
+- In every later run they are `{ keep: true }` for those lines: a variable that already holds the value is unchanged,
+  so re-applying an unchanged plan writes nothing.
+- A line that would have to write the value again (its variable was deleted, or a new line references the password
+  after it was created) is **refused** with `OUTPUT_UNAVAILABLE`, nothing written. Sponson never re-creates or
+  renews a password on its own to get a value back: that would rotate a credential something may still be using.
+  To rotate deliberately, delete the password in PlanetScale (`missing` drift: the next apply creates a new one and
+  passes it on in that run) or change its `name` in the plan.
+
+A different `role` on an existing password is `PARAM_INVALID` at plan time: PlanetScale cannot change a role in
+place, and replacing the password is the plan's decision (a new `name`), not Sponson's. Two passwords with the line's
+name on one branch are `PROVIDER_CONFLICT` (PlanetScale does not keep names unique). Destroy deletes the password;
+destroying the branch deletes the rest. Passwords are not listed for drift or adoption. PlanetScale Postgres
+databases use roles instead of passwords and are not supported by this op.
+
 ### Outputs
 
 The outputs each built-in op declares. `immediate` outputs exist once the line is applied; `external` ones only after
@@ -309,7 +369,25 @@ the named event. Sensitive outputs are never displayed, logged or written to rec
 | `vercel.deploy` | `preview_url` | immediate | no |
 | `vercel.deploy` | `deployment_id` | immediate | no |
 | `clerk.redirect_allow` | `id` | immediate | no |
+| `planetscale.branch` | `name` | immediate | no |
+| `planetscale.branch` | `branch_id` | immediate | no |
+| `planetscale.password` | `id` | immediate | no |
+| `planetscale.password` | `username` | immediate | no |
+| `planetscale.password` | `host` | immediate | no |
+| `planetscale.password` | `role` | immediate | no |
+| `planetscale.password` | `password` | immediate, [once](#once-only-outputs) | yes |
+| `planetscale.password` | `connection_string` | immediate, [once](#once-only-outputs) | yes |
 <!-- generated:outputs:end -->
+
+### Once-only outputs
+
+Some providers reveal a value only in the answer that creates a resource (a database password's plaintext). An op
+declares such an output `once` (always together with `sensitive`). It reaches the lines that reference it in the
+run that creates the resource. In a later run, when the resource already exists, a reference to it resolves to
+`{ keep: true }`: a dependent that holds the value keeps it, and a dependent that would have to write it is refused
+with `OUTPUT_UNAVAILABLE` before anything is written. A plan run shows such a dependent as unchanged (or blocked), never
+pending forever. Nothing is re-created to get the value back; see
+[ADR 0017](adr/0017-once-only-outputs.md).
 
 ## What is checked when
 
@@ -318,7 +396,7 @@ the named event. Sensitive outputs are never displayed, logged or written to rec
 | Editing, with the schema | shape of every key; id format; value forms; secret-looking literals; display text; the built-in ops' parameter names and `target` values | (editor diagnostics) |
 | Parsing (every command) | everything above that the parser enforces, plus unique ids, declared environments, `depends_on` and `from:` ids exist | `PLAN_PARSE`, `PLAN_INVALID`, `SECRET_LITERAL`, `REF_UNKNOWN` |
 | Preparing a run (before any provider call) | `--env` declared; adapters and ops exist; references survive the environment filter; no cycles; referenced outputs exist; `${ctx.*}` resolves; approval | `ENV_UNKNOWN`, `ADAPTER_UNKNOWN`, `OP_UNKNOWN`, `REF_FILTERED`, `REF_CYCLE`, `REF_OUTPUT_UNKNOWN`, `CTX_NULL`, `ENV_NOT_APPROVED` (apply only) |
-| Reading live state (per line) | parameter values; credentials; secrets resolve; drift; ownership by another scope | `PARAM_INVALID`, `PROVIDER_*`, `SECRET_UNRESOLVED`, `DRIFT_CHANGED`, `OWNED_BY_OTHER_SCOPE` |
+| Reading live state (per line) | parameter values; credentials; secrets resolve; drift; ownership by another scope; once-only outputs a line would need again | `PARAM_INVALID`, `PROVIDER_*`, `SECRET_UNRESOLVED`, `DRIFT_CHANGED`, `OWNED_BY_OTHER_SCOPE`, `OUTPUT_UNAVAILABLE` |
 
 Every code is listed in [errors.md](errors.md).
 

@@ -122,6 +122,8 @@ async function knownOutputs(rc: RunContext, walk: PlanWalk, inspection: Inspecti
     if (ext) values = { ...values, ...ext };
   }
   rc.guardOutputs(values, op.outputs);
-  walk.outputs.set(c.id, { values: values as LineOutputs["values"], specs: op.outputs });
+  // A resource that exists and that apply would not create again has shown its `once` outputs already.
+  const spent = live !== null && !inspection.diffs.some((d) => d.kind === "create");
+  walk.outputs.set(c.id, { values: values as LineOutputs["values"], specs: op.outputs, spent });
   return planOutputs(values, op.outputs);
 }

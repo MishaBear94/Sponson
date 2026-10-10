@@ -22,6 +22,7 @@ Nygard's format). They explain *why* the code is the way it is; [ARCHITECTURE.md
 | [0014](0014-secrets-are-references.md) | Secrets are references, never values | Accepted |
 | [0015](0015-adapters-describe-themselves.md) | Adapters and secret sources describe themselves | Accepted |
 | [0016](0016-one-receipts-ref-per-scope.md) | One receipts branch per environment and scope | Accepted |
+| [0017](0017-once-only-outputs.md) | Once-only outputs resolve to `{ keep: true }` after the run that revealed them | Proposed |
 
 ## Writing a new record
 

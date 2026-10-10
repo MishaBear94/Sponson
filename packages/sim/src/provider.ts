@@ -52,8 +52,16 @@ export interface DriftRequest {
  * registry only knows `ProviderSim<unknown, unknown>`.
  */
 export interface ProviderSim<S, Seed> {
-  /** Env var names the adapter reads its credential and base URL from, and the token the sim hands out. */
-  env: { token: string; url: string; testToken: string };
+  /**
+   * Env var names the adapter reads its credential and base URL from, and the token the sim hands out; `more`:
+   * further credential variables and their placeholder values, for a credential made of two parts.
+   */
+  env: { token: string; url: string; testToken: string; more?: Record<string, string> };
+  /**
+   * Whether an `Authorization` header is well-formed for this provider. Default: `Bearer <token>`. The sim accepts
+   * any value of the right form, so an adapter that sends the wrong form gets 401 as from the real API.
+   */
+  authorizes?(header: string): boolean;
   /** Seed used when a reset does not name this provider. */
   defaultSeed: Seed;
   /** Fresh state from a seed (`undefined`: empty). Called on every reset, in registry order. */

@@ -673,3 +673,62 @@ describe("v2: scope and environment boundaries", () => {
     await expect(planRun(opts(PLAN.replace("a.id", "a.idd")))).rejects.toMatchObject({ code: "REF_OUTPUT_UNKNOWN" });
   });
 });
+
+describe("once-only outputs (ADR 0017)", () => {
+  const ONCE = `
+version: 1
+changes:
+  - id: pw
+    adapter: fake
+    op: item
+    name: pw
+    value: one
+  - id: env
+    adapter: fake
+    op: item
+    name: env
+    value: { from: pw.token }
+`;
+
+  it("reaches dependents in the run that creates it, is never recorded, and a re-apply writes nothing", async () => {
+    const first = await applyRun(opts(ONCE));
+    expect(first.receipt.status).toBe("complete");
+    expect(cloud.items.get("env")!.value).toBe(`t-${cloud.items.get("pw")!.id}-pw`);
+    expect(JSON.stringify(first.receipt)).not.toContain("t-it_");
+
+    const writes = cloud.writes.length;
+    const plan = await planRun(opts(ONCE));
+    expect(plan.lines.map((l) => l.status)).toEqual(["unchanged", "unchanged"]);
+    expect(plan.lines[1]!.inputs["value"]).toMatchObject({ state: "kept", ref: "pw.token", dependsOn: "pw" });
+    const again = await applyRun(opts(ONCE));
+    expect(again.receipt.status).toBe("complete");
+    expect(Object.values(again.receipt.lines).map((l) => l.status)).toEqual(["unchanged", "unchanged"]);
+    expect(cloud.writes.length).toBe(writes);
+  });
+
+  it("is pending in a plan while the producing line still has to create its resource", async () => {
+    const r = await planRun(opts(ONCE));
+    expect(r.lines.map((l) => l.status)).toEqual(["create", "pending"]);
+  });
+
+  it("a re-created producer (missing drift) passes its new value on in that run", async () => {
+    await applyRun(opts(ONCE));
+    cloud.delete("pw");
+    const r = await applyRun(opts(ONCE));
+    expect(r.receipt.status).toBe("complete");
+    expect(cloud.items.get("env")!.value).toBe(`t-${cloud.items.get("pw")!.id}-pw`);
+  });
+
+  it("a dependent that would need the value in a later run is refused, and nothing is re-created", async () => {
+    await applyRun(opts(ONCE));
+    cloud.delete("env");
+    const writes = cloud.writes.length;
+    const plan = await planRun(opts(ONCE));
+    expect(plan.lines[1]).toMatchObject({ status: "blocked", errorCode: "OUTPUT_UNAVAILABLE" });
+    const r = await applyRun(opts(ONCE));
+    expect(r.receipt.status).toBe("failed");
+    expect(r.receipt.lines["env"]).toMatchObject({ status: "blocked", errorCode: "OUTPUT_UNAVAILABLE", error: expect.stringMatching(/`pw.token`.*earlier run.*Nothing was written/) });
+    expect(cloud.writes.length).toBe(writes);
+    expect(cloud.items.has("pw")).toBe(true);
+  });
+});

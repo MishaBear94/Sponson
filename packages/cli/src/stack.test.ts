@@ -91,7 +91,7 @@ describe("detectStack", () => {
     expect(s.assumed).toBe(true);
     expect(s.todos.map((t) => t.path)).toEqual(["providers.vercel.project", "providers.neon.project"]);
     const text = expectValidPlan(d, ["db", "env"]);
-    expect(text).toContain("Nothing Sponson manages (Vercel, Neon) was detected");
+    expect(text).toContain("Nothing Sponson manages (Vercel, Neon, PlanetScale) was detected");
     expect(text).toContain("DATABASE_URL: { from: db.connection_string }");
   });
 
@@ -157,17 +157,58 @@ describe("detectStack", () => {
   it("every unsupported service is reported, never silently ignored", async () => {
     const d = await detectStack(
       repo({
-        "package.json": pkg({ "@planetscale/database": "1", "@auth0/nextjs-auth0": "3", "@launchdarkly/node-server-sdk": "9", "posthog-js": "1", stripe: "16", "@sentry/nextjs": "8", firebase: "10", "@libsql/client": "0.6" }, { wrangler: "3" }),
+        "package.json": pkg({ "@auth0/nextjs-auth0": "3", "@launchdarkly/node-server-sdk": "9", "posthog-js": "1", stripe: "16", "@sentry/nextjs": "8", firebase: "10", "@libsql/client": "0.6" }, { wrangler: "3" }),
         "netlify.toml": "[build]\n",
         "fly.toml": "app = 'x'\n",
         "railway.json": "{}",
-        ".env.example": "DATABASE_URL=mysql://u:p@aws.connect.psdb.cloud/db\n",
       }),
     );
-    expect(unsupportedIds(d)).toEqual(["planetscale", "turso", "auth0", "netlify", "cloudflare", "railway", "fly", "firebase", "launchdarkly", "posthog", "stripe", "sentry"]);
+    expect(unsupportedIds(d)).toEqual(["turso", "auth0", "netlify", "cloudflare", "railway", "fly", "firebase", "launchdarkly", "posthog", "stripe", "sentry"]);
     for (const u of d.unsupported) expect(u.pointer, u.id).toMatch(/ROADMAP\.md|issues/);
     const text = expectValidPlan(d, ["db", "env"]);
     for (const u of d.unsupported) expect(text).toContain(`# Not supported yet, so no line below manages it: ${u.name}`);
+  });
+
+  it("Next.js + Vercel + PlanetScale + Prisma: a branch, a password on it, and DATABASE_URL from its connection string", async () => {
+    const d = await detectStack(
+      repo({
+        "package.json": pkg({ next: "15", "@planetscale/database": "1", "@prisma/client": "6" }),
+        ".vercel/project.json": { projectId: "prj_web123" },
+        ".env.example": `DATABASE_URL=mysql://u:${SECRET_PASSWORD}@aws.connect.psdb.cloud/db\nPLANETSCALE_SERVICE_TOKEN=\n`,
+      }),
+    );
+    expect(ids(d)).toEqual(["vercel", "planetscale", "next", "prisma"]);
+    expect(unsupportedIds(d)).toEqual([]);
+    expect(d.found.find((f) => f.id === "planetscale")!.evidence).toEqual([
+      "package.json: @planetscale/database",
+      "PLANETSCALE_SERVICE_TOKEN in .env.example",
+      "DATABASE_URL in .env.example points at *.psdb.cloud",
+    ]);
+    expect(JSON.stringify(d)).not.toContain(SECRET_PASSWORD);
+
+    const text = expectValidPlan(d, ["db", "dbpw", "env"]);
+    expect(text).toMatch(/planetscale: \{ organization: "my-org", database: "my-db" \}\s+# TODO: the name slugs of your organization and database/);
+    expect(text).toContain("adapter: planetscale\n    op: branch");
+    expect(text).toContain("branch: { from: db.name }");
+    expect(text).toContain('connection_params: "sslaccept=strict"');
+    expect(text).toContain("DATABASE_URL: { from: dbpw.connection_string }");
+    expect(text).not.toMatch(/neon|Not supported yet/);
+    expect(composeStarter(d).todos.map((t) => t.path)).toEqual(["providers.planetscale.organization", "providers.planetscale.database"]);
+    expect(credentialsFor(d)).toEqual(["VERCEL_TOKEN", "PLANETSCALE_SERVICE_TOKEN_ID", "PLANETSCALE_SERVICE_TOKEN"]);
+  });
+
+  it("PlanetScale without Vercel: no connection_params without Prisma, and the missing deploy target said in a comment", async () => {
+    const d = await detectStack(repo({ "package.json": pkg({ "@planetscale/database": "1" }) }));
+    const text = expectValidPlan(d, ["db", "dbpw"]);
+    expect(text).not.toContain("connection_params");
+    expect(text).toContain("# The password's connection string (`{ from: dbpw.connection_string }`) has no deploy target");
+  });
+
+  it("Neon and PlanetScale both: the database lines use Neon, and PlanetScale is mentioned, not dropped", async () => {
+    const d = await detectStack(repo({ "package.json": pkg({ "@neondatabase/serverless": "1", "@planetscale/database": "1" }), "vercel.json": {} }));
+    const text = expectValidPlan(d, ["db", "env"]);
+    expect(text).toContain("DATABASE_URL: { from: db.connection_string }");
+    expect(text).toContain("# PlanetScale was detected too, but the database lines below use Neon");
   });
 
   it("broken files are no signal rather than a crash", async () => {

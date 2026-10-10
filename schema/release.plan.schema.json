@@ -20,6 +20,15 @@
       "type": "object",
       "additionalProperties": { "type": "object" },
       "properties": {
+        "planetscale": {
+          "type": "object",
+          "description": "PlanetScale organization and database (their name slugs). Credentials: PLANETSCALE_SERVICE_TOKEN_ID and PLANETSCALE_SERVICE_TOKEN in the environment.",
+          "required": ["organization", "database"],
+          "properties": {
+            "organization": { "type": "string", "minLength": 1 },
+            "database": { "type": "string", "minLength": 1 }
+          }
+        },
         "vercel": {
           "type": "object",
           "description": "Vercel project (`prj_…`) and, for team projects, the team id (`team_…`).",
@@ -157,7 +166,7 @@
       "required": ["id", "adapter", "op"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk. Plugins (SPONSON_PLUGINS) add more." },
+        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk, planetscale. Plugins (SPONSON_PLUGINS) add more." },
         "op": { "type": "string", "minLength": 1 },
         "environments": { "$ref": "#/$defs/nameList", "description": "Environments this line applies to. Absent: all." },
         "depends_on": { "type": "array", "items": { "$ref": "#/$defs/id" }, "description": "Ordering without a data dependency. Prefer `from:` references." }
@@ -179,6 +188,14 @@
         {
           "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "clerk" }, "op": { "const": "redirect_allow" } } },
           "then": { "$ref": "#/$defs/op_clerk_redirect_allow" }
+        },
+        {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "planetscale" }, "op": { "const": "branch" } } },
+          "then": { "$ref": "#/$defs/op_planetscale_branch" }
+        },
+        {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "planetscale" }, "op": { "const": "password" } } },
+          "then": { "$ref": "#/$defs/op_planetscale_password" }
         }
       ]
     },
@@ -259,6 +276,38 @@
         "environments": true,
         "depends_on": true,
         "url": { "$ref": "#/$defs/stringOrRef", "description": "The URL to allow. Usually `{ from: <vercel.env line>.preview_url }`." }
+      },
+      "additionalProperties": false
+    },
+    "op_planetscale_branch": {
+      "description": "planetscale.branch: a development branch of a PlanetScale database, ready before apply returns. Outputs: name, branch_id.",
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "parent": { "$ref": "#/$defs/stringOrRef", "description": "Parent branch name. Default: main." },
+        "name": { "$ref": "#/$defs/stringOrRef", "description": "Branch name. Default: sponson-${ctx.env}-${ctx.scope} (lowercase letters, digits, dashes). The branch is identified by its name." }
+      },
+      "additionalProperties": false
+    },
+    "op_planetscale_password": {
+      "description": "planetscale.password: a password on a PlanetScale branch. Outputs: id, username, host, role; password and connection_string are sensitive and once-only (only in the run that creates the password).",
+      "required": ["branch"],
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "branch": { "$ref": "#/$defs/stringOrRef", "description": "The branch, by name. Usually `{ from: <planetscale.branch line>.name }`." },
+        "name": { "$ref": "#/$defs/stringOrRef", "description": "Password name. Default: sponson-${ctx.env}-${ctx.scope}. A new name creates a new password (a deliberate rotation)." },
+        "role": {
+          "description": "The password's role. Default: admin. Cannot be changed in place.",
+          "anyOf": [{ "enum": ["reader", "writer", "readwriter", "admin"] }, { "$ref": "#/$defs/fromRef" }]
+        },
+        "connection_params": { "type": "string", "description": "Query of connection_string. Default: ssl={\"rejectUnauthorized\":true}; Prisma: sslaccept=strict." }
       },
       "additionalProperties": false
     }

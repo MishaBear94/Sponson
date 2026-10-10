@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/MishaBear94/Sponson/main/schema/release.plan.schema.json
+#
+# A Next.js app on Vercel with a PlanetScale (Vitess / MySQL) database. Every pull request gets its own
+# development branch and a password on it, and that pull request's preview deployments get its connection string.
+# Credentials: PLANETSCALE_SERVICE_TOKEN_ID and PLANETSCALE_SERVICE_TOKEN (a service token), VERCEL_TOKEN.
+version: 1
+providers:
+  vercel: { project: prj_acme_web }                        # .vercel/project.json → projectId
+  planetscale: { organization: acme, database: acme-db }   # https://app.planetscale.com/<organization>/<database>
+
+changes:
+  # One development branch per scope, `sponson-<env>-<scope>` (pull request 42: `sponson-preview-pr-42`),
+  # from `main`. Apply waits until PlanetScale reports it ready.
+  - id: db
+    adapter: planetscale
+    op: branch
+    parent: main
+    environments: [preview]
+
+  # A password on that branch. PlanetScale shows its plaintext once, when it is created, so `connection_string`
+  # is a once-only output: `env` below receives it in the same run, later runs keep what `env` holds and write
+  # nothing, and Sponson never rotates the password on its own.
+  - id: dbpw
+    adapter: planetscale
+    op: password
+    branch: { from: db.name }
+    role: admin
+    environments: [preview]
+
+  - id: env
+    adapter: vercel
+    op: env
+    target: preview
+    values:
+      DATABASE_URL: { from: dbpw.connection_string }   # sensitive and once-only: never printed, never stored
+      DATABASE_USERNAME: { from: dbpw.username }        # a plain output
+      NEXT_PUBLIC_STAGE: preview
+    environments: [preview]

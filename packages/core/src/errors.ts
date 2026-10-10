@@ -58,6 +58,10 @@ export const ERROR_CODES = {
   STORE_REJECTED: { exit: 1, doc: "The receipt store kept rejecting the receipt; a fallback copy was kept." },
   WAIT_TIMEOUT: { exit: 1, doc: "An external event did not happen within the wait timeout." },
   OWNED_BY_OTHER_SCOPE: { exit: 1, doc: "Another scope in this environment manages the resource." },
+  OUTPUT_UNAVAILABLE: {
+    exit: 1,
+    doc: "A line needs an output its provider reveals only when the resource is created (a password), and that resource was created in an earlier run; nothing is re-created to get it back.",
+  },
   INTERNAL: { exit: 1, doc: "An unexpected error." },
   PROVIDER_TRANSIENT: { exit: 1, doc: "The provider failed transiently (after retries)." },
   PROVIDER_CONFLICT: { exit: 1, doc: "The provider reported a conflict." },

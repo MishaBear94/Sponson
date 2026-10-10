@@ -30,6 +30,8 @@ export interface ChaosConfig {
   deploy_ms: number;
   /** After a Neon branch create, writes to that branch and further creates in the project answer 423 for this long. */
   neon_op_ms: number;
+  /** A PlanetScale branch created through the API reports `ready: false` for this long (0: ready at its first read). */
+  planetscale_ready_ms: number;
   /** When > 0, Neon branches, Vercel envs and Clerk redirect URLs are listed in pages of this size. */
   page_size: number;
   /** Keys a Vercel bulk upsert reports under `failed` (and does not write). */
@@ -56,6 +58,7 @@ export const DEFAULT_CHAOS: ChaosConfig = {
   deploy: "ok",
   deploy_ms: 0,
   neon_op_ms: 0,
+  planetscale_ready_ms: 0,
   page_size: 0,
   env_upsert_fail: [],
 };

@@ -43,10 +43,19 @@ async function handle(state: SimState, req: IncomingMessage, res: ServerResponse
     return send(res, r.status, r.body);
   }
 
-  // Any non-empty bearer token is accepted; missing-token bugs must surface as 401.
-  const auth = req.headers.authorization ?? "";
-  if (!/^Bearer\s+\S+$/.test(auth)) return send(res, 401, { error: "unauthorized" });
+  // Any non-empty token of the provider's form is accepted; missing-token bugs must surface as 401.
+  if (!authorized(url.pathname, req.headers.authorization ?? "")) return send(res, 401, { error: "unauthorized" });
   await serveProvider(state, req, res, { method, url, raw, body });
+}
+
+/** `/<provider>` → its own check of the Authorization header's form, for providers that are not bearer-token APIs. */
+const AUTHORIZES: Record<string, (header: string) => boolean> = Object.fromEntries(
+  providerEntries().flatMap(([name, p]) => (p.authorizes ? [[`/${name}`, (h: string) => p.authorizes!(h)]] : [])),
+);
+
+function authorized(path: string, header: string): boolean {
+  const check = AUTHORIZES[path.match(/^\/[^/]+/)?.[0] ?? ""];
+  return check ? check(header) : /^Bearer\s+\S+$/.test(header);
 }
 
 /** An authenticated provider request: latency, chaos, the write log, then the provider's routes. */
@@ -130,6 +139,12 @@ function readBody(req: IncomingMessage): Promise<string> {
 }
 
 function send(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
+  if (status === 204) {
+    // No Content means no body, not the JSON `null`.
+    res.writeHead(204, headers);
+    res.end();
+    return;
+  }
   const text = JSON.stringify(body ?? null);
   res.writeHead(status, { ...headers, "content-type": "application/json", "content-length": Buffer.byteLength(text) });
   res.end(text);
