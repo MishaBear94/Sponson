@@ -7,6 +7,7 @@
 import { SponsonError, canonicalJson, markerKind, sha256 } from "@sponson/core";
 import { paramError } from "./common.js";
 import { isObject } from "./http.js";
+import { expandRecipe, lineApi, resolveRecipeApi } from "./recipes.js";
 
 export const ADAPTER = "http";
 
@@ -237,14 +238,20 @@ export function parseApi(block: Record<string, unknown>, where: string): ApiConf
  * different APIs therefore have independent ledger identities.
  */
 export function apiBlock(block: Record<string, unknown>, params: Record<string, unknown>): Record<string, unknown> {
-  const api = params.api;
+  const api = lineApi(params);
   if (typeof api !== "string" || api === "") throw fail("`api` is required: the name of an API configured under `providers.http`", "api");
-  const cfg = block[api];
-  if (!isObject(cfg)) {
+  const where = `providers.http.${api}`;
+  const recipe = typeof params.recipe === "string" ? params.recipe.split(".")[0] : undefined;
+  // A recipe line needs no block of its own: `api` defaults to the recipe's provider, and so does its block.
+  const raw = block[api] ?? (recipe === api ? { recipe } : undefined);
+  if (!isObject(raw)) {
     const known = Object.keys(block);
-    throw planError(`no API \`${api}\` is configured (known: ${known.length ? known.join(", ") : "none"})`, `providers.http.${api}`);
+    throw planError(`no API \`${api}\` is configured (known: ${known.length ? known.join(", ") : "none"})`, where);
   }
-  parseApi(cfg, `providers.http.${api}`);
+  const cfg = resolveRecipeApi(raw, where);
+  if (raw.recipe !== undefined && recipe !== undefined && recipe !== raw.recipe) throw planError(`uses recipe \`${String(raw.recipe)}\`, but the line's recipe is \`${String(params.recipe)}\``, where);
+  if (raw.recipe !== undefined && cfg.base_url === undefined) throw planError(`recipe \`${String(raw.recipe)}\` has no default \`base_url\` (each account has its own): set \`base_url\` in this block`, where);
+  parseApi(cfg, where);
   return cfg;
 }
 
@@ -405,7 +412,8 @@ function parseFields(v: unknown, param: string): Record<string, unknown> {
 }
 
 /** `http.resource` params, checked; PARAM_INVALID naming the field otherwise. */
-export function parseResource(params: Record<string, unknown>): ResourceSpec {
+export function parseResource(line: Record<string, unknown>): ResourceSpec {
+  const params = expandRecipe(line, "resource");
   noUnknownParams(params, RESOURCE_PARAMS, "resource");
   const api = apiParam(params);
   const vars = optionalObject(params.vars, "vars") ?? {};
@@ -431,7 +439,8 @@ export function parseResource(params: Record<string, unknown>): ResourceSpec {
 }
 
 /** The outputs one `http.resource` line declares: always `id`, plus its `outputs`. */
-export function resourceOutputs(params: Record<string, unknown>): Record<string, { available: "immediate"; sensitive?: boolean }> {
+export function resourceOutputs(line: Record<string, unknown>): Record<string, { available: "immediate"; sensitive?: boolean }> {
+  const params = expandRecipe(line, "resource");
   const out: Record<string, { available: "immediate"; sensitive?: boolean }> = { id: { available: "immediate" } };
   for (const [name, d] of Object.entries(parseOutputs(params.outputs))) out[name] = d.sensitive ? { available: "immediate", sensitive: true } : { available: "immediate" };
   return out;
@@ -519,7 +528,8 @@ function parseShaped(params: Record<string, unknown>, shape: ListShape): Pick<Li
 }
 
 /** `http.list_item` params, checked; PARAM_INVALID naming the field otherwise. */
-export function parseListItem(params: Record<string, unknown>): ListItemSpec {
+export function parseListItem(line: Record<string, unknown>): ListItemSpec {
+  const params = expandRecipe(line, "list_item");
   noUnknownParams(params, LIST_PARAMS, "list_item");
   const api = apiParam(params);
   const vars = optionalObject(params.vars, "vars") ?? {};

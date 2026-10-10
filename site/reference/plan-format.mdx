@@ -560,6 +560,30 @@ as `field`), so they are sent as idempotent and retried after a dropped connecti
 runs editing the same parent at the same moment can still lose one write, which the re-read reports as
 `PROVIDER_CONFLICT` when it happens to see it ([ADR 0017](/contributing/adr/0017-generic-http-adapter)).
 
+### Recipes
+
+A recipe is a verified `http.resource` or `http.list_item` spec for one provider operation, shipped with Sponson:
+the line names it and fills in typed params instead of writing requests. Every recipe, its params, an example line
+and what it was verified against: [docs/recipes.md](/reference/recipes).
+
+```yaml
+- id: preview_dns
+  adapter: http
+  op: resource                        # the recipe's kind
+  recipe: cloudflare.dns_cname        # <provider>.<op>
+  zone_id: 023e105f4ecef8ad9ca31a8372d0c353
+  name: "${ctx.scope}.preview.example.com"
+  target: preview-host.example.net
+```
+
+`api` defaults to the recipe's provider, and its block under `providers.http` to `{ recipe: <provider> }`: the
+recipe's base URL, credential variable, headers and encoding. Write the block to override any of them
+(`cloudflare: { recipe: cloudflare, auth: { bearer_env: MY_CLOUDFLARE_TOKEN } }`); a hand-written line may name such a
+block too. Every key of the line other than `api`, `recipe` and `destroy` is a recipe param; an unknown recipe, op or
+param, a missing required one or a wrong value is `PARAM_INVALID` naming it before any request. The ledger records
+the resolved block and the keys the expanded requests produce, never the recipe's text
+([ADR 0020](/contributing/adr/0020-recipes)).
+
 ### Outputs
 
 The outputs each built-in op declares. `immediate` outputs exist once the line is applied; `external` ones only after
@@ -622,7 +646,7 @@ working. The alternative is to keep the value in a secret manager and reference 
 |---|---|---|
 | Editing, with the schema | shape of every key; id format; value forms; secret-looking literals; display text; the built-in ops' parameter names and `target` values | (editor diagnostics) |
 | Parsing (every command) | everything above that the parser enforces, plus unique ids, declared environments, `depends_on` and `from:` ids exist | `PLAN_PARSE`, `PLAN_INVALID`, `SECRET_LITERAL`, `REF_UNKNOWN` |
-| Preparing a run (before any provider call) | `--env` declared; adapters and ops exist; references survive the environment filter; no cycles; referenced outputs exist; `${ctx.*}` resolves; approval | `ENV_UNKNOWN`, `ADAPTER_UNKNOWN`, `OP_UNKNOWN`, `REF_FILTERED`, `REF_CYCLE`, `REF_OUTPUT_UNKNOWN`, `CTX_NULL`, `ENV_NOT_APPROVED` (apply only) |
+| Preparing a run (before any provider call) | `--env` declared; adapters and ops exist; references survive the environment filter; no cycles; referenced outputs exist; `${ctx.*}` resolves; recipe lines' recipe, op and params; approval | `ENV_UNKNOWN`, `ADAPTER_UNKNOWN`, `OP_UNKNOWN`, `REF_FILTERED`, `REF_CYCLE`, `REF_OUTPUT_UNKNOWN`, `CTX_NULL`, `PARAM_INVALID`, `PLAN_INVALID`, `ENV_NOT_APPROVED` (apply only) |
 | Reading live state (per line) | parameter values; credentials; secrets resolve; drift; ownership by another scope; once-only outputs a line would need again | `PARAM_INVALID`, `PROVIDER_*`, `SECRET_UNRESOLVED`, `DRIFT_CHANGED`, `OWNED_BY_OTHER_SCOPE`, `OUTPUT_UNAVAILABLE` |
 
 Every code is listed in [errors.md](/reference/errors).

@@ -76,7 +76,7 @@
         },
         "http": {
           "type": "object",
-          "description": "The generic http adapter: one block per API, named by each line's `api:`. Each block is part of its resources' identity.",
+          "description": "The generic http adapter: one block per API, named by each line's `api:` (or a recipe line's provider). Each block, as resolved, is part of its resources' identity.",
           "additionalProperties": { "$ref": "#/$defs/httpApi" }
         }
       }
@@ -227,12 +227,16 @@
           "then": { "$ref": "#/$defs/op_planetscale_password" }
         },
         {
-          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "http" }, "op": { "const": "resource" } } },
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "http" }, "op": { "const": "resource" } }, "not": { "properties": { "recipe": true }, "required": ["recipe"] } },
           "then": { "$ref": "#/$defs/op_http_resource" }
         },
         {
-          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "http" }, "op": { "const": "list_item" } } },
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "http" }, "op": { "const": "list_item" } }, "not": { "properties": { "recipe": true }, "required": ["recipe"] } },
           "then": { "$ref": "#/$defs/op_http_list_item" }
+        },
+        {
+          "if": { "required": ["adapter", "recipe"], "properties": { "adapter": { "const": "http" }, "recipe": true } },
+          "then": { "$ref": "#/$defs/op_http_recipe" }
         },
         {
           "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "launchdarkly" }, "op": { "const": "flag_target" } } },
@@ -376,10 +380,14 @@
     },
     "httpApi": {
       "type": "object",
-      "description": "One API for the http adapter: where it is, and how its credential is sent.",
-      "required": ["base_url", "auth"],
+      "description": "One API for the http adapter: where it is, and how its credential is sent. With `recipe`, the recipe's API defaults fill in what the block leaves out.",
+      "anyOf": [
+        { "properties": { "base_url": true, "auth": true }, "required": ["base_url", "auth"] },
+        { "properties": { "recipe": true }, "required": ["recipe"] }
+      ],
       "additionalProperties": false,
       "properties": {
+        "recipe": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$", "description": "A shipped recipe's provider (docs/recipes.md): its base URL, credential variable, headers and encoding are the defaults of this block." },
         "base_url": { "type": "string", "pattern": "^https?://\\S+$", "description": "The API's base URL; request paths are relative to it." },
         "base_url_env": { "$ref": "#/$defs/envName", "description": "Optional: a variable that overrides base_url when set (a staging API, the local fake cloud)." },
         "auth": {
@@ -459,6 +467,16 @@
         "gone_status": { "$ref": "#/$defs/httpStatuses", "description": "Statuses that mean 'gone' on read and delete, besides 404." }
       },
       "additionalProperties": false
+    },
+    "op_http_recipe": {
+      "description": "A recipe line of the http adapter: `recipe: <provider>.<op>` and that recipe op's params (docs/recipes.md), which `sponson plan` checks. `op` is the recipe's kind.",
+      "required": ["recipe"],
+      "properties": {
+        "op": { "enum": ["resource", "list_item"] },
+        "recipe": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*\\.[a-z0-9_]+$", "description": "The recipe op, `<provider>.<op>` (docs/recipes.md)." },
+        "api": { "type": "string", "minLength": 1, "description": "The block under providers.http. Default: the recipe's provider (the block may then be left out)." },
+        "destroy": { "$ref": "#/$defs/httpDestroy" }
+      }
     },
     "op_http_list_item": {
       "description": "http.list_item: one value kept in an array, delimited string or keyed map on a parent object, by read-modify-write. No outputs.",

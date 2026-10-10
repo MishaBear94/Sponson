@@ -186,14 +186,18 @@ The `http` adapter makes the calls a plan line declares, so there is no provider
 checked by running `sponson plan` (it only reads) against the real API before the first `apply`. The plans in
 [examples/](../examples/README.md) that use it are illustrative and say so.
 
+[Recipes](recipes.md) are the exception: each is verified against the provider pages it cites, its assumptions are
+numbered and marked verified or not in its file (and listed in docs/recipes.md), and `pnpm test:live` runs it against
+the real API when its credential and `SPONSON_LIVE_*` variables are set ([ADR 0020](adr/0020-recipes.md)).
+
 ### Sim assumptions (`packages/sim/src/routes/rest.ts`)
 
 They describe a conventional JSON REST API, not one provider; the adapter's tests and scenarios run against them.
 
 | Id | Assumption | Status |
 |---|---|---|
-| R1 | credentials as `Authorization: Bearer`, `Authorization: Basic` or a `*-Api-Key` header | convention |
-| R2 | `{ data }` envelopes for collection objects and lists, cursor in `next_cursor`; other objects bare | convention (the plan line names its own envelope with `item_path`, `list_path`, `find.next`) |
+| R1 | credentials as `Authorization: Bearer`, `Authorization: Basic` or a header ending in `-Api-Key`, `-Key` or `-Token` | convention |
+| R2 | `{ data }` envelopes for collection objects and lists, cursor in `next_cursor`; other objects bare; a collection's style changes the envelopes, cursor and id field | convention (the plan line names its own envelope with `item_path`, `list_path`, `find.next`; the recipe tests shape the style from the recipe) |
 | R3 | unknown paths are 404 until seeded or created; client-chosen ids; duplicate `name` → 409 | convention (`exists_status` covers providers that answer otherwise) |
 | R4 | PATCH is a JSON merge patch (RFC 7396); PUT replaces; JSON or form bodies; no preconditions | RFC 7396 for PATCH; the rest convention |
 | R5 | DELETE answers `{ id, deleted }`; unknown is 404 | convention (`gone_status` covers providers that answer otherwise) |

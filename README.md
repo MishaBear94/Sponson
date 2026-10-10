@@ -167,6 +167,11 @@ Next: set VERCEL_TOKEN, NEON_API_KEY, CLERK_SECRET_KEY in your environment, then
 
 Which providers are covered today, and what is planned, is measured in [docs/coverage.md](docs/coverage.md).
 
+Beyond the built-in adapters, any JSON REST API is reachable with the generic `http` adapter, and the providers it
+has been verified against ship as [recipes](docs/recipes.md): one plan line names a provider operation and fills in
+its params, for example `recipe: cloudflare.dns_cname` with a `zone_id`, a `name` and a `target`. Each recipe cites the
+API docs it was checked against and runs through create, re-apply, drift and destroy in the test suite.
+
 Third-party adapters and secret sources load as plugins: `SPONSON_PLUGINS=sponson-adapter-x,./local-adapter.mjs`, each module exporting `register(registry)`.
 
 Credentials come from the providers' own conventions (`VERCEL_TOKEN` for Vercel; every adapter's variable is listed under [built-in ops](docs/plan-format.md#built-in-ops)). Sponson has no credential store of its own.
@@ -263,6 +268,7 @@ Format, engine, the [built-in adapters](docs/plan-format.md#built-in-ops) and [s
 - [ARCHITECTURE.md](ARCHITECTURE.md): how a `plan` and an `apply` run through the code, the ledger, scopes, redaction.
 - [docs/plan-format.md](docs/plan-format.md): every key of `release.plan.yaml`, value forms, `${ctx.*}`, the built-in ops.
 - [docs/errors.md](docs/errors.md): every error code, its exit code and remedy (generated from the code).
+- [docs/recipes.md](docs/recipes.md): the shipped recipes, their params and sources (generated from the recipe files).
 - [docs/adr/](docs/adr/README.md): the design decisions and why they were made.
 - [examples/](examples/README.md): complete, tested plans to start from.
 
@@ -275,7 +281,7 @@ line of `release.plan.yaml`:
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full adapter checklist: the adapter file, its registration (or a plugin loaded with `SPONSON_PLUGINS`), one sim routes file, and one scenario.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full adapter checklist: the adapter file, its registration (or a plugin loaded with `SPONSON_PLUGINS`), one sim routes file, and one scenario. Adding a recipe is one YAML file; its checklist is there too.
 
 ## License
 

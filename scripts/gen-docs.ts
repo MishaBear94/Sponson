@@ -7,6 +7,9 @@
  *                             adapters        every built-in adapter, its ops, credential and base-URL variable
  *                             secret-schemes  every built-in secret scheme, its form and what resolves it
  *                             outputs         the outputs each built-in op declares
+ *   docs/recipes.md         entirely, from the recipe files (packages/adapters/recipes/*.yaml)
+ *   docs/coverage.md        the blocks coverage-matrix, coverage-secrets and coverage-numbers, from the matrix data
+ *                           in docs/coverage.yaml: every table row and every coverage number
  *
  * These tables are the only place the docs enumerate adapters, ops or secret schemes; everything else (README,
  * SKILL.md, ARCHITECTURE.md, the schema, package descriptions) links here and gives at most one example.
@@ -24,6 +27,12 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRegistry } from "../packages/adapters/src/index.js";
 import { ERROR_CODES, WARNING_CODES, type ErrorCodeSpec } from "../packages/core/src/errors.js";
+import { loadCoverage } from "./coverage-data.js";
+import { cell, slug } from "./md.js";
+import { renderMatrix, renderNumbers, renderSecretSources } from "./render-coverage.js";
+import { renderRecipes } from "./render-recipes.js";
+
+export { slug };
 
 export const REPO = fileURLToPath(new URL("..", import.meta.url));
 
@@ -34,10 +43,6 @@ const EXIT_MEANING: Record<number, string> = {
   3: "the scope's lock is held by another run, or this run lost it: wait and re-plan, never force",
 };
 
-/** Markdown table cells cannot contain a raw `|` or a newline; backslashes are escaped first so `\|` survives. */
-function cell(s: string | undefined): string {
-  return (s ?? "").replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\n/g, " ");
-}
 
 export function renderErrors(): string {
   const codes = Object.entries(ERROR_CODES as Record<string, ErrorCodeSpec>);
@@ -107,14 +112,6 @@ export function markers(name: string): { start: string; end: string } {
   return { start: `<!-- generated:${name}:start (scripts/gen-docs.ts; run \`pnpm docs:gen\`) -->`, end: `<!-- generated:${name}:end -->` };
 }
 
-/** GitHub's anchor for a Markdown heading (enough of github-slugger for our headings). */
-export function slug(heading: string): string {
-  return heading
-    .trim()
-    .toLowerCase()
-    .replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, "")
-    .replace(/ /g, "-");
-}
 
 /** The built-in adapters and their ops, linked to each op's section of `doc` (which must exist). */
 export function renderAdapters(doc: string): string {
@@ -173,9 +170,23 @@ export async function generate(): Promise<GeneratedFile[]> {
     const { start, end } = markers(name);
     doc = withBlock(doc, start, end, render(doc));
   }
+  const coverageDoc = "docs/coverage.md";
+  const data = await loadCoverage();
+  let coverage = await readFile(join(REPO, coverageDoc), "utf8");
+  const coverageBlocks: Array<[string, string]> = [
+    ["coverage-matrix", renderMatrix(data)],
+    ["coverage-secrets", renderSecretSources(data)],
+    ["coverage-numbers", renderNumbers(data)],
+  ];
+  for (const [name, body] of coverageBlocks) {
+    const { start, end } = markers(name);
+    coverage = withBlock(coverage, start, end, body);
+  }
   return [
     { path: "docs/errors.md", content: renderErrors() },
     { path: planFormat, content: doc },
+    { path: "docs/recipes.md", content: renderRecipes() },
+    { path: coverageDoc, content: coverage },
   ];
 }
 

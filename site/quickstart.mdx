@@ -90,6 +90,11 @@ Next: set VERCEL_TOKEN, NEON_API_KEY, CLERK_SECRET_KEY in your environment, then
 
 Which providers are covered today, and what is planned, is measured in [docs/coverage.md](/reference/coverage).
 
+Beyond the built-in adapters, any JSON REST API is reachable with the generic `http` adapter, and the providers it
+has been verified against ship as [recipes](/reference/recipes): one plan line names a provider operation and fills in
+its params, for example `recipe: cloudflare.dns_cname` with a `zone_id`, a `name` and a `target`. Each recipe cites the
+API docs it was checked against and runs through create, re-apply, drift and destroy in the test suite.
+
 Third-party adapters and secret sources load as plugins: `SPONSON_PLUGINS=sponson-adapter-x,./local-adapter.mjs`, each module exporting `register(registry)`.
 
 Credentials come from the providers' own conventions (`VERCEL_TOKEN` for Vercel; every adapter's variable is listed under [built-in ops](/reference/plan-format#built-in-ops)). Sponson has no credential store of its own.

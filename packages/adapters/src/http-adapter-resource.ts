@@ -46,6 +46,14 @@ function locator(spec: ResourceSpec, id: string): string {
   return `${method} ${fillPath(spec.delete.path, spec.vars, id)}${gone}`;
 }
 
+/**
+ * What the ledger knows a line's object by: its key, and its record id with `id` standing for the provider's id.
+ * The recipe identity lock (recipes.test.ts) pins it per recipe op.
+ */
+export function resourceIdentity(spec: ResourceSpec, id: string): { key: string | undefined; id: string } {
+  return { key: resourceKey(spec), id: locator(spec, id) };
+}
+
 /** The request a record id names. */
 function parseLocator(id: string): { method: string; path: string; gone: number[] } | null {
   const m = /^(DELETE|POST|KEEP) (\/\S*)(?: gone=([\d,]+))?$/.exec(id);

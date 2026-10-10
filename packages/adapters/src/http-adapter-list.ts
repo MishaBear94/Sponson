@@ -20,6 +20,7 @@ import { SponsonError, canonicalJson, type AdapterContext, type DiffSide, type L
 import { ABSENT, SENSITIVE, assertNoPending, desiredSide, paramError } from "./common.js";
 import { isObject, type ApiClient } from "./http.js";
 import { failedWith, httpClient, write } from "./http-adapter-client.js";
+import { expandRecipe } from "./recipes.js";
 import { ADAPTER, apiBlock, at, fieldTokens, fillPath, firstMarker, isKeep, parseListItem, pointerTokens, projection, setAt, stateHash, type ListItemSpec, type ListShape } from "./http-adapter-spec.js";
 
 /** Read-modify-write rounds before giving up on a collection that keeps changing under us. */
@@ -85,6 +86,15 @@ function writePath(loc: Locator): string {
 
 function keyOf(loc: Locator): string {
   return `${writePath(loc)}#${loc.list}=${text(loc.item)}`;
+}
+
+/**
+ * What the ledger knows a line's item by: its key and record id (the locator), or undefined while pending. The
+ * recipe identity lock (recipes.test.ts) pins it per recipe op.
+ */
+export function listItemIdentity(spec: ListItemSpec): { key: string; id: string } | undefined {
+  const loc = locatorOf(spec);
+  return loc ? { key: keyOf(loc), id: canonicalJson(loc) } : undefined;
 }
 
 function labelOf(spec: ListItemSpec, loc: Locator): string {
@@ -292,6 +302,8 @@ function diffExisting(spec: ListItemSpec, key: string, label: string, current: R
 /** `http.list_item`: one value kept in a collection on a parent object, by read-modify-write. */
 export const listItem: OpSpec = {
   outputs: {},
+  // A recipe line's params are checked before any request (PARAM_INVALID naming the param); it declares no outputs.
+  outputsFor: (params) => (params.recipe === undefined ? {} : (expandRecipe(params, "list_item"), {})),
   providerFor: apiBlock,
 
   async read(actx, params) {
