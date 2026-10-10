@@ -119,6 +119,27 @@ describe("http.resource", () => {
     expect(h.sim.state.rest.collections["/gates"]).toHaveLength(1);
   });
 
+  it("a once-only output comes from the create that made the object, never from a read, an update or a create refused as existing", async () => {
+    // The sim echoes the token on every read; a real provider shows it only once. Either way only the create may return it.
+    const KEY = { ...GATE, create: { path: "/gates", body: { token: "tok_once_value_0042" } }, outputs: { token: { path: "/token", sensitive: true, once: true } } };
+    const actx = h.actx("http", API);
+    const r = await resource.apply(actx, KEY, null);
+    expect(r.created).toEqual([GATE_KEY]);
+    expect(r.outputs.token).toBe("tok_once_value_0042");
+
+    const again = await readApply(h, resource, KEY);
+    expect(again.live!.outputs).not.toHaveProperty("token");
+    expect(again.result.outputs).not.toHaveProperty("token");
+    const changed = await readApply(h, resource, { ...KEY, fields: { ...GATE.fields, enabled: false } });
+    expect(changed.diffs[0]!.kind).toBe("update");
+    expect(changed.result.outputs).not.toHaveProperty("token");
+
+    // Lost answer, retried: the provider says it exists, so this call revealed nothing.
+    const retried = await resource.apply(actx, KEY, null);
+    expect(retried.created).toEqual([]);
+    expect(retried.outputs).not.toHaveProperty("token");
+  });
+
   it("exists_status and gone_status classify a provider's own statuses", async () => {
     // A provider that answers a duplicate create with 400 and a deleted object with 410.
     const server = createServer((req, res) => {
@@ -359,11 +380,17 @@ describe("http: malformed specs name the field", () => {
   });
 
   it("declares the outputs a line names, with their sensitivity", () => {
-    expect(resource.outputsFor!({ ...GATE, outputs: { gate_name: "/name", signing_secret: { path: "/secret", sensitive: true } } })).toEqual({
+    expect(resource.outputsFor!({ ...GATE, outputs: { gate_name: "/name", signing_secret: { path: "/secret", sensitive: true }, token: { path: "/token", sensitive: true, once: true } } })).toEqual({
       id: { available: "immediate" },
       gate_name: { available: "immediate" },
       signing_secret: { available: "immediate", sensitive: true },
+      token: { available: "immediate", sensitive: true, once: true },
     });
+  });
+
+  it("a once-only output must be sensitive, and its flags booleans", () => {
+    expect(() => resource.outputsFor!({ ...GATE, outputs: { token: { path: "/token", once: true } } })).toThrow(/`outputs\.token` is `once`.*must be `sensitive: true` too/);
+    expect(() => resource.outputsFor!({ ...GATE, outputs: { token: { path: "/token", sensitive: "yes" } } })).toThrow(/`outputs\.token\.sensitive` must be true or false/);
   });
 });
 

@@ -110,6 +110,10 @@
           "description": "The http.resource or http.list_item params, without api, vars and destroy. `{ param: <name> }` stands for a param's value; `{<name>}` in a path for its URI-encoded value.",
           "properties": { "api": false, "vars": false, "destroy": false }
         },
+        "destroy": {
+          "enum": ["keep", "never"],
+          "description": "What destroying a scope does with what the op made when the line does not say. Absent: delete it. `keep`: leave it (shared history, such as a release); a line may still write `destroy: delete`. `never`: the provider cannot delete it; it is always left, and `destroy: delete` is refused."
+        },
         "sim": {
           "type": "object",
           "additionalProperties": false,

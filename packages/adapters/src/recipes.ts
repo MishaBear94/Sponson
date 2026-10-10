@@ -60,6 +60,12 @@ export interface RecipeOp {
   params: Record<string, RecipeParam>;
   /** The http op's params, minus `api`, `vars` and `destroy`; `{ param: <name> }` values and `{<name>}` placeholders. */
   http: Record<string, unknown>;
+  /**
+   * What destroying a scope does with what the op made, when the line does not say (`destroy:`). Absent: delete it.
+   * `keep`: leave it (history shared beyond the scope, such as a release); a line may still say `destroy: delete`.
+   * `never`: the provider offers no way to delete it, so it is always left and `destroy: delete` is PARAM_INVALID.
+   */
+  destroy?: "keep" | "never";
   sim?: RecipeSimHints;
   /** For `pnpm test:live`: the environment variable supplying each param that has no usable example live. */
   live?: { params?: Record<string, string> };
@@ -231,7 +237,16 @@ export function expandRecipe(params: Record<string, unknown>, kind: RecipeOp["ki
   if (op.kind !== kind) throw paramError(ADAPTER, `recipe ${recipe.provider}.${name} is an \`http.${op.kind}\` recipe: write \`op: ${op.kind}\``, "recipe");
   const values = recipeValues(params);
   const spec = substitute(op.http, values) as Record<string, unknown>;
-  return { ...spec, api: lineApi(params), vars: values, ...(params.destroy !== undefined ? { destroy: params.destroy } : {}) };
+  const destroy = recipeDestroy(`recipe ${recipe.provider}.${name}`, op, params.destroy);
+  return { ...spec, api: lineApi(params), vars: values, ...(destroy !== undefined ? { destroy } : {}) };
+}
+
+/** The line's `destroy`, or the op's default; `delete` of an op the provider cannot delete is PARAM_INVALID. */
+function recipeDestroy(where: string, op: RecipeOp, line: unknown): unknown {
+  if (op.destroy === "never" && line !== undefined && line !== "keep") {
+    throw paramError(ADAPTER, `${where}: the provider offers no way to delete what it makes, so it is always left in place: remove \`destroy\` or write \`destroy: keep\``, "destroy");
+  }
+  return line ?? (op.destroy === undefined ? undefined : "keep");
 }
 
 /**

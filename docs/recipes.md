@@ -72,7 +72,7 @@ Assumptions:
 
 **DNS CNAME record** (`http.resource`). A CNAME record in a zone, such as `pr-42.preview.example.com` pointing at the preview deployment's host. Located by name and type; a console edit of its target, proxying, TTL or comment is drift.
 
-Covers: `cloudflare-dns` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`, `hostname`.
+Covers: `cloudflare-dns` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`, `hostname`. On destroy: deleted (`destroy: keep` on the line leaves it).
 
 | Param | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -152,7 +152,7 @@ Assumptions:
 
 **Database branch** (`http.resource`). A database copied from a parent database (a branch), named for the scope, such as `app-pr-42` from `app`. Its hostname is an output for the app's connection URL. Only its existence is compared for drift: changing `group` or `parent` later does not move or re-copy a database that exists.
 
-Covers: `turso-database` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`, `hostname`, `db_id`.
+Covers: `turso-database` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`, `hostname`, `db_id`. On destroy: deleted (`destroy: keep` on the line leaves it).
 
 | Param | Type | Required | Default | Meaning |
 |---|---|---|---|---|

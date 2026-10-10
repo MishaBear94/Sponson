@@ -73,9 +73,14 @@ function record(spec: ResourceSpec, key: string, l: Located): ResourceRecord {
   return { key, id: locator(spec, l.id), hash: stateHash(projection(l.item, fieldNames(spec))), label: label(spec, key) };
 }
 
-function outputsOf(spec: ResourceSpec, item: Record<string, unknown> | undefined, id: string): Record<string, Literal> {
+/**
+ * The outputs read from `item`. A `once` output only from `revealed`, the answer of the create that made the object:
+ * anywhere else the provider does not show it, and a value taken from a read would be a fake (ADR 0018).
+ */
+function outputsOf(spec: ResourceSpec, item: Record<string, unknown> | undefined, id: string, revealed = false): Record<string, Literal> {
   const out: Record<string, Literal> = { id };
   for (const [name, d] of Object.entries(spec.outputs)) {
+    if (d.once && !revealed) continue;
     const v = literalOf(at(item, pointerTokens(d.path)));
     if (v !== undefined) out[name] = v;
   }
@@ -200,14 +205,15 @@ async function create(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, 
   }
   let item = itemOf(sent.response, spec.itemPath);
   let id = idOf(item, spec.idPath);
+  const revealed = id !== undefined;
   if (id === undefined) {
-    // Some APIs answer a create with no body (201, 204): find what was created.
+    // Some APIs answer a create with no body (201, 204): find what was created. It reveals no once-only value.
     const l = await locate(api, spec);
     if (!l) throw noId(spec, `the answer to ${spec.create.method} ${path}`);
     ({ id, item } = l);
   }
   const resource = { key, id: locator(spec, id), hash: stateHash(desiredState(spec, undefined)), label: label(spec, key) };
-  return { resources: [resource], outputs: outputsOf(spec, item, id), created: [key] };
+  return { resources: [resource], outputs: outputsOf(spec, item, id, revealed), created: [key] };
 }
 
 async function update(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, key: string, current: ResourceRecord, live: LiveState): Promise<ApplyResult> {

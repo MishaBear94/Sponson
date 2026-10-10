@@ -4,7 +4,7 @@
  * a PARAM_INVALID (or PLAN_INVALID for the provider block) naming the field at fault. See ADR 0017 and
  * docs/plan-format.md (`http.resource`, `http.list_item`).
  */
-import { SponsonError, canonicalJson, markerKind, sha256 } from "@sponson/core";
+import { SponsonError, canonicalJson, markerKind, sha256, type OutputSpec } from "@sponson/core";
 import { paramError } from "./common.js";
 import { isObject } from "./http.js";
 import { expandRecipe, lineApi, resolveRecipeApi } from "./recipes.js";
@@ -313,10 +313,14 @@ export interface FindSpec {
   next?: { path: string; param: string };
 }
 
-/** Declared output: a pointer into the object, and whether it must never be shown. */
+/**
+ * Declared output: a pointer into the object, whether it must never be shown, and whether the provider reveals it
+ * only in the answer that creates the object (`once`, ADR 0018: an API key's token, a signing secret).
+ */
 export interface OutputDecl {
   path: string;
   sensitive: boolean;
+  once: boolean;
 }
 
 /** `http.resource` params, checked. Values may still be markers. */
@@ -398,11 +402,20 @@ function parseOutputs(v: unknown): Record<string, OutputDecl> {
     const param = `outputs.${name}`;
     if (name === "id") throw fail("`outputs.id` is reserved: the object's id is always the output `id`", param);
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw fail(`output name \`${name}\` must be letters, digits and _`, param);
-    if (typeof decl === "string") out[name] = { path: pointerParam(decl, param, ""), sensitive: false };
-    else if (isObject(decl)) out[name] = { path: pointerParam(decl.path, `${param}.path`, ""), sensitive: decl.sensitive === true };
-    else throw fail(`\`${param}\` must be a JSON pointer, or \`{ path, sensitive: true }\``, param);
+    if (typeof decl === "string") out[name] = { path: pointerParam(decl, param, ""), sensitive: false, once: false };
+    else if (isObject(decl)) out[name] = outputDecl(decl, param);
+    else throw fail(`\`${param}\` must be a JSON pointer, or \`{ path, sensitive: true, once?: true }\``, param);
   }
   return out;
+}
+
+/** `{ path, sensitive?, once? }`. A value shown only at creation is a credential, so `once` requires `sensitive`. */
+function outputDecl(decl: Record<string, unknown>, param: string): OutputDecl {
+  for (const flag of ["sensitive", "once"]) {
+    if (decl[flag] !== undefined && typeof decl[flag] !== "boolean") throw fail(`\`${param}.${flag}\` must be true or false`, `${param}.${flag}`);
+  }
+  if (decl.once === true && decl.sensitive !== true) throw fail(`\`${param}\` is \`once\` (shown only when the object is created), so it must be \`sensitive: true\` too`, `${param}.sensitive`);
+  return { path: pointerParam(decl.path, `${param}.path`, ""), sensitive: decl.sensitive === true, once: decl.once === true };
 }
 
 function parseFields(v: unknown, param: string): Record<string, unknown> {
@@ -438,11 +451,11 @@ export function parseResource(line: Record<string, unknown>): ResourceSpec {
   return spec;
 }
 
-/** The outputs one `http.resource` line declares: always `id`, plus its `outputs`. */
-export function resourceOutputs(line: Record<string, unknown>): Record<string, { available: "immediate"; sensitive?: boolean }> {
+/** The outputs one `http.resource` line declares: always `id`, plus its `outputs` (`once` ones as in ADR 0018). */
+export function resourceOutputs(line: Record<string, unknown>): Record<string, OutputSpec> {
   const params = expandRecipe(line, "resource");
-  const out: Record<string, { available: "immediate"; sensitive?: boolean }> = { id: { available: "immediate" } };
-  for (const [name, d] of Object.entries(parseOutputs(params.outputs))) out[name] = d.sensitive ? { available: "immediate", sensitive: true } : { available: "immediate" };
+  const out: Record<string, OutputSpec> = { id: { available: "immediate" } };
+  for (const [name, d] of Object.entries(parseOutputs(params.outputs))) out[name] = { available: "immediate", ...(d.sensitive ? { sensitive: true } : {}), ...(d.once ? { once: true } : {}) };
   return out;
 }
 

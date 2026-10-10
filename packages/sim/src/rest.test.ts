@@ -44,4 +44,22 @@ describe("rest sim styles", () => {
     expect((await call("GET", "/gates", undefined, { "x-postmark-server-key": "t" })).status).toBe(200);
     expect((await call("GET", "/gates", undefined, { "x-other": "t" })).status).toBe(401);
   });
+
+  it("accepts a credential in a header the seed declares, and only there", async () => {
+    sim = await startSim({ seed: { rest: { collections: { "/markers": [] }, auth_headers: ["X-Honeycomb-Team"] } } });
+    expect((await call("GET", "/markers", undefined, { "x-honeycomb-team": "t" })).status).toBe(200);
+    expect((await call("GET", "/markers", undefined, { "x-honeycomb-team": " " })).status).toBe(401);
+    expect((await call("GET", "/markers", undefined, { "x-other": "t" })).status).toBe(401);
+  });
+
+  it("ignores a trailing slash, and lists a collection under its aliases", async () => {
+    sim = await startSim({ seed: { rest: { collections: { "/releases/": [] }, styles: { "/releases/": { id_field: "version", item_path: "" } }, aliases: { "/hooks/all": "/hooks" } } } });
+    const created = await call("POST", "/releases/", { version: "1.0" });
+    expect(created).toEqual({ status: 201, body: { version: "1.0" } });
+    expect((await call("GET", "/releases/1.0/")).body).toEqual({ version: "1.0" });
+    expect(Object.keys(sim.state.rest.collections)).toContain("/releases");
+    await call("POST", "/hooks/", { url: "https://a" });
+    expect(((await call("GET", "/hooks/all")).body.data as unknown[]).length).toBe(1);
+    expect(sim.state.rest.collections["/hooks"]).toHaveLength(1);
+  });
 });

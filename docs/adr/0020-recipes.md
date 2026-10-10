@@ -127,7 +127,8 @@ chosen: its signing secret exists only in the create response, which the `http` 
   recipe's text, and the lock makes the identity-changing edits explicit.
 - **No schema per recipe in `schema/release.plan.schema.json`**: an editor checks `recipe:`'s form, `sponson plan`
   checks the params.
-- Everything ADR 0017 leaves out stays out (once-only outputs, polling, OAuth exchanges, SigV4).
+- Everything ADR 0017 leaves out stays out (polling, OAuth exchanges, SigV4). Once-only outputs were left out too,
+  until the amendment below.
 
 ## Alternatives considered
 
@@ -151,3 +152,30 @@ chosen: its signing secret exists only in the create response, which the `http` 
 - The rest sim's answers are shaped per collection; the default shape is unchanged.
 - The sim proves a recipe consistent with its own declarations, not with the provider: the verified assumptions and
   `pnpm test:live` are what tie a recipe to the real API.
+
+## Amendment: once-only outputs, destroy defaults, and sim shapes
+
+Writing the webhook, API key and release-marker recipes of [docs/coverage.yaml](../coverage.yaml) found three gaps.
+Each is closed by the smallest general change; none names a provider.
+
+- **Once-only outputs in `http.resource`.** An API key's token is in the create answer only. `outputs` now takes
+  `{ path, sensitive: true, once: true }`: the op declares the output `once` ([ADR 0018](0018-once-only-outputs.md))
+  and takes its value only from the answer of the create that made the object, never from a read, an update, an answer
+  without the object (found afterwards), or a create the provider refused as existing (a lost answer, retried). The
+  engine's fingerprints and `--recreate` then work as for `planetscale.password`. `once` without `sensitive: true` is
+  `PARAM_INVALID`: a value shown once is a credential.
+- **Destroy defaults per recipe op.** A release or a deploy record is history shared beyond one scope, and some
+  providers offer no way to delete it at all (deploy records). A recipe op may say `destroy: keep` (lines leave what
+  they made unless they write `destroy: delete`) or `destroy: never` (no delete request exists: always left, and a
+  line's `destroy: delete` is `PARAM_INVALID` naming the recipe). The record id is then `KEEP <path>`, as for a
+  hand-written line with `destroy: keep`, so identity follows ADR 0017 unchanged; a `never` op still declares the
+  object's URL as `delete.path`, used only as its identity.
+- **Sim shapes.** The generic REST sim ignores a trailing slash (`/releases/` is `/releases`), lists a collection under
+  a second path when a provider lists at another URL than it creates at (seed `aliases`, which the recipe harness
+  derives from `find.path`), and accepts the credential in a header the seed names (`auth_headers`, derived from the
+  recipe's `auth.header`, for header names that do not end in `-Key` or `-Token`). `ProviderSim.authorized` receives
+  the provider's state for this.
+
+Still out of reach for recipes, and recorded on the coverage rows that need them: an API that needs two credentials on
+every request, a list request sent as a POST, a delete that names the object in its body, and a credential that is
+itself an output of another line (a per-environment server's token).

@@ -155,6 +155,32 @@ describe("recipe errors", () => {
     }
   });
 
+  it("an op's `destroy` sets the line's default: `keep` may be overridden, `never` refuses `destroy: delete`", () => {
+    const op = (destroy?: "keep" | "never"): RecipeOp => ({
+      kind: "resource",
+      title: "Marker",
+      summary: "A marker that stays as history.",
+      covers: [],
+      params: { name: { type: "string", required: true, description: "The name.", example: "m" } },
+      http: { read: { path: "/markers/{name}" }, create: { path: "/markers" } },
+      ...(destroy ? { destroy } : {}),
+    });
+    const forget = useRecipe({ ...ORIGINS, provider: "history", ops: { plain: op(), kept: op("keep"), undeletable: op("never") } });
+    try {
+      const line = (o: string, extra: Record<string, unknown> = {}) => ({ recipe: `history.${o}`, name: "m", ...extra });
+      expect(expandRecipe(line("plain"), "resource")).not.toHaveProperty("destroy");
+      expect(parseResource(line("plain")).destroy).toBe("delete");
+      expect(parseResource(line("kept")).destroy).toBe("keep");
+      expect(parseResource(line("kept", { destroy: "delete" })).destroy).toBe("delete");
+      expect(parseResource(line("undeletable")).destroy).toBe("keep");
+      expect(parseResource(line("undeletable", { destroy: "keep" })).destroy).toBe("keep");
+      expect(codeOf(() => parseResource(line("undeletable", { destroy: "delete" })))).toMatch(/^PARAM_INVALID: .*recipe history\.undeletable: the provider offers no way to delete/);
+      expect(resourceIdentity(parseResource(line("undeletable")), "ID").id).toBe("KEEP /markers/m");
+    } finally {
+      forget();
+    }
+  });
+
   it("substitutes whole values, drops absent optional ones, and leaves lines without `recipe` alone", () => {
     expect(substitute({ a: { param: "x" }, b: [{ param: "y" }, 1], c: { d: { param: "x" } } }, { x: "X" })).toEqual({ a: "X", b: [1], c: { d: "X" } });
     const plain = { api: "a", create: { path: "/x" } };

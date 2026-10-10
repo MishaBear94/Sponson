@@ -68,9 +68,10 @@ export interface ProviderSim<S, Seed> {
   drift(core: SimCore, state: S, d: DriftRequest): boolean;
   /**
    * Whether a request's headers carry a credential this provider accepts. Absent: any non-empty bearer token. Like
-   * the default, accept any non-empty value: the point is that a missing credential surfaces as 401.
+   * the default, accept any non-empty value: the point is that a missing credential surfaces as 401. `state` is the
+   * provider's current state, for a provider whose seed declares how credentials arrive.
    */
-  authorized?(headers: IncomingHttpHeaders): boolean;
+  authorized?(headers: IncomingHttpHeaders, state: S): boolean;
   /** Answer one authenticated, chaos-checked request under `/<name>/`. */
   routes(core: SimCore, state: S, req: RouteRequest): Reply;
 }

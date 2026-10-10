@@ -249,7 +249,8 @@ yet are listed under [Current coverage](#current-coverage).
    delete), "busy" (retry), on top of `packages/adapters/src/http.ts`'s defaults; plus pagination styles (cursor,
    `next` link, page number).
 8. **Destroy modes**: `delete`, `update` to an archived state (Stripe prices `active=false`), remove-from-list, or
-   `leave` (Sentry releases are history).
+   `leave` (Sentry releases are history). `delete` and `leave` exist (`destroy: keep`); a recipe op sets the default
+   (`destroy: keep`, or `never` when the provider cannot delete; [ADR 0020](adr/0020-recipes.md), amendment).
 9. **Simple polling**: after create, poll a URL until a JSON path equals a value, with a timeout (Algolia tasks, Turso
    or Prisma readiness). Long multi-step lifecycles stay first-class.
 10. **Scope listing** for drift and `sponson init`: a list request plus a filter (name prefix, URL host) so unmanaged
@@ -257,7 +258,8 @@ yet are listed under [Current coverage](#current-coverage).
 11. **Once-only outputs**: an output that is only in the create response must be declared as such, so the engine
     feeds it to dependent lines in the same run and refuses a later run that needs it (instead of reading an empty
     value). Needed for Stripe webhook secrets, API keys and DB passwords even in first-class adapters. The engine
-    side exists: `OutputSpec.once` ([ADR 0018](adr/0018-once-only-outputs.md)), first used by `planetscale.password`.
+    side exists: `OutputSpec.once` ([ADR 0018](adr/0018-once-only-outputs.md)), first used by `planetscale.password`;
+    `http.resource` declares one as `{ path, sensitive: true, once: true }` ([ADR 0020](adr/0020-recipes.md), amendment).
 12. **Sim support**: a generic sim route set driven by the same declaration, so every `http` line gets the chaos and
     drift scenarios the built-in adapters get.
 
