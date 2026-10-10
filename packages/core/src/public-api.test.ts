@@ -47,6 +47,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "CLOUDFLARE_DEFAULT_API_URL", "cloudflareAdapter",
     "algoliaAdapter",
     "XATA_DEFAULT_API_URL", "xataAdapter",
+    "DIGITALOCEAN_DEFAULT_API_URL", "digitaloceanAdapter",
   ],
   "@sponson/sim": [
     "CHAOS_KEYS", "ChaosAction", "ChaosConfig", "ChaosRequest", "ClerkRedirect", "ClerkSeed", "ClerkState",
@@ -64,6 +65,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "CloudflarePagesEnv", "CloudflareEnvVar", "CloudflarePagesProject", "CloudflareState", "CloudflareSeedVars", "CloudflareSeed", "cloudflareSim",
     "AlgoliaIndex", "AlgoliaState", "AlgoliaSeed", "algoliaSim",
     "XataBranch", "XataState", "XataSeed", "xataSim", "xataConnectionString",
+    "DigitaloceanApp", "DigitaloceanState", "DigitaloceanSeed", "digitaloceanSim",
   ],
   "sponson": [
     "CtxFacts", "CtxOverrides", "CtxSource", "DEFAULT_CTX_SOURCES", "RunIO", "SponsonPlugin", "bitbucketPipelinesSource",

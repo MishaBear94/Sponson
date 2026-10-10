@@ -100,7 +100,8 @@ categories:
         api_shape: REST `PUT /v2/apps/{id}` whole spec, bearer; **list** in spec
         generic: P (whole-spec writes)
         priority: P2
-        covered_by: null
+        covered_by: digitalocean.app
+        note: "an app per scope from a whole spec, waited for until deployed (in place of the app DigitalOcean's GitHub action makes); secret values are not compared"
   - id: databases
     title: Databases with branching or per-PR instances
     rows:
@@ -438,6 +439,7 @@ categories:
         generic: Y (one call, no destroy; archive via dashboard)
         priority: P1
         covered_by: null
+        note: "not covered: a sync is a one-off action with nothing to read back or delete (no API archives an app); the REST v2 sync endpoint is beta and does not document how to target a branch environment. Inngest's Vercel and Netlify integrations sync each deploy"
   - id: search-payments
     title: Search, payments test mode
     rows:

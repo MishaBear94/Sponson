@@ -28,6 +28,7 @@ All fetched on 2026-10-10 (LaunchDarkly, PlanetScale, Supabase, Netlify: 2026-10
 | Cloudflare | OpenAPI document, https://github.com/cloudflare/api-schemas (`openapi.json`); API reference https://developers.cloudflare.com/api/resources/pages/subresources/projects/methods/get/ and [`…/methods/edit/`](https://developers.cloudflare.com/api/resources/pages/subresources/projects/methods/edit/); the Pages and fundamentals pages cited below | fetched 2026-10-11 |
 | Algolia | Search API reference https://www.algolia.com/doc/rest-api/search/, generated from https://github.com/algolia/api-clients-automation (`specs/search`: `spec.yml`, `operationIndex.yml`, `getTask.yml`, `settings.yml`, `listIndices.yml`); copy guide https://www.algolia.com/doc/guides/sending-and-managing-data/manage-indices-and-apps/manage-indices/how-to/copy-indices; CLI authentication https://www.algolia.com/doc/tools/cli/authentication | fetched 2026-10-11 |
 | Xata | OpenAPI document https://api.xata.tech/openapi.json; docs https://xata.io/docs/cli, https://xata.io/docs/cli/branch, https://xata.io/docs/platform/branch | fetched 2026-10-11 |
+| DigitalOcean | OpenAPI document https://github.com/digitalocean/openapi (`specification/resources/apps`: `apps_create.yml`, `apps_get.yml`, `apps_update.yml`, `apps_delete.yml`, `apps_list.yml`, `apps_get_deployment.yml`, `models/app.yml`, `models/app_spec.yml`, `models/app_variable_definition.yml`, `models/apps_deployment_phase.yml`), rendered at https://docs.digitalocean.com/reference/api/digitalocean/#tag/Apps; app spec reference https://docs.digitalocean.com/products/app-platform/reference/app-spec/ | fetched 2026-10-11 |
 
 Vercel, Neon and Clerk use bearer authentication (`securitySchemes`), which is what the shared HTTP client sends
 by default: ✅. LaunchDarkly takes the access token as the whole `Authorization` value, without `Bearer`; the adapter
@@ -371,6 +372,32 @@ Deploy Previews cannot be rebuilt through any documented call (the docs describe
 | XA6 | credentials readable at any time | endpoint ✅; "any time" inferred |
 | XA7 | ready within minutes | ❓ (bounded by `SPONSON_XATA_READY_TIMEOUT_MS`) |
 
+## DigitalOcean
+
+### Calls the adapter makes
+
+| Call | What the adapter sends and reads | Spec | Notes |
+|---|---|---|---|
+| base URL and auth | `https://api.digitalocean.com`, `Authorization: Bearer <DIGITALOCEAN_ACCESS_TOKEN>` | ✅ | (DO1) |
+| `GET /v2/apps?per_page=100&page=` | `apps[].id`, `.spec`, `.live_url`; follows `links.pages.next` | ✅ | No name filter; the adapter matches `spec.name` as DigitalOcean's own GitHub action does (DO2). |
+| `POST /v2/apps` | `{ spec }`; reads `app.id`, `app.pending_deployment.id` | ✅ | Duplicate name: unique per account, status undocumented ❓; any conflict is re-read and claimed (DO3). |
+| `PUT /v2/apps/{id}` | `{ spec }`, the whole spec | ✅ | Replaces the spec; starts a deployment (DO4, inferred). |
+| `GET /v2/apps/{app_id}/deployments/{deployment_id}` | `deployment.phase` until `ACTIVE` or `SUPERSEDED`; `ERROR`/`CANCELED` fail | ✅ | (DO5) |
+| `DELETE /v2/apps/{id}` | answer not read; `404` is gone | ✅ | (DO8) |
+
+### Sim assumptions (`packages/sim/src/routes/digitalocean.ts`)
+
+| Id | Assumption | Status |
+|---|---|---|
+| DO1 | base URL, bearer token, `DIGITALOCEAN_ACCESS_TOKEN` | ✅ verified |
+| DO2 | create/get/list shapes; no name filter | ✅ verified |
+| DO3 | names unique per account; duplicate status | uniqueness ✅; status ❓ |
+| DO4 | `PUT` replaces the whole spec and deploys | ✅ replace; deploy inferred |
+| DO5 | `pending_deployment`; deployment phases | ✅ verified |
+| DO6 | stored spec adds defaults, keeps sent fields and list order | ❓ (pinned) |
+| DO7 | `SECRET` values read back encrypted (`EV[…]`) | encryption ✅; read-back form ❓ |
+| DO8 | `DELETE` removes the app | ✅ verified |
+
 ## What still needs a live account
 
 - Vercel: V1 (propagation of env writes), the deployment list's order, whether `decrypt=true` still decrypts,
@@ -397,5 +424,7 @@ Deploy Previews cannot be rebuilt through any documented call (the docs describe
   missing index), AL8 (how long a copy takes).
 - Xata: XA3 (whether branch names are unique), XA5 (the spelling of `statusType`), XA6 (credentials of a branch still
   coming up), XA7 (how long a branch takes).
+- DigitalOcean: DO3 (status of a duplicate name), DO6 (that the stored spec keeps every sent field in order), DO7
+  (what a secret reads back as).
 
 Run them with `pnpm test:live`; see the header of `scenarios/contract.test.ts`.

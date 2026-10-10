@@ -63,7 +63,7 @@ the tables below are generated from it: edit the data, then run `pnpm docs:gen`.
 | AWS Amplify | Branch (per-PR previews built in); env vars per branch | `UpdateBranch` `environmentVariables`, SigV4; **map** full replace | N (SigV4; CLI fallback) | P2 | no |
 | Google Cloud Run | Tagged revision per PR (`--tag pr-42`), env vars on it | Admin API v2 / `gcloud run deploy --tag --update-env-vars`, Google OAuth; revision = whole service spec | N (part of the deploy, not beside it) | P2 | no |
 | Azure Static Web Apps | Preview environment per PR (built in); app settings | ARM `PUT .../staticSites/{s}/builds/{env}/config/appsettings`, AAD token; **map** full replace | P (AAD token) | P2 | no |
-| DigitalOcean App Platform | No native PR previews; app per PR via its GitHub action; envs in the app spec | REST `PUT /v2/apps/{id}` whole spec, bearer; **list** in spec | P (whole-spec writes) | P2 | no |
+| DigitalOcean App Platform | No native PR previews; app per PR via its GitHub action; envs in the app spec | REST `PUT /v2/apps/{id}` whole spec, bearer; **list** in spec | P (whole-spec writes) | P2 | **yes** (`digitalocean.app`: an app per scope from a whole spec, waited for until deployed (in place of the app DigitalOcean's GitHub action makes); secret values are not compared) |
 
 ### Databases with branching or per-PR instances
 
@@ -193,14 +193,14 @@ Counted over the 56 side-effect rows of the matrix (rows marked `n/a` have nothi
 
 | Measure | Covered | Coverage |
 |---|---|---|
-| Rows | 19 of 56 | **33.9%** |
-| Weighted by priority | 39 of 90 | **43.3%** |
+| Rows | 20 of 56 | **35.7%** |
+| Weighted by priority | 40 of 90 | **44.4%** |
 | P0 rows only | 7 of 9 | 77.8% |
-| Rows an API reaches (all but `manual`) | 19 of 53 | 35.8% |
-| Weighted, rows an API reaches | 39 of 85 | 45.9% |
+| Rows an API reaches (all but `manual`) | 20 of 53 | 37.7% |
+| Weighted, rows an API reaches | 40 of 85 | 47.1% |
 | Secret sources (separate) | 4 of 9 vendors; weighted 7 of 14 | 44.4%; 50.0% |
 
-Covered: Vercel (`vercel.env`, `vercel.deploy`); Netlify (`netlify.env`); Cloudflare Pages / Workers (`cloudflare.pages_env`); Render (recipe [`render.env_var`](recipes.md#renderenv_var)); Heroku (recipe [`heroku.config_var`](recipes.md#herokuconfig_var)); Neon (`neon.branch`); Supabase (`supabase.branch`); PlanetScale (`planetscale.branch`, `planetscale.password`); Turso (recipe [`turso.database_branch`](recipes.md#tursodatabase_branch)); Xata (`xata.branch`); Prisma Postgres (recipe [`prisma.database`](recipes.md#prismadatabase), recipe [`prisma.database_copy`](recipes.md#prismadatabase_copy)); Clerk (`clerk.redirect_allow`); Supabase Auth (`supabase.auth_redirect`); LaunchDarkly (`launchdarkly.flag_target`); Cloudflare DNS (recipe [`cloudflare.dns_cname`](recipes.md#cloudflaredns_cname)); Vercel domains (recipe [`vercel.project_domain`](recipes.md#vercelproject_domain)); Upstash Redis (recipe [`upstash.redis_database`](recipes.md#upstashredis_database)); Upstash QStash (recipe [`qstash.schedule`](recipes.md#qstashschedule)); Algolia (`algolia.index`).
+Covered: Vercel (`vercel.env`, `vercel.deploy`); Netlify (`netlify.env`); Cloudflare Pages / Workers (`cloudflare.pages_env`); Render (recipe [`render.env_var`](recipes.md#renderenv_var)); Heroku (recipe [`heroku.config_var`](recipes.md#herokuconfig_var)); DigitalOcean App Platform (`digitalocean.app`); Neon (`neon.branch`); Supabase (`supabase.branch`); PlanetScale (`planetscale.branch`, `planetscale.password`); Turso (recipe [`turso.database_branch`](recipes.md#tursodatabase_branch)); Xata (`xata.branch`); Prisma Postgres (recipe [`prisma.database`](recipes.md#prismadatabase), recipe [`prisma.database_copy`](recipes.md#prismadatabase_copy)); Clerk (`clerk.redirect_allow`); Supabase Auth (`supabase.auth_redirect`); LaunchDarkly (`launchdarkly.flag_target`); Cloudflare DNS (recipe [`cloudflare.dns_cname`](recipes.md#cloudflaredns_cname)); Vercel domains (recipe [`vercel.project_domain`](recipes.md#vercelproject_domain)); Upstash Redis (recipe [`upstash.redis_database`](recipes.md#upstashredis_database)); Upstash QStash (recipe [`qstash.schedule`](recipes.md#qstashschedule)); Algolia (`algolia.index`).
 
 Automated coverage counts only rows an op manages without a person. Rows no API reaches (`manual`, or a `manual.step` line that records the step a person does; weight 5): Google OAuth clients (no public API for standard OAuth web clients); Clerk webhooks (Clerk's API manages the Svix app, not its endpoints); Stripe sandboxes (no public API for account sandboxes). They cap coverage at 53 rows, 85 of 90 weighted (94.4%).
 

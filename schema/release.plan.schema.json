@@ -20,6 +20,11 @@
       "type": "object",
       "additionalProperties": { "type": "object" },
       "properties": {
+        "digitalocean": {
+          "type": "object",
+          "description": "Nothing to configure: the account is the token's. Credential: DIGITALOCEAN_ACCESS_TOKEN in the environment.",
+          "additionalProperties": false
+        },
         "xata": {
           "type": "object",
           "description": "Xata organization and project ids. Credential: XATA_API_KEY in the environment.",
@@ -216,7 +221,7 @@
       "required": ["id", "adapter", "op"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk, planetscale, launchdarkly, supabase, netlify, cloudflare, and http (any JSON REST API described in the plan), algolia, xata. Plugins (SPONSON_PLUGINS) add more." },
+        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk, planetscale, launchdarkly, supabase, netlify, cloudflare, and http (any JSON REST API described in the plan), algolia, xata, digitalocean. Plugins (SPONSON_PLUGINS) add more." },
         "op": { "type": "string", "minLength": 1 },
         "environments": { "$ref": "#/$defs/nameList", "description": "Environments this line applies to. Absent: all." },
         "depends_on": { "type": "array", "items": { "$ref": "#/$defs/id" }, "description": "Ordering without a data dependency. Prefer `from:` references." }
@@ -286,6 +291,10 @@
         {
           "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "xata" }, "op": { "const": "branch" } } },
           "then": { "$ref": "#/$defs/op_xata_branch" }
+        },
+        {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "digitalocean" }, "op": { "const": "app" } } },
+          "then": { "$ref": "#/$defs/op_digitalocean_app" }
         }
       ]
     },
@@ -673,6 +682,20 @@
         "depends_on": true,
         "name": { "$ref": "#/$defs/stringOrRef", "description": "The branch's name, e.g. ${ctx.scope}; its identity." },
         "parent_id": { "$ref": "#/$defs/stringOrRef", "description": "The id of the branch to copy (not its name)." }
+      },
+      "additionalProperties": false
+    },
+    "op_digitalocean_app": {
+      "description": "digitalocean.app: an App Platform app per scope from a whole app spec, waited for until deployed. Outputs: app_id, live_url.",
+      "required": ["spec"],
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "spec": { "type": "object", "required": ["name"], "properties": { "name": true }, "description": "The whole app spec (https://docs.digitalocean.com/products/app-platform/reference/app-spec/); spec.name is the app's identity. Values may be references." },
+        "wait": { "type": "boolean", "description": "Wait for the deployment a create or update starts. Default true." }
       },
       "additionalProperties": false
     }

@@ -237,6 +237,7 @@ The base URL override replaces the provider's API base URL (the test suites poin
 | `cloudflare` | [`cloudflare.pages_env`](/reference/plan-format#cloudflare-pages_env) | `CLOUDFLARE_API_TOKEN` | `CLOUDFLARE_API_URL` |
 | `algolia` | [`algolia.index`](/reference/plan-format#algolia-index) | `ALGOLIA_API_KEY` | `ALGOLIA_API_URL` |
 | `xata` | [`xata.branch`](/reference/plan-format#xata-branch) | `XATA_API_KEY` | `XATA_API_URL` |
+| `digitalocean` | [`digitalocean.app`](/reference/plan-format#digitalocean-app) | `DIGITALOCEAN_ACCESS_TOKEN` | `DIGITALOCEAN_API_URL` |
 
 A missing credential fails the line with `PROVIDER_AUTH`. Every resource has a key that identifies it within the
 adapter and provider block; the ledger treats two resources with the same key as the same resource.
@@ -677,6 +678,26 @@ branch cannot be moved, so changing `parent_id` later changes nothing; a deleted
 again (with a new connection string, passed on in that run). Destroy deletes the branch, never the parent. Not
 listed for drift or adoption.
 
+### `digitalocean.app`
+
+A DigitalOcean App Platform app per scope, created from an app spec the line carries whole, its environment
+variables included (App Platform has no pull request previews of its own; this is the app per pull request that
+DigitalOcean's GitHub action otherwise makes). Every create and update starts a deployment, which `apply` waits for
+until it is `ACTIVE` (`ERROR` or `CANCELED` fails the line; not live within `SPONSON_DIGITALOCEAN_DEPLOY_TIMEOUT_MS`,
+twenty minutes by default, is `WAIT_TIMEOUT`). Requires `DIGITALOCEAN_ACCESS_TOKEN` with the app scopes; no
+provider block.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `spec` | map | (required) | The whole [app spec](https://docs.digitalocean.com/products/app-platform/reference/app-spec/). `spec.name` (unique in the account) is the app's identity (key `app:<name>`), such as `web-${ctx.scope}`. Values may be literals, `${ctx.*}`, `{ from }` or `{ secret }`, at any depth. |
+| `wait` | boolean | `true` | Wait for the deployment. |
+
+Outputs: `app_id`, and `live_url` once the app has been deployed. **Drift** covers the fields the spec declares, read
+back from the live spec: the platform's defaults and anything else not declared are ignored, and the values of
+`type: SECRET` variables are not compared (they read back encrypted), so a console edit of a declared field is
+`changed`, an edit of a secret's value is not seen. An update sends the whole spec (`PUT`): a field set only in the
+console is removed by the next update. Destroy deletes the app. Not listed for drift or adoption.
+
 ### Outputs
 
 The outputs each built-in op declares. `immediate` outputs exist once the line is applied; `external` ones only after
@@ -717,6 +738,8 @@ the named event. Sensitive outputs are never displayed, logged or written to rec
 | `algolia.index` | `name` | immediate | no |
 | `xata.branch` | `branch_id` | immediate | no |
 | `xata.branch` | `connection_string` | immediate | yes |
+| `digitalocean.app` | `app_id` | immediate | no |
+| `digitalocean.app` | `live_url` | immediate | no |
 
 ### Once-only outputs
 

@@ -48,7 +48,7 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CLERK_DEFAULT_API_URL, CLOUDFLARE_DEFAULT_API_URL, algoliaAdapter, xataAdapter, LAUNCHDARKLY_DEFAULT_API_URL, NETLIFY_DEFAULT_API_URL, PLANETSCALE_DEFAULT_API_URL, SUPABASE_DEFAULT_API_URL, clerkAdapter, cloudflareAdapter, launchdarklyAdapter, neonAdapter, netlifyAdapter, planetscaleAdapter, supabaseAdapter, vercelAdapter } from "@sponson/adapters";
+import { CLERK_DEFAULT_API_URL, CLOUDFLARE_DEFAULT_API_URL, algoliaAdapter, digitaloceanAdapter, xataAdapter, LAUNCHDARKLY_DEFAULT_API_URL, NETLIFY_DEFAULT_API_URL, PLANETSCALE_DEFAULT_API_URL, SUPABASE_DEFAULT_API_URL, clerkAdapter, cloudflareAdapter, launchdarklyAdapter, neonAdapter, netlifyAdapter, planetscaleAdapter, supabaseAdapter, vercelAdapter } from "@sponson/adapters";
 import type { AdapterContext, Ctx } from "@sponson/core";
 import { SUPABASE_DEMO_PROJECT, simEnv, startSim, type SimHandle } from "@sponson/sim";
 import { cliEnv, runCli, workspace, type CliRun, type Workspace } from "./support.js";
@@ -660,6 +660,46 @@ describe.skipIf(LIVE && !XA_LIVE)(`contract: xata (${LIVE ? "@live" : "sim"})`, 
   it("assumption XA4: a deleted branch is gone from the list when DELETE returns", async () => {
     await op.destroy(xactx(), [made!]);
     expect(await op.read(xactx(), params)).toBeNull();
+    made = undefined;
+  }, 120_000);
+});
+
+/**
+ * DigitalOcean App Platform (`assumption DO…`, packages/sim/src/routes/digitalocean.ts). Live only with
+ * DIGITALOCEAN_ACCESS_TOKEN and SPONSON_LIVE_DIGITALOCEAN=1 (it creates the static-site app `sponson-ct-<tag>` from
+ * a public sample repository, billed while it exists, and deletes it in `afterAll`).
+ */
+const DO_LIVE = !!process.env.DIGITALOCEAN_ACCESS_TOKEN && process.env.SPONSON_LIVE_DIGITALOCEAN === "1";
+describe.skipIf(LIVE && !DO_LIVE)(`contract: digitalocean (${LIVE ? "@live" : "sim"})`, () => {
+  const op = digitaloceanAdapter.ops.app!;
+  const params = {
+    spec: {
+      name: `sponson-ct-${tag}`,
+      static_sites: [{ name: "site", git: { repo_clone_url: "https://github.com/digitalocean/sample-html.git", branch: "main" } }],
+      envs: [{ key: "SPONSON_CONTRACT", value: tag, scope: "BUILD_TIME" }, { key: "SPONSON_SECRET", value: SECRET, type: "SECRET", scope: "BUILD_TIME" }],
+    },
+  };
+  const dctx = (): AdapterContext => {
+    const ctx: Ctx = { env: "preview", git: { branch, sha, short_sha: sha.slice(0, 7) }, pr: { number: pr }, scope: `pr-${pr}` };
+    return { ctx, provider: {}, env: { ...env, SPONSON_DIGITALOCEAN_POLL_MS: LIVE ? "10000" : "1" }, log: () => {}, intend: async () => {}, redact: (t) => t };
+  };
+  let made: { key: string; id: string; hash: string } | undefined;
+
+  afterAll(async () => {
+    if (made) await op.destroy(dctx(), [made]).catch(() => {});
+  }, 120_000);
+
+  it("assumption DO2, DO5, DO6, DO7: a created app deploys, and reads back unchanged (defaults ignored, secret encrypted)", async () => {
+    const r = await op.apply(dctx(), params, null);
+    made = r.resources[0];
+    const live = await op.read(dctx(), params);
+    expect(op.diff(live, params)[0]!.kind).toBe("unchanged");
+    expect(typeof live!.outputs.live_url).toBe("string");
+  }, 25 * 60_000);
+
+  it("assumption DO8: a deleted app is gone from the list", async () => {
+    await op.destroy(dctx(), [made!]);
+    expect(await op.read(dctx(), params)).toBeNull();
     made = undefined;
   }, 120_000);
 });
