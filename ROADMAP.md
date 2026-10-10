@@ -4,7 +4,7 @@ What Sponson needs next, cut into pieces one contributor can pick up. Each item 
 to know it is done. Items marked **good first issue** need no prior knowledge of the engine; items marked
 **ADR** change a format or contract and start with a design record in `docs/adr/` (see MAINTAINERS.md).
 
-Want one? Comment on its issue (or open one from the item) so nobody duplicates work. Something missing?
+Want one? Comment on its linked issue so nobody duplicates work; for an item without one, open it from the item. Something missing?
 Open a feature or adapter request.
 
 Status as of 0.3.0: format, engine, the built-in adapters ([listed here](docs/plan-format.md#built-in-ops)),
@@ -22,11 +22,11 @@ first, then the adapter.
 
 | Item | Where | Label |
 |------|-------|-------|
-| Run `pnpm test:live` against free Vercel, Neon and Clerk dev accounts and report the results in an issue (pass/fail per assumption, API versions seen) | `scenarios/contract.test.ts` header | **good first issue** |
-| Clerk C1 (status and wording of a duplicate redirect URL; the adapter re-reads after any 400/422) | `packages/sim/src/routes/clerk.ts` | **good first issue** |
-| Neon N1 (does a branch being deleted still list?), N2 (which requests answer 423 during a create) and N5 (status of a duplicate branch name) | `packages/sim/src/routes/neon.ts` | help wanted |
-| Vercel V2 (deployment list order), V3 (does the deprecated `?decrypt=true` still decrypt; `sensitive`-type vars are never returned — decide how they should diff), V4 (`created` for updated entries, `ENV_CONFLICT`), V5 (branch auto-cancel; a `gitSource` deployment built from the project's `link`), V6 (`until` on the env list) | `packages/sim/src/routes/vercel.ts` | help wanted |
-| A scheduled (weekly) CI job that runs the live contract suite with repository secrets, and opens an issue when an assumption breaks | `.github/workflows/` | help wanted |
+| Run `pnpm test:live` against free Vercel, Neon and Clerk dev accounts and report the results in an issue (pass/fail per assumption, API versions seen) ([#10](https://github.com/MishaBear94/Sponson/issues/10)) | `scenarios/contract.test.ts` header | **good first issue** |
+| Clerk C1 (status and wording of a duplicate redirect URL; the adapter re-reads after any 400/422) ([#11](https://github.com/MishaBear94/Sponson/issues/11)) | `packages/sim/src/routes/clerk.ts` | **good first issue** |
+| Neon N1 (does a branch being deleted still list?), N2 (which requests answer 423 during a create) and N5 (status of a duplicate branch name) ([#12](https://github.com/MishaBear94/Sponson/issues/12)) | `packages/sim/src/routes/neon.ts` | help wanted |
+| Vercel V2 (deployment list order), V3 (does the deprecated `?decrypt=true` still decrypt; `sensitive`-type vars are never returned — decide how they should diff), V4 (`created` for updated entries, `ENV_CONFLICT`), V5 (branch auto-cancel; a `gitSource` deployment built from the project's `link`), V6 (`until` on the env list) ([#13](https://github.com/MishaBear94/Sponson/issues/13)) | `packages/sim/src/routes/vercel.ts` | help wanted |
+| A scheduled (weekly) CI job that runs the live contract suite with repository secrets, and opens an issue when an assumption breaks ([#14](https://github.com/MishaBear94/Sponson/issues/14)) | `.github/workflows/` | help wanted |
 
 ## 2. More adapters
 
@@ -35,9 +35,9 @@ and registers them. The checklist is in CONTRIBUTING.md.
 
 | Item | Notes | Label |
 |------|-------|-------|
-| **Feature flags: LaunchDarkly** — `flag_target`: turn a flag on for a preview (target the preview URL or a context key), off again on destroy | The README's fourth console. Decide the resource key (project + environment + flag + target) | adapter, help wanted |
+| **Feature flags: LaunchDarkly** — `flag_target`: turn a flag on for a preview (target the preview URL or a context key), off again on destroy ([#15](https://github.com/MishaBear94/Sponson/issues/15)) | The README's fourth console. Decide the resource key (project + environment + flag + target) | adapter, help wanted |
 | Feature flags: a second provider (Statsig, Unleash, PostHog or GrowthBook) | Reuse whatever shape LaunchDarkly settles on | adapter |
-| Identity callbacks beyond Clerk: Auth0 (allowed callback URLs on an application), Supabase Auth redirect URLs | Small, close to `clerk.ts` | adapter, **good first issue** |
+| Identity callbacks beyond Clerk: Auth0 (allowed callback URLs on an application), Supabase Auth redirect URLs ([#16](https://github.com/MishaBear94/Sponson/issues/16)) | Small, close to `clerk.ts` | adapter, **good first issue** |
 | Database branches: Supabase branching, PlanetScale branches | Close to `neon.ts`; output a connection string marked `sensitive` | adapter |
 | Deploy-target env vars: Netlify, Railway, Fly.io secrets | Close to `vercel.ts`'s `env` op, without the deploy barrier at first | adapter |
 
@@ -48,8 +48,8 @@ The CLI-backed sources (e.g. `aws-sm://`) show how to call a CLI through the inj
 
 | Item | Label |
 |------|-------|
-| `vault://` — HashiCorp Vault KV v2 over HTTP (`VAULT_ADDR`, `VAULT_TOKEN`) | **good first issue** |
-| `infisical://` — Infisical via its CLI | **good first issue** |
+| `vault://` — HashiCorp Vault KV v2 over HTTP (`VAULT_ADDR`, `VAULT_TOKEN`) ([#17](https://github.com/MishaBear94/Sponson/issues/17)) | **good first issue** |
+| `infisical://` — Infisical via its CLI ([#18](https://github.com/MishaBear94/Sponson/issues/18)) | **good first issue** |
 | A scenario per new source under `scenarios/e-secrets/` proving the value never reaches any output (invariant 1) | part of each item above |
 
 ## 4. Lifecycle and operations
@@ -67,9 +67,9 @@ The CLI-backed sources (e.g. `aws-sm://`) show how to call a CLI through the inj
 | Item | Label |
 |------|-------|
 | Raise the coverage thresholds (`vitest.config.ts`, enforced by `pnpm test:coverage` in CI) as coverage rises: pick an uncovered branch from `pnpm test:coverage` and test it | **good first issue** |
-| Windows in the CI matrix (paths in the local receipt store, `git` and `node` spawning) | help wanted |
+| Windows in the CI matrix (paths in the local receipt store, `git` and `node` spawning) ([#19](https://github.com/MishaBear94/Sponson/issues/19)) | help wanted |
 | Turn the property suite's counterexamples into scenarios automatically (print a ready-to-save YAML) | help wanted |
-| A `sponson` devcontainer / Codespaces config with the sim started | **good first issue** |
+| A `sponson` devcontainer / Codespaces config with the sim started ([#20](https://github.com/MishaBear94/Sponson/issues/20)) | **good first issue** |
 
 ## Not planned
 
