@@ -13,7 +13,7 @@
  */
 import { SponsonError, canonicalJson, sha256, type AdapterContext, type ApplyResult, type DiffSide, type Literal, type LiveState, type OpSpec, type ResourceDiff, type ResourceRecord } from "@sponson/core";
 import { ABSENT, SENSITIVE, assertNoPending, desiredSide, paramError } from "./common.js";
-import { isObject, listAll, type ApiClient } from "./http.js";
+import { isObject, isProviderError, listAll, type ApiClient } from "./http.js";
 import { failedWith, httpClient, idOf, itemOf, literalOf, write } from "./http-adapter-client.js";
 import { ADAPTER, apiBlock, at, bodyOf, deepMerge, fieldTokens, fillPath, firstMarker, isKeep, parseResource, pointerTokens, projection, resourceOutputs, stateHash, type FindSpec, type ResourceSpec } from "./http-adapter-spec.js";
 
@@ -235,6 +235,16 @@ async function update(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, 
 
 const PENDING_KEY = "(pending)";
 
+/**
+ * A delete the provider accepted (2xx) but answered with something that is not JSON (Upstash answers `OK`): the
+ * answer is never read, so the object is gone all the same.
+ */
+function acceptedWithoutJson(e: unknown): boolean {
+  if (!isProviderError(e, "PROVIDER_RESPONSE")) return false;
+  const status = e.details.status;
+  return typeof status === "number" && status >= 200 && status < 300;
+}
+
 /** `http.resource`: one object per item, located by a path or by `find`, its declared `fields` kept as planned. */
 export const resource: OpSpec = {
   outputs: { id: { available: "immediate" } },
@@ -281,7 +291,7 @@ export const resource: OpSpec = {
       try {
         await write(api, req.method, req.path, req.method === "POST" ? {} : undefined, true);
       } catch (e) {
-        if (!failedWith(e, "PROVIDER_NOT_FOUND", req.gone)) throw e;
+        if (!failedWith(e, "PROVIDER_NOT_FOUND", req.gone) && !acceptedWithoutJson(e)) throw e;
       }
     }
   },

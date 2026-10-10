@@ -516,7 +516,7 @@ One object per item: a feature flag, a webhook endpoint, a DNS record.
 | `read` | `{ path }` | — | GET the object. With `find`, the path takes `{id}` and fetches the found object's detail; without `find`, it must be a path that names the object (a client-chosen id or key). One of `find` and `read` is required. 404 means it does not exist. |
 | `create` | `{ method?, path, body?, content_type?, idempotency_key? }` | (required) | `POST` (or `PUT`, `PATCH`) to create. The body is `match`, then `fields`, then `body` merged. `idempotency_key: true` sends an `Idempotency-Key` derived from the resource key, the commit and the body, and lets a create whose connection dropped be sent again. |
 | `update` | `{ method?, path?, body?, content_type? }` | none | `PATCH` (or `PUT`, `POST`) when `fields` differ from live; path defaults to `read.path`. `PATCH` and `POST` send the declared fields; `PUT` sends the whole declared state (`match`, `fields`, kept values). Without `update`, a difference is `PARAM_INVALID`. |
-| `delete` | `{ method?, path? }` | `DELETE read.path` | How the object is removed (`DELETE` or `POST`). |
+| `delete` | `{ method?, path? }` | `DELETE read.path` | How the object is removed (`DELETE` or `POST`). Its answer is not read: any 2xx is success, JSON or not (`OK`). |
 | `destroy` | `delete` \| `keep` | `delete` | `keep` leaves the object in place when the scope is destroyed. |
 | `item_path` | JSON pointer | `""` | Where the object is in read, create and update answers (`/data` for a `{ data: {...} }` envelope). |
 | `id_path` | JSON pointer | `/id` | Where the id is in the object. |

@@ -154,6 +154,28 @@ describe("http.resource", () => {
     }
   });
 
+  it("destroy: a delete accepted with an answer that is not JSON (`OK`) succeeds; a failure that is not JSON still fails", async () => {
+    let status = 200;
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(status, { "content-type": "text/plain" });
+        res.end(status === 200 ? "OK" : "Internal error");
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    try {
+      const env = { ...h.env, REST_API_URL: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, SPONSON_HTTP_RETRIES: "0" };
+      const actx = h.actx("http", API, { env });
+      const record = { key: "/dbs/a", id: "DELETE /dbs/a", hash: "h" };
+      await resource.destroy(actx, [record]);
+      status = 500;
+      await expect(resource.destroy(actx, [record])).rejects.toMatchObject({ code: "PROVIDER_TRANSIENT" });
+    } finally {
+      server.close();
+    }
+  });
+
   it("destroy: keep leaves the object in place", async () => {
     const actx = h.actx("http", API);
     const r = await resource.apply(actx, { ...GATE, destroy: "keep" }, null);
