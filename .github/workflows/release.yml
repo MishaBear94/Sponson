@@ -90,9 +90,9 @@ jobs:
           git push origin --tags
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          # pnpm reads the lower-case form; npm the upper-case one. 0.4.0 and 0.5.0 shipped without provenance.
+          # Lower case: pnpm reads only this form (npm reads it too), and Actions env names are case-insensitive, so
+          # the upper-case form beside it would be a duplicate key. 0.4.0 and 0.5.0 shipped without provenance.
           npm_config_provenance: "true"
-          NPM_CONFIG_PROVENANCE: "true"
       - name: Check what was published
         if: ${{ !inputs.dry-run }}
         run: |
