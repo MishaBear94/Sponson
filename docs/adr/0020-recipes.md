@@ -252,3 +252,40 @@ Rows whose lifecycle needs waiting (Algolia's copy task, a Xata branch coming up
 first-class adapters instead of a polling extension: each waits on a different signal, and polling in a request
 template would be a small language. Inngest's sync stays uncovered (a one-off action with nothing to read back or
 delete).
+
+## Amendment 5 (2026-10-11): run-time credentials and GraphQL in recipes
+
+The deploy-target rows Railway, Fly.io, AWS Amplify, Google Cloud Run and Azure Static Web Apps were expressible as
+hand-written lines (ADR 0017's run-time credentials and GraphQL amendment) but not as recipes: the recipe schema took
+only the three static credential forms, and the recipe harness ran every op against the generic REST sim with a fixed
+bearer token. Closed without naming a provider in the code:
+
+- **Credential forms.** A recipe's `api.auth` may be `{ command: [argv…] }` (literal arguments only, as for a plan) or
+  `{ aws_sigv4: { region, service, access_key_id_env, secret_access_key_env, session_token_env? } }`, under the
+  provider CLI's conventional variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`). docs/recipes.md describes both.
+- **The harness checks them for real.** For a SigV4 recipe the REST sim's `auth` seed (R7) verifies the signature with
+  the sims' AWS key; for a `command` recipe a fake CLI of the command's name, first on PATH, prints the one token the
+  REST sim accepts. Neither the secret key nor the token may reach any output.
+- **First-class sims for what the REST sim cannot stand in for.** A recipe op may name a sim (`sim.provider: railway`,
+  `fly`, `aws`) with its seed, the path its base URL stands for (`base_path`), a JSON pointer into its state that exists
+  once the op applied (`present`), and that sim's drift keys that edit a declared field (`changed`) and remove what the
+  op made (`missing`). The same lifecycle runs: create, re-apply with zero writes, changed drift refused until
+  `--reconcile`, missing drift recreated, destroy. GraphQL recipes need this (the REST sim speaks no GraphQL), and so
+  does a map that a POST replaces whole (Amplify's `UpdateBranch`), which the REST sim merges (R4).
+- **A read sent as a POST** (`parent.read_method: POST`, ADR 0017 amended), for Azure Resource Manager's list actions.
+
+Decisions per row, recorded on the rows and in the recipes' assumptions:
+
+- **Railway** (`railway.variable`): the environment's id is a param, not looked up (PR environment naming is not
+  documented); values are read `unrendered`. Railway redeploys after a write; Sponson does not wait for that deploy.
+- **Fly.io** (`fly_machines.app`, `fly.secret`): two files, since the Machines API and the GraphQL API have different
+  base URLs. Secret values are never readable, so only presence is compared, and a secret reaches Machines started
+  after it is set: order it before the PR's deploy.
+- **AWS Amplify** (`amplify.branch`, `amplify.branch_variable`): the regional endpoint and region default to
+  `us-east-1`; a block overrides `base_url` and `auth` for another region or temporary credentials.
+- **Google Cloud Run** (`cloud_run.traffic_tag`): the per-PR tag is read-modify-write of the service's `traffic`
+  with `updateMask=traffic` and the service's `etag` sent back (`send: [etag]`), so a concurrent deploy makes the write
+  fail rather than be overwritten. No first-class adapter was needed. The row stays uncovered: the revision and its
+  environment variables are made by the deploy, which Sponson does not perform.
+- **Azure Static Web Apps** (`azure_swa.build_app_setting`): read with `listAppSettings` (POST), written whole with a
+  PUT; the preview environment is named by the pull request's number and exists only after its first deploy.

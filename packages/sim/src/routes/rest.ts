@@ -171,9 +171,9 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
       collections: {},
       objects: byPath(structuredClone(seed?.objects ?? {})),
       styles: byPath(structuredClone(seed?.styles ?? {})),
-      aliases: Object.fromEntries(Object.entries(seed?.aliases ?? {}).map(([a, p]) => [normPath(a), normPath(p)])),
+      aliases: pathPairs(seed?.aliases),
       auth_headers: (seed?.auth_headers ?? []).map((h) => h.toLowerCase()),
-      reads: Object.fromEntries(Object.entries(seed?.reads ?? {}).map(([a, p]) => [normPath(a), normPath(p)])),
+      reads: pathPairs(seed?.reads),
     };
     for (const [path, items] of Object.entries(byPath(seed?.collections ?? {}))) {
       const field = styleOf(state, path).id_field;
@@ -342,6 +342,11 @@ function parseValue(v: string): unknown {
 /** A path without its trailing slash (`/releases/` and `/releases` name the same thing, assumption R3). */
 function normPath(path: string): string {
   return path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
+}
+
+/** A seed map of path to path, both normalised. */
+function pathPairs(m: Record<string, string> | undefined): Record<string, string> {
+  return Object.fromEntries(Object.entries(m ?? {}).map(([a, p]) => [normPath(a), normPath(p)]));
 }
 
 /** A seed map keyed by normalised paths. */

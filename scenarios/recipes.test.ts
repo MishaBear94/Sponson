@@ -7,16 +7,24 @@
  * of its `sim.objects`), then the example line runs create → idempotent re-apply (zero writes) → drift (a declared
  * field edited in the console is refused until --reconcile; the object or item removed by hand is recreated) →
  * destroy (only what Sponson made is removed; an op its recipe keeps on destroy is left, with no request). The
- * credential never reaches any output.
+ * credential never reaches any output. A run-time credential is checked for real by the sim (R7): a SigV4 signature
+ * with the sims' AWS key, or the token a faked CLI on PATH prints for a `command` credential.
+ *
+ * An op whose API the REST sim cannot stand in for (GraphQL) names a first-class sim in `sim.provider`, seeds it with
+ * `sim.seed`, and says what to observe: `sim.present`, a JSON pointer into that sim's state that exists once the op
+ * applied, and `sim.drift`, that sim's drift keys that edit a declared field and remove what the op made. The same
+ * lifecycle then runs against it.
  *
  * Live (`pnpm test:live`, SPONSON_LIVE=1): an op runs create → re-apply → destroy against the real API when its
  * credential variable and every `SPONSON_LIVE_*` variable its recipe's `live.params` names are set; otherwise it is
  * skipped. Use throwaway projects: it creates the example object under a unique scope and destroys it.
  */
 import { randomBytes } from "node:crypto";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { expandRecipe, loadRecipes, type Recipe, type RecipeOp } from "@sponson/adapters";
-import { startSim, type RestStyle, type SimHandle } from "@sponson/sim";
+import { AWS_SIM_ACCESS_KEY_ID, AWS_SIM_SECRET_ACCESS_KEY, startSim, type ProviderName, type RestStyle, type SimHandle, type SimSeed } from "@sponson/sim";
 import { cliEnv, runCli, SHA, workspace, type CliRun, type Workspace } from "./support.js";
 
 const LIVE = process.env.SPONSON_LIVE === "1";
@@ -24,10 +32,51 @@ const TOKEN = "tok_recipe_scenario_secret_0042";
 
 const cases = loadRecipes().flatMap((r) => Object.entries(r.ops).map(([name, op]) => [`${r.provider}.${name}`, r, name, op] as const));
 
+/** The credential forms a recipe's API block may take. */
+interface RecipeAuth {
+  bearer_env?: string;
+  value_env?: string;
+  basic?: { user_env: string; password_env: string };
+  command?: string[];
+  aws_sigv4?: { region: string; service: string; access_key_id_env: string; secret_access_key_env: string; session_token_env?: string };
+}
+
+const authOf = (r: Recipe): RecipeAuth => r.api.auth as RecipeAuth;
+
 /** Every credential variable of the recipe's API block. */
 function credentialVars(r: Recipe): string[] {
-  const auth = r.api.auth as { bearer_env?: string; value_env?: string; basic?: { user_env: string; password_env: string } };
-  return [auth.bearer_env, auth.value_env, auth.basic?.user_env, auth.basic?.password_env].filter((v): v is string => typeof v === "string");
+  const auth = authOf(r);
+  const s = auth.aws_sigv4;
+  return [auth.bearer_env, auth.value_env, auth.basic?.user_env, auth.basic?.password_env, s?.access_key_id_env, s?.secret_access_key_env, s?.session_token_env].filter((v): v is string => typeof v === "string");
+}
+
+/** The secret the sim run uses: a SigV4 secret key must be the one the sims verify signatures with. */
+function secretOf(r: Recipe): string {
+  return authOf(r).aws_sigv4 ? AWS_SIM_SECRET_ACCESS_KEY : TOKEN;
+}
+
+/** The value of each credential variable in a sim run (an access key id is an identifier, not the secret). */
+function credentialEnv(r: Recipe): Record<string, string> {
+  const id = authOf(r).aws_sigv4?.access_key_id_env;
+  return Object.fromEntries(credentialVars(r).map((v) => [v, v === id ? AWS_SIM_ACCESS_KEY_ID : secretOf(r)]));
+}
+
+/** For a run-time credential, the REST sim checks it for real (R7): the SigV4 signature, or the token a CLI prints. */
+function restAuth(r: Recipe): Record<string, unknown> {
+  const auth = authOf(r);
+  if (auth.aws_sigv4) return { auth: { sigv4: { keys: { [AWS_SIM_ACCESS_KEY_ID]: AWS_SIM_SECRET_ACCESS_KEY }, region: auth.aws_sigv4.region, service: auth.aws_sigv4.service } } };
+  return auth.command ? { auth: { tokens: [TOKEN] } } : {};
+}
+
+/** A `command` credential's CLI, faked first on PATH: it prints the token. */
+async function fakeCli(r: Recipe, dir: string): Promise<Record<string, string>> {
+  const command = authOf(r).command;
+  if (!command) return {};
+  const bin = join(dir, ".recipe-bin");
+  await mkdir(bin, { recursive: true });
+  await writeFile(join(bin, command[0]!), `#!/bin/sh\necho "${TOKEN}"\n`);
+  await chmod(join(bin, command[0]!), 0o755);
+  return { PATH: [bin, process.env.PATH].filter(Boolean).join(delimiter) };
 }
 
 /** `${ctx.*}` as the CLI fills it for `scope`. */
@@ -124,12 +173,19 @@ function simSeed(r: Recipe, op: RecipeOp, spec: Record<string, unknown>) {
   const findPath = (spec.find as { path?: string } | undefined)?.path;
   if (op.kind === "resource" && create?.path && findPath && fill(findPath, vars) !== collectionOf(op, spec)) aliases[fill(findPath, vars)] = collectionOf(op, spec);
   const objects = Object.fromEntries(Object.entries(op.sim?.objects ?? {}).map(([p, o]) => [fill(p, vars), structuredClone(o)]));
-  // A parent read in an envelope (`parent.item_path`) is answered in it.
-  const parent = spec.parent as { path: string; read_path?: string; item_path?: string } | undefined;
-  if (op.kind === "list_item" && parent?.item_path) styles[fill(parent.read_path ?? parent.path, vars)] = { item_path: parent.item_path };
+  // A parent read in an envelope (`parent.item_path`) is answered in it; one read with a POST (R8) is answered there.
+  const parent = spec.parent as { path: string; read_path?: string; read_method?: string; item_path?: string } | undefined;
+  if (op.kind === "list_item" && parent?.item_path) styles[parentPath(spec)] = { item_path: parent.item_path };
+  const reads = op.kind === "list_item" && parent?.read_method === "POST" ? { [fill(parent.read_path ?? parent.path, vars)]: parentPath(spec) } : {};
   // A credential header the sim would not recognise by its name (`X-Honeycomb-Team`).
   const header = (r.api.auth as { header?: string }).header;
-  return { rest: { collections, objects, styles, aliases, ...(header ? { auth_headers: [header] } : {}) } };
+  return { rest: { collections, objects, styles, aliases, reads, ...(header ? { auth_headers: [header] } : {}), ...restAuth(r) } };
+}
+
+/** Where a list item's parent object is kept in the sim: the read path, or for a read sent as a POST, the write path. */
+function parentPath(spec: Record<string, unknown>): string {
+  const parent = spec.parent as { path: string; read_path?: string; read_method?: string };
+  return fill(parent.read_method === "POST" ? parent.path : (parent.read_path ?? parent.path), spec.vars as Record<string, unknown>);
 }
 
 class Run {
@@ -137,12 +193,13 @@ class Run {
     readonly ws: Workspace,
     readonly env: NodeJS.ProcessEnv,
     readonly ctx: string[],
+    readonly secret: string = TOKEN,
   ) {}
 
   async cli(args: string, sim?: SimHandle): Promise<CliRun & { writes: number }> {
     const before = sim?.state.writes.length ?? 0;
     const r = await runCli([...args.split(" "), ...this.ctx, "--receipts", "local", "--receipts-dir", `${this.ws.dir}/.sponson/receipts`], { env: this.env, cwd: this.ws.dir });
-    for (const out of [r.stdout, r.stderr]) expect(out, `${args}: the credential leaked`).not.toContain(TOKEN);
+    for (const out of [r.stdout, r.stderr]) expect(out, `${args}: the credential leaked`).not.toContain(this.secret);
     return { ...r, writes: (sim?.state.writes.length ?? before) - before };
   }
 }
@@ -168,8 +225,7 @@ function edited(v: unknown): unknown {
 
 /** The parent's collection as a list of item keys, and a way to remove the item from it, for every shape. */
 function parentList(sim: SimHandle, spec: Record<string, unknown>): { parent: Record<string, unknown>; field: string; has: () => boolean; remove: () => void } {
-  const parentPath = fill((spec.parent as { path: string; read_path?: string }).read_path ?? (spec.parent as { path: string }).path, spec.vars as Record<string, unknown>);
-  const parent = sim.state.rest.objects[parentPath]!;
+  const parent = sim.state.rest.objects[parentPath(spec)]!;
   const listPath = (spec.list_path as string | undefined) ?? "";
   const shape = (spec.shape as string | undefined) ?? "array";
   const sep = (spec.separator as string | undefined) ?? ",";
@@ -196,13 +252,16 @@ function parentList(sim: SimHandle, spec: Record<string, unknown>): { parent: Re
   };
 }
 
+const SIM_CTX = ["--env", "preview", "--pr", "42", "--branch", "feat/x", "--sha", SHA];
+
 async function lifecycleInSim(r: Recipe, name: string, op: RecipeOp): Promise<void> {
+  if (op.sim?.provider) return lifecycleInProviderSim(r, name, op);
   const params = exampleParams(op);
   const spec = expandRecipe({ recipe: `${r.provider}.${name}`, ...interpolate(params, "pr-42") }, op.kind);
-  const sim = await startSim({ seed: simSeed(r, op, spec) });
+  const sim = await startSim({ seed: simSeed(r, op, spec) as Partial<SimSeed> });
   const ws = await workspace("recipe", { plan: planText(r, name, op, params) });
-  const env = cliEnv(sim, { [String(r.api.base_url_env)]: `${sim.url}/rest`, ...Object.fromEntries(credentialVars(r).map((v) => [v, TOKEN])) });
-  const run = new Run(ws, env, ["--env", "preview", "--pr", "42", "--branch", "feat/x", "--sha", SHA]);
+  const env = cliEnv(sim, { [String(r.api.base_url_env)]: `${sim.url}/rest`, ...credentialEnv(r), ...(await fakeCli(r, ws.dir)) });
+  const run = new Run(ws, env, SIM_CTX, secretOf(r));
   const seededObjects = structuredClone(sim.state.rest.objects);
   try {
     let res = await run.cli("plan --json", sim);
@@ -271,6 +330,52 @@ async function listDrift(run: Run, sim: SimHandle, spec: Record<string, unknown>
   res = await run.cli("apply --json", sim);
   expect(res.code, `put back${diag(res)}`).toBe(0);
   expect(parentList(sim, spec).has()).toBe(true);
+}
+
+/** One CLI step, expected to exit with `code` and leave the line with `status`. */
+async function step(run: Run, sim: SimHandle, args: string, code: number, status: string): Promise<CliRun & { writes: number }> {
+  const res = await run.cli(args, sim);
+  expect({ code: res.code, status: lineOf(res).status }, `${args}${diag(res)}`).toEqual({ code, status });
+  return res;
+}
+
+function driftKinds(res: CliRun): string[] {
+  return ((res.json?.drift as Array<{ kind: string }> | undefined) ?? []).map((d) => d.kind).filter((k) => k !== "unmanaged");
+}
+
+/** The lifecycle against the first-class sim the recipe op names (`sim.provider`), observed through its hints. */
+async function lifecycleInProviderSim(r: Recipe, name: string, op: RecipeOp): Promise<void> {
+  const hints = op.sim!;
+  const provider = hints.provider as ProviderName;
+  const params = exampleParams(op);
+  const sim = await startSim({ seed: { [provider]: structuredClone(hints.seed ?? {}) } as Partial<SimSeed> });
+  const ws = await workspace("recipe", { plan: planText(r, name, op, params) });
+  const env = cliEnv(sim, { [String(r.api.base_url_env)]: `${sim.url}${hints.base_path ?? `/${provider}`}`, ...credentialEnv(r), ...(await fakeCli(r, ws.dir)) });
+  const run = new Run(ws, env, SIM_CTX, secretOf(r));
+  const present = () => valueAt(sim.state.provider(provider), hints.present ?? "") !== undefined;
+  const drift = (d: Record<string, string>) => sim.state.applyChaos({ drift: Object.fromEntries(Object.entries(d).map(([k, v]) => [`${provider}.${k}`, v])) });
+  try {
+    await step(run, sim, "plan --json", 0, "create");
+    await step(run, sim, "apply --json", 0, "applied");
+    expect(present(), `${hints.present} once applied`).toBe(true);
+    expect((await step(run, sim, "apply --json", 0, "unchanged")).writes, "re-apply writes nothing").toBe(0);
+    if (hints.drift?.changed) {
+      drift(hints.drift.changed);
+      expect(driftKinds(await step(run, sim, "plan --json", 1, "blocked"))).toEqual(["changed"]);
+      await step(run, sim, "apply --reconcile --json", 0, "applied");
+      expect((await step(run, sim, "apply --json", 0, "unchanged")).writes, "reconciled: nothing left to write").toBe(0);
+    }
+    drift(hints.drift?.missing ?? {});
+    expect(present(), `${hints.present} removed by hand`).toBe(false);
+    expect(driftKinds(await step(run, sim, "plan --json", 0, "create"))).toEqual(["missing"]);
+    await step(run, sim, "apply --json", 0, "applied");
+    expect(present(), `${hints.present} recreated`).toBe(true);
+    await step(run, sim, "apply --destroy --json", 0, "destroyed");
+    expect(present(), `${hints.present} after destroy`).toBe(false);
+  } finally {
+    await sim.close();
+    await ws.cleanup();
+  }
 }
 
 async function lifecycleLive(r: Recipe, name: string, op: RecipeOp): Promise<void> {

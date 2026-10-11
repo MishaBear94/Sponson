@@ -21,6 +21,11 @@ function credential(api: Record<string, unknown>): string {
   const auth = api.auth as Record<string, unknown>;
   if (typeof auth.bearer_env === "string") return `\`${auth.bearer_env}\` (bearer)`;
   if (typeof auth.value_env === "string") return `\`${String(auth.value_env)}\` (header \`${String(auth.header)}\`)`;
+  if (Array.isArray(auth.command)) return `the token \`${auth.command.join(" ")}\` prints (bearer)`;
+  if (typeof auth.aws_sigv4 === "object" && auth.aws_sigv4 !== null) {
+    const s = auth.aws_sigv4 as Record<string, string>;
+    return `\`${s.access_key_id_env}\` / \`${s.secret_access_key_env}\`${s.session_token_env ? ` (and \`${s.session_token_env}\`)` : ""} (AWS SigV4, \`${s.service}\` in \`${s.region}\`)`;
+  }
   const basic = auth.basic as Record<string, string>;
   return `\`${basic.user_env}\` / \`${basic.password_env}\` (basic)`;
 }
