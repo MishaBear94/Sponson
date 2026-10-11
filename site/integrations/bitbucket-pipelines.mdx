@@ -13,7 +13,7 @@ merged or declined" trigger, so destroying a preview is a custom pipeline you ru
 |---|---|---|
 | PR created or updated | `pull-requests`: `sponson plan`, `sponson apply`, `sponson finish` | plan; apply (stops with status `partial` at the deploy barrier); `apply --wait` (finishes the lines that needed the preview URL) |
 | PR merged or declined | `custom: sponson-destroy` | `sponson apply --destroy` for the PR id you enter |
-| Push to `main` | `branches: main`: `sponson production` | `sponson apply --env production`, a manual step on the `production` deployment environment |
+| Push to `main` | `branches: main`: `production waits for approval`, then `sponson production` | `sponson apply --env production`, a manual step on the `production` deployment environment |
 
 ## Prerequisites
 
@@ -25,7 +25,7 @@ merged or declined" trigger, so destroying a preview is a custom pipeline you ru
 
 1. Copy [bitbucket-pipelines.yml](https://github.com/MishaBear94/Sponson/blob/main/integrations/bitbucket/bitbucket-pipelines.yml) to the repository root, or merge its pipelines into yours.
    If Pipelines deploys the app, put your deploy steps between `sponson apply` and `sponson finish`.
-2. Replace `0.4.0` with the Sponson version you have reviewed.
+2. Replace `0.5.0` with the Sponson version you have reviewed.
 3. Create the receipts token and the variables below.
 4. In **Repository settings → Deployments**, keep the production tokens in the `Production` environment's variables
    and, on plans that offer it, restrict who may deploy to it.
@@ -73,7 +73,7 @@ variables.
 | `--sha` | `BITBUCKET_COMMIT` |
 | `--approved-by` | `BITBUCKET_STEP_TRIGGERER_UUID`, the account that started the manual production step |
 
-Sponson releases after 0.4.0 read `BITBUCKET_PR_ID`, `BITBUCKET_BRANCH` and `BITBUCKET_COMMIT` themselves when
+Sponson 0.5.0 and later read `BITBUCKET_PR_ID`, `BITBUCKET_BRANCH` and `BITBUCKET_COMMIT` themselves when
 `BITBUCKET_BUILD_NUMBER` is set, so those flags may then be dropped. `--approved-by` always stays explicit.
 
 ## Notes
@@ -81,6 +81,13 @@ Sponson releases after 0.4.0 read `BITBUCKET_PR_ID`, `BITBUCKET_BRANCH` and `BIT
 - The approver is recorded as an account UUID, the only identity of the person who started the step that Pipelines
   exposes. Look it up in the workspace's members if you need the name.
 - `clone: depth: full` fetches the whole history; Sponson uses it to recognise a late build of an older commit.
+- Pipelines rejects a pipeline whose first step is manual, so `branches: main` starts with a step that only says
+  what to run next; put your own build or deploy steps there instead if you have them.
+- What has been run (`scripts/try-ci-templates.sh bitbucket`): every step's script verbatim in `node:22`, in pipeline
+  order, against the fake cloud: the pull request pipeline (apply stopping at the deploy barrier, finish waiting for
+  it), both steps of `branches: main` with the triggerer recorded as the approver, and `custom: sponson-destroy` on
+  `main` with the PR's id and branch. The clone and the predefined, custom and deployment variables are emulated; not
+  run on Bitbucket itself. See [how the templates are checked](/integrations/overview#how-the-templates-are-checked).
 
 ## The template: bitbucket-pipelines.yml
 
@@ -92,9 +99,10 @@ Sponson releases after 0.4.0 read `BITBUCKET_PR_ID`, `BITBUCKET_BRANCH` and `BIT
 #   pull request merged or declined   Bitbucket has no such trigger: run the custom pipeline sponson-destroy
 #                                     (Run pipeline in the UI, or the API) with the PR's id and branch
 #   push to main                      sponson production: a manual step on the Production deployment environment
+#                                     (after an automatic first step: a pipeline cannot start with a manual step)
 #
-# Replace 0.4.0 everywhere with the Sponson version you have reviewed. The flags are explicit so the template works
-# with any version; Sponson releases after 0.4.0 also read the same variables by themselves.
+# Replace 0.5.0 everywhere with the Sponson version you have reviewed. The flags are explicit so the template works
+# with any version; Sponson 0.5.0 and later also read the same variables by themselves.
 
 image: node:22
 
@@ -112,12 +120,12 @@ pipelines:
             # access token with write access (README.md): the pipeline's own clone credentials do not reach the
             # separate clone Sponson pushes from. The anchor is reused by every step below.
             - &receipts-remote export SPONSON_RECEIPTS_REMOTE="https://x-token-auth:${SPONSON_GIT_TOKEN}@bitbucket.org/${BITBUCKET_REPO_FULL_NAME}.git"
-            - npx -y sponson@0.4.0 plan --env preview --pr "$BITBUCKET_PR_ID" --branch "$BITBUCKET_BRANCH" --sha "$BITBUCKET_COMMIT"
+            - npx -y sponson@0.5.0 plan --env preview --pr "$BITBUCKET_PR_ID" --branch "$BITBUCKET_BRANCH" --sha "$BITBUCKET_COMMIT"
       - step:
           name: sponson apply
           script:
             - *receipts-remote
-            - npx -y sponson@0.4.0 apply --env preview --pr "$BITBUCKET_PR_ID" --branch "$BITBUCKET_BRANCH" --sha "$BITBUCKET_COMMIT"
+            - npx -y sponson@0.5.0 apply --env preview --pr "$BITBUCKET_PR_ID" --branch "$BITBUCKET_BRANCH" --sha "$BITBUCKET_COMMIT"
       # Your own deploy steps go here, if Bitbucket Pipelines deploys the app.
       - step:
           name: sponson finish
@@ -125,10 +133,15 @@ pipelines:
           script:
             - *receipts-remote
             # Waits for the preview deployment of this commit, then applies the lines that needed its URL.
-            - npx -y sponson@0.4.0 apply --wait --wait-timeout 900 --env preview --pr "$BITBUCKET_PR_ID" --branch "$BITBUCKET_BRANCH" --sha "$BITBUCKET_COMMIT"
+            - npx -y sponson@0.5.0 apply --wait --wait-timeout 900 --env preview --pr "$BITBUCKET_PR_ID" --branch "$BITBUCKET_BRANCH" --sha "$BITBUCKET_COMMIT"
 
   branches:
     main:
+      # Pipelines refuses a pipeline whose first step is manual, so the manual production step comes second.
+      - step:
+          name: production waits for approval
+          script:
+            - echo "Run the manual step 'sponson production' to apply production; whoever runs it is the approver."
       - step:
           name: sponson production
           # Whoever starts this manual step is the approver. Restrict who may deploy to Production in the
@@ -137,7 +150,7 @@ pipelines:
           trigger: manual
           script:
             - *receipts-remote
-            - npx -y sponson@0.4.0 apply --env production --pr "" --branch "$BITBUCKET_BRANCH" --sha "$BITBUCKET_COMMIT" --approved-by "$BITBUCKET_STEP_TRIGGERER_UUID"
+            - npx -y sponson@0.5.0 apply --env production --pr "" --branch "$BITBUCKET_BRANCH" --sha "$BITBUCKET_COMMIT" --approved-by "$BITBUCKET_STEP_TRIGGERER_UUID"
 
   custom:
     sponson-destroy:
@@ -148,5 +161,5 @@ pipelines:
           name: sponson destroy
           script:
             - *receipts-remote
-            - npx -y sponson@0.4.0 apply --destroy --env preview --pr "$SPONSON_PR_ID" --branch "$SPONSON_PR_BRANCH" --sha "$BITBUCKET_COMMIT"
+            - npx -y sponson@0.5.0 apply --destroy --env preview --pr "$SPONSON_PR_ID" --branch "$SPONSON_PR_BRANCH" --sha "$BITBUCKET_COMMIT"
 ```

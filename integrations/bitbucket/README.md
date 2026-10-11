@@ -8,7 +8,7 @@ merged or declined" trigger, so destroying a preview is a custom pipeline you ru
 |---|---|---|
 | PR created or updated | `pull-requests`: `sponson plan`, `sponson apply`, `sponson finish` | plan; apply (stops with status `partial` at the deploy barrier); `apply --wait` (finishes the lines that needed the preview URL) |
 | PR merged or declined | `custom: sponson-destroy` | `sponson apply --destroy` for the PR id you enter |
-| Push to `main` | `branches: main`: `sponson production` | `sponson apply --env production`, a manual step on the `production` deployment environment |
+| Push to `main` | `branches: main`: `production waits for approval`, then `sponson production` | `sponson apply --env production`, a manual step on the `production` deployment environment |
 
 ## Prerequisites
 
@@ -20,7 +20,7 @@ merged or declined" trigger, so destroying a preview is a custom pipeline you ru
 
 1. Copy [bitbucket-pipelines.yml](bitbucket-pipelines.yml) to the repository root, or merge its pipelines into yours.
    If Pipelines deploys the app, put your deploy steps between `sponson apply` and `sponson finish`.
-2. Replace `0.4.0` with the Sponson version you have reviewed.
+2. Replace `0.5.0` with the Sponson version you have reviewed.
 3. Create the receipts token and the variables below.
 4. In **Repository settings → Deployments**, keep the production tokens in the `Production` environment's variables
    and, on plans that offer it, restrict who may deploy to it.
@@ -68,7 +68,7 @@ variables.
 | `--sha` | `BITBUCKET_COMMIT` |
 | `--approved-by` | `BITBUCKET_STEP_TRIGGERER_UUID`, the account that started the manual production step |
 
-Sponson releases after 0.4.0 read `BITBUCKET_PR_ID`, `BITBUCKET_BRANCH` and `BITBUCKET_COMMIT` themselves when
+Sponson 0.5.0 and later read `BITBUCKET_PR_ID`, `BITBUCKET_BRANCH` and `BITBUCKET_COMMIT` themselves when
 `BITBUCKET_BUILD_NUMBER` is set, so those flags may then be dropped. `--approved-by` always stays explicit.
 
 ## Notes
@@ -76,5 +76,12 @@ Sponson releases after 0.4.0 read `BITBUCKET_PR_ID`, `BITBUCKET_BRANCH` and `BIT
 - The approver is recorded as an account UUID, the only identity of the person who started the step that Pipelines
   exposes. Look it up in the workspace's members if you need the name.
 - `clone: depth: full` fetches the whole history; Sponson uses it to recognise a late build of an older commit.
+- Pipelines rejects a pipeline whose first step is manual, so `branches: main` starts with a step that only says
+  what to run next; put your own build or deploy steps there instead if you have them.
+- What has been run (`scripts/try-ci-templates.sh bitbucket`): every step's script verbatim in `node:22`, in pipeline
+  order, against the fake cloud: the pull request pipeline (apply stopping at the deploy barrier, finish waiting for
+  it), both steps of `branches: main` with the triggerer recorded as the approver, and `custom: sponson-destroy` on
+  `main` with the PR's id and branch. The clone and the predefined, custom and deployment variables are emulated; not
+  run on Bitbucket itself. See [how the templates are checked](../README.md#how-the-templates-are-checked).
 
 <!-- sponson:embed bitbucket-pipelines.yml -->

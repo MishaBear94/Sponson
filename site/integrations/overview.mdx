@@ -25,7 +25,7 @@ What every CI needs, whichever it is:
 
 - **`npx -y sponson@<version>`**, pinned to the version you reviewed, on Node.js 22 or later.
 - **The scope flags** `--pr`, `--branch` and `--sha`, filled from the CI's predefined variables. Each template passes
-  them explicitly; Sponson releases after 0.4.0 also read GitLab's, CircleCI's and Bitbucket's variables themselves
+  them explicitly; Sponson 0.5.0 and later also read GitLab's, CircleCI's and Bitbucket's variables themselves
   (as they read GitHub Actions'), see [the run context](/reference/plan-format#context-interpolation-$ctx-).
 - **Provider tokens** as the CI's secret variables, in every job that runs Sponson, destroy included.
 - **A token that can push receipts.** The git-branch receipt store pushes orphan branches
@@ -33,7 +33,36 @@ What every CI needs, whichever it is:
   enough. Each template sets `SPONSON_RECEIPTS_REMOTE` to an HTTPS URL carrying a write token; its README says which
   token to create. Sponson strips credentials from every git error it prints.
 
-**How the templates are checked.** `scenarios/docs/integrations.test.ts` parses every template, checks the GitLab
-template's structure (stages, jobs, rules, environments and their `on_stop` job), and runs every Sponson command line
-in them through the CLI's own argument parser. The templates have not yet been run on GitLab, CircleCI or Bitbucket
-themselves; each README's notes say which behaviour of the host they rely on.
+## How the templates are checked
+
+**On every `pnpm test`**, `scenarios/docs/integrations.test.ts` parses every template, checks the GitLab template's
+structure (stages, jobs, rules, environments and their `on_stop` job) and Bitbucket's (no pipeline starts with a
+manual step), and runs every Sponson command line in them through the CLI to the expected scope, with the flags and
+through detection of the host's variables alike.
+
+**End to end, in Docker**, `scripts/try-ci-templates.sh [gitlab] [circleci] [bitbucket]` runs each template's whole
+preview life against the fake cloud (`@sponson/sim`): a scratch repository whose `main` has a release plan (a Neon
+branch, the preview's `DATABASE_URL` from it, a production variable from a secret) and the template, and a pull
+request branch that adds a Clerk callback on the preview URL. Per host it runs the pull request pipeline (plan; apply,
+which stops at the deploy barrier because the fake deploy takes 20 seconds; finish, which waits for it), checks the
+resources exist, runs production with an approver, runs the destroy the host would run when the pull request closes,
+checks the preview resources are gone and production kept, and checks the receipts reached the repository. It also
+runs the plan command without `--pr/--branch/--sha` in each host's environment and checks the detected scope (pull
+request, `main`, and a tag build on CircleCI and Bitbucket). It needs Docker and the network, so it is not part of
+`pnpm test`; `KEEP=1` keeps the scratch directory, `SPONSON_TRY_VERSION=0.5.0` runs a release from npm instead of
+this checkout.
+
+What is real and what is emulated:
+
+| | Real | Emulated |
+|---|---|---|
+| Sponson | this checkout, packed with `pnpm pack` and installed by the template's own `npx -y sponson@<version>` line from a local npm registry that serves those tarballs and forwards everything else to npmjs.org (the version in the template is replaced by the packed one, as step 2 of each README asks) | |
+| Providers | the adapters' HTTP calls | the fake cloud answers them (`*_API_URL` set in every job) |
+| GitLab | [gitlab-ci-local](https://github.com/firecow/gitlab-ci-local) runs `.gitlab-ci.yml` itself in `node:22` containers: GitLab's JSON schema, `workflow:` and job `rules:`, `extends:`, stages, `environment:` names and environment-scoped variables (`review/*`, `production`), manual jobs | the merge request pipeline's predefined variables (`CI_PIPELINE_SOURCE=merge_request_event`, `CI_MERGE_REQUEST_*`, no `CI_COMMIT_BRANCH`) are passed as variables; GitLab itself never runs the `on_stop` job, so `sponson:destroy` is started by name |
+| CircleCI | every job's steps, verbatim, in `cimg/node:lts`: each `run` in its own `bash -eo pipefail` with `$BASH_ENV`, the step's `environment:`, pipeline parameters filled in | the checkout (a clone of the scratch repository), `circleci-agent step halt`, the predefined variables, the workflows' order, and CircleCI's API for the approver (a stand-in answering the two documented reads) |
+| Bitbucket | every step's `script:`, verbatim and in one shell, in `node:22`, YAML anchors resolved | the clone, the predefined and custom-pipeline variables, deployment variables, the pipelines' order |
+| Receipts | pushed by Sponson's own git clone to a bare repository | git rewrites the exact HTTPS URL the template builds (`url.<bare repo>.insteadOf`), so the push only succeeds if the template builds the URL the host's variables give |
+
+Not covered: the hosts' own triggers (when a pipeline starts, GitLab stopping the environment on merge), their
+runners' networks and checkout credentials, merged-results pipelines, and real provider APIs. Each README's notes say
+which behaviour of the host the template relies on.

@@ -1,6 +1,7 @@
 /**
- * The copy-paste integrations under integrations/ cannot be run on their hosts from here, so this suite checks what
- * can be checked without GitLab, CircleCI, Bitbucket or the agent tools:
+ * The copy-paste integrations under integrations/ are run in Docker by scripts/try-ci-templates.sh (GitLab through
+ * gitlab-ci-local, CircleCI and Bitbucket emulated), which needs Docker and the network and so is not part of
+ * `pnpm test`. This suite checks what can be checked without GitLab, CircleCI, Bitbucket, Docker or the agent tools:
  *
  *   - every CI template parses as YAML (anchors and aliases resolved), and has the shape its host expects: for GitLab
  *     a JSON Schema of the keys the template uses (stages, jobs, rules, environments) plus the cross-references a
@@ -10,15 +11,19 @@
  *     expanded the way the shell would, runs through the real CLI (in an empty plan, offline) to the expected scope;
  *     and the same line without `--pr/--branch/--sha` reaches the same scope through detection of the host's
  *     variables (packages/cli/src/detect.ts), so the template and the detection agree;
- *   - every JSON and TOML block in integrations/agents/README.md parses and its server runs `sponson mcp`.
+ *   - every JSON and TOML block in integrations/agents/README.md parses and its server runs `sponson mcp`;
+ *   - what scripts/try-ci-templates.sh needs from the templates, so it keeps working.
  */
+import { execFile } from "node:child_process";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { parseDocument } from "yaml";
 import { describe, expect, it } from "vitest";
 import { run } from "sponson";
+import { bitbucketStep, circleciJob } from "../../scripts/ci-templates/jobs.js";
 import { mapLines } from "../../scripts/gen-site.js";
 import { REPO } from "./plans.js";
 
@@ -339,6 +344,50 @@ describe("integrations/bitbucket/bitbucket-pipelines.yml structure", () => {
     }
     const production = steps.find((s) => s.deployment === "production");
     expect(production).toMatchObject({ trigger: "manual" });
+  });
+
+  it("no pipeline starts with a manual step (Pipelines rejects the file)", () => {
+    for (const [kind, pipelines] of Object.entries<Record<string, unknown[]>>(bb.pipelines)) {
+      for (const [name, entries] of Object.entries(pipelines)) {
+        const first = collectSteps(entries)[0];
+        expect(first?.trigger, `${kind}: ${name}`).not.toBe("manual");
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// scripts/try-ci-templates.sh runs the templates in Docker (not part of `pnpm test`). What it needs from the templates
+// is checked here, so it keeps working: every CircleCI job and Bitbucket step turns into a script that carries the
+// template's commands verbatim, and the shell script parses.
+
+describe("scripts/try-ci-templates.sh", () => {
+  it("turns every CircleCI job into a script with the job's commands verbatim", async () => {
+    const text = await read("integrations/circleci/config.yml");
+    for (const job of Object.keys(circleci.jobs)) {
+      const { image, script } = circleciJob(text, job, { "sponson-destroy-pr": "12", "sponson-destroy-branch": "feat/x" });
+      expect(image).toBe("cimg/node:lts");
+      for (const call of invocations(circleci.jobs[job])) expect(script, job).toContain(`npx -y sponson@${call.version} ${call.args.replaceAll("<< pipeline.parameters.sponson-destroy-pr >>", "12")}`);
+      expect(script).not.toContain("<< pipeline.");
+    }
+  });
+
+  it("turns every Bitbucket step into a script with the step's lines verbatim", async () => {
+    const text = await read("integrations/bitbucket/bitbucket-pipelines.yml");
+    for (const [kind, pipelines] of Object.entries<Record<string, unknown[]>>(bitbucket.pipelines)) {
+      for (const [name, entries] of Object.entries(pipelines)) {
+        collectSteps(entries).forEach((step, i) => {
+          const { image, script } = bitbucketStep(text, `${kind}/${name}/${i}`);
+          expect(image).toBe("node:22");
+          for (const line of step.script as string[]) expect(script).toContain(`\n${line}\n`);
+        });
+      }
+    }
+    expect(() => bitbucketStep("pipelines:\n  branches:\n    main:\n      - step: { name: a, trigger: manual, script: [x] }\n", "branches/main/0")).toThrow(/first step/);
+  });
+
+  it("parses as bash", async () => {
+    await promisify(execFile)("bash", ["-n", join(REPO, "scripts/try-ci-templates.sh")]);
   });
 });
 

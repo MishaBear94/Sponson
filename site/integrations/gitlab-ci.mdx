@@ -28,7 +28,7 @@ request is merged or closed. Production is a manual job on the default branch.
 
 1. Copy [gitlab-ci.yml](https://github.com/MishaBear94/Sponson/blob/main/integrations/gitlab/gitlab-ci.yml) to `.gitlab-ci.yml`, or merge its `workflow:`, `stages:` and jobs into yours.
    Put your own deploy jobs in the `deploy` stage, if GitLab deploys the app.
-2. Replace `0.4.0` with the Sponson version you have reviewed. Every job pins it, so an npm release never changes
+2. Replace `0.5.0` with the Sponson version you have reviewed. Every job pins it, so an npm release never changes
    what runs.
 3. Create the receipts token and the CI/CD variables below (**Settings → CI/CD → Variables**).
 4. Protect the `production` environment (**Operate → Environments → Protected environments**) so only the people
@@ -76,7 +76,7 @@ Sponson version:
 | `--branch` | `CI_MERGE_REQUEST_SOURCE_BRANCH_NAME` (`CI_COMMIT_BRANCH` on the default branch) |
 | `--sha` | `CI_MERGE_REQUEST_SOURCE_BRANCH_SHA` in merged-results pipelines (the head that is deployed, not the synthetic merge commit), else `CI_COMMIT_SHA` |
 
-Sponson releases after 0.4.0 read the same variables themselves when `GITLAB_CI` is set, so the flags may then be
+Sponson 0.5.0 and later read the same variables themselves when `GITLAB_CI` is set, so the flags may then be
 dropped.
 
 ## Notes
@@ -88,6 +88,13 @@ dropped.
   way. A killed apply is resumed by the next one; a cancelled one is not rolled back.
 - To clean up previews whose merge request is forgotten, add `auto_stop_in: 2 weeks` to the `environment:` of
   `sponson:apply` and `sponson:finish`.
+- What has been run: this file, unchanged but for the version, through
+  [gitlab-ci-local](https://github.com/firecow/gitlab-ci-local) in `node:22` containers against the fake cloud
+  (`scripts/try-ci-templates.sh gitlab`): a merge request pipeline (`sponson:plan`; `sponson:apply` stopping at the
+  deploy barrier; `sponson:finish` waiting for the deploy), the manual `sponson:production` on the default branch
+  with `GITLAB_USER_LOGIN` recorded as the approver, and `sponson:destroy`, with the tokens as variables scoped to
+  `review/*` and `production`. Not run on GitLab itself; see
+  [how the templates are checked](/integrations/overview#how-the-templates-are-checked).
 
 ## The template: gitlab-ci.yml
 
@@ -100,8 +107,8 @@ dropped.
 #   MR merged or closed           GitLab stops the review environment, which runs sponson:destroy
 #   pipeline on the default branch   sponson:production, a manual job a human starts (the approver)
 #
-# Replace 0.4.0 everywhere with the Sponson version you have reviewed. The flags are explicit so the template works
-# with any version; Sponson releases after 0.4.0 also read the same variables by themselves.
+# Replace 0.5.0 everywhere with the Sponson version you have reviewed. The flags are explicit so the template works
+# with any version; Sponson 0.5.0 and later also read the same variables by themselves.
 
 workflow:
   rules:
@@ -141,7 +148,7 @@ sponson:plan:
     name: review/mr-$CI_MERGE_REQUEST_IID
     action: prepare
   script:
-    - npx -y sponson@0.4.0 plan --env preview --pr "$CI_MERGE_REQUEST_IID" --branch "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" --sha "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}"
+    - npx -y sponson@0.5.0 plan --env preview --pr "$CI_MERGE_REQUEST_IID" --branch "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" --sha "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}"
 
 sponson:apply:
   extends: .sponson-mr
@@ -152,7 +159,7 @@ sponson:apply:
     name: review/mr-$CI_MERGE_REQUEST_IID
     on_stop: sponson:destroy
   script:
-    - npx -y sponson@0.4.0 apply --env preview --pr "$CI_MERGE_REQUEST_IID" --branch "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" --sha "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}"
+    - npx -y sponson@0.5.0 apply --env preview --pr "$CI_MERGE_REQUEST_IID" --branch "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" --sha "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}"
 
 sponson:finish:
   extends: .sponson-mr
@@ -163,7 +170,7 @@ sponson:finish:
     on_stop: sponson:destroy
   script:
     # Waits for the preview deployment of this commit, then applies the lines that needed its URL.
-    - npx -y sponson@0.4.0 apply --wait --wait-timeout 900 --env preview --pr "$CI_MERGE_REQUEST_IID" --branch "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" --sha "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}"
+    - npx -y sponson@0.5.0 apply --wait --wait-timeout 900 --env preview --pr "$CI_MERGE_REQUEST_IID" --branch "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" --sha "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}"
 
 sponson:destroy:
   extends: .sponson
@@ -178,7 +185,7 @@ sponson:destroy:
     name: review/mr-$CI_MERGE_REQUEST_IID
     action: stop
   script:
-    - npx -y sponson@0.4.0 apply --destroy --env preview --pr "$CI_MERGE_REQUEST_IID" --branch "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" --sha "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}"
+    - npx -y sponson@0.5.0 apply --destroy --env preview --pr "$CI_MERGE_REQUEST_IID" --branch "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" --sha "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}"
 
 sponson:production:
   extends: .sponson
@@ -193,5 +200,5 @@ sponson:production:
     name: production
     deployment_tier: production
   script:
-    - npx -y sponson@0.4.0 apply --env production --pr "" --branch "$CI_COMMIT_BRANCH" --sha "$CI_COMMIT_SHA" --approved-by "$GITLAB_USER_LOGIN"
+    - npx -y sponson@0.5.0 apply --env production --pr "" --branch "$CI_COMMIT_BRANCH" --sha "$CI_COMMIT_SHA" --approved-by "$GITLAB_USER_LOGIN"
 ```

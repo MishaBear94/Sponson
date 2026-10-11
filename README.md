@@ -272,7 +272,7 @@ What the fake cannot prove is that the real APIs behave as assumed. The assumpti
 
 ## Status
 
-Format, engine, the [built-in adapters](docs/plan-format.md#built-in-ops) and [secret schemes](docs/plan-format.md#secret-schemes), local and git-branch receipt stores, CLI, MCP server, GitHub Action, [templates](integrations/README.md) for GitLab CI/CD, CircleCI and Bitbucket Pipelines (not yet run on those hosts). Which providers are supported, and how to start with each: [docs/providers.md](docs/providers.md). Not yet: LaunchDarkly rules (its individual targets are supported), a hosted approval inbox, garbage collection of scopes whose PR closed without the action running.
+Format, engine, the [built-in adapters](docs/plan-format.md#built-in-ops) and [secret schemes](docs/plan-format.md#secret-schemes), local and git-branch receipt stores, CLI, MCP server, GitHub Action, [templates](integrations/README.md) for GitLab CI/CD, CircleCI and Bitbucket Pipelines (run end to end in Docker against the fake cloud by `scripts/try-ci-templates.sh`: GitLab's through gitlab-ci-local, CircleCI's and Bitbucket's job by job in their images with the hosts' variables emulated; not yet run on the hosts themselves). Which providers are supported, and how to start with each: [docs/providers.md](docs/providers.md). Not yet: LaunchDarkly rules (its individual targets are supported), a hosted approval inbox, garbage collection of scopes whose PR closed without the action running.
 
 ## Documentation
 

@@ -23,7 +23,7 @@ request is merged or closed. Production is a manual job on the default branch.
 
 1. Copy [gitlab-ci.yml](gitlab-ci.yml) to `.gitlab-ci.yml`, or merge its `workflow:`, `stages:` and jobs into yours.
    Put your own deploy jobs in the `deploy` stage, if GitLab deploys the app.
-2. Replace `0.4.0` with the Sponson version you have reviewed. Every job pins it, so an npm release never changes
+2. Replace `0.5.0` with the Sponson version you have reviewed. Every job pins it, so an npm release never changes
    what runs.
 3. Create the receipts token and the CI/CD variables below (**Settings → CI/CD → Variables**).
 4. Protect the `production` environment (**Operate → Environments → Protected environments**) so only the people
@@ -71,7 +71,7 @@ Sponson version:
 | `--branch` | `CI_MERGE_REQUEST_SOURCE_BRANCH_NAME` (`CI_COMMIT_BRANCH` on the default branch) |
 | `--sha` | `CI_MERGE_REQUEST_SOURCE_BRANCH_SHA` in merged-results pipelines (the head that is deployed, not the synthetic merge commit), else `CI_COMMIT_SHA` |
 
-Sponson releases after 0.4.0 read the same variables themselves when `GITLAB_CI` is set, so the flags may then be
+Sponson 0.5.0 and later read the same variables themselves when `GITLAB_CI` is set, so the flags may then be
 dropped.
 
 ## Notes
@@ -83,5 +83,12 @@ dropped.
   way. A killed apply is resumed by the next one; a cancelled one is not rolled back.
 - To clean up previews whose merge request is forgotten, add `auto_stop_in: 2 weeks` to the `environment:` of
   `sponson:apply` and `sponson:finish`.
+- What has been run: this file, unchanged but for the version, through
+  [gitlab-ci-local](https://github.com/firecow/gitlab-ci-local) in `node:22` containers against the fake cloud
+  (`scripts/try-ci-templates.sh gitlab`): a merge request pipeline (`sponson:plan`; `sponson:apply` stopping at the
+  deploy barrier; `sponson:finish` waiting for the deploy), the manual `sponson:production` on the default branch
+  with `GITLAB_USER_LOGIN` recorded as the approver, and `sponson:destroy`, with the tokens as variables scoped to
+  `review/*` and `production`. Not run on GitLab itself; see
+  [how the templates are checked](../README.md#how-the-templates-are-checked).
 
 <!-- sponson:embed gitlab-ci.yml -->

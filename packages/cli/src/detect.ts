@@ -172,26 +172,31 @@ export const gitlabCiSource: CtxSource = {
 /**
  * CircleCI (`CIRCLECI`). `CIRCLE_PULL_REQUEST` is the URL of the branch's pull request (GitHub `/pull/7`, Bitbucket
  * `/pull-requests/7`), set only when one was open when the pipeline started; `CIRCLE_PR_NUMBER` is set for forks.
+ * A tag build has `CIRCLE_TAG` and no `CIRCLE_BRANCH`, on a detached checkout: the tag stands for the branch, as
+ * `CI_COMMIT_REF_NAME` and `GITHUB_REF_NAME` do (the checkout's branch would be `HEAD` for every tag).
  */
 export const circleCiSource: CtxSource = {
   name: "circleci",
   async detect(_known, env) {
     if (!nonEmpty(env.CIRCLECI)) return {};
     return {
-      branch: nonEmpty(env.CIRCLE_BRANCH),
+      branch: firstOf(env, ["CIRCLE_BRANCH", "CIRCLE_TAG"]),
       sha: nonEmpty(env.CIRCLE_SHA1),
       pr: prFromUrl(env.CIRCLE_PULL_REQUEST) ?? positiveInt(env.CIRCLE_PR_NUMBER) ?? null,
     };
   },
 };
 
-/** Bitbucket Pipelines (`BITBUCKET_BUILD_NUMBER`). `BITBUCKET_PR_ID` is set in `pull-requests:` pipelines only. */
+/**
+ * Bitbucket Pipelines (`BITBUCKET_BUILD_NUMBER`). `BITBUCKET_PR_ID` is set in `pull-requests:` pipelines only. A tag
+ * pipeline has `BITBUCKET_TAG` and no `BITBUCKET_BRANCH`, on a detached checkout: the tag stands for the branch.
+ */
 export const bitbucketPipelinesSource: CtxSource = {
   name: "bitbucket-pipelines",
   async detect(_known, env) {
     if (!nonEmpty(env.BITBUCKET_BUILD_NUMBER)) return {};
     return {
-      branch: nonEmpty(env.BITBUCKET_BRANCH),
+      branch: firstOf(env, ["BITBUCKET_BRANCH", "BITBUCKET_TAG"]),
       sha: nonEmpty(env.BITBUCKET_COMMIT),
       pr: positiveInt(env.BITBUCKET_PR_ID) ?? null,
     };

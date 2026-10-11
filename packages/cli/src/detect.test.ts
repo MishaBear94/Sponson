@@ -103,6 +103,11 @@ describe("detectCtx", () => {
       expect((await detectCtx({}, { CIRCLECI: "true", CIRCLE_BRANCH: "main", CIRCLE_SHA1: SHA }, dir)).scope).toBe("main");
     });
 
+    it("a tag build (CIRCLE_TAG, no CIRCLE_BRANCH, a detached checkout) is the tag's scope, not the checkout's HEAD", async () => {
+      const c = await detectCtx({}, { CIRCLECI: "true", CIRCLE_TAG: "v1.2.0", CIRCLE_SHA1: SHA }, await notARepo());
+      expect(c).toMatchObject({ scope: "branch-v1.2.0", git: { branch: "v1.2.0", sha: SHA }, pr: { number: null } });
+    });
+
     it("a PR URL that does not end in a number is not a PR", async () => {
       const c = await detectCtx({}, { CIRCLECI: "true", CIRCLE_PULL_REQUEST: "https://github.com/acme/app/pull/abc", CIRCLE_BRANCH: "b", CIRCLE_SHA1: SHA }, await notARepo());
       expect(c.pr.number).toBeNull();
@@ -118,6 +123,11 @@ describe("detectCtx", () => {
     it("a branch pipeline has no pull request", async () => {
       const c = await detectCtx({}, { BITBUCKET_BUILD_NUMBER: "18", BITBUCKET_BRANCH: "main", BITBUCKET_COMMIT: SHA }, await notARepo());
       expect(c).toMatchObject({ scope: "main", pr: { number: null } });
+    });
+
+    it("a tag pipeline (BITBUCKET_TAG, no BITBUCKET_BRANCH, a detached checkout) is the tag's scope, not the checkout's HEAD", async () => {
+      const c = await detectCtx({}, { BITBUCKET_BUILD_NUMBER: "20", BITBUCKET_TAG: "v1.2.0", BITBUCKET_COMMIT: SHA }, await notARepo());
+      expect(c).toMatchObject({ scope: "branch-v1.2.0", git: { branch: "v1.2.0", sha: SHA }, pr: { number: null } });
     });
 
     it("an invalid BITBUCKET_PR_ID is no pull request, never NaN", async () => {

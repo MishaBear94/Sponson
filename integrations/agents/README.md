@@ -10,7 +10,7 @@ Each tool below gets two things: the MCP server configuration (copy it as it is)
 ## Before you start
 
 - Node.js 22 or later on the `PATH` the tool starts servers with: every configuration runs `npx -y sponson mcp`.
-  To pin a version, write `sponson@0.4.0` instead of `sponson` in the arguments.
+  To pin a version, write `sponson@0.5.0` instead of `sponson` in the arguments.
 - The server reads `release.plan.yaml`, the git checkout and its `origin` (where receipts are pushed) from the
   directory it starts in, and provider tokens (`VERCEL_TOKEN`, `NEON_API_KEY`, `CLERK_SECRET_KEY`, every
   `env://NAME` the plan references) from its environment. Never write a token into one of these files: they are

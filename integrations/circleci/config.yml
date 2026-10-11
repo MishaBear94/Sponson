@@ -6,8 +6,8 @@
 #                                                through the API with the pipeline parameters below (README.md)
 #   push to main                                 hold (an approval job), then sponson-production
 #
-# Replace 0.4.0 everywhere with the Sponson version you have reviewed. The flags are explicit so the template works
-# with any version; Sponson releases after 0.4.0 also read the same variables by themselves.
+# Replace 0.5.0 everywhere with the Sponson version you have reviewed. The flags are explicit so the template works
+# with any version; Sponson 0.5.0 and later also read the same variables by themselves.
 
 version: 2.1
 
@@ -50,7 +50,7 @@ jobs:
       - sponson-setup
       - run:
           name: sponson plan
-          command: npx -y sponson@0.4.0 plan --env preview --pr "${CIRCLE_PULL_REQUEST##*/}" --branch "$CIRCLE_BRANCH" --sha "$CIRCLE_SHA1"
+          command: npx -y sponson@0.5.0 plan --env preview --pr "${CIRCLE_PULL_REQUEST##*/}" --branch "$CIRCLE_BRANCH" --sha "$CIRCLE_SHA1"
 
   sponson-apply:
     executor: node
@@ -59,7 +59,7 @@ jobs:
       - sponson-setup
       - run:
           name: sponson apply
-          command: npx -y sponson@0.4.0 apply --env preview --pr "${CIRCLE_PULL_REQUEST##*/}" --branch "$CIRCLE_BRANCH" --sha "$CIRCLE_SHA1"
+          command: npx -y sponson@0.5.0 apply --env preview --pr "${CIRCLE_PULL_REQUEST##*/}" --branch "$CIRCLE_BRANCH" --sha "$CIRCLE_SHA1"
 
   sponson-finish:
     executor: node
@@ -69,7 +69,7 @@ jobs:
       - run:
           name: sponson apply --wait (finish the lines that needed the deploy)
           no_output_timeout: 20m
-          command: npx -y sponson@0.4.0 apply --wait --wait-timeout 900 --env preview --pr "${CIRCLE_PULL_REQUEST##*/}" --branch "$CIRCLE_BRANCH" --sha "$CIRCLE_SHA1"
+          command: npx -y sponson@0.5.0 apply --wait --wait-timeout 900 --env preview --pr "${CIRCLE_PULL_REQUEST##*/}" --branch "$CIRCLE_BRANCH" --sha "$CIRCLE_SHA1"
 
   sponson-destroy:
     executor: node
@@ -80,7 +80,7 @@ jobs:
           environment:
             DESTROY_PR: << pipeline.parameters.sponson-destroy-pr >>
             DESTROY_BRANCH: << pipeline.parameters.sponson-destroy-branch >>
-          command: npx -y sponson@0.4.0 apply --destroy --env preview --pr "$DESTROY_PR" --branch "$DESTROY_BRANCH" --sha "$CIRCLE_SHA1"
+          command: npx -y sponson@0.5.0 apply --destroy --env preview --pr "$DESTROY_PR" --branch "$DESTROY_BRANCH" --sha "$CIRCLE_SHA1"
 
   sponson-production:
     executor: node
@@ -97,7 +97,7 @@ jobs:
             echo "export SPONSON_APPROVED_BY=\"${login:-$approver_id}\"" >> "$BASH_ENV"
       - run:
           name: sponson apply --env production
-          command: npx -y sponson@0.4.0 apply --env production --pr "" --branch "$CIRCLE_BRANCH" --sha "$CIRCLE_SHA1"
+          command: npx -y sponson@0.5.0 apply --env production --pr "" --branch "$CIRCLE_BRANCH" --sha "$CIRCLE_SHA1"
 
 workflows:
   sponson-preview:

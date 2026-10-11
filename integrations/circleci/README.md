@@ -22,7 +22,7 @@ Jobs on a branch without an open pull request stop at their first step (`circlec
 
 1. Copy [config.yml](config.yml) to `.circleci/config.yml`, or merge its parameters, commands, jobs and workflows
    into yours. If CircleCI deploys the app, put your deploy jobs between `sponson-apply` and `sponson-finish`.
-2. Replace `0.4.0` with the Sponson version you have reviewed.
+2. Replace `0.5.0` with the Sponson version you have reviewed.
 3. Create two [contexts](https://circleci.com/docs/contexts/) (**Organization Settings → Contexts**) with the
    variables below. Restrict `sponson-production` to a security group of the people allowed to deploy.
 
@@ -77,7 +77,7 @@ deleted. Only the `sponson-destroy` workflow runs when `sponson-destroy-pr` is s
 | `--branch` | `CIRCLE_BRANCH` |
 | `--sha` | `CIRCLE_SHA1` |
 
-Sponson releases after 0.4.0 read the same variables themselves when `CIRCLECI` is set (and `CIRCLE_PR_NUMBER` for
+Sponson 0.5.0 and later read the same variables themselves when `CIRCLECI` is set (and `CIRCLE_PR_NUMBER` for
 pull requests from forks), so the flags may then be dropped.
 
 ## Notes
@@ -89,5 +89,11 @@ pull requests from forks), so the flags may then be dropped.
   apply without an approver in any case.
 - Projects that use CircleCI's GitHub App integration trigger pipelines differently from the `/pipeline` endpoint
   above; see CircleCI's documentation for triggering a pipeline with parameters.
+- What has been run (`scripts/try-ci-templates.sh circleci`): every job's steps verbatim in `cimg/node:lts`, in the
+  order the workflows run them, against the fake cloud: `sponson-preview` on the pull request's branch (apply stopping
+  at the deploy barrier, finish waiting for it), `sponson-plan` halting on `main`, `sponson-production` with the
+  approver read through a stand-in for CircleCI's API, and `sponson-destroy` with the pipeline parameters. The
+  checkout, the predefined variables and the API are emulated; not run on CircleCI itself. See
+  [how the templates are checked](../README.md#how-the-templates-are-checked).
 
 <!-- sponson:embed config.yml -->
