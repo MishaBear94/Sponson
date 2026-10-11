@@ -120,12 +120,34 @@ describe("the PR comment, from real --json output", () => {
     const w = await world();
     await w.cli("apply --json");
     await w.sim.state.applyChaos({ drift: { "vercel.env.preview.DATABASE_URL": "postgresql://console:edited@host/db" } } as never);
+
+    const plan = await snapshot("plan-drift", w, "plan --json", { command: "plan" });
+    // The headline says what exists, not what applying would give: the branch is already there.
+    expect(plan.md).toContain("This preview already has its own database branch.");
+    expect(plan.md).not.toContain("Applying this plan gives");
+    // The refused line and the line it holds back, counted apart; one fix, said once, on the refused line.
+    expect(plan.md).toContain("**1 line is refused**, and 1 line that depends on it is held back");
+    expect(plan.md.match(/--reconcile/g)).toHaveLength(1);
+    expect(plan.md).toMatch(/`callback` .* held back: depends on `env`/);
+    // Engine text's identifiers stay code spans, never entity soup next to them.
+    expect(plan.md).not.toContain("&#96;");
+
     await w.writePlan(PLAN.replace("STRIPE_KEY: { secret: \"env://STRIPE_KEY\" }", "STRIPE_KEY: { secret: \"env://STRIPE_KEY\" }\n      MODE: preview"));
     const drift = await snapshot("apply-drift", w, "apply --json");
     expect(drift.json.receipt.lines.env.errorCode).toBe("DRIFT_CHANGED");
     expect(drift.md).toContain("refused:");
     expect(drift.md).toContain("`sponson apply --reconcile`");
+    expect(drift.md.match(/--reconcile/g)).toHaveLength(1);
+    expect(drift.md).toContain("**1 line did not apply**, and 1 line that depends on it is held back");
+    expect(drift.md).not.toContain("&#96;");
     expect(drift.md).not.toContain("console:edited");
+
+    // The pull request closes with the edit still there: deleted with the rest (Sponson created it), and said so.
+    const destroyed = await snapshot("destroy-changed", w, "apply --destroy --json", { command: "destroy" });
+    expect(destroyed.json.receipt.lines.env.status).toBe("destroyed");
+    expect(destroyed.json.receipt.lines.env.notes.changedOutside).toEqual(["DATABASE_URL (preview, feat/x)"]);
+    expect(destroyed.md).toContain("DATABASE\\_URL (preview, feat/x) was changed outside Sponson since the last apply; deleted anyway");
+    expect(destroyed.md).not.toContain("console:edited");
   });
 
   it("control: a manual step shows its instructions whole and how a person confirms it", async () => {

@@ -106,6 +106,11 @@ describe.each(recipeNames())("recipes/%s.yaml", (name) => {
       for (const p of Object.keys(op!.params)) params.add(p);
       if (st.preview_url) expect(op!.params[st.preview_url]?.type, `preview_url ${st.preview_url}`).toBe("string");
       for (const p of Object.keys(st.values ?? {})) expect(Object.keys(op!.params), `value for ${p}`).toContain(p);
+      // A param init writes "to check" is written with its default: it must have one.
+      for (const p of st.check ?? []) expect(op!.params[p]?.default, `check ${p}: a param with a default`).toBeDefined();
+      // An output passed to the deploy target's variables must be one the op declares.
+      const outputs = (op!.http.outputs ?? {}) as Record<string, unknown>;
+      for (const out of Object.keys(st.env ?? {})) expect(Object.keys(outputs), `env output ${out}`).toContain(out);
       const line = { recipe: `${name}.${st.op}`, ...exampleParams(op!), ...st.values };
       expect(() => expandRecipe(line, op!.kind), st.op).not.toThrow();
     }

@@ -1,12 +1,12 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { GitBranchReceiptStore, isKeepRef, planRun, walkParams, type Ctx, type Drift, type Redactor, type Registry } from "@sponson/core";
 import { Document, isMap, isScalar, isSeq, parseDocument, visit, type Pair } from "yaml";
 import { UsageError, planPathFor, toRunOptions, withInvocation, type GlobalOpts, type Invocation, type IO } from "../context.js";
 import { withRedactorWarnings } from "../output.js";
-import { detectStack, fsReader, type Finding, type UnsupportedFinding } from "../stack.js";
+import { detectStack, fsReader, type Finding, type StackDetection, type UnsupportedFinding } from "../stack.js";
 import { runSetup, type SetupReport } from "../setup.js";
-import { composeStarter, credentialsFor, type Todo } from "../starter.js";
+import { composeStarter, credentialsFor, planTodos, todoLines, type Starter, type Todo } from "../starter.js";
 import { NO_TERMINAL } from "../terminal.js";
 
 export interface InitOpts extends GlobalOpts {
@@ -36,8 +36,9 @@ export interface InitResult {
   created: boolean;
   path: string;
   /**
-   * What the repository's files say it uses, when a starter was written; `null` when the plan already existed.
-   * File, dependency and variable names only: never a value read from an `.env` file.
+   * What the repository's files say it uses: when a starter was written, and with `--setup` on an existing plan (its
+   * `todo` then lists the TODOs the plan still has); `null` when an existing plan is adopted into. File, dependency
+   * and variable names only: never a value read from an `.env` file.
    */
   detected: InitDetected | null;
   /** Lines appended to an existing plan, with the resource keys each one adopts. */
@@ -61,17 +62,21 @@ export async function initCommand(opts: InitOpts, io: IO, redactor: Redactor): P
   const text: string[] = [];
 
   if (existing === null) {
-    const starter = await writeStarter(planPath, io);
+    const starter = await writeStarter(planPath, io, opts.setup === true);
     result.created = true;
     result.detected = starter.detected;
     text.push(...starter.text);
-  } else if (!opts.setup) {
+  } else if (opts.setup) {
+    // Setup on an existing plan detects again, so the report reads the same on every run, with the TODOs still left.
+    result.detected = (await detect(io, existing)).detected;
+  } else {
     // Adopting reads live state with the credentials; with --setup they are what is being set up, so it waits.
     text.push(...(await withInvocation(opts, io, redactor, (inv) => adoptUnmanaged(inv, existing, opts, io, result))));
     result.warnings = withRedactorWarnings(result.warnings, redactor);
   }
 
-  if (await ensureGitignore(io.cwd)) text.push("Added .sponson/ to .gitignore");
+  // Said right after the plan it was written for (or alone): init writes the plan and this one line, nothing else.
+  if (await ensureGitignore(io.cwd)) text.splice(result.created ? 1 : text.length, 0, "Added .sponson/ to .gitignore");
   if (opts.setup) return setupAfterInit(opts, io, redactor, result, text);
 
   if (opts.json) {
@@ -79,13 +84,7 @@ export async function initCommand(opts: InitOpts, io: IO, redactor: Redactor): P
     return 0;
   }
   if (result.warnings.length) text.push("", "warnings", ...result.warnings.map((w) => `  ${w}`));
-  const origin = await GitBranchReceiptStore.originOf(io.cwd);
-  if (origin) {
-    text.push(
-      "",
-      "Receipts will live on orphan branches of this repository, one per environment and scope (`sponson-receipts/<env>/<scope>`). Every `sponson apply` pushes a small JSON file to its scope's branch recording what it did and the hashes of what it wrote, so the next run (on any machine, including CI) can detect drift and know what to destroy. These branches share no history with your code, are never merged, and use the same credentials you already push with.",
-    );
-  }
+  if (result.created && (await GitBranchReceiptStore.originOf(io.cwd))) text.push(RECEIPTS_NOTE);
   io.stdout.write(text.join("\n") + "\n");
   return 0;
 }
@@ -96,12 +95,12 @@ export async function initCommand(opts: InitOpts, io: IO, redactor: Redactor): P
  */
 async function setupAfterInit(opts: InitOpts, io: IO, redactor: Redactor, result: InitResult, text: string[]): Promise<number> {
   const out = opts.json ? io.stderr : io.stdout;
-  // The starter's "Next: set … in your environment" is what setup does now.
-  const before = text.filter((l) => !l.startsWith("Next: set "));
-  if (!opts.json && before.length) out.write(`${before.join("\n")}\n`);
-  const detected = (result.detected?.found ?? []).filter((f) => f.kind === "provider");
+  if (!opts.json && text.length) out.write(`${text.join("\n")}\n`);
+  // Providers whose lines a starter written in this run may have left commented out; an existing plan says it all.
+  const detected = result.created ? (result.detected?.found ?? []).filter((f) => f.kind === "provider") : [];
+  const todos = result.detected?.todo ?? [];
   const say = (...lines: string[]) => void out.write(`${lines.join("\n")}\n`);
-  result.setup = await runSetup({ io, redactor, terminal: io.terminal ?? NO_TERMINAL, opts, planPath: result.path, detected }, say);
+  result.setup = await runSetup({ io, redactor, terminal: io.terminal ?? NO_TERMINAL, opts, planPath: result.path, detected, todos }, say);
   result.warnings = withRedactorWarnings(result.warnings, redactor);
   if (opts.json) io.json(result);
   else if (result.warnings.length) say("", "warnings", ...result.warnings.map((w) => `  ${w}`));
@@ -133,10 +132,10 @@ async function adoptUnmanaged(inv: Invocation, existing: string, opts: InitOpts,
     result.added = adoptions.map((a) => ({ id: a.change.id, adapter: String(a.change.adapter), op: String(a.change.op), keys: a.keys }));
   }
   if (result.added.length === 0) {
-    text.push(`${result.path} already covers everything in ${inv.ctx.env}. Nothing to adopt.`);
+    text.push(`${shown(io, result.path)} already covers everything in ${inv.ctx.env}. Nothing to adopt.`);
     return text;
   }
-  text.push(`Added ${result.added.length} line${result.added.length === 1 ? "" : "s"} to ${result.path}: ${result.added.map((a) => a.id).join(", ")}`);
+  text.push(`Added ${result.added.length} line${result.added.length === 1 ? "" : "s"} to ${shown(io, result.path)}: ${result.added.map((a) => a.id).join(", ")}`);
   if (adoptions.some((a) => keepsValues(a.change))) {
     text.push("Adopted variables are written as `{ keep: true }`: Sponson keeps their live values and never destroys them. Replace `{ keep: true }` with a value or `{ secret: \"env://KEY\" }` to let Sponson manage the value.");
   }
@@ -147,26 +146,51 @@ async function adoptUnmanaged(inv: Invocation, existing: string, opts: InitOpts,
 // Starter plan
 // ---------------------------------------------------------------------------
 
-/** Detect the stack from the repository's files, write the starter plan composed for it, and summarise. */
-async function writeStarter(planPath: string, io: IO): Promise<{ detected: InitDetected; text: string[] }> {
+/** Where receipts go, said once when a starter is written in a repository with a git remote. */
+export const RECEIPTS_NOTE =
+  "Receipts: each `sponson apply` records what it did on an orphan branch of this repository (`sponson-receipts/<env>/<scope>`, never merged), so the next run, on any machine or in CI, sees drift and knows what to destroy.";
+
+/** A path as people read it: relative to the working directory (JSON keeps it absolute). */
+function shown(io: IO, path: string): string {
+  return relative(io.cwd, path) || path;
+}
+
+/**
+ * What the repository's files say, and the starter composed for it. `plan` is the existing plan's text: its `todo`
+ * is then what that plan still has (`planTodos`), not the starter's.
+ */
+async function detect(io: IO, plan?: string): Promise<{ detection: StackDetection; starter: Starter; detected: InitDetected }> {
   const { VERCEL_PROJECT_ID, VERCEL_ORG_ID, NEON_PROJECT_ID, NETLIFY_SITE_ID, CLOUDFLARE_ACCOUNT_ID } = io.env;
   const detection = await detectStack(fsReader(io.cwd), { VERCEL_PROJECT_ID, VERCEL_ORG_ID, NEON_PROJECT_ID, NETLIFY_SITE_ID, CLOUDFLARE_ACCOUNT_ID });
   const starter = composeStarter(detection);
-  await writeFile(planPath, starter.text, "utf8");
-  const detected: InitDetected = { found: detection.found, unsupported: detection.unsupported, todo: starter.todos, assumed: starter.assumed };
-  return { detected, text: [`Wrote ${planPath}`, ...initSummary(detected, credentialsFor(detection))] };
+  const todo = plan === undefined ? starter.todos : planTodos(plan, starter.todos);
+  return { detection, starter, detected: { found: detection.found, unsupported: detection.unsupported, todo, assumed: starter.assumed } };
 }
 
-/** The short human summary: what was found, what is not supported yet, what is left to fill in, what to run next. */
-export function initSummary(d: InitDetected, credentials: string[]): string[] {
+/**
+ * Detect the stack from the repository's files, write the starter plan composed for it, and summarise. With
+ * `setup`, the TODOs and credentials are left out of the summary: setup lists them next.
+ */
+async function writeStarter(planPath: string, io: IO, setup: boolean): Promise<{ detected: InitDetected; text: string[] }> {
+  const { detection, starter, detected } = await detect(io);
+  await writeFile(planPath, starter.text, "utf8");
+  return { detected, text: [`Wrote ${shown(io, planPath)}`, ...initSummary(detected, credentialsFor(detection), { setup })] };
+}
+
+/**
+ * The short human summary: what was found, what is not supported yet, what is left to fill in, what to run next.
+ * `setup`: only what was found (setup goes on with the TODOs, then the credentials).
+ */
+export function initSummary(d: InitDetected, credentials: string[], o: { setup?: boolean } = {}): string[] {
   const out = [
     d.assumed
       ? `Detected: ${d.found.length ? `${d.found.map((f) => f.name).join(", ")}, but no deploy target or database Sponson manages` : "nothing Sponson manages"}; wrote the Vercel + Neon template`
       : `Detected: ${d.found.map((f) => `${f.name} (${f.evidence[0]!})`).join(", ")}`,
   ];
   if (d.unsupported.length) out.push("Not supported yet (no line manages them):", ...d.unsupported.map((u) => `  ${u.name} (${u.evidence[0]!}): ${u.pointer}`));
-  if (d.todo.length) out.push("To fill in:", ...d.todo.map((t) => `  ${t.path} (now ${JSON.stringify(t.placeholder)}): ${t.hint}`));
-  out.push(`Next: set ${credentials.join(", ")} in your environment, then run \`sponson plan\``);
+  if (o.setup) return out;
+  if (d.todo.length) out.push("To fill in:", ...todoLines(d.todo));
+  out.push(`Next: ${d.todo.length ? "fill in the TODOs, " : ""}set ${credentials.join(", ")} in your environment, then run \`sponson plan\``);
   return out;
 }
 

@@ -57,7 +57,7 @@ steps:
       exit: 1
       status: failed
       lines: { pages: blocked }
-      errors: { pages: "reconcile" }
+      errors: { pages: "outside Sponson" }
   - run: apply --reconcile --json
     expect:
       exit: 0

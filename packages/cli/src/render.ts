@@ -9,7 +9,11 @@ export interface RenderOptions {
   color: boolean;
 }
 
-export const PLAN_SYMBOL: Record<PlanLineStatus, string> = { create: "+", update: "~", unchanged: "=", run: ">", pending: "?", todo: "*", blocked: "-", error: "!" };
+/**
+ * One glyph per status. `-` means something is (or was) removed, so it is kept for that alone: a line that is held
+ * back (refused, or waiting on a refused line) is `x`, which reads as "not done", never as a delete.
+ */
+export const PLAN_SYMBOL: Record<PlanLineStatus, string> = { create: "+", update: "~", unchanged: "=", run: ">", pending: "?", todo: "*", blocked: "x", error: "!" };
 export const LINE_SYMBOL: Record<LineStatus, string> = {
   applied: "+",
   unchanged: "=",
@@ -17,12 +21,12 @@ export const LINE_SYMBOL: Record<LineStatus, string> = {
   failed: "!",
   rolled_back: "-",
   rollback_failed: "!",
-  skipped: "-",
+  skipped: "x",
   destroyed: "-",
   destroy_failed: "!",
-  blocked: "-",
+  blocked: "x",
 };
-const ANSI: Record<string, string> = { "+": "32", "~": "33", "=": "2", "!": "31" };
+const ANSI: Record<string, string> = { "+": "32", "~": "33", "=": "2", "!": "31", x: "35" };
 
 function paint(symbol: string, text: string, color: boolean): string {
   const code = ANSI[symbol];
@@ -46,11 +50,24 @@ export function sideText(s: DiffSide | undefined): string | undefined {
   }
 }
 
-export function diffText(d: ResourceDiff): string {
+/**
+ * One resource's diff as text. The value is left out where it says nothing the label does not (a Neon branch whose
+ * label already ends in its name), and a change between two hidden values says what changed instead of
+ * `(secret) → (secret)`: `drifted` marks a resource changed outside Sponson since the last apply.
+ */
+export function diffText(d: ResourceDiff, drifted = false): string {
   const after = sideText(d.after);
   if (after === undefined) return d.label;
   const before = sideText(d.before);
+  if (before === undefined && d.after?.state === "literal" && (d.label === after || d.label.endsWith(` ${after}`))) return d.label;
+  if (before !== undefined && before === after && hidden(d.before) && hidden(d.after)) {
+    return `${d.label}  ${drifted ? "changed outside Sponson" : "changes"} (value hidden)`;
+  }
   return `${d.label}  ${before !== undefined ? `${before} → ` : ""}${after}`;
+}
+
+function hidden(s: DiffSide | undefined): boolean {
+  return s?.state === "sensitive" || s?.state === "secret";
 }
 
 /** Line errors in text output carry the same CLI remedy the JSON envelope does (from core's ERROR_CODES). */
@@ -100,9 +117,11 @@ function warningsSection(warnings: string[]): string {
 // plan
 // ---------------------------------------------------------------------------
 
-function planRow(l: PlanLine): Row {
+/** `drifted` holds `line\0resourceKey` of every resource changed outside Sponson (from the plan's drift). */
+function planRow(l: PlanLine, drifted: Set<string>): Row {
   const row: Row = { symbol: PLAN_SYMBOL[l.status], id: l.id, op: `${l.adapter}.${l.op}`, status: l.status, detail: "", sub: [] };
-  const diffRows = () => l.diffs.map((d) => `${PLAN_SYMBOL[d.kind]} ${diffText(d)}`);
+  const text = (d: ResourceDiff) => diffText(d, drifted.has(`${l.id}\u0000${d.key}`));
+  const diffRows = () => l.diffs.map((d) => `${PLAN_SYMBOL[d.kind]} ${text(d)}`);
   if (l.status === "pending") {
     row.detail = l.waitingOn ? `waiting on \`${l.waitingOn}\`${l.waitingFor ? ` (${l.waitingFor})` : ""}` : `waiting${l.waitingFor ? ` on ${l.waitingFor}` : ""}`;
     row.sub = diffRows();
@@ -113,7 +132,7 @@ function planRow(l: PlanLine): Row {
     row.detail = `by hand: ${l.manual.title}`;
     row.sub = todoText(l.manual);
   } else if (l.diffs.length === 1) {
-    row.detail = diffText(l.diffs[0]!);
+    row.detail = text(l.diffs[0]!);
   } else if (l.diffs.length > 1) {
     row.sub = diffRows();
   }
@@ -134,7 +153,8 @@ export function renderPlan(result: PlanResult, opts: RenderOptions): string {
   if (result.lock) notes.push(`! an apply is running on this scope; this plan may change (lock held by ${result.lock.holder} until ${result.lock.expiresAt})`);
   if (result.requiresApproval) notes.push("! apply needs approval: it writes to production (--approved-by <who>, from a human)");
   const noteText = notes.length ? `\n${notes.join("\n")}\n` : "";
-  const body = result.lines.length ? table(result.lines.map(planRow), opts.color) : "(no lines for this environment)";
+  const drifted = new Set(result.drift.filter((d) => d.kind === "changed" && d.line).map((d) => `${d.line!}\u0000${d.resource.key}`));
+  const body = result.lines.length ? table(result.lines.map((l) => planRow(l, drifted)), opts.color) : "(no lines for this environment)";
   return `${header}\n${noteText}\n${body}\n${driftSection(result.drift)}${warningsSection(result.warnings)}\n${planSummary(result.lines)}\n`;
 }
 

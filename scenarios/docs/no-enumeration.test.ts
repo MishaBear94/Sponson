@@ -13,7 +13,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createRegistry } from "@sponson/adapters";
+import { createRegistry, detectableProviders } from "@sponson/adapters";
 import { GENERATED_MARK, SITE, sitePages } from "../../scripts/gen-site.js";
 import { REPO } from "./plans.js";
 
@@ -55,6 +55,13 @@ const HAND_COUNT = new RegExp(`\\b(?:${NUMBER})\\s+(?:[a-z-]+\\s+)?(?:${COUNTED}
 
 const files = await docs();
 const schemes = createRegistry().secretSchemes();
+/** Every provider Sponson manages and detects: a hand-written "not supported yet" list once named four of them. */
+const supported = detectableProviders(createRegistry()).map((p) => p.title);
+
+/** The sentences that say something is not supported or managed yet. */
+function notSupportedSentences(text: string): string[] {
+  return text.split(/(?<=[.!?:])\s+/).filter((s) => /not supported yet|(does|do) not manage yet|not managed yet/i.test(s));
+}
 
 describe.each(files.map((f) => [f.path, f.text] as const))("%s", (_path, text) => {
   const prose = withoutGenerated(text);
@@ -65,6 +72,12 @@ describe.each(files.map((f) => [f.path, f.text] as const))("%s", (_path, text) =
 
   it("has no hand-maintained count of repo contents", () => {
     expect(prose.match(HAND_COUNT) ?? []).toEqual([]);
+  });
+
+  it("calls no supported provider \"not supported yet\" (that list is generated from the detection data)", () => {
+    const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const named = notSupportedSentences(prose).flatMap((s) => supported.filter((t) => new RegExp(`\\b${esc(t)}\\b`).test(s)));
+    expect(named).toEqual([]);
   });
 });
 

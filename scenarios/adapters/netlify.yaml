@@ -55,7 +55,7 @@ steps:
       exit: 1
       status: failed
       lines: { env: blocked }
-      errors: { env: "reconcile" }
+      errors: { env: "outside Sponson" }
   - run: apply --reconcile --json
     expect:
       exit: 0

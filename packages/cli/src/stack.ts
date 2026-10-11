@@ -97,6 +97,8 @@ export interface StackDetection {
   publicPrefix: string;
   /** `vercel.json` turns off automatic Git deployments, so the plan has to start the deploy itself. */
   vercelAutoDeployOff: boolean;
+  /** Each variable *name* the `.env*` files declare, with the files that declare it. Never a value. */
+  envNames?: Record<string, string[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +317,7 @@ export async function detectStack(reader: RepoReader, env: IdEnv = {}, providers
     ...databaseVar(s),
     publicPrefix: PUBLIC_PREFIX[framework ?? ""] ?? "",
     vercelAutoDeployOff: autoDeployOff(s.files.get("vercel.json")),
+    envNames: Object.fromEntries(s.envNames),
     ...(wrangler ? { cloudflareNotPages: wrangler.pagesOutputDir === undefined } : {}),
   };
 }

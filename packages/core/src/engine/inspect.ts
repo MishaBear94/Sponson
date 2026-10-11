@@ -109,7 +109,10 @@ function changedOutside(rc: RunContext, change: Change, provider: Record<string,
   });
 }
 
-/** What one diffed resource means against the ledger: drift to report, and why apply must refuse it. */
+/**
+ * What one diffed resource means against the ledger: drift to report, and why apply must refuse it. Both state what
+ * happened only; the remedy is the error code's (`DRIFT_CHANGED`'s `cliHint`, or the PR comment's fix), said once.
+ */
 interface Verdict {
   drift?: Drift;
   refusal?: Refusal;
@@ -137,15 +140,15 @@ function judge(rc: RunContext, change: Change, provider: Record<string, unknown>
   }
   if (e.id && live.id !== e.id) {
     return {
-      drift: { kind: "changed", replaced: true, ...at(live.id), message: `${label} was deleted and re-created outside Sponson. The new one is not Sponson's; apply refuses this line unless the run reconciles, and then treats it as adopted.` },
-      ...refuse(`${label} was replaced outside Sponson since the last apply. Apply with reconcile to take it over as adopted, or update the plan.`),
+      drift: { kind: "changed", replaced: true, ...at(live.id), message: `${label} was deleted and re-created outside Sponson since the last apply; the new one is not Sponson's (reconciling adopts it).` },
+      ...refuse(`${label} was deleted and re-created outside Sponson since the last apply.`),
     };
   }
   // A console edit that already matches the plan is accepted silently; one that conflicts is refused.
   if (e.hash && rc.ledger.keyed(live.hash) !== e.hash && d.kind !== "unchanged") {
     return {
-      drift: { kind: "changed", ...at(live.id), message: `${label} was changed outside Sponson since the last apply. Apply refuses this line unless the run reconciles.` },
-      ...refuse(`${label} was changed outside Sponson since the last apply. Apply with reconcile to overwrite it, or update the plan to match.`),
+      drift: { kind: "changed", ...at(live.id), message: `${label} was changed outside Sponson since the last apply.` },
+      ...refuse(`${label} was changed outside Sponson since the last apply.`),
     };
   }
   return {};

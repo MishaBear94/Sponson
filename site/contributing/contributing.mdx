@@ -128,8 +128,11 @@ existing file in `packages/adapters/recipes/` and:
    Add a `detect` block so `sponson init` finds the provider with no change to the CLI: its SDK's package names
    (`deps`), config files (`files`), variable names (`env`, `PROVIDER_*` for a prefix) and database URL hosts
    (`db_hosts`), never anything that would need a value read; the `starter` lines init writes (`preview_url` names
-   the param that takes the preview's URL, `values` gives `${ctx.*}` values such as `preview-${ctx.scope}`), and
-   `where` to find each other required param (`base_url` for a per-account API). Leave it out only when another
+   the param that takes the preview's URL, `values` gives `${ctx.*}` values such as `preview-${ctx.scope}`, `check`
+   names params written with their `default` and a TODO to check it against the app, such as a webhook handler's
+   `path`, and `env` passes an output to the deploy target's variables under the name the app's `.env*` files use,
+   such as `{ secret: STRIPE_WEBHOOK_SECRET }`), and `where` to find each other required param (`base_url` for a
+   per-account API). Leave it out only when another
    recipe file or a first-class adapter already detects the provider.
 3. **Mark the row covered** in `docs/coverage.yaml` (`covered_by: recipe:<provider>.<op>`) and list its id in the
    op's `covers`.

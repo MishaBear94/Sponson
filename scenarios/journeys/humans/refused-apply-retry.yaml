@@ -24,7 +24,7 @@ steps:
     expect: { exit: 0, status: complete }
   - chaos: { drift: { "vercel.env.preview.MAINTENANCE": "on" } }
   - run: apply --json
-    expect: { exit: 1, lines: { env: blocked }, errors: { env: "reconcile" } }
+    expect: { exit: 1, lines: { env: blocked }, errors: { env: "outside Sponson" } }
   - run: plan --json
     expect: { exit: 1, drift: [{ kind: changed, line: env }], plan_lines: { env: blocked } }
   - run: apply --json

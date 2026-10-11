@@ -36,6 +36,12 @@ Further rules:
   replaced resource reconciled this way is treated as adopted, because Sponson did not create it.
 - Drift is only looked for where plan lines could own resources (each op's `listScope`): no account-wide scans and no
   permissions beyond what the plan needs.
+- `apply --destroy` deletes a resource Sponson created even when it has `changed` drift: the scope is going away and
+  what it created goes with it. The edit is never lost silently: destroy re-reads the line first, names the resource
+  in a warning (so in the output and the PR comment) and records it under the line's `notes.changedOutside` in the
+  receipt. There is no flag to keep such a resource: destroy runs unattended when a pull request closes, and a kept
+  resource would belong to no scope, the garbage nothing collects (ADR 0002's missing fourth command). A resource
+  re-created outside Sponson (a new provider id) is not Sponson's, so destroy leaves it, as before.
 
 ## Consequences
 

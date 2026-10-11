@@ -12,7 +12,11 @@
  *                           in docs/coverage.yaml: every table row and every coverage number
  *   docs/providers.md       entirely: the provider catalog, from docs/coverage.yaml, the recipe files and the registry
  *                           (scripts/render-providers.ts)
- *   README.md               the block providers-summary: the catalog's numbers and a link to it
+ *   README.md               the block providers-summary: the catalog's numbers and a link to it; the block
+ *                           init-unsupported: the services `init` detects but nothing manages yet, from UNSUPPORTED
+ *                           (packages/cli/src/stack.ts), so a service that gains a recipe leaves the README with it
+ *   action/README.md        the comment-* blocks: the example PR comments, from the snapshots the PR comment suite
+ *                           writes from real runs (scenarios/journeys/secrets/__snapshots__/pr-comment/)
  *
  * These tables are the only place the docs enumerate adapters, ops or secret schemes; everything else (README,
  * SKILL.md, ARCHITECTURE.md, the schema, package descriptions) links here and gives at most one example.
@@ -29,6 +33,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRegistry } from "../packages/adapters/src/index.js";
+import { UNSUPPORTED } from "../packages/cli/src/stack.js";
 import { ERROR_CODES, WARNING_CODES, type ErrorCodeSpec } from "../packages/core/src/errors.js";
 import { loadCoverage } from "./coverage-data.js";
 import { cell, slug } from "./md.js";
@@ -146,6 +151,38 @@ export function renderSecretSchemes(): string {
   return rows.join("\n");
 }
 
+/** "a, b and c". */
+function andList(xs: string[]): string {
+  return xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)!}`;
+}
+
+/** The services `init` detects that no adapter or recipe manages yet: README's init-unsupported block. */
+export function renderInitUnsupported(): string {
+  const names = UNSUPPORTED.map((r) => r.name);
+  const which = names.length ? `: today ${andList(names)}` : "; today there are none";
+  return `A service \`init\` detects that no adapter or recipe manages yet is listed as "not supported yet", with where to ask for it, and never silently dropped${which}.`;
+}
+
+/** The PR comment snapshots action/README.md shows, by block name; each one a real run's comment. */
+export const COMMENT_EXAMPLES: Record<string, string> = {
+  "comment-apply-complete": "apply-complete",
+  "comment-apply-partial": "apply-partial",
+  "comment-destroy": "destroy",
+  "comment-plan-drift": "plan-drift",
+  "comment-apply-refused-production": "apply-refused-production",
+  "comment-apply-manual-step": "apply-manual-step",
+};
+
+const SNAPSHOTS = "scenarios/journeys/secrets/__snapshots__/pr-comment";
+
+/** One snapshot as an example: the run id and plan hash the suite masks, put back as plausible values. */
+export async function renderCommentExample(snapshot: string): Promise<string> {
+  const md = (await readFile(join(REPO, SNAPSHOTS, `${snapshot}.md`), "utf8"))
+    .replace(/\b(run|destroy)-RUNID\b/g, (_m, kind: string) => `${kind}-${kind === "run" ? "1a2b3c4d" : "5e6f7a8b"}`)
+    .replace(/\bplan PLANHASH\b/g, "plan 1e5d99ef");
+  return ["```markdown", md.trimEnd(), "```"].join("\n");
+}
+
 /** Replace the generated block of a document; throws when the markers are missing. */
 export function withBlock(doc: string, start: string, end: string, body: string): string {
   const a = doc.indexOf(start);
@@ -186,7 +223,14 @@ export async function generate(): Promise<GeneratedFile[]> {
     coverage = withBlock(coverage, start, end, body);
   }
   const summary = markers("providers-summary");
-  const readme = withBlock(await readFile(join(REPO, "README.md"), "utf8"), summary.start, summary.end, renderProvidersSummary(data));
+  let readme = withBlock(await readFile(join(REPO, "README.md"), "utf8"), summary.start, summary.end, renderProvidersSummary(data));
+  const unsupported = markers("init-unsupported");
+  readme = withBlock(readme, unsupported.start, unsupported.end, renderInitUnsupported());
+  let action = await readFile(join(REPO, "action/README.md"), "utf8");
+  for (const [name, snapshot] of Object.entries(COMMENT_EXAMPLES)) {
+    const m = markers(name);
+    action = withBlock(action, m.start, m.end, await renderCommentExample(snapshot));
+  }
   return [
     { path: "docs/errors.md", content: renderErrors() },
     { path: planFormat, content: doc },
@@ -194,6 +238,7 @@ export async function generate(): Promise<GeneratedFile[]> {
     { path: coverageDoc, content: coverage },
     { path: "docs/providers.md", content: renderProviders(data, REPO) },
     { path: "README.md", content: readme },
+    { path: "action/README.md", content: action },
   ];
 }
 

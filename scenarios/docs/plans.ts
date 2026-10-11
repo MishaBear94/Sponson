@@ -44,3 +44,16 @@ export async function scenarioPlans(): Promise<PlanSource[]> {
   }
   return out;
 }
+
+/** The `bash` blocks of README.md's "Try it in 60 seconds" section, as lists of non-empty lines. */
+export function tryItBlocks(readme: string): { start: string[]; steps: string[] } {
+  const at = readme.search(/\n#{2,3} Try it in 60 seconds\n/);
+  if (at < 0) throw new Error('README.md has no "Try it in 60 seconds" section');
+  // From the heading to the next `##` or `###` heading.
+  const body = readme.slice(readme.indexOf("\n", at + 1) + 1);
+  const end = body.search(/^#{2,3} /m);
+  const section = end < 0 ? body : body.slice(0, end);
+  const blocks = [...section.matchAll(/^```bash\n([\s\S]*?)^```$/gm)].map((m) => m[1]!.split("\n").filter((l) => l.trim() !== ""));
+  if (blocks.length !== 2) throw new Error(`expected two bash blocks in "Try it in 60 seconds", found ${String(blocks.length)}`);
+  return { start: blocks[0]!, steps: blocks[1]! };
+}

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { applyRun, destroyRun, planRun, type RunOptions } from "./index.js";
 import { Lease } from "./lease.js";
-import { SponsonError } from "../errors.js";
+import { SponsonError, cliHintFor } from "../errors.js";
 import { parsePlan } from "../plan.js";
 import { Redactor } from "../redact.js";
 import { LocalReceiptStore } from "../receipts/local.js";
@@ -229,14 +229,29 @@ describe("drift", () => {
 
     const { receipt } = await applyRun(opts());
     expect(receipt.status).toBe("failed");
-    expect(receipt.lines["a"]!.error).toContain("reconcile");
-    expect(receipt.lines["a"]!.error).not.toContain("--");
+    // The engine states what happened; the remedy is the code's, said once by whoever shows it (ERROR_CODES cliHint).
+    expect(receipt.lines["a"]!.errorCode).toBe("DRIFT_CHANGED");
+    expect(receipt.lines["a"]!.error).toBe("alpha was changed outside Sponson since the last apply.");
+    expect(cliHintFor("DRIFT_CHANGED")).toContain("--reconcile");
     expect(cloud.items.get("alpha")!.value).toBe("edited-in-console");
 
     const fixed = await applyRun(opts(PLAN, { reconcile: true }));
     expect(fixed.receipt.status).toBe("complete");
     expect(fixed.receipt.lines["a"]!.notes).toMatchObject({ reconciled: true });
     expect(cloud.items.get("alpha")!.value).toBe("one");
+  });
+
+  it("destroy deletes what Sponson created even when it was edited since, and records and says so", async () => {
+    await applyRun(opts());
+    cloud.drift("alpha", "edited-in-console");
+    const { receipt, warnings } = await destroyRun(opts());
+    expect(receipt.status).toBe("complete");
+    expect(receipt.lines["a"]!.status).toBe("destroyed");
+    expect(cloud.items.has("alpha")).toBe(false);
+    expect(receipt.lines["a"]!.notes).toMatchObject({ changedOutside: ["alpha"] });
+    expect(warnings).toContainEqual(expect.stringContaining("alpha was changed outside Sponson since the last apply; deleted anyway"));
+    // An unedited line is deleted without a word.
+    expect(receipt.lines["b"]?.notes?.changedOutside).toBeUndefined();
   });
 
   it("recreates a resource that went missing", async () => {

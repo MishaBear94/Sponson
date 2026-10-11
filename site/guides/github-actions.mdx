@@ -7,9 +7,11 @@ description: "One action for the whole life of a preview environment, and produc
 
 Runs `sponson plan`, `sponson apply` or `sponson apply --destroy` from `release.plan.yaml` and comments the result on the pull request. One action, one command, three triggers.
 
-**Pin the action to a commit.** Replace `<commit-sha>` with the full SHA of the Sponson commit you have reviewed
-(`git rev-parse HEAD` in a checkout). Release tags will exist from the first release; a SHA is the only reference
-nobody can move under you.
+**Pin the action to a commit.** A commit SHA is the only reference nobody can move under you. `sponson init --setup`
+writes the workflow with `<commit-sha>` filled in: the commit the installed version's release tag (`sponson@<version>`)
+points at. To pin by hand, read that commit with
+`git ls-remote https://github.com/MishaBear94/Sponson 'refs/tags/sponson@<version>^{}'` (`uses:` cannot name the tag
+itself: GitHub splits a reference at its `@`).
 
 ## Inputs
 
@@ -154,13 +156,35 @@ On a push the action passes no scope flags; the CLI reads the GitHub context (`G
 ## The PR comment
 
 One comment per environment, marked with `<!-- sponson:<env> -->` and updated in place on every run. It is written for
-the reviewer: a headline that says what this pull request's preview has, then one line per plan line with a link to
-the provider's console where Sponson knows one, the preview URL as a link, and what a waiting line waits for. Values
-are never shown: resources by name, inputs as references (`DATABASE_URL ← db.connection_string`), secrets as
-`(secret)`. A refusal, a failure or drift is one sentence with the fix (`sponson apply --reconcile`,
-`--approved-by <who>`, `sponson apply --confirm <line>`).
+the reviewer: a headline that says what this pull request's preview has (on a plan: what it already has, and what
+applying would add), then one line per plan line with a link to the provider's console where Sponson knows one, the
+preview URL as a link, and what a waiting line waits for. Values are never shown: resources by name, inputs as
+references (`DATABASE_URL ← db.connection_string`), secrets as `(secret)`. A refused or failed line says what happened
+and then the fix, once (`sponson apply --reconcile`, `--approved-by <who>`, `sponson apply --confirm <line>`); a line
+held back only because a line it depends on was refused is counted apart and has no fix of its own.
 
-After `apply` on a pull request:
+The examples below are real comments: the PR comment suite (`scenarios/journeys/secrets/pr-comment.test.ts`) renders
+them from `--json` output against the fake cloud, and `pnpm docs:gen` copies its snapshots here, so they cannot go
+stale. The plan is the README's (a Neon branch, two Vercel variables, a Clerk callback).
+
+While the preview deploy has not finished (`apply` on `opened`; the `deployment_status` run finishes the callback):
+
+```markdown
+<!-- sponson:preview -->
+### Sponson: the preview for pr-42 is almost ready
+
+This preview has its own database branch and 2 variables.
+
+Still to come: 1 auth callback, once the preview deploy finishes (nothing to retry).
+
+- `db` Neon branch sponson/preview/pr-42 — set up in this run · [console](https://console.neon.tech/app/projects/proj_demo/branches/br-11)
+- `env` 2 variables (preview, feat/x): `DATABASE_URL` and `STRIPE_KEY`, values not shown — set up in this run · [console](https://vercel.com/d?to=%2F%5Bteam%5D%2F%5Bproject%5D%2Fsettings%2Fenvironment-variables&title=Go+to+Environment+Variables)
+- `callback` auth callback — waits for the preview deploy: the run after the deploy finishes it, nothing to retry
+
+<sub>apply run-1a2b3c4d · plan 1e5d99ef · [run log](https://github.com/acme/app/actions/runs/1001)</sub>
+```
+
+After the deploy, the same comment:
 
 ```markdown
 <!-- sponson:preview -->
@@ -168,17 +192,78 @@ After `apply` on a pull request:
 
 This preview has its own database branch, 2 variables and 1 auth callback.
 
-**Preview:** [https://acme-web-git-feat-x.vercel.app](https://acme-web-git-feat-x.vercel.app)
+**Preview:** [https://prj\_demo-01234567.vercel.app](https://prj_demo-01234567.vercel.app)
 
-- `db` Neon branch sponson/preview/pr-42 — set up in this run · [console](https://console.neon.tech/app/projects/proj_demo/branches/br-11)
-- `env` 2 variables (preview, feat/x): `DATABASE_URL` and `STRIPE_KEY`, values not shown — set up in this run · [console](https://vercel.com/d?to=%2F%5Bteam%5D%2F%5Bproject%5D%2Fsettings%2Fenvironment-variables&title=Go+to+Environment+Variables)
-- `callback` Clerk redirect https://acme-web-git-feat-x.vercel.app — set up in this run · [console](https://dashboard.clerk.com)
+- `db` Neon branch sponson/preview/pr-42 — unchanged · [console](https://console.neon.tech/app/projects/proj_demo/branches/br-11)
+- `env` 2 variables (preview, feat/x): `DATABASE_URL` and `STRIPE_KEY`, values not shown — unchanged · [console](https://vercel.com/d?to=%2F%5Bteam%5D%2F%5Bproject%5D%2Fsettings%2Fenvironment-variables&title=Go+to+Environment+Variables)
+- `callback` Clerk redirect https://prj\_demo-01234567.vercel.app — set up in this run · [console](https://dashboard.clerk.com)
 
 <sub>apply run-1a2b3c4d · plan 1e5d99ef · [run log](https://github.com/acme/app/actions/runs/1001)</sub>
 ```
 
-Before the preview deploy finished, the same comment said `is almost ready`, `Still to come: 1 auth callback, once
-the preview deploy finishes (nothing to retry)`, and listed the callback as `waits for the preview deploy`.
+Someone edited `DATABASE_URL` in the Vercel console (`plan`; an `apply` refuses the same line the same way):
+
+```markdown
+<!-- sponson:preview -->
+### Sponson plan: the preview for pr-42
+
+This preview already has its own database branch.
+
+**1 line is refused**, and 1 line that depends on it is held back: see below for why and how to fix it.
+
+- `db` Neon branch sponson/preview/pr-42 — up to date
+- `env` 2 variables (preview, feat/x): `DATABASE_URL` (secret) and `STRIPE_KEY` — refused: DATABASE\_URL (preview, feat/x) was changed outside Sponson since the last apply. (`DRIFT_CHANGED`) **Fix:** Keep that change by updating the plan, or overwrite it with `sponson apply --reconcile`.
+- `callback` auth callback — held back: depends on `env`, which cannot be applied (`DEPENDENCY_BLOCKED`)
+
+**Drift**
+
+- DATABASE\_URL (preview, feat/x) (line `env`) was changed outside Sponson since the last apply.
+
+<sub>plan 1e5d99ef · [run log](https://github.com/acme/app/actions/runs/1001)</sub>
+```
+
+A line waits on a [manual step](/reference/plan-format#manual-step) (the job stays red, exit 2, until a person confirms
+it):
+
+```markdown
+<!-- sponson:preview -->
+### Sponson: the preview for pr-42 waits for a person
+
+This preview has 1 variable.
+
+Still to come: 1 manual step.
+
+**Preview:** [https://prj\_demo-01234567.vercel.app](https://prj_demo-01234567.vercel.app)
+
+- `env` MODE (preview, feat/x), values not shown — set up in this run · [console](https://vercel.com/d?to=%2F%5Bteam%5D%2F%5Bproject%5D%2Fsettings%2Fenvironment-variables&title=Go+to+Environment+Variables)
+- `google-redirect` manual step — waits for a person to do the manual step below
+
+**Manual steps waiting for a person** (no API can do these; a person does them, agents never confirm them)
+
+- `google-redirect` Allow the callback on the Google OAuth client
+
+<pre>1. Open the client "acme-web".
+2. Add https://prj_demo-01234567.vercel.app/cb to its authorized redirect URIs and save.</pre>
+
+  Then a person confirms it: `sponson apply --confirm google-redirect`
+
+<sub>apply run-1a2b3c4d · plan 1e5d99ef · [run log](https://github.com/acme/app/actions/runs/1001)</sub>
+```
+
+A production run without an approver, refused before anything is touched:
+
+```markdown
+<!-- sponson:production -->
+### Sponson apply refused: `ENV_NOT_APPROVED`
+
+This run applies to production: approval is required (approvedBy).
+
+**Fix:** Production needs a person's approval: run it with `--approved-by <who>` from your approval workflow, never from an agent.
+
+Nothing was written.
+
+<sub>[run log](https://github.com/acme/app/actions/runs/1001)</sub>
+```
 
 When the pull request closes (`destroy`):
 
@@ -186,7 +271,7 @@ When the pull request closes (`destroy`):
 <!-- sponson:preview -->
 ### Sponson cleaned up the preview for pr-42
 
-**Cleaned up:** Clerk redirect https://acme-web-git-feat-x.vercel.app; 2 variables (preview, feat/x): `DATABASE_URL` and `STRIPE_KEY`; Neon branch sponson/preview/pr-42.
+**Cleaned up:** Clerk redirect https://prj\_demo-01234567.vercel.app; 2 variables (preview, feat/x): `DATABASE_URL` and `STRIPE_KEY`; Neon branch sponson/preview/pr-42.
 
 **Kept (adopted, never destroyed):** nothing.
 
@@ -202,9 +287,15 @@ Sponson under the same name, or the undo of a [manual step](/reference/plan-form
 A manual step that nobody has done yet is listed under the lines with its instructions, whole, and the command a person
 runs once they did it (`sponson apply --confirm <line>`); the job stays red (exit 2) until then.
 
-Console links: Neon links the branch, Vercel the project's Environment Variables page (through Vercel's dashboard
-link, which asks for the team and project), Clerk the dashboard, and a [recipe](/reference/recipes) line its op's
-`console_url` when the recipe declares one. They come from `receipt.lines[id].consoleUrl` in the JSON result.
+A resource Sponson created that someone edited since the last apply is deleted on destroy too (the pull request is
+closing), and the comment's warnings name it: `DATABASE_URL (preview, feat/x) was changed outside Sponson since the
+last apply; deleted anyway`. The receipt records it under the line's `notes.changedOutside`.
+
+Console links: Neon links the branch, Vercel the project's Environment Variables page, Clerk the dashboard, and a
+[recipe](/reference/recipes) line its op's `console_url` when the recipe declares one. They come from
+`receipt.lines[id].consoleUrl` in the JSON result. Vercel's link goes through its documented dashboard link, which
+asks the person for the team and project: Vercel's dashboard addresses a project by team slug and project name, and
+documents no page URL by the project id the plan holds. Clerk documents no dashboard URL deeper than its root.
 
 How the comment is made: the action runs the CLI with `--json` (that JSON is the `result` output), then renders the
 comment from it with Sponson's own renderer (`render-comment.mjs`, the function behind

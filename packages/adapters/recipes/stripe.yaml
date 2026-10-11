@@ -55,6 +55,8 @@ detect:
     - op: webhook_endpoint
       preview_url: url
       values: { name: "preview-${ctx.scope}" }
+      check: [path]
+      env: { secret: STRIPE_WEBHOOK_SECRET }
 assumptions:
   - id: ST1
     verified: true

@@ -109,7 +109,7 @@ describe("sponson init detects the stack", () => {
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toMatch(/^Detected: Vercel \(\.vercel\/project\.json\), Neon \(package\.json: @neondatabase\/serverless\), Clerk \(package\.json: @clerk\/nextjs\), Next\.js \(package\.json: next\), Prisma/m);
     expect(r.stdout).toMatch(/To fill in:\n {2}providers\.neon\.project \(now "proj_xxx"\): run `neonctl projects list`/);
-    expect(r.stdout).toContain("Next: set VERCEL_TOKEN, NEON_API_KEY, CLERK_SECRET_KEY in your environment, then run `sponson plan`");
+    expect(r.stdout).toContain("Next: fill in the TODOs, set VERCEL_TOKEN, NEON_API_KEY, CLERK_SECRET_KEY in your environment, then run `sponson plan`");
     expect(r.stdout).not.toContain("Not supported yet");
     const { text, ids } = await writtenPlan(cwd);
     expect(ids).toEqual(["db", "env", "callback"]);
@@ -147,7 +147,7 @@ describe("sponson init detects the stack", () => {
     // and the human summary names the credential to set
     await rm(join(cwd, "release.plan.yaml"));
     const human = await init(cwd);
-    expect(human.stdout).toContain("Next: set VERCEL_TOKEN, SUPABASE_ACCESS_TOKEN in your environment");
+    expect(human.stdout).toContain("Next: fill in the TODOs, set VERCEL_TOKEN, SUPABASE_ACCESS_TOKEN in your environment");
     expect(human.stdout).not.toContain("Not supported yet");
 
     // Once the TODOs are filled in, the plan plans against the (fake) cloud: the branch to create, the rest pending.
@@ -186,7 +186,7 @@ describe("sponson init detects the stack", () => {
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toMatch(/^Detected: Vercel \(\.vercel\/project\.json\), PlanetScale \(package\.json: @planetscale\/database/m);
     expect(r.stdout).toMatch(/To fill in:\n {2}providers\.planetscale\.organization \(now "my-org"\): the name slugs[^\n]*\n {2}providers\.planetscale\.database \(now "my-db"\)/);
-    expect(r.stdout).toContain("Next: set VERCEL_TOKEN, PLANETSCALE_SERVICE_TOKEN_ID, PLANETSCALE_SERVICE_TOKEN in your environment");
+    expect(r.stdout).toContain("Next: fill in the TODOs, set VERCEL_TOKEN, PLANETSCALE_SERVICE_TOKEN_ID, PLANETSCALE_SERVICE_TOKEN in your environment");
     expect(r.stdout).not.toContain("Not supported yet");
     const { text, ids } = await writtenPlan(cwd);
     expect(ids).toEqual(["db", "dbpw", "env"]);
@@ -208,7 +208,7 @@ describe("sponson init detects the stack", () => {
     expect(r.stdout).not.toContain("Not supported yet");
     expect(r.stdout).toMatch(/To fill in:\n {2}changes\.auth0_callback_url\.client_id \(now "<client_id>"\): Auth0 Dashboard/);
     expect(r.stdout).toContain('  changes.sentry_release.organization (now "<organization>"): Sentry → Settings → Organization Settings → Organization Slug');
-    expect(r.stdout).toContain("Next: set VERCEL_TOKEN, NEON_API_KEY, AUTH0_CLIENT_ID, AUTH0_CLIENT_SECRET, STRIPE_SECRET_KEY, SENTRY_AUTH_TOKEN in your environment, then run `sponson plan`");
+    expect(r.stdout).toContain("Next: fill in the TODOs, set VERCEL_TOKEN, NEON_API_KEY, AUTH0_CLIENT_ID, AUTH0_CLIENT_SECRET, STRIPE_SECRET_KEY, SENTRY_AUTH_TOKEN in your environment, then run `sponson plan`");
     const { text, ids } = await writtenPlan(cwd);
     expect(ids).toEqual(["db", "env", "stripe_webhook_endpoint", "inngest_sync"]);
     expect(text).toContain('    recipe: stripe.webhook_endpoint\n    name: "preview-${ctx.scope}"\n    url: { from: env.preview_url }');

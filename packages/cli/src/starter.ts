@@ -4,7 +4,7 @@
  * they do not. Pure: text in, text out.
  */
 import { stringify } from "yaml";
-import type { Recipe, RecipeStarter } from "@sponson/adapters";
+import type { Recipe, RecipeParam, RecipeStarter } from "@sponson/adapters";
 import { has, type Finding, type StackDetection, type UnsupportedFinding } from "./stack.js";
 
 /** A placeholder left in the plan for the user to fill in. */
@@ -441,10 +441,49 @@ function starters(r: Recipe): RecipeStarter[] {
   return r.detect?.starter ?? [{ op: Object.keys(r.ops)[0]! }];
 }
 
-/** Every detected recipe provider's lines (ready, or commented out until their TODOs are filled in). */
+/**
+ * Every detected recipe provider's lines (ready, or commented out until their TODOs are filled in), each ready one
+ * followed by the deploy target's line for the outputs its app reads from a variable (`starter.env`).
+ */
 function recipeLines(d: StackDetection, s: Shape, todos: Todo[], taken: Set<string>): string[] {
   const preview = s.vercel || s.netlify ? previewUrlFrom(s) : undefined;
-  return d.recipes.flatMap((r) => starters(r).flatMap((st) => recipeLine(r, st, { preview, todos, taken, credentials: d.credentials[r.provider] ?? [] })));
+  // Cloudflare Pages preview variables are shared by every preview: a per-PR output never goes there.
+  const target = s.vercel ? "vercel" : s.netlify ? "netlify" : undefined;
+  return d.recipes.flatMap((r) =>
+    starters(r).flatMap((st) => {
+      const line = recipeLine(r, st, { preview, todos, taken, credentials: d.credentials[r.provider] ?? [] });
+      return line.ready && target ? [...line.text, ...outputEnvLine(r, st, line.id, target, d.envNames ?? {}, taken)] : line.text;
+    }),
+  );
+}
+
+/**
+ * The deploy target's preview variables for a recipe line's outputs that the app reads by a name its `.env*` files
+ * declare (`starter.env`: Stripe's endpoint `secret` as `STRIPE_WEBHOOK_SECRET`). Only the variable's name is read.
+ * A line of its own: the recipe line takes the preview URL from the deploy target's line, so this cannot be that line.
+ */
+function outputEnvLine(r: Recipe, st: RecipeStarter, from: string, target: "vercel" | "netlify", envNames: Record<string, string[]>, taken: Set<string>): string[] {
+  const wanted = Object.entries(st.env ?? {}).filter(([, name]) => envNames[name] !== undefined);
+  if (wanted.length === 0) return [];
+  const specs = (r.ops[st.op]!.http.outputs ?? {}) as Record<string, { once?: boolean }>;
+  const once = wanted.some(([out]) => specs[out]?.once === true);
+  const id = freshId(`${from}_env`, taken);
+  return [
+    `  # \`${from}\`'s ${andWords(wanted.map(([out]) => `\`${out}\``))} as ${andWords(wanted.map(([, name]) => `${name} (the name ${envNames[name]![0]!} uses)`))}: a reference, never a value.`,
+    ...(once ? ["  # The provider shows it only when it creates the resource, so it is written in that same run: keep this line in the plan."] : []),
+    `  - id: ${id}`,
+    `    adapter: ${target}`,
+    "    op: env",
+    ...(target === "vercel" ? ["    target: preview"] : []),
+    "    values:",
+    ...wanted.map(([out, name]) => `      ${name}: { from: ${from}.${out} }`),
+    "    environments: [preview]",
+    "",
+  ];
+}
+
+function andWords(xs: string[]): string {
+  return xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)!}`;
 }
 
 interface RecipeLineCtx {
@@ -455,21 +494,25 @@ interface RecipeLineCtx {
   credentials: string[];
 }
 
-/** A param written into a recipe line: its value as YAML, and the comment beside it. */
+/**
+ * A param written into a recipe line: its value as YAML, and the comment beside it. `placeholder` marks a TODO: a
+ * value missing (`<name>`), or a default to check against the app (`starter.check`).
+ */
 interface ParamText {
   name: string;
   value: string;
   note?: string;
   missing: boolean;
+  placeholder?: string;
 }
 
-function recipeLine(r: Recipe, st: RecipeStarter, c: RecipeLineCtx): string[] {
+function recipeLine(r: Recipe, st: RecipeStarter, c: RecipeLineCtx): { id: string; ready: boolean; text: string[] } {
   const op = r.ops[st.op]!;
   const id = freshId(`${r.provider}_${st.op}`, c.taken);
   const params = Object.entries(op.params)
-    .filter(([name, p]) => p.required === true || name === st.preview_url || st.values?.[name] !== undefined)
-    .map(([name, p]) => recipeParam(r, st, name, p.description, c.preview));
-  for (const p of params) if (p.missing) c.todos.push({ path: `changes.${id}.${p.name}`, placeholder: `<${p.name}>`, hint: p.note! });
+    .filter(([name, p]) => p.required === true || name === st.preview_url || st.values?.[name] !== undefined || st.check?.includes(name) === true)
+    .map(([name, p]) => recipeParam(r, st, name, p, c.preview));
+  for (const p of params) if (p.placeholder !== undefined) c.todos.push({ path: `changes.${id}.${p.name}`, placeholder: p.placeholder, hint: p.note! });
   const block = perAccountBlock(r, c.todos);
   const ready = params.every((p) => !p.missing) && block.length === 0;
   const body = [
@@ -477,22 +520,27 @@ function recipeLine(r: Recipe, st: RecipeStarter, c: RecipeLineCtx): string[] {
     "  adapter: http",
     `  op: ${op.kind}`,
     `  recipe: ${r.provider}.${st.op}`,
-    ...params.map((p) => `  ${p.name}: ${p.value}${p.note ? `   # ${p.missing ? "TODO: " : ""}${p.note}` : ""}`),
+    ...params.map((p) => `  ${p.name}: ${p.value}${p.note ? `   # ${p.placeholder !== undefined ? "TODO: " : ""}${p.note}` : ""}`),
     "  environments: [preview]",
   ];
   const credential = c.credentials.length ? `; ${c.credentials.join(", ")} ${c.credentials.length === 1 ? "is" : "are"} read from the environment` : "";
   const head = `  # ${r.title}: ${op.title.charAt(0).toLowerCase()}${op.title.slice(1)} (recipe ${r.provider}.${st.op}, ${DOCS}/recipes.md#${r.provider}${st.op}${credential}).`;
-  if (ready) return [head, ...body.map((l) => `  ${l}`), ""];
-  return [head, ...block, "  # Fill in the TODOs, then uncomment:", ...body.map((l) => `  # ${l}`), ""];
+  if (ready) return { id, ready, text: [head, ...body.map((l) => `  ${l}`), ""] };
+  return { id, ready, text: [head, ...block, "  # Fill in the TODOs, then uncomment:", ...body.map((l) => `  # ${l}`), ""] };
 }
 
-function recipeParam(r: Recipe, st: RecipeStarter, name: string, description: string, preview: [string, string] | undefined): ParamText {
+function recipeParam(r: Recipe, st: RecipeStarter, name: string, p: RecipeParam, preview: [string, string] | undefined): ParamText {
   if (name === st.preview_url && preview) return { name, value: `{ from: ${preview[0]} }`, note: preview[1], missing: false };
   const given = st.values?.[name];
   if (given !== undefined) return { name, value: yamlValue(given), missing: false };
-  const where = r.detect?.where?.[name] ?? description;
+  if (st.check?.includes(name) && p.default !== undefined) {
+    const value = yamlValue(p.default);
+    const note = `${p.description.replace(/\.$/, "")}; the recipe's default: check it against your app, then delete this TODO`;
+    return { name, value, note, missing: false, placeholder: typeof p.default === "string" ? p.default : value };
+  }
+  const where = r.detect?.where?.[name] ?? p.description;
   const hint = name === st.preview_url ? `the preview's URL (no deploy target Sponson manages was detected to take it from): ${where}` : where;
-  return { name, value: q(`<${name}>`), note: hint, missing: true };
+  return { name, value: q(`<${name}>`), note: hint, missing: true, placeholder: `<${name}>` };
 }
 
 /** For a per-account API (no default base URL), the provider block to add, as comments; empty otherwise. */
@@ -519,4 +567,33 @@ function yamlValue(v: unknown): string {
 
 function q(s: string): string {
   return JSON.stringify(s);
+}
+
+/** A `# TODO:` comment in a plan: what `init` marks a placeholder with (`  neon: { project: "proj_xxx" }   # TODO: …`). */
+const TODO_MARK = /#\s*TODO:\s*/;
+
+/**
+ * The TODOs a plan still has: every line carrying a `# TODO:` comment. A starter TODO keeps its path and placeholder
+ * while its placeholder is still on such a line (`known`: the TODOs the starter for this repository has); any other
+ * TODO line is reported by its line number and comment. Filling in a value means deleting its TODO comment too, as
+ * the starter's comments say: until then the value counts as a placeholder (setup does not check against it).
+ */
+export function planTodos(text: string, known: Todo[]): Todo[] {
+  const out: Todo[] = [];
+  text.split(/\r?\n/).forEach((line, i) => {
+    const m = TODO_MARK.exec(line);
+    if (!m) return;
+    const before = line.slice(0, m.index);
+    // Several starter lines may share a placeholder (`<url>`): each line takes the first one not taken yet.
+    const placeholders = [...new Set(known.map((t) => t.placeholder).filter((p) => p !== "" && before.includes(p)))];
+    const matched = placeholders.flatMap((p) => known.find((t) => t.placeholder === p && !out.includes(t)) ?? []);
+    if (matched.length) out.push(...matched);
+    else out.push({ path: `line ${String(i + 1)}`, placeholder: "", hint: line.slice(m.index + m[0].length).trim() });
+  });
+  return out;
+}
+
+/** One line per TODO, indented: where, what is there now, and where to find the real value. */
+export function todoLines(todos: Todo[]): string[] {
+  return todos.map((t) => `  ${t.path}${t.placeholder ? ` (now ${JSON.stringify(t.placeholder)})` : ""}: ${t.hint}`);
 }

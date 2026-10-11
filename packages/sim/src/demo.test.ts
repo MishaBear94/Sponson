@@ -1,10 +1,11 @@
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DEMO_BRANCH, DEMO_DRIFT, DEMO_PLAN, demoEnvFile, demoInstructions, demoSteps, envExports, shellQuote, writeDemo } from "./demo.js";
+import { DEMO_BRANCH, DEMO_DRIFT, DEMO_PLAN, SIM_VERSION, demoEnvFile, demoInstructions, demoSteps, envExports, shellQuote, writeDemo } from "./demo.js";
 import { SimState } from "./state.js";
 
 const exec = promisify(execFile);
@@ -70,13 +71,20 @@ describe("writeDemo", () => {
 });
 
 describe("the demo's text", () => {
-  it("env file: every adapter variable from simEnv, the sim URL, the pull request, and an npx fallback", () => {
+  it("env file: every adapter variable from simEnv, the sim URL, the pull request, and the CLI of the sim's own version", () => {
     const text = demoEnvFile("http://127.0.0.1:4777");
     for (const line of envExports("http://127.0.0.1:4777")) expect(text).toContain(`${line}\n`);
     expect(text).toContain("export SPONSON_SIM_URL=http://127.0.0.1:4777\n");
     expect(text).toContain("export VERCEL_API_URL=http://127.0.0.1:4777/vercel\n");
     expect(text).toContain("export SPONSON_CTX_PR=42\n");
-    expect(text).toContain('command -v sponson >/dev/null 2>&1 || sponson() { npx --yes sponson "$@"; }');
+    // Always the pinned CLI, never "whatever sponson is on PATH": a function shadows a global install.
+    expect(text).toContain(`\nsponson() { npx --yes sponson@${SIM_VERSION} "$@"; }\n`);
+    expect(text).not.toContain("command -v");
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
+    const cli = JSON.parse(readFileSync(new URL("../../cli/package.json", import.meta.url), "utf8")) as { version: string };
+    expect(SIM_VERSION).toBe(pkg.version);
+    // Released together at one version (.changeset/config.json `fixed`): the pinned CLI is the one this sim was built with.
+    expect(cli.version).toBe(SIM_VERSION);
   });
 
   it("steps: no inline comments (interactive zsh would pass them as arguments), and a drift the sim accepts", () => {

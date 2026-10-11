@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { SponsonError } from "../errors.js";
+import type { LineOutputs } from "../resolve.js";
 import type { LedgerEntry, Receipt, ReceiptLine } from "../types.js";
 import { Lease, withParentLock } from "./lease.js";
 import type { Ledger } from "./ledger.js";
@@ -84,6 +85,7 @@ async function destroyGroup(rc: RunContext, prepared: Prepared, receipt: Receipt
     }
     return [];
   }
+  await noteChangedOutside(rc, prepared, line, head, ours);
   await deleteOurs(rc, prepared, line, head, ours, holder);
   line.resources = rc.ledger.all().filter((x) => x.line === head.line).map(toRecord);
   const left = new Set(line.resources.map((r) => r.key));
@@ -128,6 +130,42 @@ async function deleteOurs(rc: RunContext, prepared: Prepared, line: ReceiptLine,
     line.error = err.message;
     line.errorCode = err.code ?? "DESTROY_FAILED";
   }
+}
+
+/**
+ * A resource Sponson created that a person edited since the last apply (changed drift) is still deleted: the scope
+ * is going away, and what Sponson created goes with it (ADR 0006). The edit is not lost silently: it is recorded on
+ * the line (`notes.changedOutside`, labels) and said in a warning, so the output and the PR comment name it.
+ */
+async function noteChangedOutside(rc: RunContext, prepared: Prepared, line: ReceiptLine, head: LedgerEntry, ours: LedgerEntry[]): Promise<void> {
+  const change = prepared.ordered.find((c) => c.id === head.line && c.adapter === head.adapter);
+  if (!change) return;
+  let live: Awaited<ReturnType<typeof rereadLine>>;
+  try {
+    live = await rereadLine(rc, prepared, change, head.provider, ledgerOutputs(rc, prepared));
+  } catch {
+    return; // the delete reports what is wrong with the provider
+  }
+  const byKey = new Map((live?.resources ?? []).map((r) => [r.key, r]));
+  const changed = ours.filter((e) => {
+    const r = byKey.get(e.key);
+    return r !== undefined && e.hash !== "" && (!e.id || r.id === e.id) && rc.ledger.keyed(r.hash) !== e.hash;
+  });
+  if (changed.length === 0) return;
+  const labels = changed.map((e) => byKey.get(e.key)!.label ?? e.label ?? e.key);
+  line.notes = { ...line.notes, changedOutside: labels };
+  const one = labels.length === 1;
+  rc.warnings.push(`\`${head.line}\`: ${labels.join(", ")} ${one ? "was" : "were"} changed outside Sponson since the last apply; deleted anyway (Sponson created ${one ? "it" : "them"}, and this scope is being destroyed).`);
+}
+
+/** The public outputs the ledger recorded per line, so a line that reads by another's output (a URL) can be read. */
+function ledgerOutputs(rc: RunContext, prepared: Prepared): Map<string, LineOutputs> {
+  const out = new Map<string, LineOutputs>();
+  for (const e of rc.ledger.all()) {
+    const specs = prepared.ops.get(e.line)?.outputs;
+    if (e.outputs && specs && !out.has(e.line)) out.set(e.line, { values: e.outputs, specs });
+  }
+  return out;
 }
 
 function survivorWarning(lineId: string, survivors: string[]): string {

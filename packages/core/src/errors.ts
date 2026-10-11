@@ -52,7 +52,7 @@ export const ERROR_CODES = {
   DRIFT_CHANGED: {
     exit: 1,
     doc: "A resource was changed or replaced outside Sponson; the line is refused unless the run reconciles.",
-    cliHint: "Re-run with --reconcile to take the live resource over, or update the plan.",
+    cliHint: "Keep that change by updating the plan to match, or re-run with --reconcile to overwrite it (a re-created one is adopted).",
   },
   LOCK_HELD: { exit: 3, doc: "Another run holds the scope's lock.", cliHint: "Wait for it, or pass --wait." },
   LOCK_LOST: { exit: 3, doc: "The run lost the scope's lock to another run and stopped." },

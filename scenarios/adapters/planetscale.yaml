@@ -70,7 +70,7 @@ steps:
       status: failed
       writes: 0
       lines: { db: blocked }
-      errors: { db: "reconcile" }
+      errors: { db: "outside Sponson" }
   - run: apply --reconcile --json
     expect:
       exit: 0

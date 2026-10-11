@@ -151,6 +151,16 @@ export interface RecipeStarter {
   preview_url?: string;
   /** Values written for these params (usually built from `${ctx.*}`). */
   values?: Record<string, unknown>;
+  /**
+   * Params written with their documented `default` and a `# TODO:` to check it against the app (Stripe's `path`:
+   * where the app's webhook handler is), so the line shows the whole value it uses instead of hiding the default.
+   */
+  check?: string[];
+  /**
+   * Outputs passed to the deploy target's preview variables, by output → variable name, when the repository's
+   * `.env*` files name that variable (only the name is read): `{ secret: STRIPE_WEBHOOK_SECRET }`.
+   */
+  env?: Record<string, string>;
 }
 
 /** A recipe's `detect` block: the signals of the provider (names and files only), and init's lines for it. */

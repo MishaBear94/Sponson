@@ -149,10 +149,21 @@ function code(s: unknown): string {
   return "`" + (t || " ") + "`";
 }
 
-/** At most `n` characters of provider text, escaped. */
+/** What may stand in a code span taken over from provider or engine text: no backtick, tag, entity, cell end or escape. */
+const SAFE_SPAN = /^`[^`<>&|\\\r\n]+`$/;
+
+/**
+ * At most `n` characters of provider or engine text, escaped. Its `identifier` spans (`depends on \`env\``) stay code
+ * spans, as everywhere else in the comment, instead of showing as `&#96;` entities; a span holding anything that could
+ * open a tag or break out is escaped like the rest.
+ */
 function clip(s: unknown, n = 300): string {
   const t = str(s).trim();
-  return esc(t.length > n ? `${t.slice(0, n - 1)}…` : t);
+  const cut = t.length > n ? `${t.slice(0, n - 1)}…` : t;
+  return cut
+    .split(/(`[^`\r\n]+`)/)
+    .map((part) => (SAFE_SPAN.test(part) ? code(part.slice(1, -1)) : esc(part)))
+    .join("");
 }
 
 /** A link to an `http(s)` URL, or the text alone when the URL is anything else. */
@@ -276,7 +287,7 @@ function waitPhrase(waitingFor: string | undefined, waitingOn?: string): string 
 
 /** One sentence: how to fix a refusal or failure, in this comment's words; else the CLI's remedy. */
 const FIX: Partial<Record<string, string>> = {
-  DRIFT_CHANGED: "It was changed outside Sponson: keep that change by updating the plan, or overwrite it with `sponson apply --reconcile`.",
+  DRIFT_CHANGED: "Keep that change by updating the plan, or overwrite it with `sponson apply --reconcile`.",
   ENV_NOT_APPROVED: "Production needs a person's approval: run it with `--approved-by <who>` from your approval workflow, never from an agent.",
   MANUAL_STEP_PENDING: "A person does the step below, then runs `sponson apply --confirm <line>`.",
   OWNED_BY_OTHER_SCOPE: "Another pull request or branch manages it: destroy that scope first, or give this one its own name in the plan.",
@@ -286,7 +297,8 @@ const FIX: Partial<Record<string, string>> = {
   PROVIDER_TRANSIENT: "The provider failed temporarily: re-run the job (apply resumes safely).",
   PROVIDER_TIMEOUT: "The provider did not answer in time: re-run the job (apply resumes safely).",
   SECRET_UNRESOLVED: "A secret reference could not be read: check that the secret exists and this job can read it.",
-  DEPENDENCY_BLOCKED: "Fix the line it depends on first.",
+  // The fix is the refused line's, said there once.
+  DEPENDENCY_BLOCKED: "",
   EXTERNAL_FAILED: "The deploy it waited for failed: fix the deploy and push again.",
   WAIT_TIMEOUT: "The deploy did not finish in time: re-run once it has.",
   INTENT_UNRESOLVED: "Check the provider's console and remove it by hand if it exists.",
@@ -317,8 +329,10 @@ function manualSection(todos: Todo[], heading: string): string {
   return `**${heading}** (no API can do these; a person does them, agents never confirm them)\n\n${todos.map(todoBlock).join("\n\n")}`;
 }
 
+/** What each kind of drift is. Facts only: the fix for a refused line is said once, on that line. */
 const DRIFT: Record<string, string> = {
-  changed: "was changed outside Sponson; apply refuses to overwrite it. **Fix:** keep the change by updating the plan, or overwrite it with `sponson apply --reconcile`.",
+  changed: "was changed outside Sponson since the last apply.",
+  replaced: "was deleted and re-created outside Sponson since the last apply.",
   missing: "was deleted outside Sponson; the next apply creates it again.",
   unmanaged: "exists, but no line manages it. **Fix:** `sponson init --adopt <key>` adds a line that adopts it (never destroyed).",
   orphan: "is no longer in the plan; it is left alone until this scope is destroyed.",
@@ -329,7 +343,8 @@ function driftSection(drift: unknown[]): string {
     const r = isObj(d.resource) ? d.resource : {};
     const name = str(r.label) || str(r.key) || str(d.adapter);
     const where = d.line ? ` (line ${code(d.line)})` : "";
-    return `- ${esc(name)}${where} ${DRIFT[str(d.kind)] ?? esc(d.message)}`;
+    const kind = d.kind === "changed" && d.replaced === true ? "replaced" : str(d.kind);
+    return `- ${esc(name)}${where} ${DRIFT[kind] ?? clip(d.message)}`;
   });
   return items.length ? `**Drift**\n\n${items.join("\n")}` : "";
 }
@@ -434,27 +449,66 @@ function planWhat(l: Line): string {
   );
 }
 
+/** A line held back only because a line it depends on is refused or failed: it has no fix of its own. */
+const heldBack = (l: Line): boolean => l.errorCode === "DEPENDENCY_BLOCKED";
+
 function planPhrase(l: Line): string {
   if (l.status === "pending") return waitPhrase(l.waitingFor, l.waitingOn);
-  if (l.status === "blocked") return `refused: ${problem(l.error, l.errorCode)}`;
+  if (l.status === "blocked") return `${heldBack(l) ? "held back" : "refused"}: ${problem(l.error, l.errorCode)}`;
   if (l.status === "error") return `error: ${problem(l.error, l.errorCode)}`;
   return PLAN_PHRASE[l.status] ?? esc(l.status);
 }
 
 function planBullet(l: Line): string {
-  const what = l.manual ? esc(l.manual.title) : planWhat(l);
+  const what = l.manual ? esc(l.manual.title) : planWhat(l) || esc(nounOf(l)[0]);
   return `- ${code(l.id)} ${what}${what ? " — " : ""}${planPhrase(l)}`;
+}
+
+/** What lines of these plan statuses amount to: "its own database branch and 2 variables"; "" for none. */
+function planTally(lines: Line[], statuses: string[]): string {
+  return tally(lines.filter((l) => statuses.includes(l.status) && l.adapter !== "manual").map((l) => ({ noun: nounOf(l), n: Math.max(l.diffs.length, 1) })));
+}
+
+/**
+ * The plan's headline, by what is already there and what applying it would do: a preview whose branch exists
+ * "already has" it; only what is missing is what "applying this plan gives".
+ */
+function planHeadline(environment: string, lines: Line[]): string[] {
+  if (lines.length === 0) return ["This plan manages nothing in this environment."];
+  const has = planTally(lines, ["unchanged"]);
+  const adds = planTally(lines, ["create", "pending"]);
+  const updates = planTally(lines, ["update"]).replace(/^its own /, "1 ");
+  const runs = planTally(lines, ["run"]);
+  const self = subject(environment).replace(/^This/, "this");
+  return [
+    has ? `${subject(environment)} already has ${has}.` : "",
+    adds ? (has ? `Applying this plan adds ${adds.replace(/^its own /, "1 ")}.` : `Applying this plan gives ${self} ${adds}.`) : "",
+    updates ? `Applying this plan updates ${updates}.` : "",
+    runs ? `Applying this plan runs ${runs}.` : "",
+  ].filter(Boolean);
+}
+
+/**
+ * "**1 line is refused**, and 1 line that depends on it is held back: …". Lines refused (or failed) and the lines
+ * they hold back are counted apart: only the first have something to fix.
+ */
+function refusedLead(refused: number, held: number, verb: [string, string]): string {
+  if (!refused && !held) return "";
+  const lines = (n: number) => `${n} line${n === 1 ? "" : "s"}`;
+  const heldText = `${lines(held)} that depend${held === 1 ? "s" : ""} on ${refused === 1 ? "it" : "them"} ${held === 1 ? "is" : "are"} held back`;
+  if (!refused) return `**${lines(held)} ${held === 1 ? "is" : "are"} held back** by a line ${held === 1 ? "it depends" : "they depend"} on: see below.`;
+  const head = `**${lines(refused)} ${refused === 1 ? verb[0] : verb[1]}**`;
+  return `${head}${held ? `, and ${heldText}` : ""}: see below for why and how to fix it.`;
 }
 
 function renderPlan(e: Obj, o: MarkdownOptions): Parts {
   const environment = str(e.environment) || (o.environment ?? "preview");
   const lines = arr(e.lines).map(toLine).filter((l): l is Line => l !== null);
-  const kept = lines.filter((l) => !["error", "blocked", "todo"].includes(l.status) && l.adapter !== "manual");
-  const has = tally(kept.map((l) => ({ noun: nounOf(l), n: Math.max(l.diffs.length, 1) })));
-  const refused = lines.filter((l) => l.status === "blocked" || l.status === "error").length;
+  const notApplied = lines.filter((l) => l.status === "blocked" || l.status === "error");
+  const held = notApplied.filter(heldBack).length;
   const lead = [
-    has ? `Applying this plan gives ${subject(environment).replace(/^This/, "this")} ${has}.` : "This plan manages nothing in this environment.",
-    refused ? `**${refused} line${refused === 1 ? " is" : "s are"} refused**: see below for why and how to fix it.` : "",
+    ...planHeadline(environment, lines),
+    refusedLead(notApplied.length - held, held, ["is refused", "are refused"]),
     e.lock && isObj(e.lock) ? `An apply is running on this scope (${esc(e.lock.holder)}); this plan may change.` : "",
     e.requiresApproval === true ? "Applying it needs a person's approval: it writes to production (`--approved-by <who>`)." : "",
   ];
@@ -525,11 +579,12 @@ function applyLead(rc: Obj, lines: Line[]): string[] {
   const waiting = lines.filter((l) => l.status === "waiting");
   const later = tally(waiting.map((l) => ({ noun: nounOf(l), n: Math.max(l.resources.length, 1) }))).replace(/^its own /, "1 ");
   const failed = lines.filter((l) => ["failed", "rollback_failed", "blocked"].includes(l.status)).length;
+  const skipped = lines.filter((l) => l.status === "skipped" && heldBack(l)).length;
   const url = previewUrl(lines);
   return [
     has ? `${subject(environment)} has ${has}.` : `Nothing is set up for ${environment === "preview" ? "this preview" : esc(environment)} yet.`,
     later ? `Still to come: ${later}${waiting.every((l) => l.waitingFor === "deploy") ? ", once the preview deploy finishes (nothing to retry)" : ""}.` : "",
-    failed ? `**${failed} line${failed === 1 ? "" : "s"} did not apply**: see below for why and how to fix it.${lines.some((l) => l.status === "rolled_back") ? " What this run created was rolled back." : ""}` : "",
+    failed ? `${refusedLead(failed, skipped, ["did not apply", "did not apply"])}${lines.some((l) => l.status === "rolled_back") ? " What this run created was rolled back." : ""}` : "",
     url ? `**Preview:** ${link(esc(url), url)}` : "",
     rc.approvedBy ? `Approved by ${esc(rc.approvedBy)}.` : "",
   ];

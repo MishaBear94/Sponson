@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { Registry, SponsonError, sha256, type ApplyResultSummary, type LiveState, type PlanResult, type Receipt, type ResourceAdapter } from "@sponson/core";
+import { Registry, SponsonError, sha256, type ApplyResultSummary, type LiveState, type PlanResult, type Receipt, type ResourceAdapter, type ResourceDiff } from "@sponson/core";
 import { describe, expect, it } from "vitest";
 import type { IO } from "./context.js";
 import { appendChanges } from "./commands/init.js";
@@ -16,7 +16,7 @@ import { buildMcpServer, readReceipt, validateArgs } from "./commands/mcp.js";
 import { run } from "./main.js";
 import { errorEnvelope, exitCodeFor, serialize } from "./output.js";
 import { ERROR_CODES, Redactor } from "@sponson/core";
-import { finalLine, renderApply, renderPlan } from "./render.js";
+import { diffText, finalLine, renderApply, renderPlan } from "./render.js";
 import { createRequire } from "node:module";
 
 const PKG_VERSION = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
@@ -360,8 +360,41 @@ describe("text renderer", () => {
     expect(text).toContain("~ DATABASE_URL  (secret) → (pending ← db.connection_string)");
     expect(text).toContain("+ STRIPE_KEY  (secret ← env://STRIPE_KEY)");
     expect(text).toMatch(/^\? callback .*waiting on `env` \(deploy\)$/m);
-    expect(text).toMatch(/^- other .*blocked\s+DRIFT_CHANGED: changed outside Sponson Re-run with --reconcile/m); // the CLI remedy follows the engine message
+    // Blocked is `x` ("not done"), never `-` (a delete); the CLI remedy follows the engine message, once.
+    expect(text).toMatch(/^x other .*blocked\s+DRIFT_CHANGED: changed outside Sponson Keep that change by updating the plan to match, or re-run with --reconcile/m);
+    expect(text.match(/--reconcile/g)).toHaveLength(1);
     expect(text).toContain("1 to update, 1 pending, 1 blocked");
+  });
+
+  it("says a value once: no id repeated after a label that ends in it; two hidden sides say what changed", () => {
+    const diff = (d: Partial<ResourceDiff>): ResourceDiff => ({ key: "k", kind: "create", label: "L", ...d });
+    expect(diffText(diff({ label: "Neon branch sponson/preview/pr-42", after: { state: "literal", value: "sponson/preview/pr-42" } }))).toBe("Neon branch sponson/preview/pr-42");
+    expect(diffText(diff({ label: "sponson/preview/pr-42", after: { state: "literal", value: "sponson/preview/pr-42" } }))).toBe("sponson/preview/pr-42");
+    // A value the label does not carry, or an update, is still shown.
+    expect(diffText(diff({ label: "FLAG", after: { state: "literal", value: "on" } }))).toBe("FLAG  on");
+    expect(diffText(diff({ kind: "update", label: "Branch b", before: { state: "literal", value: "a" }, after: { state: "literal", value: "b" } }))).toBe("Branch b  a → b");
+    const hidden = diff({ kind: "update", label: "DATABASE_URL", before: { state: "sensitive" }, after: { state: "sensitive" } });
+    expect(diffText(hidden, true)).toBe("DATABASE_URL  changed outside Sponson (value hidden)");
+    expect(diffText(hidden)).toBe("DATABASE_URL  changes (value hidden)");
+    expect(diffText(diff({ kind: "update", label: "K", before: { state: "secret", ref: "env://K" }, after: { state: "secret", ref: "env://K" } }))).toBe("K  changes (value hidden)");
+  });
+
+  it("a drifted line in a plan: the diff says changed outside Sponson, the blocked line and the one it holds back are `x`", () => {
+    const text = renderPlan(
+      planResult({
+        lines: [
+          { id: "env", adapter: "vercel", op: "env", status: "blocked", error: "DATABASE_URL was changed outside Sponson since the last apply.", errorCode: "DRIFT_CHANGED", inputs: {}, outputs: {}, diffs: [{ key: "k", kind: "update", label: "DATABASE_URL", before: { state: "sensitive" }, after: { state: "sensitive" } }] },
+          { id: "callback", adapter: "clerk", op: "redirect_allow", status: "blocked", error: "depends on `env`, which cannot be applied", errorCode: "DEPENDENCY_BLOCKED", inputs: {}, outputs: {}, diffs: [] },
+        ],
+        drift: [{ kind: "changed", adapter: "vercel", line: "env", resource: { key: "k", label: "DATABASE_URL" }, message: "DATABASE_URL was changed outside Sponson since the last apply." }],
+      }),
+      { color: false },
+    );
+    expect(text).toContain("    ~ DATABASE_URL  changed outside Sponson (value hidden)");
+    expect(text).toMatch(/^x env /m);
+    expect(text).toMatch(/^x callback /m);
+    expect(text).not.toMatch(/^- /m);
+    expect(text.match(/--reconcile/g)).toHaveLength(1);
   });
 
   function summary(r: Partial<Receipt>): ApplyResultSummary {
@@ -394,7 +427,7 @@ describe("text renderer", () => {
       { color: false },
     );
     expect(text).toContain("approved by alice");
-    expect(text).toMatch(/^- a .*blocked\s+OWNED_BY_OTHER_SCOPE: owned by pr-7$/m);
+    expect(text).toMatch(/^x a .*blocked\s+OWNED_BY_OTHER_SCOPE: owned by pr-7$/m);
     expect(finalLine(summary({ stale: true }))).toBe("apply skipped (stale): a newer commit (fffffff) was already applied to this scope");
   });
 });

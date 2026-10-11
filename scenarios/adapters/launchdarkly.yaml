@@ -57,7 +57,7 @@ steps:
       exit: 1
       status: failed
       lines: { flag: blocked }
-      errors: { flag: "reconcile" }
+      errors: { flag: "outside Sponson" }
   - run: apply --reconcile --json
     expect:
       exit: 0

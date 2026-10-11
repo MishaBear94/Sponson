@@ -8,9 +8,10 @@
  *   - the second block runs line by line in one bash, like a user's second terminal, and each step's output is
  *     checked for what the README promises.
  *
- * `npx` is replaced by a shim on PATH that runs this checkout's sources instead of the published packages, and any
- * `sponson` already installed is hidden, so the env file's npx fallback is exercised too. HOME is a fresh
- * directory, so a contributor's git config cannot change the demo commit.
+ * `npx` is replaced by a shim on PATH that runs this checkout's sources instead of the published packages; it accepts
+ * `sponson` only pinned to this checkout's version, so the env file must run the CLI that matches the sim. A stale
+ * global `sponson` that fails is put on PATH, so the env file must shadow it. HOME is a fresh directory, so a
+ * contributor's git config cannot change the demo commit.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
@@ -19,31 +20,20 @@ import { createServer, type AddressInfo } from "node:net";
 import { delimiter, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { workspace, type Workspace } from "../support.js";
-import { REPO } from "./plans.js";
-
-/** The `bash` blocks of README.md's "Try it in 60 seconds" section, as lists of non-empty lines. */
-export function tryItBlocks(readme: string): { start: string[]; steps: string[] } {
-  const at = readme.indexOf("\n### Try it in 60 seconds\n");
-  if (at < 0) throw new Error('README.md has no "### Try it in 60 seconds" section');
-  // From the heading to the next `##` or `###` heading.
-  const body = readme.slice(readme.indexOf("\n", at + 1) + 1);
-  const end = body.search(/^#{2,3} /m);
-  const section = end < 0 ? body : body.slice(0, end);
-  const blocks = [...section.matchAll(/^```bash\n([\s\S]*?)^```$/gm)].map((m) => m[1]!.split("\n").filter((l) => l.trim() !== ""));
-  if (blocks.length !== 2) throw new Error(`expected two bash blocks in "Try it in 60 seconds", found ${String(blocks.length)}`);
-  return { start: blocks[0]!, steps: blocks[1]! };
-}
+import { REPO, tryItBlocks } from "./plans.js";
 
 const TSX_LOADER = join(REPO, "node_modules/tsx/dist/loader.mjs");
-const BINS: Record<string, string> = { "@sponson/sim": join(REPO, "packages/sim/src/bin.ts"), sponson: join(REPO, "packages/cli/src/bin.ts") };
+const VERSION = (JSON.parse(await readFile(join(REPO, "packages/cli/package.json"), "utf8")) as { version: string }).version;
+/** The packages npx may be asked for, as npx is given them: the sim unpinned (as the README runs it), the CLI pinned. */
+const BINS: Record<string, string> = { "@sponson/sim": join(REPO, "packages/sim/src/bin.ts"), [`sponson@${VERSION}`]: join(REPO, "packages/cli/src/bin.ts") };
 
-/** Stands in for npx: drops `--yes`, then runs the named package's bin from this checkout. */
+/** Stands in for npx: drops `--yes`, then runs the named package's bin from this checkout; anything else fails. */
 function npxShim(): string {
   const cases = Object.entries(BINS).map(([pkg, bin]) => `  ${pkg}) exec "${process.execPath}" --import "${TSX_LOADER}" "${bin}" "$@";;`);
   return ["#!/bin/sh", 'while [ "$#" -gt 0 ]; do case "$1" in -y|--yes) shift;; *) break;; esac; done', 'pkg=$1; shift', 'case "$pkg" in', ...cases, '  *) echo "npx shim: unexpected package $pkg" >&2; exit 127;;', "esac", ""].join("\n");
 }
 
-/** PATH without any directory that holds a `sponson`, so `command -v sponson` fails as on a fresh machine. */
+/** PATH without any directory that holds a real `sponson`: the only one is the stale global this suite puts there. */
 function pathWithoutSponson(): string[] {
   return (process.env.PATH ?? "").split(delimiter).filter((dir) => {
     try {
@@ -103,6 +93,9 @@ beforeAll(async () => {
   await mkdir(join(ws.dir, "home"));
   await writeFile(join(bin, "npx"), npxShim());
   await chmod(join(bin, "npx"), 0o755);
+  // A global install of another version: the env file's `sponson` must shadow it.
+  await writeFile(join(bin, "sponson"), '#!/bin/sh\necho "stale global sponson ran" >&2\nexit 99\n');
+  await chmod(join(bin, "sponson"), 0o755);
   const port = await freePort();
   simUrl = `http://127.0.0.1:${String(port)}`;
   // The README's default port may be taken on a contributor's machine; the sim honours SPONSON_SIM_PORT.
@@ -159,7 +152,8 @@ describe("README: Try it in 60 seconds", () => {
     const r = await step(1, /^sponson plan$/);
     expect(r.code, r.output).toBe(0);
     expect(r.output).toContain("sponson plan · preview · pr-42");
-    expect(r.output).toMatch(/\+ db +neon\.branch +create +Neon branch sponson\/preview\/pr-42/);
+    // The branch's name is in its label: said once, not again as the value.
+    expect(r.output).toMatch(/^\+ db +neon\.branch +create +Neon branch sponson\/preview\/pr-42$/m);
     expect(r.output).toContain("+ DATABASE_URL (preview, feat/checkout)  (pending ← db.connection_string)");
     expect(r.output).toContain("waiting on `env` (deploy)");
     expect(r.output).toContain("1 to create, 2 pending");
@@ -197,8 +191,15 @@ describe("README: Try it in 60 seconds", () => {
   it("6. plan catches the drift and blocks that line", async () => {
     const r = await step(5, /^sponson plan$/);
     expect(r.code, r.output).toBe(1);
-    expect(r.output).toMatch(/- env +vercel\.env +blocked +DRIFT_CHANGED/);
+    // Blocked reads as "not done" (x), never as a delete (-).
+    expect(r.output).toMatch(/^x env +vercel\.env +blocked +DRIFT_CHANGED/m);
+    expect(r.output).toMatch(/^x callback +clerk\.redirect_allow +blocked +DEPENDENCY_BLOCKED/m);
     expect(r.output).toMatch(/drift\n {2}changed +vercel +DATABASE_URL \(preview, feat\/checkout\) was changed outside Sponson/);
+    // One remedy, said once: the error code's.
+    expect(r.output.match(/--reconcile/g)).toHaveLength(1);
+    // Two hidden values: what changed, not "(secret) → (secret)".
+    expect(r.output).toContain("~ DATABASE_URL (preview, feat/checkout)  changed outside Sponson (value hidden)");
+    expect(r.output).not.toContain("(secret) → (secret)");
     expect(r.output).not.toContain("typed-in-the-console");
   });
 
@@ -206,6 +207,8 @@ describe("README: Try it in 60 seconds", () => {
     const r = await step(6, /^sponson apply --destroy$/);
     expect(r.code, r.output).toBe(0);
     expect(r.output.match(/^- \w+ .* destroyed/gm)).toHaveLength(3);
+    // The console edit is deleted with the rest (Sponson created it), but not silently.
+    expect(r.output).toMatch(/warnings\n {2}`env`: DATABASE_URL \(preview, feat\/checkout\) was changed outside Sponson since the last apply; deleted anyway/);
     expect(r.output).toContain("destroy complete");
     const state = (await (await fetch(`${simUrl}/_state`)).json()) as {
       neon: { projects: Record<string, { branches: Array<{ name: string }> }> };

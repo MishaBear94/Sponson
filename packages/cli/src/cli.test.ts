@@ -290,6 +290,9 @@ describe("sponson init", () => {
     await writeFile(join(h.cwd, "package.json"), JSON.stringify({ dependencies: { "@neondatabase/serverless": "1" } }));
     const r = await h.exec("init");
     expect(r.code).toBe(0);
+    // People read the path relative to where they are; it writes the plan and one .gitignore line, and says both.
+    expect(r.out.split("\n").slice(0, 2)).toEqual(["Wrote release.plan.yaml", "Added .sponson/ to .gitignore"]);
+    expect(r.out).not.toContain(h.cwd);
     expect(r.out).toContain("Detected: Vercel (.vercel/project.json), Neon (package.json: @neondatabase/serverless)");
     const plan = await readFile(join(h.cwd, "release.plan.yaml"), "utf8");
     expect(plan).toContain("version: 1");
@@ -299,6 +302,13 @@ describe("sponson init", () => {
     // idempotent for .gitignore
     await h.exec("init");
     expect(await readFile(join(h.cwd, ".gitignore"), "utf8")).toBe(".sponson/\n");
+  });
+
+  it("init --json keeps the plan's path absolute", async () => {
+    const h = await harness(null);
+    const r = await h.exec("init", "--json");
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.out).path).toBe(join(h.cwd, "release.plan.yaml"));
   });
 
   it("adopts an unmanaged resource into the existing plan and keeps comments", async () => {

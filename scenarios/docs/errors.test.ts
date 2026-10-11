@@ -1,8 +1,9 @@
 /**
  * Generated documentation must match its sources: docs/errors.md (ERROR_CODES) and the generated blocks of
  * docs/plan-format.md (built-in adapters and ops, secret schemes, outputs: all from `createRegistry()`), the recipe
- * docs, the coverage tables, docs/providers.md and the README's providers-summary block (the provider catalog). On failure, run `pnpm docs:gen`
- * and commit the result.
+ * docs, the coverage tables, docs/providers.md, the README's providers-summary block (the provider catalog) and its
+ * init-unsupported block (UNSUPPORTED), and action/README.md's example comments (the PR comment snapshots). On failure,
+ * run `pnpm docs:gen` and commit the result.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";

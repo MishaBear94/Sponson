@@ -6,6 +6,7 @@
  */
 import { execFile } from "node:child_process";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { simEnv } from "./index.js";
@@ -18,6 +19,12 @@ export const DEMO_BRANCH = "feat/checkout";
 export const DEMO_PR = "42";
 /** The file `source` loads in the second terminal. */
 export const DEMO_ENV_FILE = "sim.env";
+
+/**
+ * This package's version, read from package.json (one level above both src/ and dist/). The packages are released
+ * together at one version, so it is also the `sponson` CLI the demo runs: the demo and the fake cloud always match.
+ */
+export const SIM_VERSION: string = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 
 /**
  * Comments carry the explanation, because a newcomer reads this file before running anything. It uses only the
@@ -79,7 +86,7 @@ export function demoSteps(dir: string): string[] {
 
 /** One line per step of `demoSteps`, for the printed walkthrough. */
 const STEP_NOTES = [
-  "point sponson at the fake cloud (placeholder tokens, no accounts)",
+  "point sponson at the fake cloud (placeholder tokens, no accounts) and at the CLI of this sim's version",
   "the diff: a branch to create, a variable and a callback waiting on it",
   "creates the branch, injects DATABASE_URL by reference, finds the preview deploy, allows its URL",
   "again: every line unchanged, zero writes",
@@ -91,7 +98,9 @@ const STEP_NOTES = [
 /**
  * The env file: the sim's URLs and placeholder tokens (`simEnv`), `SPONSON_SIM_URL` for the drift command, and the
  * pull request number. Setting `SPONSON_CTX_PR` also keeps `sponson` from asking `gh` which pull request this is,
- * which in a repository without a remote only costs time. Without a global install, `sponson` falls back to npx.
+ * which in a repository without a remote only costs time. `sponson` is a shell function running the CLI of this
+ * sim's own version through npx: a function shadows any `sponson` on PATH, so a global install of another version
+ * cannot run the demo against a fake cloud it does not match.
  */
 export function demoEnvFile(url: string): string {
   const lines = [
@@ -99,8 +108,8 @@ export function demoEnvFile(url: string): string {
     ...envExports(url),
     "# The demo pretends this branch is pull request #42 (scope pr-42).",
     `export SPONSON_CTX_PR=${DEMO_PR}`,
-    "# Not installed globally? Run the published CLI through npx.",
-    'command -v sponson >/dev/null 2>&1 || sponson() { npx --yes sponson "$@"; }',
+    "# The CLI of the same version as this fake cloud, through npx (a function, so it wins over any installed sponson).",
+    `sponson() { npx --yes sponson@${SIM_VERSION} "$@"; }`,
   ];
   return `${lines.join("\n")}\n`;
 }

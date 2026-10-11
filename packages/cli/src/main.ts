@@ -146,7 +146,7 @@ function buildProgram(io: IO, redactor: Redactor, setCode: (c: number) => void):
   program
     .command("plan")
     .alias("status")
-    .description("read live state and print the diff and drift; changes nothing")
+    .description("read live state and print the diff and drift; changes nothing; exits 1 when a line is blocked (drift, a missing secret, a refused line it depends on) or in error")
     .action(async (_opts, cmd: Command) => setCode(await planCommand(withFormat(globals(cmd), "plan", true), io, redactor)));
 
   program

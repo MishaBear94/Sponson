@@ -43,7 +43,9 @@ Options:
 
 Commands:
   plan|status              read live state and print the diff and drift; changes
-                           nothing
+                           nothing; exits 1 when a line is blocked (drift, a
+                           missing secret, a refused line it depends on) or in
+                           error
   apply [options]          apply the plan for this environment and scope, roll
                            back on failure, write a receipt
   init [options]           write a starter plan, or adopt unmanaged resources
@@ -57,7 +59,9 @@ Commands:
 ```text
 Usage: sponson plan|status [options]
 
-read live state and print the diff and drift; changes nothing
+read live state and print the diff and drift; changes nothing; exits 1 when a
+line is blocked (drift, a missing secret, a refused line it depends on) or in
+error
 
 Options:
   -h, --help  display help for command

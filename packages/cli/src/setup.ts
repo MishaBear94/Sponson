@@ -19,6 +19,7 @@ import { childEnv, ghSecretSet, githubRepoOf } from "./gh.js";
 import type { Terminal } from "./terminal.js";
 import { VERSION } from "./version.js";
 import { WORKFLOW_PATH, releaseTag, renderWorkflow, resolveTagCommit } from "./workflow.js";
+import { todoLines, type Todo } from "./starter.js";
 
 /** How one credential stands after setup. */
 export type CredentialStatus =
@@ -65,9 +66,12 @@ export interface SetupReport {
   repo: string | null;
   credentials: SetupCredential[];
   secrets: SetupSecret[];
-  workflow: { path: string; result: "written" | "exists" | "declined" | "not-asked"; tag: string; commit: string | null };
-  /** Every credential is ok, unchecked or a login, and none is missing: the plan can run. */
+  /** `todo`: not offered, because the plan still has TODOs (a workflow would run a plan that cannot work). */
+  workflow: { path: string; result: "written" | "exists" | "declined" | "not-asked" | "todo"; tag: string; commit: string | null };
+  /** The plan has no TODO left, and every credential is ok, unchecked or a login (none missing): the plan can run. */
   ready: boolean;
+  /** What to do next, with the command: `sponson plan` when ready, otherwise what to fix first. */
+  next: string;
 }
 
 export interface SetupOpts {
@@ -97,6 +101,8 @@ export interface SetupContext {
   planPath: string;
   /** Providers detected by a starter written in this run, whose lines may still be commented out. */
   detected?: Array<{ id: string; via?: "adapter" | "recipe" }>;
+  /** The TODOs the plan still has (`planTodos`): listed first, and no workflow is offered while there are any. */
+  todos?: Todo[];
 }
 
 /** Where setup's progress goes: each argument one line. */
@@ -105,20 +111,37 @@ export type Say = (...lines: string[]) => void;
 /** The variable names an environment variable may have; anything else (`none (…)`, a plan path) is not one. */
 const VAR_NAME = /^[A-Z_][A-Z0-9_]*$/;
 
+/** The command that starts the zero-account demo (README "Try it in 60 seconds"; scenarios/docs keeps the two equal). */
+export const DEMO_COMMAND = "npx --yes @sponson/sim --demo sponson-demo";
+
 /** Run setup: collect, check, store, write. Human progress goes to `say`. */
 export async function runSetup(c: SetupContext, say: Say): Promise<SetupReport> {
   const registry = await c.io.createRegistry();
+  const plan = relative(c.io.cwd, c.planPath) || c.planPath;
+  const todos = c.todos ?? [];
+  // What the plan still needs from a person comes first: a credential checked against a placeholder proves nothing.
+  if (todos.length) say(`To fill in first (${todos.length} TODO${todos.length === 1 ? "" : "s"} in ${plan}):`, ...todoLines(todos), "");
   const needs = await gatherNeeds(c.planPath, registry, c.detected ?? []);
-  say(needs.length ? `Credentials for ${relative(c.io.cwd, c.planPath) || c.planPath}:` : "This plan needs no credentials.");
+  say(needs.length ? `Credentials for ${plan}:` : "This plan needs no credentials.");
   const values = new Map<string, string>();
   const credentials: SetupCredential[] = [];
   for (const need of needs) credentials.push(await setUpOne(c, need, values, say));
   const repo = githubRepoOf(await GitBranchReceiptStore.originOf(c.io.cwd));
   const secrets = await storeSecrets(c, credentials, values, repo, say);
-  const workflow = await writeWorkflow(c, needs, say);
-  const ready = credentials.every((x) => ["ok", "unchecked", "login"].includes(x.status));
-  say("", ready ? "Ready: run `sponson plan`." : "Not ready yet: fix the credentials above and run `sponson init --setup` again.");
-  return { repo, credentials, secrets, workflow, ready };
+  const workflow = await writeWorkflow(c, needs, todos.length, plan, say);
+  const credentialsOk = credentials.every((x) => ["ok", "unchecked", "login"].includes(x.status));
+  const ready = credentialsOk && todos.length === 0;
+  const next = nextStep(todos.length, credentialsOk, plan);
+  say("", ready ? `Ready: ${next}` : `Not ready yet: ${next}`);
+  if (!ready) say(`To try Sponson first without any account, against a local fake cloud: \`${DEMO_COMMAND}\``);
+  return { repo, credentials, secrets, workflow, ready, next };
+}
+
+/** What to do next, in order: the TODOs, then the credentials, then the first plan. */
+function nextStep(todos: number, credentialsOk: boolean, plan: string): string {
+  const fix = [todos ? `fill in the TODO${todos === 1 ? "" : "s"} in ${plan} (and delete each \`# TODO\` comment)` : "", credentialsOk ? "" : "fix the credentials above"].filter(Boolean);
+  if (fix.length === 0) return "run `sponson plan`.";
+  return `${fix.join(", and ")}, then run \`sponson init --setup\` again and \`sponson plan\`.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -379,14 +402,21 @@ async function storeOne(c: SetupContext, name: string, value: string, repo: stri
   return { name, result: r.reason, message };
 }
 
-/** Offer `.github/workflows/sponson.yml`, pinned to the commit of the installed version's tag; never overwrite one. */
-async function writeWorkflow(c: SetupContext, needs: Need[], say: Say): Promise<SetupReport["workflow"]> {
+/**
+ * Offer `.github/workflows/sponson.yml`, pinned to the commit of the installed version's tag; never overwrite one, and
+ * never offer it while the plan has TODOs: the workflow would run on every pull request against a plan that fails.
+ */
+async function writeWorkflow(c: SetupContext, needs: Need[], todos: number, plan: string, say: Say): Promise<SetupReport["workflow"]> {
   const path = join(c.io.cwd, WORKFLOW_PATH);
   const tag = releaseTag(VERSION);
   const exists = await readFile(path, "utf8").then(() => true, () => false);
   if (exists) {
     say("", `Workflow: ${WORKFLOW_PATH} exists; left as it is.`);
     return { path: WORKFLOW_PATH, result: "exists", tag, commit: null };
+  }
+  if (todos) {
+    say("", `Workflow: not offered while ${plan} has TODOs (listed at the top): it would run a plan that cannot work yet. Fill them in, then run \`sponson init --setup\` again to write it.`);
+    return { path: WORKFLOW_PATH, result: "todo", tag, commit: null };
   }
   const answer = await consent(c, `\n  Write ${WORKFLOW_PATH} (the action pinned to the commit of ${tag})?`);
   if (answer !== "yes") {

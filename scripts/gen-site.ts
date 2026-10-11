@@ -44,6 +44,7 @@ export const HAND_WRITTEN = ["guides/adopting", "guides/production-approvals"];
 
 /** README.md's `##` sections, by heading, and the page each goes to. Unlisted sections go to `concepts`. */
 const README_SECTIONS: Record<string, string | null> = {
+  "Try it in 60 seconds": "index",
   "Why this exists": "index",
   "What it does": "index",
   "Supported providers": "index",

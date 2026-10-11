@@ -185,16 +185,20 @@ describe("comment step", () => {
   const hostile = [
     "<!DOCTYPE html><html><body><h1>502</h1><!-- cf-ray 8c2f",
     "line one\r\nline two | with a pipe\rand `backticks` <script>alert(1)</script> & more",
+    "a span that would hide a tag: `<script>alert(1)</script>` and `a|b`",
   ];
 
-  it.each(hostile)("posts Sponson's markdown; provider text %# stays on its line, with no tag, HTML comment or code span", async (error) => {
+  it.each(hostile)("posts Sponson's markdown; provider text %# stays on its line, with no tag, HTML comment or unsafe code span", async (error) => {
     const { body, rendered } = await comment(receipt({ env: { id: "env", adapter: "vercel", op: "env", status: "failed", errorCode: "PROVIDER_TRANSIENT", error, resources: [], outputs: {} } }), "apply", 1);
     expect(rendered).toBe(true);
     expect(body.startsWith("<!-- sponson:preview -->\n### Sponson could not apply the preview for pr-42")).toBe(true);
     const rest = body.replace(/^<!-- sponson:preview -->/, "");
     expect(rest).not.toContain("<!--");
     expect(rest).not.toMatch(/<(html|body|h1|script)\b/i);
-    expect(rest).not.toMatch(/`backticks`/);
+    // An identifier in backticks is a code span, as Sponson's own; one holding a tag, a pipe or an entity is not.
+    const spans = rest.split("`").filter((_, i) => i % 2 === 1);
+    expect(spans.filter((x) => /[<>|&]/.test(x))).toEqual([]);
+    expect(rest).not.toContain("&#96;backticks&#96;");
     expect(rest).not.toMatch(/\r/);
     expect(body.split("\n").find((l) => l.startsWith("- `env`"))).toContain("`PROVIDER_TRANSIENT`");
     expect(body).toContain("[run log](https://github.com/acme/app/actions/runs/1001)");

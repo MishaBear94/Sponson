@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { parsePlan, type ProviderDetect } from "@sponson/core";
 import { createRegistry, detectableProviders, expandRecipe, loadRecipe, loadRecipes, type Recipe } from "@sponson/adapters";
 import { builtinProviders, detectStack, envMatches, UNSUPPORTED, type RepoReader, type StackDetection } from "./stack.js";
-import { composeStarter, credentialsFor } from "./starter.js";
+import { composeStarter, credentialsFor, planTodos } from "./starter.js";
 
 const schema = JSON.parse(await readFile(new URL("../../../schema/release.plan.schema.json", import.meta.url), "utf8")) as Record<string, unknown>;
 const validate = new Ajv2020({ allErrors: true, strict: true, strictTypes: false }).compile(schema);
@@ -139,7 +139,7 @@ describe("detection from data", () => {
     expect(text.match(/http: \{ auth0:/g)).toHaveLength(1);
     expect(expectRecipeLinesExpand(text)).toBe(2);
     for (const leak of [SECRET_STRIPE, SECRET_AUTH0, "acme.eu.auth0.com"]) expect(text).not.toContain(leak);
-    expect(composeStarter(d).todos.map((t) => t.path)).toEqual(["changes.auth0_callback_url.client_id", "changes.auth0_callback_url.url", "providers.http.auth0.base_url", "changes.auth0_logout_url.client_id"]);
+    expect(composeStarter(d).todos.map((t) => t.path)).toEqual(["changes.auth0_callback_url.client_id", "changes.auth0_callback_url.url", "providers.http.auth0.base_url", "changes.auth0_logout_url.client_id", "changes.stripe_webhook_endpoint.path"]);
     expect(credentialsFor(d)).toEqual(["VERCEL_TOKEN", "NEON_API_KEY", "AUTH0_CLIENT_ID", "AUTH0_CLIENT_SECRET", "STRIPE_SECRET_KEY"]);
     expect(expectRecipeLinesExpand(finishRecipeLines(text))).toBe(4);
   });
@@ -162,8 +162,60 @@ describe("detection from data", () => {
     const { text, todos } = composeStarter(d);
     expect(text).toMatch(/^changes: \[\]/m);
     expect(text).toContain("  #   url: \"<url>\"   # TODO: the preview's URL (no deploy target Sponson manages was detected to take it from)");
-    expect(todos.map((t) => t.path)).toEqual(["changes.fly_secret.app", "changes.fly_secret.name", "changes.fly_secret.value", "changes.stripe_webhook_endpoint.url"]);
+    expect(todos.map((t) => t.path)).toEqual(["changes.fly_secret.app", "changes.fly_secret.name", "changes.fly_secret.value", "changes.stripe_webhook_endpoint.url", "changes.stripe_webhook_endpoint.path"]);
     expect(expectRecipeLinesExpand(finishRecipeLines(text))).toBe(2);
+    // No deploy target to take the endpoint's secret: no variables line, whatever the .env files name.
+    expect(text).not.toContain("STRIPE_WEBHOOK_SECRET");
+  });
+
+  it("planTodos: what a plan still has, read back from its `# TODO` comments (a value counts as filled in once its comment is gone)", async () => {
+    const d = await detectStack(repo({ "package.json": pkg({ "@neondatabase/serverless": "1", stripe: "16" }), ".vercel/project.json": { projectId: "prj_web" }, "fly.toml": "app = 'web'\n" }));
+    const { text, todos } = composeStarter(d);
+    // The starter's own text has exactly its TODOs, with their paths, including two sharing a placeholder line by line.
+    expect(planTodos(text, todos)).toEqual(todos);
+    // Filled in: the value replaced and its comment deleted.
+    const filled = text.replace(/"proj_xxx" \}\s+# TODO:.*$/m, '"proj_real" }');
+    expect(planTodos(filled, todos).map((t) => t.path)).not.toContain("providers.neon.project");
+    // A value replaced but its comment kept still counts: the comment is what says it was checked.
+    const half = text.replace('"proj_xxx"', '"proj_real"');
+    expect(planTodos(half, todos)).toContainEqual(expect.objectContaining({ path: "line " + String(half.split("\n").findIndex((l) => l.includes("proj_real")) + 1) }));
+    // A TODO the starter did not write is reported by its line and comment.
+    expect(planTodos("version: 1\nchanges: []   # TODO: add a line\n", [])).toEqual([{ path: "line 2", placeholder: "", hint: "add a line" }]);
+    expect(planTodos("version: 1\n# Fill in the TODOs, then uncomment:\n", [])).toEqual([]);
+  });
+
+  it("Stripe: the webhook path written with a TODO to check it, and the endpoint's secret wired to STRIPE_WEBHOOK_SECRET when .env* names it", async () => {
+    const files = {
+      "package.json": pkg({ next: "15", "@neondatabase/serverless": "1", stripe: "16" }),
+      ".vercel/project.json": { projectId: "prj_web" },
+      ".neon": { projectId: "proj_web" },
+      ".env.example": `STRIPE_SECRET_KEY=${SECRET_STRIPE}\nSTRIPE_WEBHOOK_SECRET=whsec_from-a-file\n`,
+    };
+    const d = await detectStack(repo(files));
+    const text = expectValidPlan(d, ["db", "env", "stripe_webhook_endpoint", "stripe_webhook_endpoint_env"]);
+    // The whole URL the endpoint gets is in the line: the recipe's documented default path, marked to check.
+    expect(text).toMatch(/^ {4}path: "\/api\/webhooks\/stripe" {3}# TODO: The path of the app's webhook handler/m);
+    expect(composeStarter(d).todos).toContainEqual(expect.objectContaining({ path: "changes.stripe_webhook_endpoint.path", placeholder: "/api/webhooks/stripe" }));
+    // The once-only signing secret reaches the app in the same run, by reference, under the name its .env file uses.
+    expect(text).toContain(
+      "  - id: stripe_webhook_endpoint_env\n    adapter: vercel\n    op: env\n    target: preview\n    values:\n      STRIPE_WEBHOOK_SECRET: { from: stripe_webhook_endpoint.secret }\n    environments: [preview]",
+    );
+    expect(text).toContain("(the name .env.example uses)");
+    for (const leak of [SECRET_STRIPE, "whsec_from-a-file"]) expect(text).not.toContain(leak);
+    expect(JSON.stringify(d)).not.toContain("whsec_from-a-file");
+    // It plans: the reference resolves to a declared output, with no cycle through the preview URL.
+    const { plan } = parsePlan(text);
+    expect(plan.changes.find((c) => c.id === "stripe_webhook_endpoint_env")!.adapter).toBe("vercel");
+
+    // Netlify: the same line on its variables (which have no `target`).
+    const { ".vercel/project.json": _vercel, ...rest } = files;
+    const netlify = await detectStack(repo({ ...rest, "netlify.toml": "[build]\n" }));
+    const ntext = expectValidPlan(netlify, ["db", "env", "stripe_webhook_endpoint", "stripe_webhook_endpoint_env"]);
+    expect(ntext).toContain("  - id: stripe_webhook_endpoint_env\n    adapter: netlify\n    op: env\n    values:\n      STRIPE_WEBHOOK_SECRET: { from: stripe_webhook_endpoint.secret }");
+
+    // Without the name in any .env file, no variables line: nothing says the app reads one.
+    const unnamed = await detectStack(repo({ ...files, ".env.example": `STRIPE_SECRET_KEY=${SECRET_STRIPE}\n` }));
+    expectValidPlan(unnamed, ["db", "env", "stripe_webhook_endpoint"]);
   });
 
   it("a first-class adapter without a composed line (Algolia, Xata, DigitalOcean) gets a pointer to its ops, never silence", async () => {

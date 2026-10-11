@@ -5,7 +5,8 @@
 [![node: >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
 [![docs](https://img.shields.io/badge/docs-sponson.mintlify.site-0D9373.svg)](https://sponson.mintlify.site)
 
-Sponson is the plan for everything that ships beside the code.
+Sponson is Terraform-style plan/apply for per-PR preview state (database branches, env vars, auth callbacks) in
+one YAML file, with drift detection and teardown.
 
 A sponson is the float welded to the side of a hull so the boat does not roll. The code is the hull. The preview database, environment variables, callbacks, and feature flags are the float. Sponson writes that float into one file an agent can read and a human can diff.
 
@@ -51,46 +52,7 @@ sponson plan · preview · pr-42 · plan 7aba4410
 2 to create, 1 pending
 ```
 
-## Why this exists
-
-Agents can already change a repository. They cannot safely change the rest of a release.
-
-The code lands in Git. The things that have to move with it do not. A preview database lives in the database console. Environment variables live in the deploy console. OAuth callbacks live in an identity console. Feature flags live in a fourth. A person copies state between them by hand. An agent does the same thing with no shared record of what it intended, what it tried, and what a human approved.
-
-Existing tools each own one slice. Terraform and Pulumi plan resources, not the preview data and callback that belong to this release. Vercel and Railway deploy the app, not the secrets and flags that have to match it. Doppler and Infisical hold secrets, not the release those secrets belong to. A sequence of agent tool calls is not itself a record. A release needs its own file.
-
-Sponson is that file. The format is the product. A hosted approval inbox can come later. A new cloud does not.
-
-## What it does
-
-One release, one plan. Three commands.
-
-| Command | What it does | Writes anything? |
-|---|---|---|
-| `sponson init` | Detects your stack from the repository's files (every [supported provider](docs/providers.md), the framework and ORM) and writes a plan for it, with the project ids it can find and a `# TODO:` naming where to find each one it cannot. Run again to adopt resources the plan does not know about. | the plan file only |
-| `sponson plan` | Reads live state, prints the diff and any drift. | no |
-| `sponson apply` | Runs the plan in dependency order. Rolls back what this run created if a line fails. Writes a receipt. | yes |
-
-- **Secrets are references.** `{ secret: "env://NAME" }`, or any other [secret scheme](docs/plan-format.md#secret-schemes). Every command resolves them, `plan` and `apply --destroy` included (so a scheme backed by a secret manager's CLI runs that CLI on `plan` too), and registers each value for masking before anything is printed; only `apply` hands values to an adapter. They are redacted from every byte of output. A literal that looks like a secret is rejected at parse time.
-- **References cross lines.** `{ from: db.connection_string }` reads another line's output. Outputs that only exist after an external event (a deploy) stop the run with status `partial`; the next `apply` continues from there. Same command, no flags.
-- **Drift is reported, never silently overwritten.** Something changed in a console since the last apply? `plan` says so; `apply` refuses that line until you pass `--reconcile`. Something exists that the plan does not mention? It is listed and left alone.
-- **Receipts are the agent's memory.** Each run writes what actually happened to an orphan branch of your repo, one per environment and scope (`sponson-receipts/<env>/<scope>`, so unrelated pull requests never wait on each other): a ledger of every resource the scope owns (kept across failed, refused and crashed runs), what each line did, and which commits were applied. Creates are recorded before they are sent, so even a write whose response was lost is never forgotten. The agent reads the receipt, not its own last tool call.
-- **Adopting is not copying.** `sponson init` adopts existing resources as `{ keep: true }`: Sponson takes over that they exist, keeps their live values, and never destroys them.
-- **Production needs a human.** `--env production` without `--approved-by` is refused before any adapter is touched, and so is any run with a line that writes to production (a Vercel `target: production`, a LaunchDarkly environment that is production). The default environment is always `preview`; nothing is inferred from a branch name.
-- **Destroy is symmetric.** `sponson apply --destroy` removes what Sponson created, in reverse order, and never touches resources it merely adopted.
-- **What no API can do is a step for a person.** A [`manual.step`](docs/plan-format.md#manualstep) line (a Google OAuth redirect URI for the preview URL) shows its instructions as a todo, holds back the lines that depend on it until someone runs `apply --confirm <line>`, records who confirmed it and when, and asks for its undo on destroy. Agents show the step to a person; they never confirm it.
-
-## Supported providers
-
-<!-- generated:providers-summary:start (scripts/gen-docs.ts; run `pnpm docs:gen`) -->
-Sponson manages per-environment state at **53 providers** in 11 categories, from deploy targets and databases to auth callbacks, feature flags, webhooks and DNS: 15 first-class ops and 56 recipe ops. `sponson init` detects 49 of them from a repository's files and writes their lines.
-
-[docs/providers.md](docs/providers.md) lists every one: what Sponson manages there, the op or recipe, the credential, what `init` detects it by and a line to start from.
-<!-- generated:providers-summary:end -->
-
-## Quick start
-
-### Try it in 60 seconds
+## Try it in 60 seconds
 
 No Vercel, Neon or Clerk account needed: `@sponson/sim` is a local fake cloud with their APIs. You need Node.js 22
 or later, git and curl. In one terminal, start it with a ready demo repository:
@@ -111,18 +73,58 @@ sponson plan
 sponson apply --destroy
 ```
 
-1. `sim.env` points `sponson` at the fake cloud with placeholder tokens, and runs it through npx if it is not installed.
+1. `sim.env` points `sponson` at the fake cloud with placeholder tokens, and makes `sponson` the published CLI of the
+   sim's own version, through npx (a shell function, so a global install of another version cannot get in the way).
 2. `plan` reads live state and prints the diff of `release.plan.yaml`: a Neon branch to create, and a `DATABASE_URL`
    and a Clerk redirect that wait on it. Nothing is written.
 3. `apply` creates the branch, writes its connection string into Vercel's `DATABASE_URL` by reference (the password
    is never printed), finds the preview deployment of this commit, and allows its URL as a Clerk redirect.
 4. The same `apply` again: every line `unchanged`, zero writes.
 5. The `curl` plays someone editing `DATABASE_URL` in the Vercel console.
-6. `plan` reports the drift and blocks that line: `apply` will not overwrite it without `--reconcile`.
-7. `apply --destroy` removes everything the demo created, in reverse order. Ctrl-C in the first terminal stops the
-   fake cloud.
+6. `plan` reports the drift and blocks that line (`x`, exit 1): `apply` will not overwrite it without `--reconcile`.
+7. `apply --destroy` removes everything the demo created, in reverse order, and warns that `DATABASE_URL` was
+   changed outside Sponson before it deleted it. Ctrl-C in the first terminal stops the fake cloud.
 
 `scenarios/docs/try-it.test.ts` runs these exact commands from this file on every CI run.
+
+## Why this exists
+
+Agents can already change a repository. They cannot safely change the rest of a release.
+
+The code lands in Git. The things that have to move with it do not. A preview database lives in the database console. Environment variables live in the deploy console. OAuth callbacks live in an identity console. Feature flags live in a fourth. A person copies state between them by hand. An agent does the same thing with no shared record of what it intended, what it tried, and what a human approved.
+
+Existing tools each own one slice. Terraform and Pulumi plan resources, not the preview data and callback that belong to this release. Vercel and Railway deploy the app, not the secrets and flags that have to match it. Doppler and Infisical hold secrets, not the release those secrets belong to. A sequence of agent tool calls is not itself a record. A release needs its own file.
+
+Sponson is that file. The format is the product. A hosted approval inbox can come later. A new cloud does not.
+
+## What it does
+
+One release, one plan. Three commands.
+
+| Command | What it does | Writes anything? |
+|---|---|---|
+| `sponson init` | Detects your stack from the repository's files (every [supported provider](docs/providers.md), the framework and ORM) and writes a plan for it, with the project ids it can find and a `# TODO:` naming where to find each one it cannot. Run again to adopt resources the plan does not know about. | the plan file, and `.sponson/` (local receipts) in `.gitignore` |
+| `sponson plan` | Reads live state, prints the diff and any drift. Exits 1 when a line is blocked (`x`): drift, a missing secret, or a refused line it depends on. | no |
+| `sponson apply` | Runs the plan in dependency order. Rolls back what this run created if a line fails. Writes a receipt. | yes |
+
+- **Secrets are references.** `{ secret: "env://NAME" }`, or any other [secret scheme](docs/plan-format.md#secret-schemes). Every command resolves them, `plan` and `apply --destroy` included (so a scheme backed by a secret manager's CLI runs that CLI on `plan` too), and registers each value for masking before anything is printed; only `apply` hands values to an adapter. They are redacted from every byte of output. A literal that looks like a secret is rejected at parse time.
+- **References cross lines.** `{ from: db.connection_string }` reads another line's output. Outputs that only exist after an external event (a deploy) stop the run with status `partial`; the next `apply` continues from there. Same command, no flags.
+- **Drift is reported, never silently overwritten.** Something changed in a console since the last apply? `plan` says so; `apply` refuses that line until you pass `--reconcile`. Something exists that the plan does not mention? It is listed and left alone.
+- **Receipts are the agent's memory.** Each run writes what actually happened to an orphan branch of your repo, one per environment and scope (`sponson-receipts/<env>/<scope>`, so unrelated pull requests never wait on each other): a ledger of every resource the scope owns (kept across failed, refused and crashed runs), what each line did, and which commits were applied. Creates are recorded before they are sent, so even a write whose response was lost is never forgotten. The agent reads the receipt, not its own last tool call.
+- **Adopting is not copying.** `sponson init` adopts existing resources as `{ keep: true }`: Sponson takes over that they exist, keeps their live values, and never destroys them.
+- **Production needs a human.** `--env production` without `--approved-by` is refused before any adapter is touched, and so is any run with a line that writes to production (a Vercel `target: production`, a LaunchDarkly environment that is production). The default environment is always `preview`; nothing is inferred from a branch name.
+- **Destroy is symmetric.** `sponson apply --destroy` removes what Sponson created, in reverse order, and never touches resources it merely adopted. A resource Sponson created that someone edited since (changed drift) is deleted too, since the pull request is closing, but never silently: the output, the PR comment and the receipt (`notes.changedOutside`) name it.
+- **What no API can do is a step for a person.** A [`manual.step`](docs/plan-format.md#manualstep) line (a Google OAuth redirect URI for the preview URL) shows its instructions as a todo, holds back the lines that depend on it until someone runs `apply --confirm <line>`, records who confirmed it and when, and asks for its undo on destroy. Agents show the step to a person; they never confirm it.
+
+## Supported providers
+
+<!-- generated:providers-summary:start (scripts/gen-docs.ts; run `pnpm docs:gen`) -->
+Sponson manages per-environment state at **53 providers** in 11 categories, from deploy targets and databases to auth callbacks, feature flags, webhooks and DNS: 15 first-class ops and 56 recipe ops. `sponson init` detects 49 of them from a repository's files and writes their lines.
+
+[docs/providers.md](docs/providers.md) lists every one: what Sponson manages there, the op or recipe, the credential, what `init` detects it by and a line to start from.
+<!-- generated:providers-summary:end -->
+
+## Quick start
 
 ### Install
 
@@ -153,13 +155,16 @@ plan uses it shows the page where the token is created and the least it needs, t
 or asks for it (hidden input, never written to disk), and checks it with one read-only request. Then, after a yes for
 each, it stores the checked tokens as GitHub Actions secrets of your `origin` with your own `gh` (the value goes to
 `gh secret set` on stdin, nowhere else), and writes `.github/workflows/sponson.yml` with the action pinned to the
-commit of the installed version's release tag (an existing file is never overwritten). Run it again any time, also on
-an existing plan; `--yes` accepts every offer for scripted use, `--json` reports each credential's status without a
-value. Agents ask a human to run it rather than handle a token themselves ([SKILL.md](SKILL.md)).
+commit of the installed version's release tag (an existing file is never overwritten). TODOs the plan still has (a
+project id `init` could not find) are listed first, and the workflow is not offered until they are filled in: it would
+run a plan that cannot work. Run it again any time, also on an existing plan; `--yes` accepts every offer for scripted
+use, `--json` reports what `init` detects, each credential's status without a value, and `next`, the command to run
+next. Agents ask a human to run it rather than handle a token themselves ([SKILL.md](SKILL.md)).
 
 ```
 $ sponson init --setup
 Wrote release.plan.yaml
+Added .sponson/ to .gitignore
 Detected: Vercel (.vercel/project.json), Neon (package.json: @neondatabase/serverless), Clerk (package.json: @clerk/nextjs), Next.js (package.json: next)
 Credentials for release.plan.yaml:
 
@@ -167,19 +172,19 @@ Neon  NEON_API_KEY
   create it: https://neon.com/docs/manage/api-keys
   pick:      A project-scoped API key for the one project (an organization admin creates it); otherwise a personal API key.
   NEON_API_KEY (input hidden, Enter to skip):
-  ok: GET /projects/proj_quiet_sky (reaches project proj_quiet_sky)
+  ok: GET /projects/proj_demo (reaches project proj_demo)
 
 Vercel  VERCEL_TOKEN
   create it: https://vercel.com/account/tokens
   pick:      A token whose Scope is the team that owns the project, with an expiration.
   VERCEL_TOKEN: from the environment
-  ok: GET /v9/projects/prj_acme_web (reaches project prj_acme_web)
+  ok: GET /v9/projects/prj_demo (reaches project prj_demo)
 
 Clerk  CLERK_SECRET_KEY
   create it: https://dashboard.clerk.com/last-active?path=api-keys
   pick:      The Secret Key of the instance whose redirect URLs the plan manages (sk_test_ for development); Clerk secret keys have no scopes.
   CLERK_SECRET_KEY (input hidden, Enter to skip):
-  unauthorized: clerk: GET /redirect_urls?paginated=true&limit=1 → 401: {"errors":[…]}
+  unauthorized: clerk: GET /redirect_urls?paginated=true&limit=1 → 401: {"error":"chaos"}
 
 GitHub Actions secrets of acme/web (with your `gh`; the value goes to its stdin only):
   Store NEON_API_KEY as an Actions secret of acme/web (replaces one of that name)? [y/N] y
@@ -188,11 +193,15 @@ GitHub Actions secrets of acme/web (with your `gh`; the value goes to its stdin 
   VERCEL_TOKEN: stored
   CLERK_SECRET_KEY: not offered (no value, or it did not check ok)
 
-  Write .github/workflows/sponson.yml (the action pinned to the commit of sponson@0.7.0)? [y/N] y
-Workflow: wrote .github/workflows/sponson.yml (action pinned to 3f1c0a9e7b2d, sponson@0.7.0).
+  Write .github/workflows/sponson.yml (the action pinned to the commit of sponson@<version>)? [y/N] y
 
-Not ready yet: fix the credentials above and run `sponson init --setup` again.
+Workflow: wrote .github/workflows/sponson.yml (action pinned to 3f1c0a9e7b2d, sponson@<version>).
+
+Not ready yet: fix the credentials above, then run `sponson init --setup` again and `sponson plan`.
+To try Sponson first without any account, against a local fake cloud: `npx --yes @sponson/sim --demo sponson-demo`
 ```
+
+`<version>` is the installed version; the commit is the one its release tag points at.
 
 Where each provider's token is created and what to pick is listed per provider in [docs/providers.md](docs/providers.md).
 
@@ -207,21 +216,29 @@ preview URL), fills in the project ids it can find, and marks each one it cannot
 look (`vercel link`, `netlify link`, `neonctl projects list`, `supabase link`). LaunchDarkly gets a commented example line to fill in with a
 flag key and uncomment. A Wrangler configuration (`wrangler.toml`, `wrangler.json`) gives a Cloudflare Pages
 variables line with the project's `name`; Pages preview variables are shared by every preview, so no per-PR value
-is wired into them. Services Sponson does not manage yet (Auth0, PostHog, Stripe,
-Sentry, …) are listed as "not supported yet" with a link to the
-[roadmap](ROADMAP.md), never silently dropped. With nothing detected it writes the Vercel + Neon template.
+is wired into them. A provider managed by [recipes](docs/recipes.md) gets its recipe's line, ready when the plan has
+everything it needs and commented out with a `TODO` otherwise. With nothing detected it writes the Vercel + Neon
+template. Besides the plan, `init` writes one line, `.sponson/` (where local receipts go), into `.gitignore`.
+
+<!-- generated:init-unsupported:start (scripts/gen-docs.ts; run `pnpm docs:gen`) -->
+A service `init` detects that no adapter or recipe manages yet is listed as "not supported yet", with where to ask for it, and never silently dropped: today Mailgun and Twilio.
+<!-- generated:init-unsupported:end -->
 
 ```
 $ sponson init
 Wrote release.plan.yaml
+Added .sponson/ to .gitignore
 Detected: Vercel (.vercel/project.json), Neon (package.json: @neondatabase/serverless), Clerk (package.json: @clerk/nextjs), Next.js (package.json: next), Prisma (package.json: @prisma/client)
 To fill in:
   providers.neon.project (now "proj_xxx"): run `neonctl projects list`, or https://console.neon.tech → your project → Settings → General → Project ID
-Next: set VERCEL_TOKEN, NEON_API_KEY, CLERK_SECRET_KEY in your environment, then run `sponson plan`
+Next: fill in the TODOs, set VERCEL_TOKEN, NEON_API_KEY, CLERK_SECRET_KEY in your environment, then run `sponson plan`
+Receipts: each `sponson apply` records what it did on an orphan branch of this repository (`sponson-receipts/<env>/<scope>`, never merged), so the next run, on any machine or in CI, sees drift and knows what to destroy.
 ```
 
-`sponson init --json` reports the same under `detected`: `found` and `unsupported` (each with its `evidence`),
-`todo` (each placeholder's `path` and `hint`) and `assumed` (true when it wrote the template).
+A value is filled in once its `# TODO` comment is gone too: until then it counts as a placeholder. `sponson init
+--json` reports the same under `detected` (also on a re-run with `--setup`, where `todo` is what the plan still has):
+`found` and `unsupported` (each with its `evidence`), `todo` (each placeholder's `path` and `hint`) and `assumed` (true
+when the plan starts from the template). Paths are relative to the working directory in text and absolute in JSON.
 
 Which providers are covered today, and what is planned, is measured in [docs/coverage.md](docs/coverage.md).
 
