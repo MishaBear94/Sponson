@@ -212,8 +212,9 @@ next deployment; Sponson does not redeploy a Pages project.
 A Neon branch per pull request and a revision of the existing Cloud Run service `web` that uses it: the image CI
 pushed for this commit, the branch's connection string, a secret and a literal, made from the service's template and
 tagged with the scope (`pr-42`) with no share of traffic. The line's `url` output is the tag's own URL, read from
-Cloud Run (here allowed as a Clerk callback). Production's traffic stays where it is; on the first run a share on
-LATEST is pinned to the revision serving it, as `gcloud run deploy --no-traffic` does. `apply --destroy` removes the
+Cloud Run (here allowed as a Clerk callback). Production's traffic stays where it is: the example assumes it is on a
+named revision. A service whose traffic follows LATEST is refused until the line sets `pin_latest: true`, which pins
+that share to the revision serving it, as `gcloud run deploy --no-traffic` does. `apply --destroy` removes the
 tag and the Neon branch; the untagged revision is left for Cloud Run, which deletes old ones past its per-service
 limit. Reference:
 [`cloud_run.revision`](../docs/plan-format.md#cloud_runrevision).

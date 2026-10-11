@@ -95,7 +95,7 @@ categories:
         generic: "P (the tag alone is read-modify-write of `traffic`; a revision needs the service's template copied and an operation polled)"
         priority: P2
         covered_by: cloud_run.revision
-        note: "a revision of an existing service per scope from its template, with the plan's image and variables, tagged and given no traffic (LATEST is pinned to the revision serving it); destroy removes the tag and Cloud Run deletes the revision later"
+        note: "a revision of an existing service per scope from its template, with the plan's image and variables, tagged and given no traffic (traffic on LATEST is pinned only with the line's `pin_latest: true`, refused otherwise); destroy removes the tag and Cloud Run deletes the revision later"
       - id: azure-swa-settings
         provider: Azure Static Web Apps
         side_effect: Preview environment per PR (built in); app settings

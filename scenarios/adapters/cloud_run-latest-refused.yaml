@@ -1,0 +1,64 @@
+# A Cloud Run service whose traffic follows LATEST: a revision line without `pin_latest: true` is refused by plan and
+# by apply before any write (making the revision would pin LATEST's share, which changes how later production deploys
+# get traffic); with the opt-in added, the same plan applies and the share is pinned to the revision serving it.
+# Format: see the top of scenarios/runner.test.ts.
+name: "cloud_run.revision: traffic on LATEST is refused without pin_latest, with zero writes; the opt-in applies"
+plan: |
+  version: 1
+  providers:
+    cloud_run: { project: demo-project, region: us-central1 }
+  changes:
+    - id: preview
+      adapter: cloud_run
+      op: revision
+      service: web
+      image: "us-docker.pkg.dev/demo-project/web/app:${ctx.git.short_sha}"
+      env: { API_URL: "https://api-${ctx.scope}.example.com" }
+      environments: [preview]
+env:
+  SPONSON_CLOUD_RUN_POLL_MS: "5"
+bins:
+  gcloud: |
+    if [ "$*" != "auth print-access-token" ]; then echo "unexpected: $*" >&2; exit 2; fi
+    echo ya29.cr_latest_access_token_0042
+secrets: [ya29.cr_latest_access_token_0042]
+seed:
+  cloud_run:
+    services: [{ name: web }]
+steps:
+  - run: plan --json
+    expect:
+      exit: 1
+      plan_lines: { preview: error }
+      errors: { preview: "sends traffic to LATEST.*pin_latest: true" }
+  - run: apply --json
+    expect:
+      exit: 1
+      writes: 0
+      errors: { preview: "sends traffic to LATEST" }
+  - sim:
+      state:
+        "cloud_run.services.0.traffic": [{ type: TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST, percent: 100 }]
+        "cloud_run.revisions": { length: 1 }
+  - plan: |
+      version: 1
+      providers:
+        cloud_run: { project: demo-project, region: us-central1 }
+      changes:
+        - id: preview
+          adapter: cloud_run
+          op: revision
+          service: web
+          image: "us-docker.pkg.dev/demo-project/web/app:${ctx.git.short_sha}"
+          env: { API_URL: "https://api-${ctx.scope}.example.com" }
+          pin_latest: true
+          environments: [preview]
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { preview: applied }
+  - sim:
+      state:
+        "cloud_run.services.0.traffic.0": { type: TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION, revision: web-00001-abc, percent: 100 }
+        "cloud_run.services.0.traffic.1.tag": pr-42

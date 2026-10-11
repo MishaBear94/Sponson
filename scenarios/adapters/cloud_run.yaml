@@ -1,8 +1,9 @@
 # The Cloud Run adapter end to end through the CLI against the sim, with gcloud faked on PATH: a tagged revision of
 # an existing service per scope with the plan's image and variables (a secret among them) and no traffic; re-apply
 # without writes; a console redeploy under the tag with another value refused until --reconcile, which puts the tag
-# back on the plan's revision; destroy removes the tag. Production's traffic (all of it on web-00001-abc) is never
-# touched. Format: see the top of scenarios/runner.test.ts.
+# back on the plan's revision; destroy removes the tag. The service's traffic follows LATEST and the line opts in with
+# `pin_latest: true`, so its share is pinned to web-00001-abc (the revision serving it) and stays there throughout.
+# The refusal without the opt-in: cloud_run-latest-refused.yaml. Format: see the top of scenarios/runner.test.ts.
 name: "cloud_run.revision: tagged revision per scope with no traffic, drift on its variables, destroy removes the tag"
 plan: |
   version: 1
@@ -17,6 +18,7 @@ plan: |
       env:
         API_URL: "https://api-${ctx.scope}.example.com"
         DATABASE_URL: { secret: "env://CR_SCENARIO_DB_URL" }
+      pin_latest: true   # the seeded service sends its traffic to LATEST: allow pinning it to web-00001-abc
       environments: [preview]
 env:
   SPONSON_CLOUD_RUN_POLL_MS: "5"
@@ -28,7 +30,7 @@ bins:
 secrets: [cr_scenario_db_pw_0042, ya29.cr_scenario_access_token_0042]
 seed:
   cloud_run:
-    services: [{ name: web, traffic: pinned, env: { NODE_ENV: production } }]
+    services: [{ name: web, env: { NODE_ENV: production } }]
     operationPolls: 2
 steps:
   - run: plan --json

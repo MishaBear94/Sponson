@@ -1080,6 +1080,7 @@ followed by `setup-gcloud`). The service must exist: Sponson makes revisions of 
 | `env` | map: NAME → value | `{}` | Variables set on the revision's container, over the ones the service's template has. Each value is a literal, `{ from }` or `{ secret }` (resolved and set as a plain value, which anyone who can view the service sees; for Secret Manager references, keep them in the service's template). `{ keep: true }` is refused: a revision is made whole. |
 | `tag` | string | the scope (`pr-42`) | The traffic tag, the prefix of the revision's URL: lowercase letters, digits and `-`. With the service's name it names the revision, `<service>-<tag>-<hash>`, at most 63 characters. |
 | `container` | string | the only container, or the one with `ports` | Which container of a multi-container service gets the image and variables. |
+| `pin_latest` | boolean | `false` | Allow pinning a share of traffic on LATEST to the revision serving it (see below). Without it, a service whose traffic follows LATEST is refused. |
 
 The revision is made from the service's current template with the image and variables set (everything else, other
 variables included, as the template has it), by a `PATCH` with `updateMask=template` and the service's `etag`, then
@@ -1088,10 +1089,15 @@ tagged by a `PATCH` of `traffic`; `apply` waits for each long-running operation 
 minutes by default, is `WAIT_TIMEOUT`, and the next run carries on). A patch refused because the service changed
 meanwhile is read and tried again. Key `revision:<service>:<tag>`.
 
-**Traffic is never moved.** Every share stays where it was; a share on LATEST is bound to the revision serving it
-first, exactly as `--no-traffic` does, so the new revision gets none. That has the consequence gcloud's has: a later
-production deploy no longer receives traffic by itself (run `gcloud run services update-traffic --to-latest`, or
-deploy with `--no-traffic` and send traffic explicitly). The service's template is left as the preview revision's,
+**Traffic is never moved.** Every share stays where it was. When traffic is on named revisions, nothing more is
+needed. When a share follows LATEST (or `traffic` is empty, which means 100% to LATEST), a new revision would take it,
+so the line is refused by `plan` and `apply` before any write (`PARAM_INVALID` on `pin_latest`) unless it sets
+`pin_latest: true`. With it, the share on LATEST is bound to the revision serving it first, exactly as `--no-traffic`
+does, so the new revision gets none, with the consequence gcloud's has: later production deploys no longer receive
+traffic by themselves (run `gcloud run services update-traffic <service> --to-latest`, or deploy with `--no-traffic`
+and send traffic explicitly). The alternative is to pin it yourself once
+(`gcloud run services update-traffic <service> --to-revisions=<revision>=100`). `pin_latest` is a permission, not
+state: it is not part of the resource's hash, and a line with nothing to write is not refused. The service's template is left as the preview revision's,
 as after any `gcloud run deploy --tag`, so a production deploy that sets only some variables (`--update-env-vars`)
 inherits the preview's others: set every variable in production deploys (`--set-env-vars`, or
 `gcloud run services replace`). A line writes no environment, so it needs no approval, unless the block says

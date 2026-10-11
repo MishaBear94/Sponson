@@ -711,7 +711,7 @@ describe.skipIf(LIVE && !DO_LIVE)(`contract: digitalocean (${LIVE ? "@live" : "s
  * SPONSON_LIVE_CLOUD_RUN_REGION, SPONSON_LIVE_CLOUD_RUN_SERVICE (an existing, throwaway service) and
  * SPONSON_LIVE_CLOUD_RUN_IMAGE (an image it can run, e.g. us-docker.pkg.dev/cloudrun/container/hello). It makes one
  * revision tagged `sponson-ct-<tag>` with no traffic and removes the tag in `afterAll`; the revision is left for Cloud
- * Run's retention. A share of traffic on LATEST is pinned to the revision serving it (CR5).
+ * Run's retention. The line sets `pin_latest: true`: a share of traffic on LATEST is pinned to the revision serving it (CR5).
  */
 const CR_VARS = ["SPONSON_LIVE_GCP_PROJECT", "SPONSON_LIVE_CLOUD_RUN_REGION", "SPONSON_LIVE_CLOUD_RUN_SERVICE", "SPONSON_LIVE_CLOUD_RUN_IMAGE"];
 const CR_LIVE = process.env.SPONSON_LIVE_CLOUD_RUN === "1" && CR_VARS.every((k) => process.env[k]);
@@ -720,7 +720,7 @@ describe.skipIf(LIVE && !CR_LIVE)(`contract: cloud_run (${LIVE ? "@live" : "sim"
   const op = (LIVE ? cloudRunAdapter : createCloudRunAdapter({ exec: async () => SIM_TOKEN })).ops.revision!;
   const place = LIVE ? { project: process.env.SPONSON_LIVE_GCP_PROJECT!, region: process.env.SPONSON_LIVE_CLOUD_RUN_REGION! } : { project: "demo-project", region: "us-central1" };
   const service = LIVE ? process.env.SPONSON_LIVE_CLOUD_RUN_SERVICE! : "web";
-  const params = { service, tag: `sponson-ct-${tag}`, image: LIVE ? process.env.SPONSON_LIVE_CLOUD_RUN_IMAGE! : "us-docker.pkg.dev/cloudrun/container/hello", env: { SPONSON_CONTRACT: tag, SPONSON_SECRET: SECRET } };
+  const params = { service, tag: `sponson-ct-${tag}`, image: LIVE ? process.env.SPONSON_LIVE_CLOUD_RUN_IMAGE! : "us-docker.pkg.dev/cloudrun/container/hello", env: { SPONSON_CONTRACT: tag, SPONSON_SECRET: SECRET }, pin_latest: true };
   const rctx = (): AdapterContext => {
     const ctx: Ctx = { env: "preview", git: { branch, sha, short_sha: sha.slice(0, 7) }, pr: { number: pr }, scope: `pr-${pr}` };
     return { ctx, provider: place, env: { ...env, SPONSON_CLOUD_RUN_POLL_MS: LIVE ? "3000" : "1" }, log: () => {}, intend: async () => {}, redact: (t) => t };

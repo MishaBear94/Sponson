@@ -16,8 +16,10 @@ changes:
     op: branch
     environments: [preview]
 
-  # Production's traffic stays where it is; on the first run a share on LATEST is pinned to the revision serving it
-  # (see docs/plan-format.md#cloud_runrevision for what that means for later production deploys).
+  # Production's traffic stays where it is. This assumes it is on a named revision
+  # (`gcloud run services update-traffic web --to-revisions=<revision>=100`). If it follows LATEST, the line is
+  # refused until you pin it yourself or add `pin_latest: true`, which pins LATEST's share to the revision serving it;
+  # see docs/plan-format.md#cloud_runrevision for what that means for later production deploys.
   - id: preview
     adapter: cloud_run
     op: revision

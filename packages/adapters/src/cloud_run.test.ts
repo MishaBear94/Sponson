@@ -18,7 +18,8 @@ const FAST = { SPONSON_CLOUD_RUN_POLL_MS: "1" };
 const KEY = "revision:web:pr-42";
 const PRODUCTION = { type: "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION", revision: "web-00001-abc", percent: 100 };
 
-const params = (env: Record<string, unknown> = { API_URL: "https://api-pr-42.example.com" }): ResolvedParams => ({ service: "web", tag: "pr-42", image: "us-docker.pkg.dev/demo-project/web/app:abc1234", env });
+/** The seeded service sends its traffic to LATEST, so the lines here allow pinning it (`pin_latest`). */
+const params = (env: Record<string, unknown> = { API_URL: "https://api-pr-42.example.com" }): ResolvedParams => ({ service: "web", tag: "pr-42", image: "us-docker.pkg.dev/demo-project/web/app:abc1234", env, pin_latest: true });
 
 describe("cloud_run revision", () => {
   let h: Harness;
@@ -62,6 +63,30 @@ describe("cloud_run revision", () => {
     const writes = h.sim.state.writes.length;
     expect((await op.apply(actx(), params(), live)).created).toEqual([]);
     expect(h.sim.state.writes.length).toBe(writes);
+  });
+
+  it("traffic on LATEST (or empty) is refused before any write unless the line sets pin_latest; pinned traffic needs no opt-in", async () => {
+    const { pin_latest: _pin, ...strict } = params();
+    for (const traffic of [[{ type: "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", percent: 100 }], []]) {
+      svc().traffic = traffic;
+      const refused = op.read(actx(), strict);
+      await expect(refused).rejects.toMatchObject({ code: "PARAM_INVALID", details: { param: "pin_latest" } });
+      await expect(refused).rejects.toThrow(/pin LATEST's share to web-00001-abc.*update-traffic web --to-latest.*`pin_latest: true`/);
+      // Apply refuses too, even handed no live state, and sends nothing.
+      await expect(op.apply(actx(), strict, null)).rejects.toMatchObject({ code: "PARAM_INVALID" });
+      expect(h.sim.state.writes).toEqual([]);
+      expect(svc().traffic).toEqual(traffic);
+    }
+    expect(() => op.diff(null, { ...strict, pin_latest: "yes" })).toThrow(/true or false/);
+    // Already pinned to named revisions: no opt-in needed.
+    svc().traffic = [PRODUCTION];
+    const r = await op.apply(actx(), strict, await op.read(actx(), strict));
+    expect(svc().traffic).toEqual([PRODUCTION, { type: "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION", revision: r.outputs.revision, tag: "pr-42" }]);
+    // A line with nothing to write is not refused when traffic is put back on LATEST later (destroy and re-apply still work).
+    svc().traffic = [{ type: "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", percent: 100 }, { type: "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION", revision: String(r.outputs.revision), tag: "pr-42" }];
+    const live = await op.read(actx(), strict);
+    expect(op.diff(live, strict)[0]!.kind).toBe("unchanged");
+    await expect(op.read(actx(), { ...strict, env: { API_URL: "changed" } })).rejects.toMatchObject({ code: "PARAM_INVALID" });
   });
 
   it("a changed value is a new revision with the tag moved onto it; traffic stays where it was", async () => {

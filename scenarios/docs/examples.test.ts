@@ -69,7 +69,7 @@ function seedFor(file: string, plan: Plan): Partial<SimSeed> {
   if (plan.providers.supabase) seed.supabase = { projects: { [project(plan, "supabase")]: {} } };
   if (plan.providers.cloudflare) seed.cloudflare = { accounts: { [String(plan.providers.cloudflare.account)]: { [project(plan, "cloudflare")]: {} } } };
   const run = plan.providers.cloud_run;
-  if (run) seed.cloud_run = { services: plan.changes.filter((c) => c.adapter === "cloud_run").map((c) => ({ project: String(run.project), region: String(run.region), name: String(c.params.service) })) };
+  if (run) seed.cloud_run = { services: plan.changes.filter((c) => c.adapter === "cloud_run").map((c) => ({ project: String(run.project), region: String(run.region), name: String(c.params.service), traffic: "pinned" as const })) };
   return { ...seed, ...(SEEDS[file]?.(plan) ?? {}) };
 }
 

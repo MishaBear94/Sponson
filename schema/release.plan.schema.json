@@ -979,7 +979,8 @@
           "additionalProperties": { "anyOf": [{ "$ref": "#/$defs/literal" }, { "$ref": "#/$defs/fromRef" }, { "$ref": "#/$defs/secretRef" }] }
         },
         "tag": { "type": "string", "description": "The traffic tag (lowercase letters, digits and -). Default: the scope, e.g. pr-42." },
-        "container": { "type": "string", "minLength": 1, "description": "The container of a multi-container service to set. Default: the only one, or the one with ports." }
+        "container": { "type": "string", "minLength": 1, "description": "The container of a multi-container service to set. Default: the only one, or the one with ports." },
+        "pin_latest": { "type": "boolean", "description": "Allow pinning a share of traffic on LATEST (or empty traffic) to the revision serving it, so the new revision gets none; afterwards production deploys no longer receive traffic by themselves (update-traffic --to-latest). Without it such a service is refused (PARAM_INVALID). Not needed when traffic is on named revisions. Default false." }
       },
       "additionalProperties": false
     }

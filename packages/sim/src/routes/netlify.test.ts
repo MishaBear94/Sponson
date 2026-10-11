@@ -1,5 +1,5 @@
 /** The simulated Netlify's refusals and drift keys, called directly (the adapter's tests cover the happy paths). */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CHAOS } from "../chaos.js";
 import type { SimCore } from "../provider.js";
 import { netlifySim, type NetlifyState } from "./netlify.js";
@@ -78,16 +78,26 @@ describe("netlify sim", () => {
   });
 
   it("builds pushes once each (main as production), pages the list, and a build needs a known branch", () => {
-    const s = setup({ deploy_ms: 50 });
-    const list = call(s, "GET", "/sites/s1/deploys?per_page=1&page=2").body as Array<{ context: string; state: string }>;
-    expect(list).toHaveLength(1);
-    const all = call(s, "GET", "/sites/s1/deploys").body as Array<{ context: string; state: string }>;
-    expect(all.map((d) => d.context).sort()).toEqual(["branch-deploy", "production"]);
-    expect(all.every((d) => d.state === "building")).toBe(true);
-    expect(call(s, "POST", "/sites/s1/builds?branch=unknown").status).toBe(422);
-    expect(call(s, "POST", "/sites/nope/builds").status).toBe(404);
-    expect(call(s, "GET", "/sites/nope/deploys").status).toBe(404);
-    expect(call(s, "POST", "/sites/s1/builds").status).toBe(200);
+    // The sim times builds by the wall clock: freeze it, so a loaded machine cannot finish a 50 ms build mid-test.
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-11T00:00:00Z") });
+    try {
+      const s = setup({ deploy_ms: 50 });
+      const list = call(s, "GET", "/sites/s1/deploys?per_page=1&page=2").body as Array<{ context: string; state: string }>;
+      expect(list).toHaveLength(1);
+      const all = call(s, "GET", "/sites/s1/deploys").body as Array<{ context: string; state: string }>;
+      expect(all.map((d) => d.context).sort()).toEqual(["branch-deploy", "production"]);
+      expect(all.every((d) => d.state === "building")).toBe(true);
+      expect(call(s, "POST", "/sites/s1/builds?branch=unknown").status).toBe(422);
+      expect(call(s, "POST", "/sites/nope/builds").status).toBe(404);
+      expect(call(s, "GET", "/sites/nope/deploys").status).toBe(404);
+      expect(call(s, "POST", "/sites/s1/builds").status).toBe(200);
+      // Once the build time has passed, the same deploys (the two pushes and the build just started) are ready.
+      vi.advanceTimersByTime(50);
+      const later = call(s, "GET", "/sites/s1/deploys").body as Array<{ context: string; state: string }>;
+      expect(later.map((d) => d.state)).toEqual(["ready", "ready", "ready"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("chaos deploy never builds nothing; fail builds a deploy that errors", () => {

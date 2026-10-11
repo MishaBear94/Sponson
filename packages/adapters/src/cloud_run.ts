@@ -16,7 +16,7 @@
  *   revision is left for Cloud Run to delete (CR12).
  */
 import { setTimeout as sleep } from "node:timers/promises";
-import { SponsonError, canonicalJson, markerKind, sha256, type AdapterContext, type DiffSide, type Literal, type OpSpec, type ResolvedParams, type ResourceAdapter, type ResourceRecord } from "@sponson/core";
+import { SponsonError, canonicalJson, markerKind, sha256, type AdapterContext, type DiffSide, type Literal, type LiveState, type OpSpec, type ResolvedParams, type ResourceAdapter, type ResourceRecord } from "@sponson/core";
 import { assertNoPending, desiredSide, optionalEnv, paramError, requireProvider, stringParam } from "./common.js";
 import { ShapeError, isObject, isProviderError, type ApiClient } from "./http.js";
 import { DEFAULT_AUTH_DEPS, type AuthDeps } from "./http-adapter-auth.js";
@@ -83,6 +83,8 @@ interface Spec {
   image: string;
   env: Record<string, string>;
   container: string | undefined;
+  /** May traffic on LATEST be pinned (`pin_latest`)? */
+  pinLatest: boolean;
 }
 
 function envParam(v: unknown): Record<string, unknown> {
@@ -108,7 +110,7 @@ function containerParam(params: ResolvedParams): string | undefined {
 
 function specOf(params: ResolvedParams): Spec {
   const env = Object.fromEntries(Object.entries(envParam(params.env)).map(([k, v]) => [k, String(v)]));
-  return { service: stringParam(params, "service", ADAPTER), tag: tagParam(params), image: stringParam(params, "image", ADAPTER), env, container: containerParam(params) };
+  return { service: stringParam(params, "service", ADAPTER), tag: tagParam(params), image: stringParam(params, "image", ADAPTER), env, container: containerParam(params), pinLatest: pinLatestParam(params) };
 }
 
 function keyOf(service: string, tag: string): string {
@@ -288,11 +290,38 @@ async function patch(actx: AdapterContext, api: ApiClient, p: Place, service: st
  * `traffic` with every LATEST target bound to the revision it serves now, or null when there is none: a template
  * change then gives the new revision no traffic (CR5). Empty traffic means 100% to LATEST.
  */
-function pinned(svc: Service, service: string): Target[] | null {
+function pinned(svc: Service, service: string, allowed: boolean): Target[] | null {
   const traffic = svc.traffic.length > 0 ? svc.traffic : [{ type: LATEST, percent: 100 }];
-  if (!traffic.some((t) => t.type === LATEST)) return null;
+  if (!followsLatest(svc)) return null;
+  if (!allowed) throw latestRefusal(svc, service);
   if (!svc.latestReady) throw new SponsonError("PROVIDER_INVALID", `${ADAPTER}: service ${service} sends traffic to its latest revision but has no ready revision to keep it on`, { adapter: ADAPTER, service });
   return traffic.map((t) => (t.type === LATEST ? { ...t, type: BY_REVISION, revision: svc.latestReady } : t));
+}
+
+/** Whether a share of the service's traffic goes to LATEST (empty traffic does, CR5): a new revision would take it. */
+function followsLatest(svc: Service): boolean {
+  return svc.traffic.length === 0 || svc.traffic.some((t) => t.type === LATEST);
+}
+
+/** Why a line without `pin_latest: true` may not make a revision of a service whose traffic follows LATEST. */
+function latestRefusal(svc: Service, service: string): SponsonError {
+  const serving = svc.latestReady ?? "the revision serving it now";
+  return paramError(
+    ADAPTER,
+    `service ${service} sends traffic to LATEST (its latest ready revision), so a new revision would take that traffic. ` +
+      `To make one without moving traffic, Sponson must pin LATEST's share to ${serving}, as \`gcloud run deploy --no-traffic\` does; ` +
+      `after that, production deploys of ${service} no longer receive traffic by themselves until you run ` +
+      `\`gcloud run services update-traffic ${service} --to-latest\`. Set \`pin_latest: true\` on this line to allow it, ` +
+      `or pin the traffic yourself first (\`gcloud run services update-traffic ${service} --to-revisions=${svc.latestReady ?? "<revision>"}=100\`).`,
+    "pin_latest",
+  );
+}
+
+/** `pin_latest`: the line may pin traffic on LATEST (a permission, not state: not hashed). */
+function pinLatestParam(params: ResolvedParams): boolean {
+  const v = params.pin_latest;
+  if (v !== undefined && typeof v !== "boolean") throw paramError(ADAPTER, "param `pin_latest` must be true or false", "pin_latest");
+  return v === true;
 }
 
 /** The service's template with the new revision's name, image and variables; everything else as it is (CR4). */
@@ -310,7 +339,7 @@ function templateFor(svc: Service, s: Spec, name: string): Record<string, unknow
 /** Make the revision: the template patched, traffic on LATEST pinned so none moves. */
 async function createRevision(actx: AdapterContext, api: ApiClient, p: Place, s: Spec, name: string): Promise<void> {
   const svc = await requireService(api, p, s.service);
-  const traffic = pinned(svc, s.service);
+  const traffic = pinned(svc, s.service, s.pinLatest);
   await patch(actx, api, p, s.service, svc, { template: templateFor(svc, s, name), ...(traffic ? { traffic } : {}) }, `create revision ${name} of ${s.service} (no traffic)`);
 }
 
@@ -373,6 +402,26 @@ async function retryingConflicts<T>(actx: AdapterContext, what: string, run: () 
 // The op
 // ---------------------------------------------------------------------------
 
+/** What the tag points at, as the line sees it; null when the tag is absent. */
+async function tagged(api: ApiClient, p: Place, svc: Service, service: string, tag: string, params: ResolvedParams): Promise<LiveState | null> {
+  const target = svc.traffic.find((t) => t.tag === tag);
+  if (!target) return null;
+  const name = target.type === LATEST ? (svc.latestReady ?? "") : shortName(target.revision ?? "");
+  const rev = name ? await getRevision(api, p, service, name) : null;
+  if (!rev) return null;
+  // A tag on LATEST follows every deploy: never the plan's revision, so it reads as changed.
+  const hash = target.type === LATEST ? sha256(`latest:${name}`) : revisionHash(rev, service, containerParam(params), Object.keys(envParam(params.env)));
+  const uri = tagUri(svc, tag);
+  return { resources: [record(service, tag, name, hash)], outputs: { revision: name, ...(uri ? { url: uri } : {}) } };
+}
+
+/** Whether applying would write nothing: the tag is on a revision with exactly the plan's contents. */
+function unchanged(live: LiveState | null, params: ResolvedParams): boolean {
+  if (!live || firstMarker(params) !== undefined) return false;
+  const s = specOf(params);
+  return live.resources[0]?.hash === contentHash(s.image, s.env);
+}
+
 /** The first pending or secret marker among the values that decide the revision's contents. */
 function firstMarker(params: ResolvedParams): string | undefined {
   const values = [params.service, params.tag, params.image, ...Object.values(isObject(params.env) ? params.env : {})];
@@ -418,15 +467,10 @@ const revision: OpSpec = {
     const p = placeOf(actx);
     const api = client(actx);
     const svc = await requireService(api, p, service);
-    const target = svc.traffic.find((t) => t.tag === tag);
-    if (!target) return null;
-    const name = target.type === LATEST ? (svc.latestReady ?? "") : shortName(target.revision ?? "");
-    const rev = name ? await getRevision(api, p, service, name) : null;
-    if (!rev) return null;
-    // A tag on LATEST follows every deploy: never the plan's revision, so it reads as changed.
-    const hash = target.type === LATEST ? sha256(`latest:${name}`) : revisionHash(rev, service, containerParam(params), Object.keys(envParam(params.env)));
-    const uri = tagUri(svc, tag);
-    return { resources: [record(service, tag, name, hash)], outputs: { revision: name, ...(uri ? { url: uri } : {}) } };
+    const live = await tagged(api, p, svc, service, tag, params);
+    // Refused at plan time, before any write: making a revision would pin traffic on LATEST (unless allowed).
+    if (followsLatest(svc) && !pinLatestParam(params) && !unchanged(live, params)) throw latestRefusal(svc, service);
+    return live;
   },
 
   diff(live, params) {
