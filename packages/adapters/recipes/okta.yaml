@@ -1,0 +1,165 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Okta Management API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: okta
+title: Okta
+category: auth
+verified_on: "2026-10-11"
+docs:
+  - title: Okta Management API (OpenAPI specification, management-minimal.yaml)
+    url: https://raw.githubusercontent.com/okta/okta-management-openapi-spec/master/dist/current/management-minimal.yaml
+  - title: Applications API, replace an application
+    url: https://developer.okta.com/docs/api/openapi/okta-management/management/tag/Application/#tag/Application/operation/replaceApplication
+  - title: Trusted Origins API
+    url: https://developer.okta.com/docs/api/openapi/okta-management/management/tag/TrustedOrigin/
+  - title: Okta Terraform provider, configuration (conventional variable names)
+    url: https://raw.githubusercontent.com/okta/terraform-provider-okta/master/docs/index.md
+api:
+  base_url_env: OKTA_API_URL
+  auth: { header: Authorization, value_env: OKTA_API_TOKEN, prefix: "SSWS " }
+base_url_example: https://acme.okta.com/api/v1
+assumptions:
+  - id: OK1
+    verified: true
+    text: "An API token is sent as `Authorization: SSWS <token>` (the `apiToken` security scheme; Okta recommends scoped OAuth tokens, which need `private_key_jwt` and are not supported here). Every path is under `https://<org>.okta.com/api/v1`."
+    source: https://raw.githubusercontent.com/okta/okta-management-openapi-spec/master/dist/current/management-minimal.yaml
+  - id: OK2
+    verified: true
+    text: "`PUT /api/v1/apps/{appId}` replaces an application: all required properties must be in the body (no partial update), and system-assigned properties (`id`, `name`, `status`, `created`, `lastUpdated`) in the body are ignored. So the recipe sends the whole application read with `GET /api/v1/apps/{appId}` back, with one URI added or removed (`parent.send: parent`)."
+    source: https://raw.githubusercontent.com/okta/okta-management-openapi-spec/master/dist/current/management-minimal.yaml
+  - id: OK3
+    verified: true
+    text: "An OIDC application keeps its redirect URIs in `settings.oauthClient.redirect_uris` and its sign-out redirect URIs in `settings.oauthClient.post_logout_redirect_uris`, both arrays of strings."
+    source: https://raw.githubusercontent.com/okta/okta-management-openapi-spec/master/dist/current/management-minimal.yaml
+  - id: OK4
+    verified: false
+    text: "The read-only members of the GET answer that the replace documentation does not list (`_links`, `_embedded`, `credentials.oauthClient.client_id`) are ignored when sent back, as the listed system-assigned ones are."
+  - id: OK5
+    verified: false
+    text: "The application replace has no precondition: the line locks the application (`lockOn`, shared by both URI ops) against other Sponson runs; a console edit made between the read and the write can still be lost (the next apply reports it as drift)."
+  - id: OK6
+    verified: true
+    text: "`POST /api/v1/trustedOrigins` creates a trusted origin from `name`, `origin` and `scopes` (`[{ type: CORS }, { type: REDIRECT }]`, or `IFRAME_EMBED`); `GET /api/v1/trustedOrigins` lists them as a bare array, `q` prefix-matching `name` and `origin`, `limit` up to 200; `PUT /api/v1/trustedOrigins/{id}` replaces one; `DELETE /api/v1/trustedOrigins/{id}` answers 204. `name` and `origin` are each unique."
+    source: https://raw.githubusercontent.com/okta/okta-management-openapi-spec/master/dist/current/management-minimal.yaml
+  - id: OK7
+    verified: false
+    text: "A trusted origin is found among the first 200 that `q=<origin>` matches (pagination follows a `Link` header, which the http adapter does not read); an org with more than 200 origins starting with the same text may not find it and would see the create refused as a duplicate."
+  - id: OK8
+    verified: false
+    text: "Scopes are read back as written (`[{ type: CORS }, { type: REDIRECT }]`, no added members), so they can be compared as drift."
+  - id: OK9
+    verified: true
+    text: "`OKTA_API_TOKEN` is the variable the Okta Terraform provider reads for an API token."
+    source: https://raw.githubusercontent.com/okta/terraform-provider-okta/master/docs/index.md
+ops:
+  redirect_uri:
+    kind: list_item
+    title: OIDC application sign-in redirect URI
+    summary: "One URI in an Okta OIDC application's sign-in redirect URIs (`settings.oauthClient.redirect_uris`), such as the preview's `/login/callback`. The application is read, and written back whole with the URI added (Okta replaces applications only as a whole), under a lock on the application; removed on destroy; every other URI and setting is sent back as read."
+    covers: [okta-redirect]
+    params:
+      app_id:
+        type: string
+        required: true
+        description: The application's id (`0oa…`).
+        example: 0oa1gjh63g214q0Hq0g4
+      url:
+        type: string
+        required: true
+        pattern: "^\\S+://\\S+$"
+        description: "The redirect URI, exactly as the application sends it as `redirect_uri`."
+        example: "https://${ctx.scope}.preview.example.app/login/callback"
+    http:
+      parent: { path: "/apps/{app_id}", method: PUT, send: parent }
+      list_path: /settings/oauthClient/redirect_uris
+      item: { param: url }
+    sim:
+      objects:
+        "/apps/{app_id}":
+          id: 0oa1gjh63g214q0Hq0g4
+          name: oidc_client
+          label: Web app
+          status: ACTIVE
+          signOnMode: OPENID_CONNECT
+          credentials: { oauthClient: { client_id: 0oa1gjh63g214q0Hq0g4, token_endpoint_auth_method: client_secret_basic } }
+          settings:
+            oauthClient:
+              application_type: web
+              grant_types: [authorization_code]
+              response_types: [code]
+              redirect_uris: [https://app.example.com/login/callback]
+              post_logout_redirect_uris: [https://app.example.com]
+    live:
+      params: { app_id: SPONSON_LIVE_OKTA_APP_ID }
+  post_logout_redirect_uri:
+    kind: list_item
+    title: OIDC application sign-out redirect URI
+    summary: "One URI in an Okta OIDC application's sign-out redirect URIs (`settings.oauthClient.post_logout_redirect_uris`), such as the preview's home page. Written back with the whole application, under the application's lock; removed on destroy; every other URI and setting is sent back as read."
+    covers: [okta-redirect]
+    params:
+      app_id:
+        type: string
+        required: true
+        description: The application's id (`0oa…`).
+        example: 0oa1gjh63g214q0Hq0g4
+      url:
+        type: string
+        required: true
+        pattern: "^\\S+://\\S+$"
+        description: "The URI the application passes as `post_logout_redirect_uri`."
+        example: "https://${ctx.scope}.preview.example.app"
+    http:
+      parent: { path: "/apps/{app_id}", method: PUT, send: parent }
+      list_path: /settings/oauthClient/post_logout_redirect_uris
+      item: { param: url }
+    sim:
+      objects:
+        "/apps/{app_id}":
+          id: 0oa1gjh63g214q0Hq0g4
+          name: oidc_client
+          label: Web app
+          status: ACTIVE
+          signOnMode: OPENID_CONNECT
+          credentials: { oauthClient: { client_id: 0oa1gjh63g214q0Hq0g4, token_endpoint_auth_method: client_secret_basic } }
+          settings:
+            oauthClient:
+              application_type: web
+              grant_types: [authorization_code]
+              response_types: [code]
+              redirect_uris: [https://app.example.com/login/callback]
+              post_logout_redirect_uris: [https://app.example.com]
+    live:
+      params: { app_id: SPONSON_LIVE_OKTA_APP_ID }
+  trusted_origin:
+    kind: resource
+    title: Trusted origin (CORS and redirect)
+    summary: "A trusted origin for the preview, so the Okta Sign-In Widget and Auth JS may call Okta from it (CORS) and Okta may redirect to it after sign-in or sign-out (REDIRECT). Found by its origin; its name and scopes are compared as drift and replaced with `PUT`; deleted on destroy."
+    covers: [okta-redirect]
+    params:
+      name:
+        type: string
+        required: true
+        description: "The trusted origin's name, unique in the org."
+        example: "sponson-${ctx.scope}"
+      origin:
+        type: string
+        required: true
+        pattern: "^\\S+://[^/\\s]+$"
+        description: "The origin, scheme and host without a path (`https://pr-42.preview.example.app`); unique in the org."
+        example: "https://${ctx.scope}.preview.example.app"
+      scopes:
+        type: list
+        default: [{ type: CORS }, { type: REDIRECT }]
+        description: "What the origin is trusted for: `[{ type: CORS }]`, `[{ type: REDIRECT }]`, both (the default), or `IFRAME_EMBED`."
+    http:
+      find:
+        path: "/trustedOrigins?q={origin}&limit=200"
+        list_path: ""
+        match: { origin: { param: origin } }
+      create: { path: /trustedOrigins }
+      update: { method: PUT, path: "/trustedOrigins/{id}" }
+      delete: { path: "/trustedOrigins/{id}" }
+      item_path: ""
+      fields:
+        name: { param: name }
+        origin: { param: origin }
+        scopes: { param: scopes }

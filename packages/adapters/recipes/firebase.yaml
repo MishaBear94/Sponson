@@ -1,0 +1,75 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Firebase Authentication (Identity Toolkit admin API) recipes. Format and checklist: docs/adr/0020-recipes.md,
+# CONTRIBUTING.md "Adding a recipe".
+provider: firebase
+title: Firebase Authentication
+category: auth
+verified_on: "2026-10-11"
+docs:
+  - title: Identity Toolkit API v2, projects.getConfig
+    url: https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/projects/getConfig
+  - title: Identity Toolkit API v2, projects.updateConfig
+    url: https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/projects/updateConfig
+  - title: Identity Toolkit API v2, Config
+    url: https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/Config
+  - title: Authenticate for using REST
+    url: https://docs.cloud.google.com/docs/authentication/rest
+api:
+  base_url: https://identitytoolkit.googleapis.com/admin/v2
+  base_url_env: FIREBASE_API_URL
+  auth: { command: [gcloud, auth, print-access-token] }
+assumptions:
+  - id: FB1
+    verified: true
+    text: "`GET https://identitytoolkit.googleapis.com/admin/v2/projects/{project}/config` answers the project's Auth `Config`."
+    source: https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/projects/getConfig
+  - id: FB2
+    verified: true
+    text: "`PATCH …/admin/v2/projects/{project}/config?updateMask=authorizedDomains` updates the config with a `Config` body; fields set in the body but not named in `updateMask` are ignored, so the write changes the authorized domains only. It needs one of the `identitytoolkit`, `firebase` or `cloud-platform` OAuth scopes."
+    source: https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/projects/updateConfig
+  - id: FB3
+    verified: true
+    text: "`authorizedDomains` is a list of strings, the domains authorized for OAuth redirects; the masked field is replaced by the list sent, so the recipe sends the whole list read just before with one domain added or removed."
+    source: https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/Config
+  - id: FB4
+    verified: true
+    text: "`gcloud auth print-access-token` prints an access token for the signed-in credentials, used as `Authorization: Bearer`. With user credentials some APIs also need the quota project in `x-goog-user-project`: add `headers: { x-goog-user-project: <project> }` to the `providers.http.firebase` block (not needed with a service account; a block's headers are part of its identity)."
+    source: https://docs.cloud.google.com/docs/authentication/rest
+  - id: FB5
+    verified: false
+    text: "The config has no precondition the update honours (no etag in `Config`): the line locks the project's config (`lockOn`) against other Sponson runs; a console edit made between the read and the write can still be lost."
+  - id: FB6
+    verified: false
+    text: "An authorized domain is a host name without scheme, port or path, and is read back exactly as written."
+  - id: FB7
+    verified: false
+    text: "The same admin v2 config holds the authorized domains of a Firebase Authentication project with or without the Identity Platform upgrade."
+ops:
+  authorized_domain:
+    kind: list_item
+    title: Authorized domain
+    summary: "One domain in Firebase Authentication's authorized domains (Authentication, Settings, Authorized domains), which OAuth sign-in redirects and email links require, such as the preview deployment's host. Read-modify-write of the list with `updateMask=authorizedDomains` under a lock on the project's config; removed on destroy; every other domain (localhost, the Firebase hosting domains) is left as it is."
+    covers: [firebase-auth-domains]
+    params:
+      project:
+        type: string
+        required: true
+        description: The Google Cloud / Firebase project id.
+        example: demo-project
+      domain:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9.-]+$"
+        description: "The domain, a host name without scheme or path (`pr-42.preview.example.app`, `my-app-git-feat-x.vercel.app`)."
+        example: "${ctx.scope}.preview.example.app"
+    http:
+      parent:
+        path: "/projects/{project}/config?updateMask=authorizedDomains"
+        read_path: "/projects/{project}/config"
+      list_path: /authorizedDomains
+      item: { param: domain }
+    sim:
+      objects:
+        "/projects/{project}/config": { name: projects/demo-project/config, authorizedDomains: [localhost, demo-project.firebaseapp.com, demo-project.web.app] }
+    live:
+      params: { project: SPONSON_LIVE_FIREBASE_PROJECT }

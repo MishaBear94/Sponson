@@ -183,7 +183,11 @@ categories:
         api_shape: Management API `PATCH /api/v2/clients/{id}`, bearer from client-credentials; **list** (each array replaced whole); no ETag
         generic: Y (list mode, token exchange)
         priority: P0
-        covered_by: null
+        covered_by:
+          - recipe:auth0.callback_url
+          - recipe:auth0.logout_url
+          - recipe:auth0.web_origin
+          - recipe:auth0.allowed_origin
       - id: supabase-auth-redirect
         provider: Supabase Auth
         side_effect: Preview URL in "Additional Redirect URLs"
@@ -197,7 +201,7 @@ categories:
         api_shape: Identity Toolkit `PATCH admin/v2/projects/{p}/config?updateMask=authorizedDomains`, Google OAuth; **list** full replace
         generic: Y (list mode, Google token)
         priority: P1
-        covered_by: null
+        covered_by: recipe:firebase.authorized_domain
       - id: workos-redirect
         provider: WorkOS
         side_effect: Redirect URI for AuthKit
@@ -218,14 +222,19 @@ categories:
         api_shape: "`PUT /api/v1/apps/{id}` (**list**, whole app object), `POST /api/v1/trustedOrigins` (object); `SSWS` token or OAuth"
         generic: Y (list mode; trusted origins object)
         priority: P2
-        covered_by: null
+        covered_by:
+          - recipe:okta.redirect_uri
+          - recipe:okta.post_logout_redirect_uri
+          - recipe:okta.trusted_origin
       - id: kinde-callbacks
         provider: Kinde
         side_effect: Callback and logout URLs on an application
-        api_shape: Management API `POST`/`PUT /api/v1/applications/{id}/auth_redirect_urls` (add / replace); M2M client-credentials token. Path from SDK docs, not the reference **(unverified)**
-        generic: Y (token exchange)
+        api_shape: Management API `GET`/`PUT /api/v1/applications/{id}/auth_redirect_urls` and `…/auth_logout_urls` (read `{ redirect_urls }` / `{ logout_urls }`, replace with `{ urls }`; `POST` adds, `DELETE ?urls=` removes); M2M client-credentials token (audience `https://<business>.kinde.com/api`)
+        generic: Y (list mode, token exchange; written under another name than read)
         priority: P2
-        covered_by: null
+        covered_by:
+          - recipe:kinde.callback_url
+          - recipe:kinde.logout_url
       - id: google-oauth-redirect
         provider: Google OAuth clients
         side_effect: Preview URL in a web client's authorized redirect URIs

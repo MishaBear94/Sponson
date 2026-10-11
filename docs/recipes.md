@@ -38,12 +38,22 @@ names are set.
 
 | Recipe | Op | What it manages | Credential |
 |---|---|---|---|
+| [`auth0.callback_url`](#auth0callback_url) | `list_item` | Application callback URL | `AUTH0_CLIENT_ID` / `AUTH0_CLIENT_SECRET` (OAuth2 client credentials) |
+| [`auth0.logout_url`](#auth0logout_url) | `list_item` | Application allowed logout URL | `AUTH0_CLIENT_ID` / `AUTH0_CLIENT_SECRET` (OAuth2 client credentials) |
+| [`auth0.web_origin`](#auth0web_origin) | `list_item` | Application allowed web origin | `AUTH0_CLIENT_ID` / `AUTH0_CLIENT_SECRET` (OAuth2 client credentials) |
+| [`auth0.allowed_origin`](#auth0allowed_origin) | `list_item` | Application allowed origin (CORS) | `AUTH0_CLIENT_ID` / `AUTH0_CLIENT_SECRET` (OAuth2 client credentials) |
 | [`cloudflare.dns_cname`](#cloudflaredns_cname) | `resource` | DNS CNAME record | `CLOUDFLARE_API_TOKEN` (bearer) |
 | [`configcat.targeting_rule`](#configcattargeting_rule) | `list_item` | Feature flag targeting rule | `CONFIGCAT_BASIC_AUTH_USERNAME` / `CONFIGCAT_BASIC_AUTH_PASSWORD` (basic) |
+| [`firebase.authorized_domain`](#firebaseauthorized_domain) | `list_item` | Authorized domain | the token `gcloud auth print-access-token` prints (bearer) |
 | [`github.repo_webhook`](#githubrepo_webhook) | `resource` | Repository webhook | `GITHUB_TOKEN` (bearer) |
 | [`growthbook.force_rule`](#growthbookforce_rule) | `list_item` | Feature force rule | `GROWTHBOOK_API_KEY` (bearer) |
 | [`heroku.config_var`](#herokuconfig_var) | `list_item` | App config var | `HEROKU_API_KEY` (bearer) |
 | [`honeycomb.marker`](#honeycombmarker) | `resource` | Deploy marker | `HONEYCOMB_API_KEY` (header `X-Honeycomb-Team`) |
+| [`kinde.callback_url`](#kindecallback_url) | `list_item` | Application callback URL | `KINDE_MANAGEMENT_CLIENT_ID` / `KINDE_MANAGEMENT_CLIENT_SECRET` (OAuth2 client credentials) |
+| [`kinde.logout_url`](#kindelogout_url) | `list_item` | Application allowed logout redirect URL | `KINDE_MANAGEMENT_CLIENT_ID` / `KINDE_MANAGEMENT_CLIENT_SECRET` (OAuth2 client credentials) |
+| [`okta.redirect_uri`](#oktaredirect_uri) | `list_item` | OIDC application sign-in redirect URI | `OKTA_API_TOKEN` (header `Authorization`, after `SSWS`) |
+| [`okta.post_logout_redirect_uri`](#oktapost_logout_redirect_uri) | `list_item` | OIDC application sign-out redirect URI | `OKTA_API_TOKEN` (header `Authorization`, after `SSWS`) |
+| [`okta.trusted_origin`](#oktatrusted_origin) | `resource` | Trusted origin (CORS and redirect) | `OKTA_API_TOKEN` (header `Authorization`, after `SSWS`) |
 | [`posthog.release_condition`](#posthogrelease_condition) | `list_item` | Flag release condition | `POSTHOG_PERSONAL_API_KEY` (bearer) |
 | [`postmark.server`](#postmarkserver) | `resource` | Server | `POSTMARK_ACCOUNT_TOKEN` (header `X-Postmark-Account-Token`) |
 | [`postmark_server.webhook`](#postmark_serverwebhook) | `resource` | Webhook of a server | `POSTMARK_SERVER_TOKEN` (header `X-Postmark-Server-Token`) |
@@ -70,6 +80,178 @@ names are set.
 | [`upstash.redis_database`](#upstashredis_database) | `resource` | Redis database | `UPSTASH_EMAIL` / `UPSTASH_API_KEY` (basic) |
 | [`vercel.project_domain`](#vercelproject_domain) | `resource` | Branch-bound project domain | `VERCEL_TOKEN` (bearer) |
 | [`workos.redirect_uri`](#workosredirect_uri) | `resource` | AuthKit redirect URI | `WORKOS_API_KEY` (bearer) |
+
+## Auth0
+
+Recipe file: [`packages/adapters/recipes/auth0.yaml`](../packages/adapters/recipes/auth0.yaml). Verified on 2026-10-11 against:
+
+- [Get Management API access tokens for production](https://auth0.com/docs/secure/tokens/access-tokens/management-api-access-tokens/get-management-api-access-tokens-for-production)
+- [Management API v2, get a client](https://auth0.com/docs/api/management/v2/clients/get-clients-by-id)
+- [Management API v2, update a client](https://auth0.com/docs/api/management/v2/clients/patch-clients-by-id)
+- [Auth0 Terraform provider, configuration (conventional variable names)](https://raw.githubusercontent.com/auth0/terraform-provider-auth0/main/docs/index.md)
+
+| API default | Value |
+|---|---|
+| `base_url` | none: set it in the provider block |
+| `base_url_env` | `AUTH0_API_URL` |
+| Credential | `AUTH0_CLIENT_ID` / `AUTH0_CLIENT_SECRET` (OAuth2 client credentials) |
+| Token endpoint | `/oauth/token` on the origin of `base_url`; override: `AUTH0_TOKEN_URL` |
+| Audience | `/api/v2/` on the origin of `base_url` |
+
+Assumptions:
+
+- **AU1** (verified, [source](https://auth0.com/docs/secure/tokens/access-tokens/management-api-access-tokens/get-management-api-access-tokens-for-production)): A machine-to-machine application gets a Management API token from `POST https://<tenant>/oauth/token` (form-encoded `grant_type=client_credentials`, `client_id`, `client_secret`, `audience`); the audience is the Management API's identifier `https://<tenant>/api/v2/`. The answer has `access_token`, `expires_in` (86400 in the example) and `token_type: Bearer`. The recipe writes both as paths, so a plan's `base_url: https://<tenant>/api/v2` names the tenant once.
+- **AU2** (verified, [source](https://auth0.com/docs/api/management/v2/clients/get-clients-by-id)): `GET /api/v2/clients/{id}` answers the application with its `callbacks`, `allowed_logout_urls`, `web_origins` and `allowed_origins` arrays, which only a token with `read:clients` (or `read:client_keys`) receives. `fields` with `include_fields=true` limits the answer to the listed fields, so the recipe never reads the client secret.
+- **AU3** (verified, [source](https://auth0.com/docs/api/management/v2/clients/patch-clients-by-id)): `PATCH /api/v2/clients/{id}` (scope `update:clients`) updates an application; `callbacks`, `allowed_logout_urls`, `web_origins` and `allowed_origins` are arrays of strings, and the body needs at least one property, so a write sends the one array alone.
+- **AU4** **(unverified)**: An array sent in a PATCH replaces the stored array whole (it is not merged), so the recipe sends the full list read just before with one URL added or removed. The reference does not say so for these fields.
+- **AU5** **(unverified)**: Updates have no precondition (no ETag or version): the line locks the application (`lockOn`, one lock per tenant and client id, shared by the four ops) against other Sponson runs, and a console edit made between the read and the write can still be lost (the next apply then reports it as drift).
+- **AU6** **(unverified)**: URLs are stored and read back exactly as written (no trailing slash added or case changed), so a URL identifies its entry.
+- **AU7** (verified, [source](https://raw.githubusercontent.com/auth0/terraform-provider-auth0/main/docs/index.md)): `AUTH0_CLIENT_ID` and `AUTH0_CLIENT_SECRET` are the variables the Auth0 Terraform provider reads for a machine-to-machine client.
+- **AU8** **(unverified)**: The audience stays the tenant's canonical domain when the tenant has a custom domain, so `base_url` names the canonical domain (`<tenant>.<region>.auth0.com`), not the custom one.
+
+### `auth0.callback_url`
+
+**Application callback URL** (`http.list_item`). One URL in an Auth0 application's Allowed Callback URLs (`callbacks`), such as the preview's `/callback`; usually `{ from: <deploy line>.preview_url }` joined with the path in the app. Added by read-modify-write of the list under a lock on the application, removed on destroy; every other URL is left as it is. A URL removed in the Dashboard is drift (`missing`) that the next apply puts back.
+
+Covers: `auth0-callbacks` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: none. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `client_id` | string | yes | — | The application's Client ID. |
+| `url` | string | yes | — | The callback URL, exactly as the application sends it as `redirect_uri`. Matches `^https?://\\S+$`. |
+
+```yaml
+providers:
+  http:
+    auth0:
+      recipe: auth0
+      base_url: https://acme.eu.auth0.com/api/v2
+changes:
+  - id: callback_url
+    adapter: http
+    op: list_item
+    recipe: auth0.callback_url
+    client_id: AbC123dEf456GhI789jKl012MnO345pQ
+    url: https://${ctx.scope}.preview.example.app/callback
+```
+
+What the line expands into: the [`http.list_item`](plan-format.md#httplist_item) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+parent:
+  path: /clients/{client_id}
+  read_path: /clients/{client_id}?fields=callbacks,allowed_logout_urls,web_origins,allowed_origins&include_fields=true
+list_path: /callbacks
+item: { param: url }
+```
+
+### `auth0.logout_url`
+
+**Application allowed logout URL** (`http.list_item`). One URL in an Auth0 application's Allowed Logout URLs (`allowed_logout_urls`), where `/v2/logout` may return the user, such as the preview's home page. Read-modify-write of the list under the application's lock; removed on destroy; every other URL is left as it is.
+
+Covers: `auth0-callbacks` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: none. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `client_id` | string | yes | — | The application's Client ID. |
+| `url` | string | yes | — | The URL the application passes as `returnTo` on logout. Matches `^https?://\\S+$`. |
+
+```yaml
+providers:
+  http:
+    auth0:
+      recipe: auth0
+      base_url: https://acme.eu.auth0.com/api/v2
+changes:
+  - id: logout_url
+    adapter: http
+    op: list_item
+    recipe: auth0.logout_url
+    client_id: AbC123dEf456GhI789jKl012MnO345pQ
+    url: https://${ctx.scope}.preview.example.app
+```
+
+What the line expands into: the [`http.list_item`](plan-format.md#httplist_item) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+parent:
+  path: /clients/{client_id}
+  read_path: /clients/{client_id}?fields=callbacks,allowed_logout_urls,web_origins,allowed_origins&include_fields=true
+list_path: /allowed_logout_urls
+item: { param: url }
+```
+
+### `auth0.web_origin`
+
+**Application allowed web origin** (`http.list_item`). One origin in an Auth0 application's Allowed Web Origins (`web_origins`), which silent authentication and the SPA SDKs' token refresh need for the preview's origin. Read-modify-write of the list under the application's lock; removed on destroy; every other origin is left as it is.
+
+Covers: `auth0-callbacks` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: none. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `client_id` | string | yes | — | The application's Client ID. |
+| `origin` | string | yes | — | The origin, scheme and host without a path (`https://pr-42.preview.example.app`). Matches `^https?://[^/\\s]+$`. |
+
+```yaml
+providers:
+  http:
+    auth0:
+      recipe: auth0
+      base_url: https://acme.eu.auth0.com/api/v2
+changes:
+  - id: web_origin
+    adapter: http
+    op: list_item
+    recipe: auth0.web_origin
+    client_id: AbC123dEf456GhI789jKl012MnO345pQ
+    origin: https://${ctx.scope}.preview.example.app
+```
+
+What the line expands into: the [`http.list_item`](plan-format.md#httplist_item) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+parent:
+  path: /clients/{client_id}
+  read_path: /clients/{client_id}?fields=callbacks,allowed_logout_urls,web_origins,allowed_origins&include_fields=true
+list_path: /web_origins
+item: { param: origin }
+```
+
+### `auth0.allowed_origin`
+
+**Application allowed origin (CORS)** (`http.list_item`). One origin in an Auth0 application's Allowed Origins (CORS, `allowed_origins`), for a preview that calls Auth0 from the browser across origins (embedded login, cross-origin authentication). Read-modify-write of the list under the application's lock; removed on destroy; every other origin is left as it is.
+
+Covers: `auth0-callbacks` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: none. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `client_id` | string | yes | — | The application's Client ID. |
+| `origin` | string | yes | — | The origin, scheme and host without a path (`https://pr-42.preview.example.app`). Matches `^https?://[^/\\s]+$`. |
+
+```yaml
+providers:
+  http:
+    auth0:
+      recipe: auth0
+      base_url: https://acme.eu.auth0.com/api/v2
+changes:
+  - id: allowed_origin
+    adapter: http
+    op: list_item
+    recipe: auth0.allowed_origin
+    client_id: AbC123dEf456GhI789jKl012MnO345pQ
+    origin: https://${ctx.scope}.preview.example.app
+```
+
+What the line expands into: the [`http.list_item`](plan-format.md#httplist_item) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+parent:
+  path: /clients/{client_id}
+  read_path: /clients/{client_id}?fields=callbacks,allowed_logout_urls,web_origins,allowed_origins&include_fields=true
+list_path: /allowed_origins
+item: { param: origin }
+```
 
 ## Cloudflare
 
@@ -235,6 +417,62 @@ item:
     intValue: null
     doubleValue: null
     predefinedVariationId: null
+```
+
+## Firebase Authentication
+
+Recipe file: [`packages/adapters/recipes/firebase.yaml`](../packages/adapters/recipes/firebase.yaml). Verified on 2026-10-11 against:
+
+- [Identity Toolkit API v2, projects.getConfig](https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/projects/getConfig)
+- [Identity Toolkit API v2, projects.updateConfig](https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/projects/updateConfig)
+- [Identity Toolkit API v2, Config](https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/Config)
+- [Authenticate for using REST](https://docs.cloud.google.com/docs/authentication/rest)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://identitytoolkit.googleapis.com/admin/v2` |
+| `base_url_env` | `FIREBASE_API_URL` |
+| Credential | the token `gcloud auth print-access-token` prints (bearer) |
+
+Assumptions:
+
+- **FB1** (verified, [source](https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/projects/getConfig)): `GET https://identitytoolkit.googleapis.com/admin/v2/projects/{project}/config` answers the project's Auth `Config`.
+- **FB2** (verified, [source](https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/projects/updateConfig)): `PATCH …/admin/v2/projects/{project}/config?updateMask=authorizedDomains` updates the config with a `Config` body; fields set in the body but not named in `updateMask` are ignored, so the write changes the authorized domains only. It needs one of the `identitytoolkit`, `firebase` or `cloud-platform` OAuth scopes.
+- **FB3** (verified, [source](https://docs.cloud.google.com/identity-platform/docs/reference/rest/v2/Config)): `authorizedDomains` is a list of strings, the domains authorized for OAuth redirects; the masked field is replaced by the list sent, so the recipe sends the whole list read just before with one domain added or removed.
+- **FB4** (verified, [source](https://docs.cloud.google.com/docs/authentication/rest)): `gcloud auth print-access-token` prints an access token for the signed-in credentials, used as `Authorization: Bearer`. With user credentials some APIs also need the quota project in `x-goog-user-project`: add `headers: { x-goog-user-project: <project> }` to the `providers.http.firebase` block (not needed with a service account; a block's headers are part of its identity).
+- **FB5** **(unverified)**: The config has no precondition the update honours (no etag in `Config`): the line locks the project's config (`lockOn`) against other Sponson runs; a console edit made between the read and the write can still be lost.
+- **FB6** **(unverified)**: An authorized domain is a host name without scheme, port or path, and is read back exactly as written.
+- **FB7** **(unverified)**: The same admin v2 config holds the authorized domains of a Firebase Authentication project with or without the Identity Platform upgrade.
+
+### `firebase.authorized_domain`
+
+**Authorized domain** (`http.list_item`). One domain in Firebase Authentication's authorized domains (Authentication, Settings, Authorized domains), which OAuth sign-in redirects and email links require, such as the preview deployment's host. Read-modify-write of the list with `updateMask=authorizedDomains` under a lock on the project's config; removed on destroy; every other domain (localhost, the Firebase hosting domains) is left as it is.
+
+Covers: `firebase-auth-domains` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: none. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `project` | string | yes | — | The Google Cloud / Firebase project id. |
+| `domain` | string | yes | — | The domain, a host name without scheme or path (`pr-42.preview.example.app`, `my-app-git-feat-x.vercel.app`). Matches `^[A-Za-z0-9.-]+$`. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: authorized_domain
+  adapter: http
+  op: list_item
+  recipe: firebase.authorized_domain
+  project: demo-project
+  domain: ${ctx.scope}.preview.example.app
+```
+
+What the line expands into: the [`http.list_item`](plan-format.md#httplist_item) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+parent:
+  path: /projects/{project}/config?updateMask=authorizedDomains
+  read_path: /projects/{project}/config
+list_path: /authorizedDomains
+item: { param: domain }
 ```
 
 ## GitHub
@@ -523,6 +761,256 @@ delete:
   path: /1/markers/{dataset}/{id}
 fields:
   url: { param: url }
+```
+
+## Kinde
+
+Recipe file: [`packages/adapters/recipes/kinde.yaml`](../packages/adapters/recipes/kinde.yaml). Verified on 2026-10-11 against:
+
+- [Kinde Management API (OpenAPI specification)](https://api-spec.kinde.com/kinde-management-api-spec.yaml)
+- [Access the Kinde Management API](https://docs.kinde.com/developer-tools/kinde-api/connect-to-kinde-api/)
+- [Kinde Management API JS SDK (conventional variable names)](https://github.com/kinde-oss/management-api-js)
+
+| API default | Value |
+|---|---|
+| `base_url` | none: set it in the provider block |
+| `base_url_env` | `KINDE_API_URL` |
+| Credential | `KINDE_MANAGEMENT_CLIENT_ID` / `KINDE_MANAGEMENT_CLIENT_SECRET` (OAuth2 client credentials) |
+| Token endpoint | `/oauth2/token` on the origin of `base_url`; override: `KINDE_TOKEN_URL` |
+| Audience | `/api` on the origin of `base_url` |
+
+Assumptions:
+
+- **KI1** (verified, [source](https://docs.kinde.com/developer-tools/kinde-api/connect-to-kinde-api/)): A machine-to-machine application authorized for the Management API gets a token from `POST https://<business>.kinde.com/oauth2/token` (form-encoded `grant_type=client_credentials`, `client_id`, `client_secret`, `audience=https://<business>.kinde.com/api`); API calls go to `https://<business>.kinde.com/api/v1/…`. The recipe writes the token URL and audience as paths, so a plan's `base_url: https://<business>.kinde.com/api/v1` names the business once.
+- **KI2** (verified, [source](https://api-spec.kinde.com/kinde-management-api-spec.yaml)): `GET /api/v1/applications/{app_id}/auth_redirect_urls` (scope `read:applications_redirect_uris`) answers `{ redirect_urls: [...] }`; `PUT` on the same path (scope `update:applications_redirect_uris`) replaces all of an application's callback URLs with the body's `urls` array. (`POST` adds and `DELETE ?urls=` removes; the recipe replaces the list it read, under a lock, so that one apply is one idempotent write.)
+- **KI3** (verified, [source](https://api-spec.kinde.com/kinde-management-api-spec.yaml)): `GET /api/v1/applications/{app_id}/auth_logout_urls` answers `{ logout_urls: [...] }` and `PUT` replaces them with the body's `urls` array, as for callback URLs.
+- **KI4** (verified, [source](https://docs.kinde.com/developer-tools/kinde-api/connect-to-kinde-api/)): The audience is always the business's kinde.com subdomain (`https://<business>.kinde.com/api`), even when a custom domain serves sign-in, so `base_url` names the kinde.com subdomain.
+- **KI5** (verified, [source](https://github.com/kinde-oss/management-api-js)): `KINDE_MANAGEMENT_CLIENT_ID` and `KINDE_MANAGEMENT_CLIENT_SECRET` are the variables Kinde's Management API SDK reads for the machine-to-machine client.
+- **KI6** **(unverified)**: A `PUT` with an empty `urls` list is accepted and leaves the application with no URLs of that kind (destroying the last preview URL of an application that has no others).
+- **KI7** **(unverified)**: URLs are read back exactly as written (no normalisation), and the replace has no precondition: the line locks the list (`lockOn`) against other Sponson runs; a console edit made between the read and the write can still be lost.
+
+### `kinde.callback_url`
+
+**Application callback URL** (`http.list_item`). One URL in a Kinde application's Allowed callback URLs, such as the preview's `/api/auth/kinde_callback`. Read-modify-write: the list is read (`redirect_urls`) and replaced (`urls`) with the URL added, under a lock on the list; removed on destroy; every other URL is left as it is.
+
+Covers: `kinde-callbacks` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: none. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `app_id` | string | yes | — | The application's id (its Client ID in the Kinde dashboard). |
+| `url` | string | yes | — | The callback URL, exactly as the SDK sends it (`KINDE_REDIRECT_URL` / `KINDE_SITE_URL` + the callback path). Matches `^https?://\\S+$`. |
+
+```yaml
+providers:
+  http:
+    kinde:
+      recipe: kinde
+      base_url: https://acme.kinde.com/api/v1
+changes:
+  - id: callback_url
+    adapter: http
+    op: list_item
+    recipe: kinde.callback_url
+    app_id: 3b0b5c6c8fcc464fab397f4969b5f482
+    url: https://${ctx.scope}.preview.example.app/api/auth/kinde_callback
+```
+
+What the line expands into: the [`http.list_item`](plan-format.md#httplist_item) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+parent:
+  path: /applications/{app_id}/auth_redirect_urls
+  method: PUT
+  write_list_path: /urls
+list_path: /redirect_urls
+item: { param: url }
+```
+
+### `kinde.logout_url`
+
+**Application allowed logout redirect URL** (`http.list_item`). One URL in a Kinde application's Allowed logout redirect URLs, such as the preview's home page. Read (`logout_urls`) and replaced (`urls`) with the URL added, under a lock on the list; removed on destroy; every other URL is left as it is.
+
+Covers: `kinde-callbacks` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: none. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `app_id` | string | yes | — | The application's id (its Client ID in the Kinde dashboard). |
+| `url` | string | yes | — | The URL the SDK redirects to after logout (`KINDE_POST_LOGOUT_REDIRECT_URL`). Matches `^https?://\\S+$`. |
+
+```yaml
+providers:
+  http:
+    kinde:
+      recipe: kinde
+      base_url: https://acme.kinde.com/api/v1
+changes:
+  - id: logout_url
+    adapter: http
+    op: list_item
+    recipe: kinde.logout_url
+    app_id: 3b0b5c6c8fcc464fab397f4969b5f482
+    url: https://${ctx.scope}.preview.example.app
+```
+
+What the line expands into: the [`http.list_item`](plan-format.md#httplist_item) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+parent:
+  path: /applications/{app_id}/auth_logout_urls
+  method: PUT
+  write_list_path: /urls
+list_path: /logout_urls
+item: { param: url }
+```
+
+## Okta
+
+Recipe file: [`packages/adapters/recipes/okta.yaml`](../packages/adapters/recipes/okta.yaml). Verified on 2026-10-11 against:
+
+- [Okta Management API (OpenAPI specification, management-minimal.yaml)](https://raw.githubusercontent.com/okta/okta-management-openapi-spec/master/dist/current/management-minimal.yaml)
+- [Applications API, replace an application](https://developer.okta.com/docs/api/openapi/okta-management/management/tag/Application/#tag/Application/operation/replaceApplication)
+- [Trusted Origins API](https://developer.okta.com/docs/api/openapi/okta-management/management/tag/TrustedOrigin/)
+- [Okta Terraform provider, configuration (conventional variable names)](https://raw.githubusercontent.com/okta/terraform-provider-okta/master/docs/index.md)
+
+| API default | Value |
+|---|---|
+| `base_url` | none: set it in the provider block |
+| `base_url_env` | `OKTA_API_URL` |
+| Credential | `OKTA_API_TOKEN` (header `Authorization`, after `SSWS`) |
+
+Assumptions:
+
+- **OK1** (verified, [source](https://raw.githubusercontent.com/okta/okta-management-openapi-spec/master/dist/current/management-minimal.yaml)): An API token is sent as `Authorization: SSWS <token>` (the `apiToken` security scheme; Okta recommends scoped OAuth tokens, which need `private_key_jwt` and are not supported here). Every path is under `https://<org>.okta.com/api/v1`.
+- **OK2** (verified, [source](https://raw.githubusercontent.com/okta/okta-management-openapi-spec/master/dist/current/management-minimal.yaml)): `PUT /api/v1/apps/{appId}` replaces an application: all required properties must be in the body (no partial update), and system-assigned properties (`id`, `name`, `status`, `created`, `lastUpdated`) in the body are ignored. So the recipe sends the whole application read with `GET /api/v1/apps/{appId}` back, with one URI added or removed (`parent.send: parent`).
+- **OK3** (verified, [source](https://raw.githubusercontent.com/okta/okta-management-openapi-spec/master/dist/current/management-minimal.yaml)): An OIDC application keeps its redirect URIs in `settings.oauthClient.redirect_uris` and its sign-out redirect URIs in `settings.oauthClient.post_logout_redirect_uris`, both arrays of strings.
+- **OK4** **(unverified)**: The read-only members of the GET answer that the replace documentation does not list (`_links`, `_embedded`, `credentials.oauthClient.client_id`) are ignored when sent back, as the listed system-assigned ones are.
+- **OK5** **(unverified)**: The application replace has no precondition: the line locks the application (`lockOn`, shared by both URI ops) against other Sponson runs; a console edit made between the read and the write can still be lost (the next apply reports it as drift).
+- **OK6** (verified, [source](https://raw.githubusercontent.com/okta/okta-management-openapi-spec/master/dist/current/management-minimal.yaml)): `POST /api/v1/trustedOrigins` creates a trusted origin from `name`, `origin` and `scopes` (`[{ type: CORS }, { type: REDIRECT }]`, or `IFRAME_EMBED`); `GET /api/v1/trustedOrigins` lists them as a bare array, `q` prefix-matching `name` and `origin`, `limit` up to 200; `PUT /api/v1/trustedOrigins/{id}` replaces one; `DELETE /api/v1/trustedOrigins/{id}` answers 204. `name` and `origin` are each unique.
+- **OK7** **(unverified)**: A trusted origin is found among the first 200 that `q=<origin>` matches (pagination follows a `Link` header, which the http adapter does not read); an org with more than 200 origins starting with the same text may not find it and would see the create refused as a duplicate.
+- **OK8** **(unverified)**: Scopes are read back as written (`[{ type: CORS }, { type: REDIRECT }]`, no added members), so they can be compared as drift.
+- **OK9** (verified, [source](https://raw.githubusercontent.com/okta/terraform-provider-okta/master/docs/index.md)): `OKTA_API_TOKEN` is the variable the Okta Terraform provider reads for an API token.
+
+### `okta.redirect_uri`
+
+**OIDC application sign-in redirect URI** (`http.list_item`). One URI in an Okta OIDC application's sign-in redirect URIs (`settings.oauthClient.redirect_uris`), such as the preview's `/login/callback`. The application is read, and written back whole with the URI added (Okta replaces applications only as a whole), under a lock on the application; removed on destroy; every other URI and setting is sent back as read.
+
+Covers: `okta-redirect` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: none. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `app_id` | string | yes | — | The application's id (`0oa…`). |
+| `url` | string | yes | — | The redirect URI, exactly as the application sends it as `redirect_uri`. Matches `^\\S+://\\S+$`. |
+
+```yaml
+providers:
+  http:
+    okta:
+      recipe: okta
+      base_url: https://acme.okta.com/api/v1
+changes:
+  - id: redirect_uri
+    adapter: http
+    op: list_item
+    recipe: okta.redirect_uri
+    app_id: 0oa1gjh63g214q0Hq0g4
+    url: https://${ctx.scope}.preview.example.app/login/callback
+```
+
+What the line expands into: the [`http.list_item`](plan-format.md#httplist_item) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+parent:
+  path: /apps/{app_id}
+  method: PUT
+  send: parent
+list_path: /settings/oauthClient/redirect_uris
+item: { param: url }
+```
+
+### `okta.post_logout_redirect_uri`
+
+**OIDC application sign-out redirect URI** (`http.list_item`). One URI in an Okta OIDC application's sign-out redirect URIs (`settings.oauthClient.post_logout_redirect_uris`), such as the preview's home page. Written back with the whole application, under the application's lock; removed on destroy; every other URI and setting is sent back as read.
+
+Covers: `okta-redirect` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: none. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `app_id` | string | yes | — | The application's id (`0oa…`). |
+| `url` | string | yes | — | The URI the application passes as `post_logout_redirect_uri`. Matches `^\\S+://\\S+$`. |
+
+```yaml
+providers:
+  http:
+    okta:
+      recipe: okta
+      base_url: https://acme.okta.com/api/v1
+changes:
+  - id: post_logout_redirect_uri
+    adapter: http
+    op: list_item
+    recipe: okta.post_logout_redirect_uri
+    app_id: 0oa1gjh63g214q0Hq0g4
+    url: https://${ctx.scope}.preview.example.app
+```
+
+What the line expands into: the [`http.list_item`](plan-format.md#httplist_item) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+parent:
+  path: /apps/{app_id}
+  method: PUT
+  send: parent
+list_path: /settings/oauthClient/post_logout_redirect_uris
+item: { param: url }
+```
+
+### `okta.trusted_origin`
+
+**Trusted origin (CORS and redirect)** (`http.resource`). A trusted origin for the preview, so the Okta Sign-In Widget and Auth JS may call Okta from it (CORS) and Okta may redirect to it after sign-in or sign-out (REDIRECT). Found by its origin; its name and scopes are compared as drift and replaced with `PUT`; deleted on destroy.
+
+Covers: `okta-redirect` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `name` | string | yes | — | The trusted origin's name, unique in the org. |
+| `origin` | string | yes | — | The origin, scheme and host without a path (`https://pr-42.preview.example.app`); unique in the org. Matches `^\\S+://[^/\\s]+$`. |
+| `scopes` | list | no | `[{"type":"CORS"},{"type":"REDIRECT"}]` | What the origin is trusted for: `[{ type: CORS }]`, `[{ type: REDIRECT }]`, both (the default), or `IFRAME_EMBED`. |
+
+```yaml
+providers:
+  http:
+    okta:
+      recipe: okta
+      base_url: https://acme.okta.com/api/v1
+changes:
+  - id: trusted_origin
+    adapter: http
+    op: resource
+    recipe: okta.trusted_origin
+    name: sponson-${ctx.scope}
+    origin: https://${ctx.scope}.preview.example.app
+```
+
+What the line expands into: the [`http.resource`](plan-format.md#httpresource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /trustedOrigins?q={origin}&limit=200
+  list_path: ""
+  match:
+    origin: { param: origin }
+create:
+  path: /trustedOrigins
+update:
+  method: PUT
+  path: /trustedOrigins/{id}
+delete:
+  path: /trustedOrigins/{id}
+item_path: ""
+fields:
+  name: { param: name }
+  origin: { param: origin }
+  scopes: { param: scopes }
 ```
 
 ## PostHog
