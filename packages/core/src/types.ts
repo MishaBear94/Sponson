@@ -471,6 +471,12 @@ export interface AdapterAbout {
   baseUrlEnv?: string;
   /** Further variables the credential needs, when one is not enough (PlanetScale: the service token's id). */
   extraCredentialEnv?: readonly string[];
+  /**
+   * The command whose output is the credential, for an adapter that takes a CLI's access token instead of reading a
+   * variable (Cloud Run: `gcloud auth print-access-token`). `credentialEnv` then names the command for people, and no
+   * variable is listed as the credential.
+   */
+  credentialCommand?: readonly string[];
   /** The provider as people write it (Vercel, Cloudflare Pages): `sponson init`'s summary and the provider catalog. */
   title?: string;
   /** The id of the docs/coverage.yaml category the adapter belongs to (deploy, databases, auth, …). */

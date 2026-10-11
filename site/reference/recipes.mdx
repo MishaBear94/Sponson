@@ -50,7 +50,6 @@ names are set.
 | [`auth0.web_origin`](/reference/recipes#auth0-web_origin) | `list_item` | Application allowed web origin | `AUTH0_CLIENT_ID` / `AUTH0_CLIENT_SECRET` (OAuth2 client credentials) |
 | [`auth0.allowed_origin`](/reference/recipes#auth0-allowed_origin) | `list_item` | Application allowed origin (CORS) | `AUTH0_CLIENT_ID` / `AUTH0_CLIENT_SECRET` (OAuth2 client credentials) |
 | [`azure_swa.build_app_setting`](/reference/recipes#azure_swa-build_app_setting) | `list_item` | App setting of a preview environment | the token `az account get-access-token --query accessToken -o tsv` prints (bearer) |
-| [`cloud_run.traffic_tag`](/reference/recipes#cloud_run-traffic_tag) | `list_item` | Traffic tag of a revision | the token `gcloud auth print-access-token` prints (bearer) |
 | [`cloudflare.dns_cname`](/reference/recipes#cloudflare-dns_cname) | `resource` | DNS CNAME record | `CLOUDFLARE_API_TOKEN` (bearer) |
 | [`cockroachdb.database`](/reference/recipes#cockroachdb-database) | `resource` | Database in a cluster | `COCKROACH_API_KEY` (bearer) |
 | [`cockroachdb.sql_user`](/reference/recipes#cockroachdb-sql_user) | `resource` | SQL user in a cluster | `COCKROACH_API_KEY` (bearer) |
@@ -455,76 +454,6 @@ list_path: /properties
 shape: map
 item: { param: name }
 value: { param: value }
-```
-
-## Google Cloud Run
-
-Recipe file: [`packages/adapters/recipes/cloud_run.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/cloud_run.yaml). Verified on 2026-10-11 against:
-
-- [REST Resource: projects.locations.services (Service, TrafficTarget)](https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.services)
-- [Method: projects.locations.services.patch](https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.services/patch)
-- [Method: projects.locations.services.get](https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.services/get)
-- [Rollbacks, gradual rollouts, and traffic migration (tags)](https://cloud.google.com/run/docs/rollouts-rollbacks-traffic-migration)
-- [gcloud auth print-access-token](https://cloud.google.com/sdk/gcloud/reference/auth/print-access-token)
-
-| API default | Value |
-|---|---|
-| `base_url` | `https://run.googleapis.com/v2` |
-| `base_url_env` | `CLOUD_RUN_API_URL` |
-| Credential | the token `gcloud auth print-access-token` prints (bearer) |
-
-Assumptions:
-
-- **CR1** (verified, [source](https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.services)): `GET https://run.googleapis.com/v2/projects/{project}/locations/{location}/services/{service}` answers the Service with its `traffic` list and an `etag`, 'a system-generated fingerprint for this version of the resource' that 'may be used to detect modification conflict during updates'.
-- **CR2** (verified, [source](https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.services/patch)): `PATCH https://run.googleapis.com/v2/{service.name}` takes a Service and an optional `updateMask` (fields to update), answers a long-running Operation, and needs the `cloud-platform` scope; the recipe sends `?updateMask=traffic` with `{ traffic, etag }` only, so the revision template is never written.
-- **CR3** (verified, [source](https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.services)): A TrafficTarget is `{ type, revision, percent, tag }`; `type: TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION` sends traffic to the named `revision`, `percent` defaults to zero, and `tag` is 'a string to be part of the URI to exclusively reference this target', which is the per-PR URL.
-- **CR4** (verified, [source](https://cloud.google.com/sdk/gcloud/reference/auth/print-access-token)): `gcloud auth print-access-token` prints an OAuth access token for the active account, sent as a bearer token.
-- **CR5** **(unverified)**: A patch whose `etag` no longer matches (a deploy changed the service after the read) is refused (409 ABORTED or 412) rather than applied: the line fails and the next apply reads again, so a concurrent `gcloud run deploy` is never overwritten. Sponson's own writers are serialised by the parent lock.
-- **CR6** **(unverified)**: The Service answered right after the patch's Operation is accepted already shows the new `traffic` (the desired state), so the re-read that confirms the write sees the tag; `percent` 0 is left out of the answer and `type` and `revision` are answered as sent.
-- **CR7** **(unverified)**: The revision a tag points to exists before the line applies: the PR's deploy creates it (`gcloud run deploy --no-traffic --revision-suffix <scope>` gives `<service>-<scope>`). Its environment variables are part of that revision, set by the deploy, not by this recipe; a deploy that tags (`--tag`) itself conflicts with this line's tag.
-
-### `cloud_run.traffic_tag`
-
-**Traffic tag of a revision** (`http.list_item`). A tag (`pr-42`) in a service's `traffic` list pointing at the PR's revision with no traffic share, which gives the revision its own URL (`https://pr-42---<service>-<hash>.a.run.app`). Read-modify-write of `traffic` only (`updateMask=traffic`), sent with the service's `etag` so a concurrent deploy makes the write fail instead of being overwritten (CR5); other tags and the traffic split are left alone, and destroy removes only this tag. The revision itself, and its environment variables, are the deploy's (CR7).
-
-Covers: — in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: none. On destroy: deleted (`destroy: keep` on the line leaves it).
-
-| Param | Type | Required | Default | Meaning |
-|---|---|---|---|---|
-| `project` | string | yes | — | The Google Cloud project id. |
-| `region` | string | yes | — | The service's region. |
-| `service` | string | yes | — | The Cloud Run service's name. |
-| `tag` | string | yes | — | The tag, the prefix of the revision's own URL. Matches `^[a-z][a-z0-9-]*$`. |
-| `revision` | string | yes | — | The revision the tag points to (made by the PR's deploy). |
-
-```yaml
-# under changes: (no provider block needed)
-- id: traffic_tag
-  adapter: http
-  op: list_item
-  recipe: cloud_run.traffic_tag
-  project: demo-project
-  region: us-central1
-  service: web
-  tag: ${ctx.scope}
-  revision: web-${ctx.scope}
-```
-
-What the line expands into: the [`http.list_item`](/reference/plan-format#http-list_item) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
-
-```yaml
-parent:
-  path: /projects/{project}/locations/{region}/services/{service}?updateMask=traffic
-  read_path: /projects/{project}/locations/{region}/services/{service}
-  method: PATCH
-  send:
-    - etag
-list_path: /traffic
-key_field: tag
-item:
-  tag: { param: tag }
-  revision: { param: revision }
-  type: TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION
 ```
 
 ## Cloudflare

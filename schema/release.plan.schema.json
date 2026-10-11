@@ -25,6 +25,17 @@
           "description": "Nothing to configure: the account is the token's. Credential: DIGITALOCEAN_ACCESS_TOKEN in the environment.",
           "additionalProperties": false
         },
+        "cloud_run": {
+          "type": "object",
+          "description": "The Google Cloud project id and the region of the services. Credential: the token `gcloud auth print-access-token` prints (gcloud on PATH, logged in).",
+          "required": ["project", "region"],
+          "properties": {
+            "project": { "type": "string", "minLength": 1 },
+            "region": { "type": "string", "minLength": 1 },
+            "production": { "type": "boolean", "description": "The services are production for this plan: every run with a cloud_run line needs approval. Default false (traffic is never moved)." }
+          },
+          "additionalProperties": false
+        },
         "xata": {
           "type": "object",
           "description": "Xata organization and project ids. Credential: XATA_API_KEY in the environment.",
@@ -227,7 +238,7 @@
       "required": ["id", "adapter", "op"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk, planetscale, launchdarkly, supabase, netlify, cloudflare, algolia, xata, digitalocean, http (any JSON REST API described in the plan), and manual (a step a person does by hand). Plugins (SPONSON_PLUGINS) add more." },
+        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk, planetscale, launchdarkly, supabase, netlify, cloudflare, algolia, xata, digitalocean, cloud_run, http (any JSON REST API described in the plan), and manual (a step a person does by hand). Plugins (SPONSON_PLUGINS) add more." },
         "op": { "type": "string", "minLength": 1 },
         "environments": { "$ref": "#/$defs/nameList", "description": "Environments this line applies to. Absent: all." },
         "depends_on": { "type": "array", "items": { "$ref": "#/$defs/id" }, "description": "Ordering without a data dependency. Prefer `from:` references." }
@@ -309,6 +320,10 @@
         {
           "if": { "required":  ["adapter", "op"], "properties":  { "adapter":  { "const":  "digitalocean" }, "op":  { "const":  "app" }}},
           "then": { "$ref": "#/$defs/op_digitalocean_app" }
+        },
+        {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "cloud_run" }, "op": { "const": "revision" } } },
+          "then": { "$ref": "#/$defs/op_cloud_run_revision" }
         }
       ]
     },
@@ -943,6 +958,28 @@
           "type": "boolean",
           "description": "Wait for the deployment a create or update starts. Default true."
         }
+      },
+      "additionalProperties": false
+    },
+    "op_cloud_run_revision": {
+      "description": "cloud_run.revision: a revision of an existing Cloud Run service per scope with this image and these variables, tagged, serving no traffic. Outputs: revision, url (the tag's URL).",
+      "required": ["service", "image"],
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "service": { "type": "string", "minLength": 1, "description": "The existing service's name." },
+        "image": { "$ref": "#/$defs/stringOrRef", "description": "The container image, e.g. us-docker.pkg.dev/<project>/<repo>/app:${ctx.git.sha}." },
+        "env": {
+          "type": "object",
+          "description": "NAME: value, set on the revision's container over the service template's variables. A value is a literal, `{ from }` or `{ secret }` (not `{ keep: true }`).",
+          "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "additionalProperties": { "anyOf": [{ "$ref": "#/$defs/literal" }, { "$ref": "#/$defs/fromRef" }, { "$ref": "#/$defs/secretRef" }] }
+        },
+        "tag": { "type": "string", "description": "The traffic tag (lowercase letters, digits and -). Default: the scope, e.g. pr-42." },
+        "container": { "type": "string", "minLength": 1, "description": "The container of a multi-container service to set. Default: the only one, or the one with ports." }
       },
       "additionalProperties": false
     }

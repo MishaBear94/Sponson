@@ -29,6 +29,7 @@ All fetched on 2026-10-10 (LaunchDarkly, PlanetScale, Supabase, Netlify: 2026-10
 | Algolia | Search API reference https://www.algolia.com/doc/rest-api/search/, generated from https://github.com/algolia/api-clients-automation (`specs/search`: `spec.yml`, `operationIndex.yml`, `getTask.yml`, `settings.yml`, `listIndices.yml`); copy guide https://www.algolia.com/doc/guides/sending-and-managing-data/manage-indices-and-apps/manage-indices/how-to/copy-indices; CLI authentication https://www.algolia.com/doc/tools/cli/authentication | fetched 2026-10-11 |
 | Xata | OpenAPI document https://api.xata.tech/openapi.json; docs https://xata.io/docs/cli, https://xata.io/docs/cli/branch, https://xata.io/docs/platform/branch | fetched 2026-10-11 |
 | DigitalOcean | OpenAPI document https://github.com/digitalocean/openapi (`specification/resources/apps`: `apps_create.yml`, `apps_get.yml`, `apps_update.yml`, `apps_delete.yml`, `apps_list.yml`, `apps_get_deployment.yml`, `models/app.yml`, `models/app_spec.yml`, `models/app_variable_definition.yml`, `models/apps_deployment_phase.yml`), rendered at https://docs.digitalocean.com/reference/api/digitalocean/#tag/Apps; app spec reference https://docs.digitalocean.com/products/app-platform/reference/app-spec/ | fetched 2026-10-11 |
+| Google Cloud Run | Discovery document https://run.googleapis.com/$discovery/rest?version=v2 (Service, RevisionTemplate, TrafficTarget, TrafficTargetStatus, Revision, Condition, Operation, Status; `services.patch`, `services.revisions.get`, `operations.get`); REST reference https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.services and [`…/patch`](https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.services/patch); docs https://docs.cloud.google.com/run/docs/rollouts-rollbacks-traffic-migration, https://docs.cloud.google.com/run/docs/configuring/services/containers, https://docs.cloud.google.com/run/docs/managing/revisions, https://docs.cloud.google.com/run/docs/triggering/https-request, https://docs.cloud.google.com/run/quotas; gcloud references https://docs.cloud.google.com/sdk/gcloud/reference/run/deploy and https://docs.cloud.google.com/sdk/gcloud/reference/auth/print-access-token | fetched 2026-10-11 |
 | HashiCorp Vault | KV v2 API https://developer.hashicorp.com/vault/api-docs/secret/kv/kv-v2 ("Read secret version"); HTTP API overview (token header, namespaces, status codes, error format) https://developer.hashicorp.com/vault/api-docs | fetched 2026-10-11 |
 | Infisical | CLI reference https://infisical.com/docs/cli/commands/secrets; CLI source https://github.com/Infisical/cli/blob/main/packages/cmd/secrets.go (`getSecretsByNames`), https://github.com/Infisical/cli/blob/main/packages/cmd/root.go, https://github.com/Infisical/cli/blob/main/packages/util/common.go (`FormatOutput`) | `main` on 2026-10-11 |
 | Azure Key Vault | CLI reference https://learn.microsoft.com/en-us/cli/azure/keyvault/secret#az-keyvault-secret-show; naming rules https://learn.microsoft.com/en-us/azure/key-vault/general/about-keys-secrets-certificates | fetched 2026-10-11 |
@@ -445,6 +446,37 @@ Deploy Previews cannot be rebuilt through any documented call (the docs describe
 | DO7 | `SECRET` values read back encrypted (`EV[…]`) | encryption ✅; read-back form ❓ |
 | DO8 | `DELETE` removes the app | ✅ verified |
 
+## Google Cloud Run
+
+### Calls the adapter makes
+
+| Call | What the adapter sends and reads | Spec | Notes |
+|---|---|---|---|
+| base URL and auth | `https://run.googleapis.com/v2/…`, `Authorization: Bearer <the token gcloud auth print-access-token prints>` | ✅ | `cloud-platform` scope on every method (CR1). |
+| `GET /v2/projects/{p}/locations/{r}/services/{s}` | `etag`, `template`, `traffic`, `trafficStatuses[].tag`/`.uri`, `latestReadyRevision` | ✅ | Revision names taken by their last path segment: full or short is undocumented ❓ (CR2, CR7). |
+| `PATCH …/services/{s}?updateMask=template[,traffic]` | `{ template, traffic?, etag }`: the service's template with `revision`, the container's `image` and `env` set; every LATEST target bound to `latestReadyRevision` | ✅ | Answers an Operation (CR3); a template change makes a revision (CR4); the pin keeps traffic where it is, as `--no-traffic` does (CR5). Etag as precondition ❓ (CR8). |
+| `PATCH …/services/{s}?updateMask=traffic` | `{ traffic, etag }`: the list as read, the tag moved onto the revision (tag, add) or removed (destroy); shares untouched | ✅ | (CR5, CR6) |
+| `GET /v2/{operation name}` | `done`, `error.message`/`.code` | ✅ | Polled until `done` (CR9); when a template change's operation ends is ❓. |
+| `GET …/services/{s}/revisions/{rev}` | `containers[].name`/`.image`/`.env[].value`, `conditions[type=Ready].state` | ✅ | (CR10) |
+
+### Sim assumptions (`packages/sim/src/routes/cloud_run.ts`)
+
+| Id | Assumption | Status |
+|---|---|---|
+| CR1 | base URL, bearer token from gcloud, `cloud-platform` scope | ✅ verified |
+| CR2 | Service fields; `generation` as a JSON string | ✅ verified |
+| CR3 | `PATCH` with `updateMask` answers an Operation, writes only masked fields | ✅ verified |
+| CR4 | a template change makes a revision; `template.revision` names it; naming rules | ✅ verified; refusal of a taken name ❓ |
+| CR5 | TrafficTarget shape; LATEST follows the latest ready revision; `--no-traffic` pins it | ✅ verified |
+| CR6 | a tag's URL is `trafficStatuses[].uri`, not to be parsed | ✅ verified |
+| CR7 | short or full revision names in `latest*Revision` and `traffic` | ❓ (both accepted) |
+| CR8 | `etag` in the body is a precondition; a stale one is refused (409 ABORTED in the sim) | ❓ (pinned) |
+| CR9 | Operation shape; a template change's operation ends when the revision is ready, or with an error | shape ✅; timing ❓ (pinned; the adapter also waits for `Ready`) |
+| CR10 | Revision `containers`, `conditions` with type Ready | ✅ verified |
+| CR11 | after the operation, `traffic` and `trafficStatuses` are current | ✅ verified (`reconciling`) |
+| CR12 | Cloud Run deletes non-addressable revisions past 1000 per service, untrafficked tags past 2000 per region | ✅ verified; whether a tag makes a revision addressable ❓ |
+| CR13 | tags: lowercase DNS labels, unique | lowercase ✅; the rest ❓ |
+
 ## Secret sources
 
 What each built-in secret source sends and reads (`packages/adapters/src/secrets.ts`). The CLI-backed ones are
@@ -487,6 +519,8 @@ server and the generic REST sim (assumption R7's exact headers and fixed tokens)
   coming up), XA7 (how long a branch takes).
 - DigitalOcean: DO3 (status of a duplicate name), DO6 (that the stored spec keeps every sent field in order), DO7
   (what a secret reads back as).
+- Google Cloud Run: CR4 (status of a taken revision name), CR7 (short or full revision names), CR8 (whether a stale
+  etag is refused, and how), CR9 (when a template change's operation ends), CR13 (tag rules beyond lowercase).
 
 - Secret sources: Vault's answer for a soft-deleted latest version; the exact failure texts of `az`, `bws` and
   `infisical` for a missing secret.

@@ -118,21 +118,6 @@
     "key": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-web/providers/Microsoft.Web/staticSites/web/builds/42/config/appsettings?api-version=2024-04-01#/properties=API_URL",
     "id": "{\"item\":\"API_URL\",\"list\":\"/properties\",\"missing_empty\":true,\"read\":\"/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-web/providers/Microsoft.Web/staticSites/web/builds/42/listAppSettings?api-version=2024-04-01\",\"read_method\":\"POST\",\"send\":\"collection\",\"shape\":\"map\",\"write\":\"PUT /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-web/providers/Microsoft.Web/staticSites/web/builds/42/config/appsettings?api-version=2024-04-01\"}"
   },
-  "cloud_run.traffic_tag": {
-    "provider": {
-      "base_url": "https://run.googleapis.com/v2",
-      "base_url_env": "CLOUD_RUN_API_URL",
-      "auth": {
-        "command": [
-          "gcloud",
-          "auth",
-          "print-access-token"
-        ]
-      }
-    },
-    "key": "/projects/demo-project/locations/us-central1/services/web?updateMask=traffic#/traffic=pr-42",
-    "id": "{\"item\":\"pr-42\",\"key_field\":\"tag\",\"list\":\"/traffic\",\"read\":\"/projects/demo-project/locations/us-central1/services/web\",\"send\":[\"etag\"],\"shape\":\"array\",\"write\":\"PATCH /projects/demo-project/locations/us-central1/services/web?updateMask=traffic\"}"
-  },
   "cloudflare.dns_cname": {
     "provider": {
       "base_url": "https://api.cloudflare.com/client/v4",

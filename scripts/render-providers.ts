@@ -13,7 +13,7 @@ import { createRegistry, detectableProviders, loadRecipe, loadRecipes, type Dete
 import type { ProviderDetect, Registry } from "../packages/core/src/index.js";
 import { coverRefs, MANUAL_STEP, type CoverageData, type CoverageRow } from "./coverage-data.js";
 import { cell, slug } from "./md.js";
-import { credential, exampleLine, recipeLink } from "./render-recipes.js";
+import { aboutCredential, credential, exampleLine, recipeLink } from "./render-recipes.js";
 
 /** One op that manages part of a row: a first-class `adapter.op` or a recipe `provider.op`. */
 interface OpRef {
@@ -117,8 +117,7 @@ function opLink(o: OpRef): string {
 function credentialOf(o: OpRef, registry: Registry): string {
   if (o.kind === "recipe") return credential(loadRecipe(o.provider).api);
   if (`${o.provider}.${o.op}` === MANUAL_STEP) return "none (a person does it)";
-  const about = registry.adapter(o.provider).about!;
-  return [...(about.extraCredentialEnv ?? []), about.credentialEnv].map((v) => `\`${v}\``).join(" + ");
+  return aboutCredential(registry.adapter(o.provider).about!);
 }
 
 /** What `sponson init` detects an op's provider by: its adapter's `about.detect`, or its recipe's `detect`. */

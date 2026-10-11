@@ -259,6 +259,12 @@ export interface Credential {
   masks: () => string[];
 }
 
+/** Who a credential belongs to, for its errors: the adapter, and where its command is configured. */
+export interface CredentialOwner {
+  adapter: string;
+  where: string;
+}
+
 /** A token obtained at run time, and when to stop using it. */
 interface Token {
   value: string;
@@ -323,8 +329,8 @@ const EXPIRY_MARGIN_S = 60;
 /** How long a command's token is used before the command runs again (CLIs print tokens valid for 5–60 minutes). */
 export const COMMAND_TOKEN_TTL_MS = 5 * 60_000;
 
-function authError(message: string, details: Record<string, unknown> = {}): SponsonError {
-  return new SponsonError("PROVIDER_AUTH", `${ADAPTER}: ${message}`, { adapter: ADAPTER, ...details });
+function authError(message: string, details: Record<string, unknown> = {}, adapter: string = ADAPTER): SponsonError {
+  return new SponsonError("PROVIDER_AUTH", `${adapter}: ${message}`, { adapter, ...details });
 }
 
 /** The answer of a token endpoint: an access token of type Bearer, and when it expires. */
@@ -375,20 +381,22 @@ async function fetchOauth2(actx: AdapterContext, auth: Extract<Auth, { kind: "oa
 }
 
 /** Run the command (no shell) and take its stdout, trimmed, as the token. */
-async function fetchCommand(actx: AdapterContext, argv: string[], deps: AuthDeps, redact: (t: string) => string): Promise<Token> {
+async function fetchCommand(actx: AdapterContext, argv: string[], deps: AuthDeps, redact: (t: string) => string, who: CredentialOwner): Promise<Token> {
   const [file, ...args] = argv as [string, ...string[]];
   const shown = argv.join(" ");
+  const { adapter } = who;
+  const where = ` (${who.where})`;
   let out: string;
   try {
     out = await deps.exec(file, args, actx.env);
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") throw authError(`\`${file}\` is not installed or not on PATH (auth.command)`, { command: shown });
-    if (code === "EACCES") throw authError(`\`${file}\` on PATH is not executable (auth.command)`, { command: shown });
-    throw authError(`\`${shown}\` failed: ${redact((e as Error).message).slice(0, 500)}`, { command: shown });
+    if (code === "ENOENT") throw authError(`\`${file}\` is not installed or not on PATH${where}`, { command: shown }, adapter);
+    if (code === "EACCES") throw authError(`\`${file}\` on PATH is not executable${where}`, { command: shown }, adapter);
+    throw authError(`\`${shown}\` failed: ${redact((e as Error).message).slice(0, 500)}`, { command: shown }, adapter);
   }
   const token = out.trim();
-  if (token === "" || /\s/.test(token)) throw authError(`\`${shown}\` printed ${token === "" ? "nothing" : "more than one word"}; it must print the access token alone`, { command: shown });
+  if (token === "" || /\s/.test(token)) throw authError(`\`${shown}\` printed ${token === "" ? "nothing" : "more than one word"}; it must print the access token alone`, { command: shown }, adapter);
   return { value: token, expiresAt: deps.now() + COMMAND_TOKEN_TTL_MS };
 }
 
@@ -440,9 +448,10 @@ function lineCredential(auth: Auth, line: string): Credential {
 /**
  * The credential of an API block for this call; `line`, a line's own `credential`, replaces the variable of a bearer
  * or header form (ADR 0017, "Line credentials"). Static forms read their variables now (PROVIDER_AUTH when one is
- * unset); dynamic ones fetch or sign per request, through the run's cache.
+ * unset); dynamic ones fetch or sign per request, through the run's cache. `who` names the adapter and where its
+ * command is configured in a failed command's error (a first-class adapter built on this client, such as `cloud_run`).
  */
-export function credentialFor(actx: AdapterContext, auth: Auth, deps: AuthDeps, redact: (t: string) => string, line?: string): Credential {
+export function credentialFor(actx: AdapterContext, auth: Auth, deps: AuthDeps, redact: (t: string) => string, line?: string, who: CredentialOwner = { adapter: ADAPTER, where: "auth.command" }): Credential {
   if (line !== undefined) return lineCredential(auth, line);
   const env = actx.env;
   switch (auth.kind) {
@@ -466,7 +475,7 @@ export function credentialFor(actx: AdapterContext, auth: Auth, deps: AuthDeps, 
     }
     case "command": {
       const entry = entryFor(actx, auth, "");
-      return { token: "", authHeader: "bearer", signer: bearerSigner(actx, entry, deps, () => fetchCommand(actx, auth.argv, deps, redact)), masks: () => entry.issued };
+      return { token: "", authHeader: "bearer", signer: bearerSigner(actx, entry, deps, () => fetchCommand(actx, auth.argv, deps, redact, who)), masks: () => entry.issued };
     }
     case "sigv4":
       return { token: "", authHeader: "bearer", signer: sigv4Signer(actx, auth, deps), masks: () => [] };

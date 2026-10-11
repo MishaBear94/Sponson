@@ -110,7 +110,8 @@
                   "contributing/adr/0019-parent-object-locks",
                   "contributing/adr/0020-recipes",
                   "contributing/adr/0021-manual-steps",
-                  "contributing/adr/0022-one-off-actions"
+                  "contributing/adr/0022-one-off-actions",
+                  "contributing/adr/0023-cloud-run-revisions"
                 ]
               },
               "contributing/security",

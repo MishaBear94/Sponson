@@ -13,7 +13,7 @@ does it, the credential it reads from the environment, what `sponson init` detec
 for every provider it detects: ready to apply when it knows every value, else commented out with a `# TODO:` that
 says where to find each missing one.
 
-53 providers in 11 categories: 14 ops of first-class adapters and 57 recipe ops, plus 3 steps no API reaches, tracked as [`manual.step`](/reference/plan-format#manual-step) lines. `sponson init` detects 48 providers.
+53 providers in 11 categories: 15 ops of first-class adapters and 56 recipe ops, plus 3 steps no API reaches, tracked as [`manual.step`](/reference/plan-format#manual-step) lines. `sponson init` detects 49 providers.
 
 - First-class ops: [the plan format](/reference/plan-format#built-in-ops). Recipes: [Recipes](/reference/recipes).
 - What is covered and what is not, and why: [Provider coverage](/reference/coverage).
@@ -46,7 +46,7 @@ says where to find each missing one.
 | [Fly.io](/reference/providers#fly-io) | Per-PR app (the usual pattern is one app per PR) plus its secrets | recipe [`fly_machines.app`](/reference/recipes#fly_machines-app), recipe [`fly.secret`](/reference/recipes#fly-secret) | `FLY_API_TOKEN` (bearer) |
 | [Heroku](/reference/providers#heroku) | Review app per PR; config vars on it | recipe [`heroku.config_var`](/reference/recipes#heroku-config_var) | `HEROKU_API_KEY` (bearer) |
 | [AWS Amplify](/reference/providers#aws-amplify) | Branch (per-PR previews built in); env vars per branch | recipe [`amplify.branch`](/reference/recipes#amplify-branch), recipe [`amplify.branch_variable`](/reference/recipes#amplify-branch_variable) | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (AWS SigV4, `amplify` in `us-east-1`) |
-| [Google Cloud Run](/reference/providers#google-cloud-run) | Tagged revision per PR (`--tag pr-42`), env vars on it | recipe [`cloud_run.traffic_tag`](/reference/recipes#cloud_run-traffic_tag) | the token `gcloud auth print-access-token` prints (bearer) |
+| [Google Cloud Run](/reference/providers#google-cloud-run) | Tagged revision per PR (`--tag pr-42`), env vars on it | [`cloud_run.revision`](/reference/plan-format#cloud_run-revision) | the token `gcloud auth print-access-token` prints (bearer) |
 | [Azure Static Web Apps](/reference/providers#azure-static-web-apps) | Preview environment per PR (built in); app settings | recipe [`azure_swa.build_app_setting`](/reference/recipes#azure_swa-build_app_setting) | the token `az account get-access-token --query accessToken -o tsv` prints (bearer) |
 | [DigitalOcean App Platform](/reference/providers#digitalocean-app-platform) | No native PR previews; app per PR via its GitHub action; envs in the app spec | [`digitalocean.app`](/reference/plan-format#digitalocean-app) | `DIGITALOCEAN_ACCESS_TOKEN` |
 
@@ -215,23 +215,27 @@ Branch (per-PR previews built in); env vars per branch (variables before the bra
 
 ### Google Cloud Run
 
-Tagged revision per PR (`--tag pr-42`), env vars on it (the tag only: recipe cloud_run.traffic_tag; the revision's env vars are set by the deploy).
+Tagged revision per PR (`--tag pr-42`), env vars on it (a revision of an existing service per scope from its template, with the plan's image and variables, tagged and given no traffic (LATEST is pinned to the revision serving it); destroy removes the tag and Cloud Run deletes the revision later).
 
-- **Ops**: recipe [`cloud_run.traffic_tag`](/reference/recipes#cloud_run-traffic_tag)
+- **Ops**: [`cloud_run.revision`](/reference/plan-format#cloud_run-revision)
 - **Credential**: the token `gcloud auth print-access-token` prints (bearer)
-- **Detected by `sponson init` from**: not detected (write the line yourself)
+- **Detected by `sponson init` from**: `@google-cloud/run`, `CLOUD_RUN_*`, `K_SERVICE`
 
 ```yaml
-# under changes: (no provider block needed)
-- id: traffic_tag
-  adapter: http
-  op: list_item
-  recipe: cloud_run.traffic_tag
-  project: demo-project
-  region: us-central1
-  service: web
-  tag: ${ctx.scope}
-  revision: web-${ctx.scope}
+# from examples/cloud-run-neon-preview.plan.yaml
+providers:
+  cloud_run: { project: acme-web-prod, region: europe-west1 }
+changes:
+  - id: preview
+    adapter: cloud_run
+    op: revision
+    service: web
+    image: europe-west1-docker.pkg.dev/acme-web-prod/web/app:${ctx.git.sha}
+    env:
+      DATABASE_URL: { from: db.connection_string }
+      SESSION_SECRET: { secret: env://PREVIEW_SESSION_SECRET }
+      APP_ENV: preview
+    environments: [preview]
 ```
 
 ### Azure Static Web Apps

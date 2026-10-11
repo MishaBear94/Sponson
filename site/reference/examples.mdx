@@ -27,6 +27,7 @@ The format is specified in [docs/plan-format.md](/reference/plan-format).
 | [http-flags-webhooks-allowlists.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/http-flags-webhooks-allowlists.plan.yaml) | APIs with no adapter of their own, through the generic `http` adapter (illustrative) |
 | [cloudflare-pages-vars.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/cloudflare-pages-vars.plan.yaml) | Cloudflare Pages preview and production variables; shared preview keys; write-only secrets |
 | [google-oauth-manual-step.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/google-oauth-manual-step.plan.yaml) | a step no API can do (a Google OAuth redirect URI for the preview URL): a manual step, `--confirm` |
+| [cloud-run-neon-preview.plan.yaml](https://github.com/MishaBear94/Sponson/blob/main/examples/cloud-run-neon-preview.plan.yaml) | a Cloud Run revision per pull request with its own URL and no traffic, using a Neon branch |
 
 ## nextjs-neon-preview.plan.yaml
 
@@ -805,4 +806,55 @@ changes:
       STRIPE_SECRET_KEY: { secret: "env://STRIPE_LIVE_SECRET_KEY" }
     rewrite_secrets: true
     environments: [production]
+```
+
+## cloud-run-neon-preview.plan.yaml
+
+A Neon branch per pull request and a revision of the existing Cloud Run service `web` that uses it: the image CI
+pushed for this commit, the branch's connection string, a secret and a literal, made from the service's template and
+tagged with the scope (`pr-42`) with no share of traffic. The line's `url` output is the tag's own URL, read from
+Cloud Run (here allowed as a Clerk callback). Production's traffic stays where it is; on the first run a share on
+LATEST is pinned to the revision serving it, as `gcloud run deploy --no-traffic` does. `apply --destroy` removes the
+tag and the Neon branch; the untagged revision is left for Cloud Run, which deletes old ones past its per-service
+limit. Reference:
+[`cloud_run.revision`](/reference/plan-format#cloud_run-revision).
+
+```yaml cloud-run-neon-preview.plan.yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/MishaBear94/Sponson/main/schema/release.plan.schema.json
+#
+# A Neon branch per pull request, and a revision of the Cloud Run service `web` per pull request that uses it:
+# the image CI built for this commit, the branch's connection string, tagged `pr-42` (the scope) and serving no
+# traffic. Its own URL is the `url` output. Needs gcloud on PATH, logged in (in GitHub Actions:
+# google-github-actions/auth, then setup-gcloud), and NEON_API_KEY.
+version: 1
+environments: [preview, production]
+providers:
+  neon: { project: proj_acme_web }
+  cloud_run: { project: acme-web-prod, region: europe-west1 }
+
+changes:
+  - id: db
+    adapter: neon
+    op: branch
+    environments: [preview]
+
+  # Production's traffic stays where it is; on the first run a share on LATEST is pinned to the revision serving it
+  # (see docs/plan-format.md#cloud_runrevision for what that means for later production deploys).
+  - id: preview
+    adapter: cloud_run
+    op: revision
+    service: web
+    image: "europe-west1-docker.pkg.dev/acme-web-prod/web/app:${ctx.git.sha}"
+    env:
+      DATABASE_URL: { from: db.connection_string }
+      SESSION_SECRET: { secret: "env://PREVIEW_SESSION_SECRET" }
+      APP_ENV: preview
+    environments: [preview]
+
+  # The preview's own URL, for anything that needs it: here, a callback allowed on the Clerk instance.
+  - id: callback
+    adapter: clerk
+    op: redirect_allow
+    url: { from: preview.url }
+    environments: [preview]
 ```

@@ -28,6 +28,7 @@ Nygard's format). They explain *why* the code is the way it is; [ARCHITECTURE.md
 | [0020](0020-recipes.md) | Recipes: verified http specs as one-line building blocks | Proposed |
 | [0021](0021-manual-steps.md) | Manual steps for state no API can manage | Proposed |
 | [0022](0022-one-off-actions.md) | One-off actions: `http.action` | Proposed |
+| [0023](0023-cloud-run-revisions.md) | Cloud Run revisions: `cloud_run.revision` | Proposed |
 
 ## Writing a new record
 

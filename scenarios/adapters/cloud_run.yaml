@@ -1,0 +1,82 @@
+# The Cloud Run adapter end to end through the CLI against the sim, with gcloud faked on PATH: a tagged revision of
+# an existing service per scope with the plan's image and variables (a secret among them) and no traffic; re-apply
+# without writes; a console redeploy under the tag with another value refused until --reconcile, which puts the tag
+# back on the plan's revision; destroy removes the tag. Production's traffic (all of it on web-00001-abc) is never
+# touched. Format: see the top of scenarios/runner.test.ts.
+name: "cloud_run.revision: tagged revision per scope with no traffic, drift on its variables, destroy removes the tag"
+plan: |
+  version: 1
+  providers:
+    cloud_run: { project: demo-project, region: us-central1 }
+  changes:
+    - id: preview
+      adapter: cloud_run
+      op: revision
+      service: web
+      image: "us-docker.pkg.dev/demo-project/web/app:${ctx.git.short_sha}"
+      env:
+        API_URL: "https://api-${ctx.scope}.example.com"
+        DATABASE_URL: { secret: "env://CR_SCENARIO_DB_URL" }
+      environments: [preview]
+env:
+  SPONSON_CLOUD_RUN_POLL_MS: "5"
+  CR_SCENARIO_DB_URL: postgres://app:cr_scenario_db_pw_0042@db.example.com/app
+bins:
+  gcloud: |
+    if [ "$*" != "auth print-access-token" ]; then echo "unexpected: $*" >&2; exit 2; fi
+    echo ya29.cr_scenario_access_token_0042
+secrets: [cr_scenario_db_pw_0042, ya29.cr_scenario_access_token_0042]
+seed:
+  cloud_run:
+    services: [{ name: web, traffic: pinned, env: { NODE_ENV: production } }]
+    operationPolls: 2
+steps:
+  - run: plan --json
+    expect:
+      exit: 0
+      plan_lines: { preview: create }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { preview: applied }
+  - sim:
+      write_order: ["PATCH /cloud_run/v2/projects/demo-project/locations/us-central1/services/web", "PATCH /cloud_run/v2/projects/demo-project/locations/us-central1/services/web"]
+      state:
+        "cloud_run.services.0.traffic": { length: 2 }
+        "cloud_run.services.0.traffic.0": { type: TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION, revision: web-00001-abc, percent: 100 }
+        "cloud_run.services.0.traffic.1.tag": pr-42
+        "cloud_run.revisions": { length: 2 }
+  - run: apply --json
+    expect:
+      exit: 0
+      writes: 0
+      lines: { preview: unchanged }
+  # Someone redeploys under the tag with an edited variable: refused until --reconcile, which re-tags the plan's revision.
+  - chaos:
+      drift: { "cloud_run.service.web.tag.pr-42.env.API_URL": "https://edited.example.com" }
+  - run: plan --json
+    expect:
+      exit: 1
+      drift: [{ kind: changed, line: preview }]
+      plan_lines: { preview: blocked }
+  - run: apply --reconcile --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { preview: applied }
+  - sim:
+      state:
+        "cloud_run.services.0.traffic.0": { type: TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION, revision: web-00001-abc, percent: 100 }
+        "cloud_run.revisions": { length: 3 }
+  - run: apply --json
+    expect: { exit: 0, writes: 0, lines: { preview: unchanged } }
+  - run: apply --destroy --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { preview: destroyed }
+  - sim:
+      state:
+        "cloud_run.services.0.traffic": [{ type: TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION, revision: web-00001-abc, percent: 100 }]
+        "cloud_run.revisions": { length: 3 }

@@ -66,6 +66,8 @@ export interface StackDetection {
   recipes: Recipe[];
   /** Each provider found: the variables its credential is read from when Sponson runs. */
   credentials: Record<string, string[]>;
+  /** Each provider found that takes a CLI's token instead: the command that prints it. */
+  credentialCommands?: Record<string, readonly string[]>;
   ids: {
     vercelProject?: string;
     vercelTeam?: string;
@@ -308,6 +310,7 @@ export async function detectStack(reader: RepoReader, env: IdEnv = {}, providers
     unsupported,
     recipes: detected.flatMap(({ p }) => (p.recipe ? [p.recipe] : [])),
     credentials: Object.fromEntries(detected.map(({ p }) => [p.id, p.credentials])),
+    credentialCommands: Object.fromEntries(detected.flatMap(({ p }) => (p.credentialCommand ? [[p.id, p.credentialCommand]] : []))),
     ids,
     ...databaseVar(s),
     publicPrefix: PUBLIC_PREFIX[framework ?? ""] ?? "",

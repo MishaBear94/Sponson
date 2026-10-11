@@ -34,7 +34,7 @@ import { loadCoverage } from "./coverage-data.js";
 import { cell, slug } from "./md.js";
 import { renderMatrix, renderNumbers, renderSecretSources } from "./render-coverage.js";
 import { renderProviders, renderProvidersSummary } from "./render-providers.js";
-import { renderRecipes } from "./render-recipes.js";
+import { aboutCredential, renderRecipes } from "./render-recipes.js";
 
 export { slug };
 
@@ -129,8 +129,7 @@ export function renderAdapters(doc: string): string {
     });
     const about = registry.adapter(name).about;
     if (!about) throw new Error(`built-in adapter \`${name}\` declares no \`about\` (credentialEnv, baseUrlEnv): set it on the adapter object`);
-    const credential = [...(about.extraCredentialEnv ?? []), about.credentialEnv].map((v) => `\`${v}\``).join(" + ");
-    rows.push(`| \`${name}\` | ${ops.join(", ")} | ${credential} | ${about.baseUrlEnv ? `\`${about.baseUrlEnv}\`` : "—"} |`);
+    rows.push(`| \`${name}\` | ${ops.join(", ")} | ${aboutCredential(about)} | ${about.baseUrlEnv ? `\`${about.baseUrlEnv}\`` : "—"} |`);
   }
   return rows.join("\n");
 }

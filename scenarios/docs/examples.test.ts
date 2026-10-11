@@ -3,7 +3,8 @@
  * environment it declares: exit 0, no line in `error` or `blocked`. The sim is seeded with the projects each
  * example names, plus the live resources an adopting example expects to exist (SEEDS).
  */
-import { join } from "node:path";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { delimiter, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parsePlan, secretRefs, type Plan } from "@sponson/core";
 import { startSim, type SimHandle, type SimSeed } from "@sponson/sim";
@@ -67,6 +68,8 @@ function seedFor(file: string, plan: Plan): Partial<SimSeed> {
   if (plan.providers.launchdarkly) seed.launchdarkly = { projects: { [project(plan, "launchdarkly")]: launchdarklyProject(plan) } };
   if (plan.providers.supabase) seed.supabase = { projects: { [project(plan, "supabase")]: {} } };
   if (plan.providers.cloudflare) seed.cloudflare = { accounts: { [String(plan.providers.cloudflare.account)]: { [project(plan, "cloudflare")]: {} } } };
+  const run = plan.providers.cloud_run;
+  if (run) seed.cloud_run = { services: plan.changes.filter((c) => c.adapter === "cloud_run").map((c) => ({ project: String(run.project), region: String(run.region), name: String(c.params.service) })) };
   return { ...seed, ...(SEEDS[file]?.(plan) ?? {}) };
 }
 
@@ -98,6 +101,11 @@ function secretEnv(plan: Plan): Record<string, string> {
   return env;
 }
 
+/** For a plan with Cloud Run lines, a fake `gcloud` first on PATH that prints an access token, as CI's would. */
+function gcloudEnv(plan: Plan): Record<string, string> {
+  return plan.providers.cloud_run ? { PATH: [join(ws.dir, ".bin"), process.env.PATH].filter(Boolean).join(delimiter) } : {};
+}
+
 const examples = await examplePlans();
 
 let sim: SimHandle;
@@ -105,6 +113,9 @@ let ws: Workspace;
 beforeAll(async () => {
   sim = await startSim();
   ws = await workspace("examples");
+  await mkdir(join(ws.dir, ".bin"), { recursive: true });
+  await writeFile(join(ws.dir, ".bin", "gcloud"), '#!/bin/sh\n[ "$*" = "auth print-access-token" ] && echo ya29.example-token\n');
+  await chmod(join(ws.dir, ".bin", "gcloud"), 0o755);
 });
 afterAll(async () => {
   await sim?.close();
@@ -124,7 +135,7 @@ describe.each(examples.map((e) => [e.name.split("/").pop()!, e.source] as const)
     for (const env of plan.environments) {
       const r = await runCli(
         ["plan", "--json", "--plan", join(EXAMPLES_DIR, file), "--env", env, "--pr", "42", "--branch", "feat/checkout", "--sha", SHA, "--receipts", "local", "--receipts-dir", join(ws.dir, file)],
-        { env: cliEnv(sim, { ...secretEnv(plan), ...httpEnv(plan, sim) }), cwd: ws.dir },
+        { env: cliEnv(sim, { ...secretEnv(plan), ...httpEnv(plan, sim), ...gcloudEnv(plan) }), cwd: ws.dir },
       );
       const bad = (r.json?.lines ?? []).filter((l: { status: string }) => l.status === "error" || l.status === "blocked");
       expect({ env, code: r.code, ok: r.json?.ok, bad, error: r.json?.error }).toEqual({ env, code: 0, ok: true, bad: [], error: undefined });

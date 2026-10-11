@@ -45,10 +45,11 @@
  *
  * It creates one development branch and a password on it, and deletes both in `afterAll`.
  */
+import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CLERK_DEFAULT_API_URL, CLOUDFLARE_DEFAULT_API_URL, algoliaAdapter, digitaloceanAdapter, xataAdapter, LAUNCHDARKLY_DEFAULT_API_URL, NETLIFY_DEFAULT_API_URL, PLANETSCALE_DEFAULT_API_URL, SUPABASE_DEFAULT_API_URL, clerkAdapter, cloudflareAdapter, launchdarklyAdapter, neonAdapter, netlifyAdapter, planetscaleAdapter, supabaseAdapter, vercelAdapter } from "@sponson/adapters";
+import { CLERK_DEFAULT_API_URL, CLOUDFLARE_DEFAULT_API_URL, CLOUD_RUN_DEFAULT_API_URL, algoliaAdapter, cloudRunAdapter, createCloudRunAdapter, digitaloceanAdapter, xataAdapter, LAUNCHDARKLY_DEFAULT_API_URL, NETLIFY_DEFAULT_API_URL, PLANETSCALE_DEFAULT_API_URL, SUPABASE_DEFAULT_API_URL, clerkAdapter, cloudflareAdapter, launchdarklyAdapter, neonAdapter, netlifyAdapter, planetscaleAdapter, supabaseAdapter, vercelAdapter } from "@sponson/adapters";
 import type { AdapterContext, Ctx } from "@sponson/core";
 import { SUPABASE_DEMO_PROJECT, simEnv, startSim, type SimHandle } from "@sponson/sim";
 import { cliEnv, runCli, workspace, type CliRun, type Workspace } from "./support.js";
@@ -702,4 +703,66 @@ describe.skipIf(LIVE && !DO_LIVE)(`contract: digitalocean (${LIVE ? "@live" : "s
     expect(await op.read(dctx(), params)).toBeNull();
     made = undefined;
   }, 120_000);
+});
+
+/**
+ * Google Cloud Run (`assumption CR…`, packages/sim/src/routes/cloud_run.ts). Live only with gcloud on PATH, logged in
+ * to an account that may update the service, SPONSON_LIVE_CLOUD_RUN=1, SPONSON_LIVE_GCP_PROJECT,
+ * SPONSON_LIVE_CLOUD_RUN_REGION, SPONSON_LIVE_CLOUD_RUN_SERVICE (an existing, throwaway service) and
+ * SPONSON_LIVE_CLOUD_RUN_IMAGE (an image it can run, e.g. us-docker.pkg.dev/cloudrun/container/hello). It makes one
+ * revision tagged `sponson-ct-<tag>` with no traffic and removes the tag in `afterAll`; the revision is left for Cloud
+ * Run's retention. A share of traffic on LATEST is pinned to the revision serving it (CR5).
+ */
+const CR_VARS = ["SPONSON_LIVE_GCP_PROJECT", "SPONSON_LIVE_CLOUD_RUN_REGION", "SPONSON_LIVE_CLOUD_RUN_SERVICE", "SPONSON_LIVE_CLOUD_RUN_IMAGE"];
+const CR_LIVE = process.env.SPONSON_LIVE_CLOUD_RUN === "1" && CR_VARS.every((k) => process.env[k]);
+describe.skipIf(LIVE && !CR_LIVE)(`contract: cloud_run (${LIVE ? "@live" : "sim"})`, () => {
+  const SIM_TOKEN = "ya29.contract-sim-token";
+  const op = (LIVE ? cloudRunAdapter : createCloudRunAdapter({ exec: async () => SIM_TOKEN })).ops.revision!;
+  const place = LIVE ? { project: process.env.SPONSON_LIVE_GCP_PROJECT!, region: process.env.SPONSON_LIVE_CLOUD_RUN_REGION! } : { project: "demo-project", region: "us-central1" };
+  const service = LIVE ? process.env.SPONSON_LIVE_CLOUD_RUN_SERVICE! : "web";
+  const params = { service, tag: `sponson-ct-${tag}`, image: LIVE ? process.env.SPONSON_LIVE_CLOUD_RUN_IMAGE! : "us-docker.pkg.dev/cloudrun/container/hello", env: { SPONSON_CONTRACT: tag, SPONSON_SECRET: SECRET } };
+  const rctx = (): AdapterContext => {
+    const ctx: Ctx = { env: "preview", git: { branch, sha, short_sha: sha.slice(0, 7) }, pr: { number: pr }, scope: `pr-${pr}` };
+    return { ctx, provider: place, env: { ...env, SPONSON_CLOUD_RUN_POLL_MS: LIVE ? "3000" : "1" }, log: () => {}, intend: async () => {}, redact: (t) => t };
+  };
+  /** The service as the API answers it, read directly (CR2). */
+  const token = () => (LIVE ? execFileSync("gcloud", ["auth", "print-access-token"], { encoding: "utf8" }).trim() : SIM_TOKEN);
+  const serviceUrl = () => `${env.CLOUD_RUN_API_URL ?? CLOUD_RUN_DEFAULT_API_URL}/v2/projects/${place.project}/locations/${place.region}/services/${service}`;
+  const getService = async () => (await (await fetch(serviceUrl(), { headers: { authorization: `Bearer ${token()}` } })).json()) as { etag: string; traffic?: unknown[]; trafficStatuses?: Array<{ revision?: string; percent?: number; tag?: string; uri?: string }> };
+  /** Who serves what share: what must never change. */
+  const shares = (s: Awaited<ReturnType<typeof getService>>) => (s.trafficStatuses ?? []).filter((t) => (t.percent ?? 0) > 0).map((t) => `${t.revision}=${t.percent}`).sort();
+  let made: { key: string; id: string; hash: string } | undefined;
+  let before: string[] = [];
+
+  beforeAll(async () => {
+    before = shares(await getService());
+  }, 60_000);
+  afterAll(async () => {
+    if (made) await op.destroy(rctx(), [made]).catch(() => {});
+  }, 300_000);
+
+  it("assumption CR3, CR4, CR5, CR6, CR9, CR10, CR11: a revision is made, tagged with its own URL, and no share of traffic moves", async () => {
+    const r = await op.apply(rctx(), params, null);
+    made = r.resources[0];
+    expect(String(r.outputs.url)).toMatch(new RegExp(`^https://sponson-ct-${tag}---`));
+    expect(shares(await getService())).toEqual(before);
+    const live = await op.read(rctx(), params);
+    expect(op.diff(live, params)[0]!.kind).toBe("unchanged");
+  }, 15 * 60_000);
+
+  it("assumption CR8: a patch with a stale etag is refused and changes nothing", async () => {
+    const s = await getService();
+    const res = await fetch(`${serviceUrl()}?updateMask=traffic`, { method: "PATCH", headers: { authorization: `Bearer ${token()}`, "content-type": "application/json" }, body: JSON.stringify({ traffic: s.traffic ?? [], etag: '"sponson-stale-etag"' }) });
+    expect([409, 412]).toContain(res.status);
+    expect((await getService()).etag).toBe(s.etag);
+  }, 120_000);
+
+  it("assumption CR5, CR11: destroy removes the tag, and every share of traffic is where it was", async () => {
+    await op.destroy(rctx(), [made!]);
+    const s = await getService();
+    expect((s.trafficStatuses ?? []).some((t) => t.tag === params.tag)).toBe(false);
+    expect(shares(s)).toEqual(before);
+    expect(await op.read(rctx(), params)).toBeNull();
+    made = undefined;
+  }, 15 * 60_000);
 });

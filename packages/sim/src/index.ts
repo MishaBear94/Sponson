@@ -20,6 +20,7 @@ export * from "./routes/cloudflare.js";
 export * from "./routes/algolia.js";
 export * from "./routes/xata.js";
 export * from "./routes/digitalocean.js";
+export * from "./routes/cloud_run.js";
 export { createSimServer } from "./server.js";
 
 /**

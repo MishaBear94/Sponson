@@ -50,6 +50,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "algoliaAdapter",
     "XATA_DEFAULT_API_URL", "xataAdapter",
     "DIGITALOCEAN_DEFAULT_API_URL", "digitaloceanAdapter",
+    "CLOUD_RUN_DEFAULT_API_URL", "cloudRunAdapter", "createCloudRunAdapter",
     "manualAdapter",
   ],
   "@sponson/sim": [
@@ -73,6 +74,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "AlgoliaIndex", "AlgoliaState", "AlgoliaSeed", "algoliaSim",
     "XataBranch", "XataState", "XataSeed", "xataSim", "xataConnectionString",
     "DigitaloceanApp", "DigitaloceanState", "DigitaloceanSeed", "digitaloceanSim",
+    "CloudRunTrafficTarget", "CloudRunRevision", "CloudRunService", "CloudRunOperation", "CloudRunState", "CloudRunSeedService", "CloudRunSeed", "cloudRunSim",
   ],
   "sponson": [
     "CtxFacts", "CtxOverrides", "CtxSource", "DEFAULT_CTX_SOURCES", "RunIO", "SponsonPlugin", "bitbucketPipelinesSource",

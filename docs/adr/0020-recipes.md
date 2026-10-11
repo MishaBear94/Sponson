@@ -4,7 +4,8 @@ Date: 2026-10-11
 
 ## Status
 
-Proposed
+Proposed. Amended by [ADR 0023](0023-cloud-run-revisions.md) (Amendment 5's Google Cloud Run recipe is replaced by
+the `cloud_run.revision` op).
 
 ## Context
 

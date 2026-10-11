@@ -261,6 +261,7 @@ The base URL override replaces the provider's API base URL (the test suites poin
 | `algolia` | [`algolia.index`](/reference/plan-format#algolia-index) | `ALGOLIA_API_KEY` | `ALGOLIA_API_URL` |
 | `xata` | [`xata.branch`](/reference/plan-format#xata-branch) | `XATA_API_KEY` | `XATA_API_URL` |
 | `digitalocean` | [`digitalocean.app`](/reference/plan-format#digitalocean-app) | `DIGITALOCEAN_ACCESS_TOKEN` | `DIGITALOCEAN_API_URL` |
+| `cloud_run` | [`cloud_run.revision`](/reference/plan-format#cloud_run-revision) | the token `gcloud auth print-access-token` prints (bearer) | `CLOUD_RUN_API_URL` |
 
 A missing credential fails the line with `PROVIDER_AUTH`. Every resource has a key that identifies it within the
 adapter and provider block; the ledger treats two resources with the same key as the same resource.
@@ -1064,6 +1065,48 @@ back from the live spec: the platform's defaults and anything else not declared 
 `changed`, an edit of a secret's value is not seen. An update sends the whole spec (`PUT`): a field set only in the
 console is removed by the next update. Destroy deletes the app. Not listed for drift or adoption.
 
+### `cloud_run.revision`
+
+A revision of an existing Google Cloud Run service per scope, with the line's image and environment variables,
+reachable at its own tag URL and serving no traffic: what `gcloud run deploy --no-traffic --tag pr-42
+--update-env-vars …` does ([ADR 0023](/contributing/adr/0023-cloud-run-revisions)). Requires `providers.cloud_run.project` and
+`providers.cloud_run.region`, and `gcloud` on PATH, logged in to an account allowed to update the service (the
+adapter sends the token `gcloud auth print-access-token` prints; in GitHub Actions, `google-github-actions/auth`
+followed by `setup-gcloud`). The service must exist: Sponson makes revisions of it, never the service.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `service` | string | (required) | The service's name. |
+| `image` | string | (required) | The container image, such as `us-docker.pkg.dev/<project>/<repo>/app:${ctx.git.sha}` or a `{ from }`. |
+| `env` | map: NAME → value | `{}` | Variables set on the revision's container, over the ones the service's template has. Each value is a literal, `{ from }` or `{ secret }` (resolved and set as a plain value, which anyone who can view the service sees; for Secret Manager references, keep them in the service's template). `{ keep: true }` is refused: a revision is made whole. |
+| `tag` | string | the scope (`pr-42`) | The traffic tag, the prefix of the revision's URL: lowercase letters, digits and `-`. With the service's name it names the revision, `<service>-<tag>-<hash>`, at most 63 characters. |
+| `container` | string | the only container, or the one with `ports` | Which container of a multi-container service gets the image and variables. |
+
+The revision is made from the service's current template with the image and variables set (everything else, other
+variables included, as the template has it), by a `PATCH` with `updateMask=template` and the service's `etag`, then
+tagged by a `PATCH` of `traffic`; `apply` waits for each long-running operation and for the revision to be ready
+(failing to start fails the line with Cloud Run's message; not done within `SPONSON_CLOUD_RUN_TIMEOUT_MS`, ten
+minutes by default, is `WAIT_TIMEOUT`, and the next run carries on). A patch refused because the service changed
+meanwhile is read and tried again. Key `revision:<service>:<tag>`.
+
+**Traffic is never moved.** Every share stays where it was; a share on LATEST is bound to the revision serving it
+first, exactly as `--no-traffic` does, so the new revision gets none. That has the consequence gcloud's has: a later
+production deploy no longer receives traffic by itself (run `gcloud run services update-traffic --to-latest`, or
+deploy with `--no-traffic` and send traffic explicitly). The service's template is left as the preview revision's,
+as after any `gcloud run deploy --tag`, so a production deploy that sets only some variables (`--update-env-vars`)
+inherits the preview's others: set every variable in production deploys (`--set-env-vars`, or
+`gcloud run services replace`). A line writes no environment, so it needs no approval, unless the block says
+`production: true` (a service that is production for this plan), which makes every run with the line need approval.
+
+Outputs: `revision` (its name) and `url`, the tag's URL exactly as Cloud Run answers it in `trafficStatuses`. **Drift**
+covers the tagged revision's image and the values of the declared variables. Revisions are immutable, so a console
+edit is a redeploy under the tag, which is `changed`; reconciling puts the tag back on the plan's revision (found by
+its name, not made again). A removed tag is `missing`, and the next apply tags the revision again (Cloud Run also
+deletes tags without a traffic share by itself past 2000 per project and region). **Destroy** removes the tag, leaving
+traffic shares and other tags alone; the revision is left for Cloud Run, which deletes "non-addressable" revisions
+past 1000 per service, oldest first. Every line on a service locks it (`cloud_run:<project>/<region>:service:<service>`).
+Not listed for drift or adoption.
+
 ### Outputs
 
 The outputs each built-in op declares. `immediate` outputs exist once the line is applied; `external` ones only after
@@ -1108,6 +1151,8 @@ the named event. Sensitive outputs are never displayed, logged or written to rec
 | `xata.branch` | `connection_string` | immediate | yes |
 | `digitalocean.app` | `app_id` | immediate | no |
 | `digitalocean.app` | `live_url` | immediate | no |
+| `cloud_run.revision` | `url` | immediate | no |
+| `cloud_run.revision` | `revision` | immediate | no |
 
 ### Once-only outputs
 

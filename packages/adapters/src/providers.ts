@@ -4,7 +4,7 @@
  * this list and the provider catalog (docs/providers.md) is generated from it, so declaring `detect` on an adapter
  * or in a recipe file is all it takes for both; neither keeps a list of providers of its own.
  */
-import type { ProviderDetect, Registry } from "@sponson/core";
+import type { AdapterAbout, ProviderDetect, Registry } from "@sponson/core";
 import { loadRecipes, recipeCredentialEnv, type Recipe } from "./recipes.js";
 
 /** A provider `sponson init` can detect: who manages it, what to detect it by, and the credential it reads. */
@@ -20,8 +20,24 @@ export interface DetectableProvider {
   detect: ProviderDetect;
   /** The variables its credential is read from when Sponson runs (never written into a plan). */
   credentials: string[];
+  /** The command whose output is its credential, when it takes a CLI's token instead (`gcloud auth print-access-token`). */
+  credentialCommand?: readonly string[];
   /** For a recipe provider, its recipe. */
   recipe?: Recipe;
+}
+
+/** A first-class adapter as a detectable provider; one that takes a CLI's token reads no credential variable. */
+function adapterProvider(name: string, about: AdapterAbout, detect: ProviderDetect): DetectableProvider {
+  const command = about.credentialCommand;
+  return {
+    id: name,
+    title: about.title ?? name,
+    category: about.category ?? "other",
+    via: "adapter",
+    detect,
+    credentials: [...(about.extraCredentialEnv ?? []), ...(command ? [] : [about.credentialEnv])],
+    ...(command ? { credentialCommand: command } : {}),
+  };
 }
 
 /** The detectable providers: the registry's adapters in registration order, then the recipes by provider. */
@@ -29,15 +45,7 @@ export function detectableProviders(registry: Registry, recipes: Recipe[] = load
   const out: DetectableProvider[] = [];
   for (const name of registry.adapterNames()) {
     const about = registry.adapter(name).about;
-    if (!about?.detect) continue;
-    out.push({
-      id: name,
-      title: about.title ?? name,
-      category: about.category ?? "other",
-      via: "adapter",
-      detect: about.detect,
-      credentials: [...(about.extraCredentialEnv ?? []), about.credentialEnv],
-    });
+    if (about?.detect) out.push(adapterProvider(name, about, about.detect));
   }
   const taken = new Set(out.map((p) => p.id));
   for (const recipe of recipes) {

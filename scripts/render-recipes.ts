@@ -5,6 +5,7 @@
  */
 import { Document, isScalar, stringify, visit } from "yaml";
 import { loadRecipes, type Recipe, type RecipeOp } from "../packages/adapters/src/index.js";
+import type { AdapterAbout } from "../packages/core/src/index.js";
 import { cell, show, slug } from "./md.js";
 
 /** The heading of a recipe op's section, and so its anchor (`cloudflaredns_cname`). */
@@ -15,6 +16,12 @@ export function recipeHeading(provider: string, op: string): string {
 /** The link to a recipe op's section of docs/recipes.md, relative to `from` (a file in docs/). */
 export function recipeLink(provider: string, op: string): string {
   return `[\`${provider}.${op}\`](recipes.md#${slug(recipeHeading(provider, op).slice(4))})`;
+}
+
+/** A first-class adapter's credential as the docs show it: its variables, or the token its CLI prints. */
+export function aboutCredential(about: AdapterAbout): string {
+  if (about.credentialCommand) return `the token \`${about.credentialCommand.join(" ")}\` prints (bearer)`;
+  return [...(about.extraCredentialEnv ?? []), about.credentialEnv].map((v) => `\`${v}\``).join(" + ");
 }
 
 export function credential(api: Record<string, unknown> | undefined): string {

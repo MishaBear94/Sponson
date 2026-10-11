@@ -6,7 +6,7 @@
 import { SponsonError, canonicalJson, markerKind, type AdapterContext, type Literal, type OpSpec } from "@sponson/core";
 import { clientFor, optionalEnv } from "./common.js";
 import { isObject, isProviderError, type ApiClient } from "./http.js";
-import { DEFAULT_AUTH_DEPS, credentialFor, type Auth, type AuthDeps } from "./http-adapter-auth.js";
+import { DEFAULT_AUTH_DEPS, credentialFor, type Auth, type AuthDeps, type Credential } from "./http-adapter-auth.js";
 import { ADAPTER, at, pointerTokens, parseApi, type ApiConfig } from "./http-adapter-spec.js";
 
 /** Per-request settings on top of the API's: a vendor media type, an `Idempotency-Key`. */
@@ -101,20 +101,37 @@ function refuseCredentials(cfg: ApiConfig, env: NodeJS.ProcessEnv, line?: string
   }
 }
 
+/** What `httpClient` takes besides the request options (see there). */
+export interface ClientOptions {
+  where?: string;
+  authOptional?: boolean;
+  adapter?: string;
+  credentialWhere?: string;
+  block?: Record<string, unknown>;
+}
+
+/** The credential of this call: the line's own (checked against the block's refusals), else the block's. */
+function credentialOf(actx: AdapterContext, cfg: ApiConfig, redact: (t: string) => string, opts: ClientOptions): Credential {
+  const line = LINE_CREDENTIAL.get(actx);
+  refuseCredentials(cfg, actx.env, line);
+  const who = opts.credentialWhere ? { adapter: opts.adapter ?? ADAPTER, where: opts.credentialWhere } : undefined;
+  return credentialFor(actx, cfg.auth, DEPS.get(actx) ?? DEFAULT_AUTH_DEPS, redact, line, who);
+}
+
 /**
  * The client for the line's API. The credential (a static header, or a signer for the forms obtained or computed
  * per request) comes from http-adapter-auth.ts; everything it holds or obtains is masked in this client's error text
  * too, whatever the engine already masks. `opts`: where the block is, for messages; whether a block without `auth`
- * sends no credential (a manual step's verify request); the adapter named in errors.
+ * sends no credential (a manual step's verify request); the adapter named in errors; for an adapter whose credential
+ * is fixed rather than the block's `auth` (Cloud Run's gcloud token), what a failed command's error points at, and the
+ * API block itself when it is the adapter's rather than `actx.provider`.
  */
-export function httpClient(actx: AdapterContext, req: RequestOptions = {}, opts: { where?: string; authOptional?: boolean; adapter?: string } = {}): ApiClient {
-  const cfg = parseApi(actx.provider, opts.where ?? "providers.http.<api>", opts);
+export function httpClient(actx: AdapterContext, req: RequestOptions = {}, opts: ClientOptions = {}): ApiClient {
+  const cfg = parseApi(opts.block ?? actx.provider, opts.where ?? "providers.http.<api>", opts);
   const baseUrl = (cfg.baseUrlEnv ? optionalEnv(actx.env, cfg.baseUrlEnv) : undefined) ?? cfg.baseUrl;
   let hidden: () => string[] = () => [];
   const redact = (t: string) => hidden().reduce((s, h) => (h.length >= 4 ? s.split(h).join("****") : s), actx.redact(t));
-  const line = LINE_CREDENTIAL.get(actx);
-  refuseCredentials(cfg, actx.env, line);
-  const cred = credentialFor(actx, cfg.auth, DEPS.get(actx) ?? DEFAULT_AUTH_DEPS, redact, line);
+  const cred = credentialOf(actx, cfg, redact, opts);
   hidden = () => [cred.token, ...cred.masks()];
   const contentType = req.contentType ?? cfg.mediaType;
   return clientFor({ ...actx, redact }, opts.adapter ?? ADAPTER, {

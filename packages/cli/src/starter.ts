@@ -429,7 +429,9 @@ function adapterNotes(d: StackDetection): string[] {
   for (const f of d.found) {
     if (f.via !== "adapter" || COMPOSED.has(f.id)) continue;
     const vars = (d.credentials[f.id] ?? []).join(", ");
-    out.push(`  # ${f.name} was detected: its ops are in ${DOCS}/providers.md (${vars} is read from the environment).`, "");
+    const command = d.credentialCommands?.[f.id];
+    const how = command ? `it authenticates with the token \`${command.join(" ")}\` prints` : `${vars} is read from the environment`;
+    out.push(`  # ${f.name} was detected: its ops are in ${DOCS}/providers.md (${how}).`, "");
   }
   return out;
 }

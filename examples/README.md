@@ -22,6 +22,7 @@ The format is specified in [docs/plan-format.md](../docs/plan-format.md).
 | [http-flags-webhooks-allowlists.plan.yaml](http-flags-webhooks-allowlists.plan.yaml) | APIs with no adapter of their own, through the generic `http` adapter (illustrative) |
 | [cloudflare-pages-vars.plan.yaml](cloudflare-pages-vars.plan.yaml) | Cloudflare Pages preview and production variables; shared preview keys; write-only secrets |
 | [google-oauth-manual-step.plan.yaml](google-oauth-manual-step.plan.yaml) | a step no API can do (a Google OAuth redirect URI for the preview URL): a manual step, `--confirm` |
+| [cloud-run-neon-preview.plan.yaml](cloud-run-neon-preview.plan.yaml) | a Cloud Run revision per pull request with its own URL and no traffic, using a Neon branch |
 
 ## nextjs-neon-preview.plan.yaml
 
@@ -205,3 +206,14 @@ A pull request that sets another value for one of these keys is refused with `OW
 Cloudflare never returns a secret's value, so Sponson compares secrets by presence and type: `pages-production` sets
 `rewrite_secrets: true` so that a rotated `STRIPE_LIVE_SECRET_KEY` is written on the next apply. Variables reach the
 next deployment; Sponson does not redeploy a Pages project.
+
+## cloud-run-neon-preview.plan.yaml
+
+A Neon branch per pull request and a revision of the existing Cloud Run service `web` that uses it: the image CI
+pushed for this commit, the branch's connection string, a secret and a literal, made from the service's template and
+tagged with the scope (`pr-42`) with no share of traffic. The line's `url` output is the tag's own URL, read from
+Cloud Run (here allowed as a Clerk callback). Production's traffic stays where it is; on the first run a share on
+LATEST is pinned to the revision serving it, as `gcloud run deploy --no-traffic` does. `apply --destroy` removes the
+tag and the Neon branch; the untagged revision is left for Cloud Run, which deletes old ones past its per-service
+limit. Reference:
+[`cloud_run.revision`](../docs/plan-format.md#cloud_runrevision).

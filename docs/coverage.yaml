@@ -92,10 +92,10 @@ categories:
         provider: Google Cloud Run
         side_effect: Tagged revision per PR (`--tag pr-42`), env vars on it
         api_shape: Admin API v2 / `gcloud run deploy --tag --update-env-vars`, Google OAuth; revision = whole service spec
-        generic: "P (the tag: `recipe:cloud_run.traffic_tag`, read-modify-write of `traffic` with the etag; the revision and its env vars are the deploy's)"
+        generic: "P (the tag alone is read-modify-write of `traffic`; a revision needs the service's template copied and an operation polled)"
         priority: P2
-        covered_by: null
-        note: "the tag only: recipe cloud_run.traffic_tag; the revision's env vars are set by the deploy"
+        covered_by: cloud_run.revision
+        note: "a revision of an existing service per scope from its template, with the plan's image and variables, tagged and given no traffic (LATEST is pinned to the revision serving it); destroy removes the tag and Cloud Run deletes the revision later"
       - id: azure-swa-settings
         provider: Azure Static Web Apps
         side_effect: Preview environment per PR (built in); app settings
