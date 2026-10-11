@@ -200,10 +200,11 @@ They describe a conventional JSON REST API, not one provider; the adapter's test
 |---|---|---|
 | R1 | credentials as `Authorization: Bearer`, `Authorization: Basic`, a bare token in `Authorization` (Unleash) or a header ending in `-Api-Key`, `-Key` or `-Token` | convention |
 | R2 | `{ data }` envelopes for collection objects and lists, cursor in `next_cursor`; other objects bare; a collection's style changes the envelopes, cursor and id field; an object's style may give its reads an `item_path` envelope; a create may be posted to an alias of its collection | convention (the plan line names its own envelope with `item_path`, `list_path`, `find.next`; the recipe tests shape the style from the recipe) |
-| R3 | unknown paths are 404 until seeded or created; client-chosen ids; duplicate `name` → 409 | convention (`exists_status` covers providers that answer otherwise) |
-| R4 | PATCH is a JSON merge patch (RFC 7396); PUT replaces; JSON or form bodies; no preconditions | RFC 7396 for PATCH; the rest convention |
+| R3 | unknown paths are 404 until seeded or created; client-chosen ids; duplicate `name` → 409; a style may name objects by a query parameter (`item_query`: `?url=`) | convention (`exists_status` covers providers that answer otherwise; the query follows Stytch's management API, SY4 in its recipe) |
+| R4 | PATCH (and POST to an object, as Stripe updates) is a JSON merge patch (RFC 7396); PUT replaces; JSON or form bodies, form values typed under the style's `form_types`; no preconditions | RFC 7396 for PATCH; the rest convention; Stripe's typed form parameters (ST1) |
 | R5 | DELETE answers `{ id, deleted }`; unknown is 404 | convention (`gone_status` covers providers that answer otherwise) |
-| R6 | with an `auth` seed, credentials are checked for real: an OAuth2 client-credentials token endpoint, fixed bearer tokens, HTTP Digest, SigV4 | RFC 6749 §4.4, RFC 7616 (its §3.9.1 example is a test vector), AWS SigV4 (its published test suite is a test vector; ../auth.ts is written independently of the client) |
+| R6 | a style's `once_fields` appear only in the create's answer, never stored or listed | Stripe's webhook signing secret (ST5–ST6 in its recipe) |
+| R7 | with an `auth` seed, credentials are checked for real: an OAuth2 client-credentials token endpoint, fixed bearer tokens, HTTP Digest, SigV4 | RFC 6749 §4.4, RFC 7616 (its §3.9.1 example is a test vector), AWS SigV4 (its published test suite is a test vector; ../auth.ts is written independently of the client) |
 
 ### Authentication forms (`packages/adapters/src/http-adapter-auth.ts`)
 

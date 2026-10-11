@@ -48,6 +48,8 @@ export interface RecipeSimHints {
   numeric_ids?: boolean;
   /** Objects to seed by path (placeholders filled from the example params): a list item's parent. */
   objects?: Record<string, Record<string, unknown>>;
+  /** The query parameter the provider names one object with, when objects are keyed by a value (`url`). */
+  item_query?: string;
   /**
    * The collection a resource lives in, when its create is posted to another path (Statsig adds a rule with
    * `POST /gates/{id}/rule` and lists them at `/gates/{id}/rules`). Default: the create's path.
@@ -220,10 +222,35 @@ function paramRef(v: unknown): string | undefined {
   return isObject(v) && Object.keys(v).length === 1 && typeof v.param === "string" ? v.param : undefined;
 }
 
-/** `tpl` with every `{ param: <name> }` replaced by its value; a param without one removes its map key or list item. */
+/** `{ join: [ … ] }`'s parts, when `v` is one: the other template form, concatenating whole values. */
+function joinParts(v: unknown): unknown[] | undefined {
+  return isObject(v) && Object.keys(v).length === 1 && Array.isArray(v.join) ? v.join : undefined;
+}
+
+/**
+ * `{ join: [<part>, …] }`: the parts (literal strings, numbers, or `{ param: <name> }`) as one string, such as a
+ * preview URL and a path. A part that is not known yet (a reference, a marker) stands for the whole value, so a
+ * pending URL makes the joined value pending; a param without a value removes the value. Never anything richer:
+ * a recipe stays data (ADR 0020, "Amendment").
+ */
+function join(parts: unknown[], values: Record<string, unknown>): unknown {
+  const filled = parts.map((p) => substitute(p, values));
+  if (filled.some((p) => p === undefined)) return undefined;
+  // `${ctx.*}` inside a string joins like any text; a marker or a `{ from }` the engine has not resolved does not.
+  const deferred = filled.find((p) => markerKind(p) !== null || isObject(p));
+  if (deferred !== undefined) return deferred;
+  return filled.map((p) => String(p as string | number | boolean)).join("");
+}
+
+/**
+ * `tpl` with every `{ param: <name> }` replaced by its value (a param without one removes its map key or list
+ * item) and every `{ join: [...] }` by its parts joined.
+ */
 export function substitute(tpl: unknown, values: Record<string, unknown>): unknown {
   const ref = paramRef(tpl);
   if (ref !== undefined) return values[ref];
+  const parts = joinParts(tpl);
+  if (parts !== undefined) return join(parts, values);
   if (Array.isArray(tpl)) return tpl.map((x) => substitute(x, values)).filter((x) => x !== undefined);
   if (!isObject(tpl)) return tpl;
   const out: Record<string, unknown> = {};

@@ -182,6 +182,23 @@ Adapters that do not define them behave exactly as before.
   real provider, not by the sim.
 - `destroy: keep` is an explicit, per-line exception to "after a destroy nothing Sponson created survives".
 
+## Amendment: archive deletes and refused credentials (2026-10-11)
+
+Create-only outputs are declared since [ADR 0020](/contributing/adr/0020-recipes), Amendment 2 (`outputs.<name>: { path, sensitive:
+true, once: true }`), so "Create-only outputs … there is no declaration" under *What it deliberately does not do* no
+longer holds. Two more gaps stood between the adapter and Stripe's webhook endpoints and catalog objects (ADR 0020,
+Amendment 3). Each is closed with the smallest declaration that says what the provider does, and neither changes an
+existing line's identity:
+
+- **`delete.body`** with `method: POST`: the archive request for objects a provider never deletes (a Stripe price is
+  only ever `active: false`). The body (literals only) is appended to the record id as ` body=<canonical JSON>`, so
+  destroy still needs nothing but the ledger; record ids without a body are unchanged.
+- **`refuse_credential: { prefixes, unless_env }`** on an API block: a credential starting with one of the prefixes is
+  `PROVIDER_AUTH` before any request, in plan, apply and destroy alike, unless the named variable is `1` or `true`.
+  Stripe's `sk_live_`/`rk_live_` keys must never create objects for a preview. It is part of the block, hence of
+  ledger identity, like `headers`; a recipe's refusal cannot be overridden by the plan (the variable is the opt-out),
+  so it changes only if the recipe does, behind the identity lock.
+
 ## Amendment: run-time credentials, XML and GraphQL
 
 Date: 2026-10-11

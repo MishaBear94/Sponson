@@ -59,9 +59,15 @@ names are set.
 | [`sentry.deploy`](/reference/recipes#sentry-deploy) | `resource` | Deploy of a release to an environment | `SENTRY_AUTH_TOKEN` (bearer) |
 | [`split.targeting_rule`](/reference/recipes#split-targeting_rule) | `list_item` | Feature flag targeting rule | `SPLIT_ADMIN_API_KEY` (bearer) |
 | [`statsig.gate_rule`](/reference/recipes#statsig-gate_rule) | `resource` | Feature gate rule | `STATSIG_CONSOLE_API_KEY` (header `STATSIG-API-KEY`) |
+| [`stripe.webhook_endpoint`](/reference/recipes#stripe-webhook_endpoint) | `resource` | Webhook endpoint | `STRIPE_SECRET_KEY` (bearer) |
+| [`stripe.product`](/reference/recipes#stripe-product) | `resource` | Product | `STRIPE_SECRET_KEY` (bearer) |
+| [`stripe.price`](/reference/recipes#stripe-price) | `resource` | Price | `STRIPE_SECRET_KEY` (bearer) |
+| [`stripe.coupon`](/reference/recipes#stripe-coupon) | `resource` | Coupon | `STRIPE_SECRET_KEY` (bearer) |
+| [`stytch.redirect_url`](/reference/recipes#stytch-redirect_url) | `resource` | Redirect URL | `STYTCH_WORKSPACE_KEY_ID` / `STYTCH_WORKSPACE_KEY_SECRET` (basic) |
 | [`svix.endpoint`](/reference/recipes#svix-endpoint) | `resource` | Application endpoint | `SVIX_AUTH_TOKEN` (bearer) |
 | [`turso.database_branch`](/reference/recipes#turso-database_branch) | `resource` | Database branch | `TURSO_API_TOKEN` (bearer) |
 | [`unleash.flag_strategy`](/reference/recipes#unleash-flag_strategy) | `resource` | Flag strategy with constraints | `UNLEASH_AUTH_TOKEN` (header `Authorization`) |
+| [`workos.redirect_uri`](/reference/recipes#workos-redirect_uri) | `resource` | AuthKit redirect URI | `WORKOS_API_KEY` (bearer) |
 
 ## Cloudflare
 
@@ -1231,6 +1237,344 @@ fields:
   environments: { param: environment_names }
 ```
 
+## Stripe
+
+Recipe file: [`packages/adapters/recipes/stripe.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/stripe.yaml). Verified on 2026-10-11 against:
+
+- [Authentication](https://docs.stripe.com/api/authentication)
+- [API keys](https://docs.stripe.com/keys)
+- [Idempotent requests](https://docs.stripe.com/api/idempotent_requests)
+- [Create a webhook endpoint](https://docs.stripe.com/api/webhook_endpoints/create)
+- [List all webhook endpoints](https://docs.stripe.com/api/webhook_endpoints/list)
+- [Update a webhook endpoint](https://docs.stripe.com/api/webhook_endpoints/update)
+- [Delete a webhook endpoint](https://docs.stripe.com/api/webhook_endpoints/delete)
+- [Webhooks in the Dashboard (endpoint limit)](https://docs.stripe.com/development/dashboard/webhooks)
+- [Create a product](https://docs.stripe.com/api/products/create)
+- [Retrieve a product](https://docs.stripe.com/api/products/retrieve)
+- [Delete a product](https://docs.stripe.com/api/products/delete)
+- [Create a price](https://docs.stripe.com/api/prices/create)
+- [List all prices](https://docs.stripe.com/api/prices/list)
+- [Update a price](https://docs.stripe.com/api/prices/update)
+- [Create a coupon](https://docs.stripe.com/api/coupons/create)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.stripe.com/v1` |
+| `base_url_env` | `STRIPE_API_URL` |
+| Credential | `STRIPE_SECRET_KEY` (bearer) |
+| `encoding` | `form` |
+| `refuse_credential` | credentials starting `sk_live_` or `rk_live_` are refused (`PROVIDER_AUTH`) unless `SPONSON_STRIPE_ALLOW_LIVE=1`; a plan cannot override this |
+
+Assumptions:
+
+- **ST1** (verified, [source](https://docs.stripe.com/api/authentication)): The API takes a secret or restricted key as `Authorization: Bearer` (besides Basic), and request bodies form-encoded with bracketed nesting (`metadata[k]=v`, `enabled_events[0]=x`).
+- **ST2** (verified, [source](https://docs.stripe.com/keys)): Test-mode keys start with `sk_test_` / `rk_test_`, live-mode keys with `sk_live_` / `rk_live_`; objects of one mode are invisible to the other. The recipe refuses the live prefixes (`refuse_credential`) unless `SPONSON_STRIPE_ALLOW_LIVE=1`.
+- **ST3** **(unverified)**: Organization keys (`sk_org_…`) and platform-managed keys do not carry the mode in their prefix, so they are not refused: use a test-mode secret or restricted key for previews.
+- **ST4** (verified, [source](https://docs.stripe.com/api/idempotent_requests)): Every v1 `POST` accepts an `Idempotency-Key` (up to 255 characters, kept at least 24 hours); a retry with the same key returns the saved answer, and different parameters under one key are an error.
+- **ST5** (verified, [source](https://docs.stripe.com/api/webhook_endpoints/create)): `POST /v1/webhook_endpoints` takes `url`, `enabled_events` (`['*']` for all), `description`, `metadata` and `api_version`, and answers the endpoint with its signing `secret` populated.
+- **ST6** (verified, [source](https://docs.stripe.com/api/webhook_endpoints/list)): `GET /v1/webhook_endpoints` (`limit` 1–100) answers `{ data: [...], has_more }` whose endpoints carry `url`, `enabled_events`, `description` and `metadata` but no `secret`: the secret exists only in the create's answer, hence the `once` output.
+- **ST7** (verified, [source](https://docs.stripe.com/development/dashboard/webhooks)): An account has at most 16 webhook endpoints, so one list page of 100 holds them all, and at most 16 previews (minus the account's own endpoints) can have one at a time.
+- **ST8** (verified, [source](https://docs.stripe.com/api/webhook_endpoints/update)): `POST /v1/webhook_endpoints/{id}` updates `url`, `enabled_events`, `description`, `metadata` and `disabled` in place (the secret is not rotated); `DELETE` on the same path removes the endpoint.
+- **ST9** **(unverified)**: The API returns `url`, `enabled_events` and `description` as they were written, `enabled_events` in the order sent, so an unchanged endpoint hashes the same on every plan.
+- **ST10** (verified, [source](https://docs.stripe.com/api/products/create)): `POST /v1/products` takes a client-chosen `id` (unique among the account's products), `name`, `description` and `active`; `GET /v1/products/{id}` retrieves it; `POST /v1/products/{id}` updates it.
+- **ST11** (verified, [source](https://docs.stripe.com/api/products/delete)): A product can be deleted only while it has no prices, and prices are never deleted, so the recipe archives a product (`active: false`) instead of deleting it.
+- **ST12** **(unverified)**: An archived product is still returned by `GET /v1/products/{id}`, and its id stays taken: re-applying a destroyed scope finds it and reactivates it as an adopted object, which a later destroy leaves active.
+- **ST13** (verified, [source](https://docs.stripe.com/api/prices/create)): `POST /v1/prices` takes `product`, `currency`, `unit_amount`, `recurring[interval]`, `nickname`, `lookup_key` and `transfer_lookup_key` (which moves the lookup key from the price holding it to the new one).
+- **ST14** (verified, [source](https://docs.stripe.com/api/prices/list)): `GET /v1/prices` lists active prices by default, filters by up to 10 `lookup_keys` and by `active`, and answers `{ data: [...] }`.
+- **ST15** (verified, [source](https://docs.stripe.com/api/prices/update)): A price's amount, currency and interval cannot change after creation; `POST /v1/prices/{id}` updates `active`, `nickname`, `lookup_key` and `metadata`. There is no delete: the recipe archives (`active: false`).
+- **ST16** (verified, [source](https://docs.stripe.com/api/coupons/create)): `POST /v1/coupons` takes a client-chosen `id`, `name`, `percent_off` or `amount_off` with `currency`, `duration` (`once`, `repeating`, `forever`) and `duration_in_months`.
+- **ST17** **(unverified)**: `GET /v1/coupons/{id}` retrieves a coupon, `POST /v1/coupons/{id}` updates its `name` and `metadata` only (the discount is fixed), and `DELETE /v1/coupons/{id}` deletes it, after which its id may be used again.
+- **ST18** **(unverified)**: Stripe must reach the endpoint's URL over public HTTPS: a preview behind deployment protection (Vercel Authentication) receives no events unless it lets Stripe's requests through.
+
+### `stripe.webhook_endpoint`
+
+**Webhook endpoint** (`http.resource`). A test-mode webhook endpoint that sends the preview's events to its own URL, `url` + `path` (usually `{ from: web.preview_url }`). Identified by `name` in its metadata, so a new preview URL updates the endpoint in place. Its signing `secret` exists only in the answer that creates the endpoint: it is a once-only output, passed in the same run to the line that writes it (`STRIPE_WEBHOOK_SECRET` in a `vercel.env` or `netlify.env` line); later runs keep what that line holds, and `apply --recreate <line>` rotates it. Writing the secret rebuilds the preview, and a preview URL output follows the newest deploy, so the next run moves the endpoint to the rebuilt deploy's URL (in place: the secret is kept); a URL that does not change per deploy (`https://deploy-preview-${ctx.pr.number}--<site>.netlify.app`, a custom preview domain) avoids that update. A console edit of its URL, events or description is drift.
+
+Covers: `stripe-webhook` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`, `secret` (sensitive, [once](/reference/plan-format#once-only-outputs): only from the create). On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `name` | string | yes | — | The endpoint's identity, kept in its metadata (`sponson_endpoint`): unique per preview, such as `preview-${ctx.scope}`. Matches `^[A-Za-z0-9_.:/-]{1,200}$`. |
+| `url` | string | yes | — | The preview's base URL, without a trailing slash: usually `{ from: <vercel.env or netlify.env line>.preview_url }`. Matches `^https://\\S*[^/]$`. |
+| `path` | string | no | `/api/webhooks/stripe` | The path of the app's webhook handler, appended to `url`. Matches `^/\\S*$`. |
+| `enabled_events` | list | no | `["*"]` | The event types sent to the endpoint (`['*']`: all that need no explicit selection). |
+| `description` | string | no | — | A note shown in the Dashboard. |
+| `api_version` | string | no | — | The Stripe API version events are rendered with (the account's default when left out); sent on create only. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: webhook_endpoint
+  adapter: http
+  op: resource
+  recipe: stripe.webhook_endpoint
+  name: preview-${ctx.scope}
+  url: https://pr-42.preview.example.com
+  enabled_events:
+    - checkout.session.completed
+    - customer.subscription.updated
+  description: Preview webhook managed by Sponson
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value, `{ join: [...] }` for its parts joined into one string, and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /webhook_endpoints?limit=100
+  list_path: /data
+  match:
+    /metadata/sponson_endpoint: { param: name }
+create:
+  path: /webhook_endpoints
+  idempotency_key: true
+  body:
+    api_version: { param: api_version }
+update:
+  method: POST
+  path: /webhook_endpoints/{id}
+delete:
+  path: /webhook_endpoints/{id}
+fields:
+  url:
+    join:
+      - { param: url }
+      - { param: path }
+  enabled_events: { param: enabled_events }
+  description: { param: description }
+outputs:
+  secret:
+    path: /secret
+    sensitive: true
+    once: true
+```
+
+### `stripe.product`
+
+**Product** (`http.resource`). A test-mode product with an id of the plan's choosing, such as `pro-pr-42`, for the prices a preview sells. Destroy archives it (`active: false`): Stripe never deletes a product that has prices. A console edit of its name, description or active flag is drift.
+
+Covers: `stripe-test-objects` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `product_id` | string | yes | — | The product's id, unique in the account, such as `pro-${ctx.scope}`. Matches `^[A-Za-z0-9_-]{1,100}$`. |
+| `name` | string | yes | — | The product's name, shown to customers. |
+| `description` | string | no | — | The product's description, shown to customers. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: product
+  adapter: http
+  op: resource
+  recipe: stripe.product
+  product_id: pro-${ctx.scope}
+  name: Pro (preview)
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+read:
+  path: /products/{product_id}
+create:
+  path: /products
+  idempotency_key: true
+  body:
+    id: { param: product_id }
+update:
+  method: POST
+delete:
+  method: POST
+  body:
+    active: false
+fields:
+  name: { param: name }
+  description: { param: description }
+  active: true
+```
+
+### `stripe.price`
+
+**Price** (`http.resource`). A test-mode price found by its lookup key (`lookup`, such as `pro-monthly-pr-42`, which the preview's code looks the price up by), product, currency, amount and interval. Amount, currency and interval cannot change on a Stripe price, so changing them in the plan makes a new price that takes over the lookup key, and the old one stays until the scope is destroyed. Destroy archives it (`active: false`): Stripe never deletes a price. A console edit of its nickname is drift.
+
+Covers: `stripe-test-objects` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `lookup` | string | yes | — | The price's `lookup_key`: what the preview's code looks it up by, unique among active prices. (Named `lookup` because a plan key ending in `_key` must hold a secret reference.) Matches `^\\S{1,200}$`. |
+| `product` | string | yes | — | The product's id: usually `{ from: <stripe.product line>.id }`. |
+| `currency` | string | yes | — | Three-letter ISO currency code, lower-case. Matches `^[a-z]{3}$`. |
+| `unit_amount` | integer | yes | — | The amount in the currency's smallest unit (1500 is 15.00 USD). |
+| `interval` | string | no | — | The billing interval of a recurring price; left out, the price is one-time. One of `day`, `week`, `month`, `year`. |
+| `nickname` | string | no | — | A note on the price, hidden from customers. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: price
+  adapter: http
+  op: resource
+  recipe: stripe.price
+  lookup: pro-monthly-${ctx.scope}
+  product: pro-pr-42
+  currency: usd
+  unit_amount: 1500
+  interval: month
+  nickname: Pro monthly (preview)
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /prices?lookup_keys[]={lookup}&active=true&limit=10
+  list_path: /data
+  match:
+    lookup_key: { param: lookup }
+    active: true
+    product: { param: product }
+    currency: { param: currency }
+    unit_amount: { param: unit_amount }
+    /recurring/interval: { param: interval }
+create:
+  path: /prices
+  idempotency_key: true
+  body:
+    transfer_lookup_key: true
+update:
+  method: POST
+  path: /prices/{id}
+delete:
+  method: POST
+  path: /prices/{id}
+  body:
+    active: false
+fields:
+  nickname: { param: nickname }
+```
+
+### `stripe.coupon`
+
+**Coupon** (`http.resource`). A test-mode coupon with an id of the plan's choosing, such as `preview-pr-42`, for the discount codes a preview accepts. Its discount (percent or amount, duration) is set on create and fixed after; give the line a new `coupon_id` to change it. Destroy deletes it. A console edit of its name is drift.
+
+Covers: `stripe-test-objects` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `coupon_id` | string | yes | — | The coupon's id (the code applied to a customer), unique in the account. Matches `^[A-Za-z0-9_-]{1,100}$`. |
+| `percent_off` | number | no | — | The discount in percent (0–100); or set `amount_off` and `currency`. |
+| `amount_off` | integer | no | — | The discount in the currency's smallest unit, with `currency`. |
+| `currency` | string | no | — | The currency of `amount_off`. Matches `^[a-z]{3}$`. |
+| `duration` | string | no | `once` | How long the discount applies to a subscription. One of `once`, `repeating`, `forever`. |
+| `duration_in_months` | integer | no | — | For `duration: repeating`, the number of months. |
+| `name` | string | no | — | The name shown to customers (the id when left out). |
+
+```yaml
+# under changes: (no provider block needed)
+- id: coupon
+  adapter: http
+  op: resource
+  recipe: stripe.coupon
+  coupon_id: preview-${ctx.scope}
+  percent_off: 25
+  name: Preview discount
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+read:
+  path: /coupons/{coupon_id}
+create:
+  path: /coupons
+  idempotency_key: true
+  body:
+    id: { param: coupon_id }
+    percent_off: { param: percent_off }
+    amount_off: { param: amount_off }
+    currency: { param: currency }
+    duration: { param: duration }
+    duration_in_months: { param: duration_in_months }
+update:
+  method: POST
+fields:
+  name: { param: name }
+```
+
+## Stytch
+
+Recipe file: [`packages/adapters/recipes/stytch.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/stytch.yaml). Verified on 2026-10-11 against:
+
+- [Create redirect URL (PWA v3)](https://stytch.com/docs/api-reference/pwa/api/v3/redirect-urls/create-redirect-url)
+- [Get all redirect URLs (PWA v3)](https://stytch.com/docs/api-reference/pwa/api/v3/redirect-urls/get-all-redirect-urls)
+- [Get redirect URL (PWA v3)](https://stytch.com/docs/api-reference/pwa/api/v3/redirect-urls/get-redirect-url)
+- [Update redirect URL (PWA v3)](https://stytch.com/docs/workspace-management/pwa/update-redirect-url)
+- [Delete redirect URL (PWA v3)](https://stytch.com/docs/api-reference/pwa/api/v3/redirect-urls/delete-redirect-url)
+- [Limits](https://stytch.com/docs/workspace-management/pwa/limits)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://management.stytch.com` |
+| `base_url_env` | `STYTCH_MANAGEMENT_API_URL` |
+| Credential | `STYTCH_WORKSPACE_KEY_ID` / `STYTCH_WORKSPACE_KEY_SECRET` (basic) |
+
+Assumptions:
+
+- **SY1** (verified, [source](https://stytch.com/docs/api-reference/pwa/api/v3/redirect-urls/create-redirect-url)): The management API authenticates with HTTP Basic: a workspace management key's id as the user and its secret as the password.
+- **SY2** (verified, [source](https://stytch.com/docs/api-reference/pwa/api/v3/redirect-urls/create-redirect-url)): `POST /pwa/v3/projects/{project_slug}/environments/{environment_slug}/redirect_urls` takes `url`, `valid_types` (`{ type, is_default }`, type one of LOGIN, INVITE, SIGNUP, RESET_PASSWORD, DISCOVERY) and `do_not_promote_defaults`, and answers `{ request_id, redirect_url: { url, valid_types }, status_code }`.
+- **SY3** (verified, [source](https://stytch.com/docs/api-reference/pwa/api/v3/redirect-urls/get-all-redirect-urls)): `GET …/redirect_urls/all` answers `{ redirect_urls: [{ url, valid_types }], … }`: every redirect URL of the environment, unpaged.
+- **SY4** (verified, [source](https://stytch.com/docs/api-reference/pwa/api/v3/redirect-urls/delete-redirect-url)): A redirect URL has no id of its own: `GET`, `PUT` (to change `valid_types`) and `DELETE` on `…/redirect_urls?url=<url>` address it by its URL.
+- **SY5** (verified, [source](https://stytch.com/docs/workspace-management/pwa/limits)): A project has at most 100 redirect URLs.
+- **SY6** **(unverified)**: `do_not_promote_defaults: true` on create and delete keeps a preview URL from becoming, or a deletion from changing, the environment's default for a type.
+- **SY7** **(unverified)**: A `PUT` body that also carries `url` (the adapter sends the identifying field back on PUT) is accepted, and `valid_types` read back in the order and form they were written, so an unchanged URL hashes the same on every plan.
+- **SY8** **(unverified)**: Each redirect URL is its own object (no shared list to rewrite), so concurrent previews need no lock.
+
+### `stytch.redirect_url`
+
+**Redirect URL** (`http.resource`). One redirect URL of a Stytch project environment, such as the preview's `/authenticate`, with the redirect types it is valid for (by default login and sign-up, never the default). Found by its URL; a console edit of its types is drift and is put back with a `PUT`. Destroy deletes it without promoting another URL to default.
+
+Covers: `stytch-redirect` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `project_slug` | string | yes | — | The project's slug. Matches `^[A-Za-z0-9_-]+$`. |
+| `environment_slug` | string | yes | — | The environment's slug within the project (its test environment, or a custom one). Matches `^[A-Za-z0-9_-]+$`. |
+| `url` | string | yes | — | The redirect URL, exactly as Stytch will receive it (`https://pr-42.preview.example.com/authenticate`). Matches `^https?://\\S+$`. |
+| `valid_types` | list | no | `[{"type":"LOGIN","is_default":false},{"type":"SIGNUP","is_default":false}]` | The redirect types the URL is valid for: `{ type, is_default }` with type LOGIN, INVITE, SIGNUP, RESET_PASSWORD or DISCOVERY. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: redirect_url
+  adapter: http
+  op: resource
+  recipe: stytch.redirect_url
+  project_slug: my-app
+  environment_slug: test
+  url: https://${ctx.scope}.preview.example.com/authenticate
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /pwa/v3/projects/{project_slug}/environments/{environment_slug}/redirect_urls/all
+  list_path: /redirect_urls
+  match:
+    url: { param: url }
+create:
+  path: /pwa/v3/projects/{project_slug}/environments/{environment_slug}/redirect_urls
+  body:
+    do_not_promote_defaults: true
+update:
+  method: PUT
+  path: /pwa/v3/projects/{project_slug}/environments/{environment_slug}/redirect_urls?url={id}
+  body:
+    do_not_promote_defaults: true
+delete:
+  path: /pwa/v3/projects/{project_slug}/environments/{environment_slug}/redirect_urls?url={id}&do_not_promote_defaults=true
+item_path: /redirect_url
+id_path: /url
+fields:
+  valid_types: { param: valid_types }
+```
+
 ## Svix
 
 Recipe file: [`packages/adapters/recipes/svix.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/svix.yaml). Verified on 2026-10-11 against:
@@ -1472,4 +1816,62 @@ fields:
     rollout: { param: rollout }
     stickiness: { param: stickiness }
     groupId: { param: feature }
+```
+
+## WorkOS
+
+Recipe file: [`packages/adapters/recipes/workos.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/workos.yaml). Verified on 2026-10-11 against:
+
+- [AuthKit API reference, Redirect URI](https://workos.com/docs/reference/authkit/redirect-uri)
+- [AuthKit, redirect URIs in the Dashboard](https://workos.com/docs/user-management/integrating-with-authkit)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.workos.com` |
+| `base_url_env` | `WORKOS_API_URL` |
+| Credential | `WORKOS_API_KEY` (bearer) |
+
+Assumptions:
+
+- **WO1** (verified, [source](https://workos.com/docs/reference/authkit/redirect-uri)): `POST /user_management/redirect_uris` with `{ uri }` creates a redirect URI for the environment the API key (`Authorization: Bearer sk_…`) belongs to, and answers the `redirect_uri` object (`id`, `uri`, `default`).
+- **WO2** (verified, [source](https://workos.com/docs/reference/authkit/redirect-uri)): `GET /user_management/redirect_uris` (`limit` 1–100, cursors `before`/`after`) answers `{ data: [...], list_metadata: { before, after } }`.
+- **WO3** (verified, [source](https://workos.com/docs/reference/authkit/redirect-uri)): `DELETE /user_management/redirect_uris/{id}` removes one and answers an empty body. There is no GET or update by id: a URI is found in the list, and nothing about it is changed in place.
+- **WO4** (verified, [source](https://workos.com/docs/user-management/integrating-with-authkit)): Redirect URIs may contain wildcards, except the default one.
+- **WO5** **(unverified)**: Each URI is its own object (no shared list to rewrite), so concurrent previews need no lock; a URI is returned exactly as it was created, so `uri` identifies it.
+- **WO6** **(unverified)**: Creating a URI that already exists is refused as a conflict (409) rather than duplicated; the line then finds the existing one.
+- **WO7** **(unverified)**: The first redirect URI of an environment becomes its default; a preview's URI is never the first in an environment that has a production URI.
+
+### `workos.redirect_uri`
+
+**AuthKit redirect URI** (`http.resource`). One redirect URI on the WorkOS environment the API key belongs to, such as the preview's `/callback`: usually `{ from: <vercel.env line>.preview_url }` joined in the app. Found by its URI in the list (following `list_metadata.after`); removed by id on destroy. A URI has nothing else to edit, so the only drift is a URI deleted in the Dashboard, which the next apply creates again.
+
+Covers: `workos-redirect` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `uri` | string | yes | — | The redirect URI, exactly as AuthKit will receive it (`https://pr-42.preview.example.com/callback`). Matches `^https?://\\S+$`. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: redirect_uri
+  adapter: http
+  op: resource
+  recipe: workos.redirect_uri
+  uri: https://${ctx.scope}.preview.example.com/callback
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /user_management/redirect_uris?limit=100
+  list_path: /data
+  match:
+    uri: { param: uri }
+  next: /list_metadata/after
+  cursor_param: after
+create:
+  path: /user_management/redirect_uris
+delete:
+  path: /user_management/redirect_uris/{id}
 ```

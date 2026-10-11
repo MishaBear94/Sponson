@@ -3,11 +3,11 @@
  * block (`actx.provider` is `providers.http.<api>`, narrowed by `OpSpec.providerFor`), its credential from the
  * environment variable(s) the block names, and writes with the idempotency each method has.
  */
-import { canonicalJson, type AdapterContext, type Literal, type OpSpec } from "@sponson/core";
+import { SponsonError, canonicalJson, type AdapterContext, type Literal, type OpSpec } from "@sponson/core";
 import { clientFor, optionalEnv } from "./common.js";
 import { isObject, isProviderError, type ApiClient } from "./http.js";
-import { DEFAULT_AUTH_DEPS, credentialFor, type AuthDeps } from "./http-adapter-auth.js";
-import { ADAPTER, at, pointerTokens, parseApi } from "./http-adapter-spec.js";
+import { DEFAULT_AUTH_DEPS, credentialFor, type Auth, type AuthDeps } from "./http-adapter-auth.js";
+import { ADAPTER, at, pointerTokens, parseApi, type ApiConfig } from "./http-adapter-spec.js";
 
 /** Per-request settings on top of the API's: a vendor media type, an `Idempotency-Key`. */
 export interface RequestOptions {
@@ -39,6 +39,46 @@ export function withDeps(op: OpSpec, deps: AuthDeps): OpSpec {
   };
 }
 
+/** The variables holding a credential's secret part, for `refuse_credential`. */
+function secretEnvs(auth: Auth): string[] {
+  switch (auth.kind) {
+    case "bearer":
+    case "header":
+      return [auth.env];
+    case "headers":
+      return auth.headers.map((h) => h.env);
+    case "basic":
+    case "digest":
+      return [auth.passwordEnv];
+    case "oauth2":
+      return [auth.clientSecretEnv];
+    case "sigv4":
+      return [auth.secretAccessKeyEnv];
+    case "command":
+    case "none":
+      return [];
+  }
+}
+
+/**
+ * Refuse a credential the API refuses (`refuse_credential`): PROVIDER_AUTH naming the variable and the prefix,
+ * never the value, before any request is sent.
+ */
+function refuseCredentials(cfg: ApiConfig, env: NodeJS.ProcessEnv): void {
+  if (!cfg.refuse || /^(1|true)$/i.test(env[cfg.refuse.unlessEnv] ?? "")) return;
+  for (const name of secretEnvs(cfg.auth)) {
+    const value = env[name] ?? "";
+    const prefix = cfg.refuse.prefixes.find((p) => value.startsWith(p));
+    if (!prefix) continue;
+    throw new SponsonError(
+      "PROVIDER_AUTH",
+      `${ADAPTER}: ${name} holds a \`${prefix}…\` credential, which this API refuses (refuse_credential): a preview environment must not write with it. ` +
+        `Use a test-mode credential, or set ${cfg.refuse.unlessEnv}=1 if this run really is meant to use it.`,
+      { adapter: ADAPTER, env: name },
+    );
+  }
+}
+
 /**
  * The client for the line's API. The credential (a static header, or a signer for the forms obtained or computed
  * per request) comes from http-adapter-auth.ts; everything it holds or obtains is masked in this client's error text
@@ -50,6 +90,7 @@ export function httpClient(actx: AdapterContext, req: RequestOptions = {}, opts:
   const baseUrl = (cfg.baseUrlEnv ? optionalEnv(actx.env, cfg.baseUrlEnv) : undefined) ?? cfg.baseUrl;
   let hidden: () => string[] = () => [];
   const redact = (t: string) => hidden().reduce((s, h) => (h.length >= 4 ? s.split(h).join("****") : s), actx.redact(t));
+  refuseCredentials(cfg, actx.env);
   const cred = credentialFor(actx, cfg.auth, DEPS.get(actx) ?? DEFAULT_AUTH_DEPS, redact);
   hidden = () => [cred.token, ...cred.masks()];
   const contentType = req.contentType ?? cfg.mediaType;

@@ -1,0 +1,140 @@
+# The stripe.webhook_endpoint recipe composed with Netlify: a test-mode endpoint per pull request pointing at the
+# preview's URL, whose signing secret (shown by Stripe only when the endpoint is created, ST6) reaches
+# STRIPE_WEBHOOK_SECRET in the same run. Writing the secret rebuilds the preview, and the URL output follows the
+# newest deploy of the commit, so the next run moves the endpoint to the rebuilt deploy: an update in place, which
+# keeps the secret and writes nothing else. From then on re-applying writes nothing (ADR 0018: the variable keeps
+# what it holds); `--recreate hook` rotates the secret; a lost variable is refused, never silently re-created; a
+# live-mode key is refused before any request. Format: see the top of scenarios/runner.test.ts.
+name: "stripe webhook → netlify: signing secret by reference in the same run; re-apply writes nothing; --recreate rotates; live keys refused; destroy"
+plan: |
+  version: 1
+  providers:
+    netlify: { site: site_demo }
+    http:
+      stripe: { recipe: stripe, base_url_env: REST_API_URL }
+  changes:
+    - id: site
+      adapter: netlify
+      op: env
+      values: { APP_ENV: preview }
+      environments: [preview]
+    - id: hook
+      adapter: http
+      op: resource
+      recipe: stripe.webhook_endpoint
+      name: "preview-${ctx.scope}"
+      url: { from: site.deploy_preview_url }
+      enabled_events: [checkout.session.completed, customer.subscription.updated]
+      environments: [preview]
+    - id: hook_env
+      adapter: netlify
+      op: env
+      values:
+        STRIPE_WEBHOOK_SECRET: { from: hook.secret }
+      environments: [preview]
+seed:
+  netlify:
+    sites:
+      site_demo:
+        name: demo-site
+        account: acme
+        pushes: [{ sha: "0123456789abcdef0123456789abcdef01234567", branch: feat/x, pr: 42 }]
+  rest:
+    collections:
+      # Someone's production endpoint: never touched.
+      /webhook_endpoints: [{ url: "https://app.example.com/api/webhooks/stripe", enabled_events: ["*"], metadata: {} }]
+    styles:
+      /webhook_endpoints: { list_path: /data, item_path: "", next_path: null, form_types: true, once_fields: [secret] }
+env:
+  STRIPE_SECRET_KEY: sk_test_scenario_key_0042
+# The sim's signing secrets all start with this (R6); neither they nor the key may reach any output (I1).
+secrets: ["secret_sim_", "sk_test_scenario_key_0042"]
+steps:
+  - run: plan --json
+    expect:
+      exit: 0
+      plan_lines: { site: create, hook: pending, hook_env: pending }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { site: applied, hook: applied, hook_env: applied }
+  - sim:
+      write_order: ["/netlify/accounts/acct_acme/env", "POST /rest/webhook_endpoints", "/netlify/accounts/acct_acme/env", "POST /netlify/sites/site_demo/builds"]
+      state:
+        "netlify.sites.site_demo.envs": { includes: { key: STRIPE_WEBHOOK_SECRET } }
+        rest.collections./webhook_endpoints: { includes: { url: "https://deploy-preview-42--demo-site.netlify.app/api/webhooks/stripe", enabled_events: [checkout.session.completed, customer.subscription.updated], metadata: { sponson_endpoint: preview-pr-42 } } }
+  # The secret's write rebuilt the preview: the endpoint follows the new deploy's URL, in place. The secret is not
+  # rotated, so STRIPE_WEBHOOK_SECRET is unchanged and nothing is rebuilt again.
+  - run: plan --json
+    expect:
+      exit: 0
+      plan_lines: { site: unchanged, hook: update, hook_env: unchanged }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      writes: 1
+      lines: { site: unchanged, hook: applied, hook_env: unchanged }
+  - sim:
+      state:
+        rest.collections./webhook_endpoints: { length: 2 }
+  # The secret is gone for good, and STRIPE_WEBHOOK_SECRET holds it: unchanged, and zero writes.
+  - run: plan --json
+    expect:
+      exit: 0
+      plan_lines: { site: unchanged, hook: unchanged, hook_env: unchanged }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      writes: 0
+      lines: { site: unchanged, hook: unchanged, hook_env: unchanged }
+  # Rotation is only ever asked for: --recreate deletes the endpoint Sponson made and creates a new one, whose
+  # secret reaches the variable in the same run.
+  - run: apply --recreate hook --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { hook: applied, hook_env: applied }
+      notes: { hook: { recreated: true } }
+  - sim:
+      write_order: ["DELETE /rest/webhook_endpoints/", "POST /rest/webhook_endpoints", "/netlify/accounts/acct_acme/env"]
+      state:
+        rest.collections./webhook_endpoints: { length: 2 }
+  # The new secret rebuilt the preview: the endpoint follows, once; then nothing to write.
+  - run: apply --json
+    expect: { exit: 0, writes: 1, lines: { hook: applied, hook_env: unchanged } }
+  - run: apply --json
+    expect: { exit: 0, writes: 0, lines: { hook: unchanged, hook_env: unchanged } }
+  # The variable's value is deleted in Netlify: the line would need the secret, which no later run has. Refused,
+  # nothing written, and the endpoint is not re-created behind anyone's back.
+  - chaos:
+      drift: { "netlify.env.branch@feat/x.STRIPE_WEBHOOK_SECRET": "delete" }
+  - run: apply --json
+    expect:
+      exit: 1
+      status: failed
+      writes: 0
+      lines: { hook: unchanged, hook_env: blocked }
+      errors: { hook_env: "hook.secret.*Nothing was written" }
+  - run: apply --recreate hook --json
+    expect: { exit: 0, status: complete, lines: { hook: applied, hook_env: applied } }
+  # A live-mode key is refused before any request, in plan and apply alike (ST2), unless explicitly allowed.
+  - env: { STRIPE_SECRET_KEY: sk_live_scenario_key_0042 }
+  - run: plan --json
+    expect:
+      exit: 1
+      errors: { hook: "STRIPE_SECRET_KEY holds a `sk_live_…` credential.*SPONSON_STRIPE_ALLOW_LIVE=1" }
+  - run: apply --json
+    expect: { exit: 1, writes: 0, errors: { hook: "refuse_credential" } }
+  - env: { STRIPE_SECRET_KEY: sk_test_scenario_key_0042 }
+  - run: apply --destroy --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { hook_env: destroyed, hook: destroyed, site: destroyed }
+  - sim:
+      state:
+        "netlify.sites.site_demo.envs": { length: 0 }
+        rest.collections./webhook_endpoints: { length: 1 }
