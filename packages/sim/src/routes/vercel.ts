@@ -169,6 +169,9 @@ export const vercelSim: ProviderSim<VercelState, VercelSeed> = {
 
 const routes = router<VercelState>(
   [
+    // A token check (`sponson init --setup`): the token's user, whatever it is.
+    route("GET", "/v2/user", () => new Reply(200, { user: { id: "user_sim", username: "sim", email: "sim@example.com" } })),
+
     route("GET", "/v9/projects/:project", ({ state, params }) => {
       const p = state.projects[params.project];
       if (!p) return notFound("project");

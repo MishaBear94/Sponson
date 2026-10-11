@@ -90,6 +90,8 @@ describe.each(recipeNames())("recipes/%s.yaml", (name) => {
     }
     const block = apiBlock(blocksFor(r), { recipe: `${name}.${Object.keys(r.ops)[0]!}` });
     expect(block).toEqual(resolvedApi(r));
+    // `sponson init --setup` shows where its credential is made and what to pick (docs/providers.md lists them too).
+    expect(r.credential, "an API block's credential says where it is created (`credential`)").toBeDefined();
   });
 
   it("its `detect` block (when it has one) names its own ops and params, and init's values pass the params' checks", () => {

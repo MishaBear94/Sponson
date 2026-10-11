@@ -12,14 +12,14 @@
  *   (XA6), so dependents in later runs get it too.
  */
 import { setTimeout as sleep } from "node:timers/promises";
-import { SponsonError, canonicalJson, markerKind, sha256, type AdapterContext, type Literal, type OpSpec, type ResourceAdapter, type ResourceRecord } from "@sponson/core";
+import { SponsonError, canonicalJson, markerKind, sha256, type AdapterContext, type Literal, type OpSpec, type ResourceAdapter, type ResourceRecord, type CredentialCheck } from "@sponson/core";
 // Only the stable authoring API exported from `@sponson/adapters` (listed in CONTRIBUTING.md).
-import { assertNoPending, clientFor, deleteIgnoringNotFound, optionalEnv, paramError, requireEnv, requireProvider, stringParam } from "./common.js";
+import { assertNoPending, clientFor, deleteIgnoringNotFound, optionalEnv, paramError, requireEnv, requireProvider, stringParam, verifyByGet, optionalProvider } from "./common.js";
 import { ShapeError, isObject, records, type ApiClient } from "./http.js";
 
 const ADAPTER = "xata";
 /** The environment Xata reads; declared once, used by the code below and by the generated docs (`about`). */
-const ABOUT = { credentialEnv: "XATA_API_KEY", baseUrlEnv: "XATA_API_URL", title: "Xata", category: "databases", detect: { deps: ["@xata.io/"], env: ["XATA_*"], files: [".xatarc"] } } as const;
+const ABOUT = { credentialEnv: "XATA_API_KEY", credentialUrl: "https://xata.io/docs/platform/api-key.md", credentialScope: "An API key limited to the project, with Branch: Read and Write.", baseUrlEnv: "XATA_API_URL", title: "Xata", category: "databases", detect: { deps: ["@xata.io/"], env: ["XATA_*"], files: [".xatarc"] } } as const;
 
 /** Xata's API base URL (XA1). `XATA_API_URL` overrides it; tests and scenarios point that at the sim. */
 export const XATA_DEFAULT_API_URL = "https://api.xata.tech";
@@ -153,8 +153,17 @@ const branch: OpSpec = {
   },
 };
 
+/** One read-only request that proves the credential works, and reaches the project when the plan names it (`sponson init --setup`). */
+async function verifyCredential(actx: AdapterContext): Promise<CredentialCheck> {
+  const api = clientFor(actx, ADAPTER, { baseUrl: optionalEnv(actx.env, ABOUT.baseUrlEnv) ?? XATA_DEFAULT_API_URL, token: requireEnv(actx.env, ABOUT.credentialEnv, ADAPTER) });
+  const org = optionalProvider(actx, "organization");
+  const project = optionalProvider(actx, "project");
+  if (!org || !project) return verifyByGet(api, "/organizations", "account");
+  return verifyByGet(api, `/organizations/${enc(org)}/projects/${enc(project)}/branches`, `project ${project}`);
+}
+
 /**
  * The Xata adapter (`adapter: xata` in a plan). Registered in `createRegistry()`; needs `XATA_API_KEY` and
  * `providers.xata.organization` and `.project`.
  */
-export const xataAdapter: ResourceAdapter = { name: ADAPTER, ops: { branch }, about: ABOUT };
+export const xataAdapter: ResourceAdapter = { name: ADAPTER, ops: { branch }, about: ABOUT, verifyCredential };

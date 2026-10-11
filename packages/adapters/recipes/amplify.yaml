@@ -22,6 +22,11 @@ api:
   base_url_env: AMPLIFY_API_URL
   auth:
     aws_sigv4: { region: us-east-1, service: amplify, access_key_id_env: AWS_ACCESS_KEY_ID, secret_access_key_env: AWS_SECRET_ACCESS_KEY }
+credential:
+  url: "https://console.aws.amazon.com/iam/home#/users"
+  scope: "An IAM user's access key whose policy allows amplify:ListApps, amplify:GetBranch, amplify:CreateBranch, amplify:UpdateBranch and amplify:DeleteBranch on the app."
+  source: "https://docs.aws.amazon.com/amplify/latest/APIReference/API_ListApps.html"
+  verify: "GET /apps?maxResults=1"
 detect:
   files: [amplify.yml]
   starter:

@@ -16,6 +16,11 @@ api:
   base_url: https://api.us.svix.com
   base_url_env: SVIX_API_URL
   auth: { bearer_env: SVIX_AUTH_TOKEN }
+credential:
+  url: "https://dashboard.svix.com/api-access"
+  scope: "The environment's API key (API Access); keys have no finer scopes."
+  source: "https://docs.svix.com/api-keys"
+  verify: "GET /api/v1/app?limit=1"
 detect:
   deps: [svix]
   env: ["SVIX_*"]

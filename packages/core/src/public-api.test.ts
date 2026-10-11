@@ -15,7 +15,7 @@ import { describe, expect, it } from "vitest";
 
 const PUBLIC_API: Record<string, string[]> = {
   "@sponson/core": [
-    "ActionTrigger", "AdapterAbout", "AdapterContext", "AdoptedLine", "AncestryCheck", "ProviderDetect", "ApplyResult", "ApplyResultSummary", "Change", "Ctx",
+    "ActionTrigger", "AdapterAbout", "AdapterContext", "AdoptedLine", "CredentialCheck", "AncestryCheck", "ProviderDetect", "ApplyResult", "ApplyResultSummary", "Change", "Ctx",
     "DiffKind", "DiffSide", "Drift", "DriftKind", "ERROR_CODES", "ErrorCode", "ErrorCodeSpec", "ExitCode", "FromRef",
     "GitBranchReceiptStore", "GitBranchStoreOptions", "KeepRef", "LEGACY_RECEIPTS_BRANCH", "Ledger", "LedgerEntry", "LineOutputs", "LineStatus",
     "Literal", "LiveState", "LocalReceiptStore", "LockHeldError", "LockInfo", "LockLostError", "MASK",
@@ -43,7 +43,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "PLANETSCALE_DEFAULT_API_URL", "planetscaleAdapter",
     "LAUNCHDARKLY_DEFAULT_API_URL", "launchdarklyAdapter",
     "RECIPES_DIR", "Recipe", "RecipeAssumption", "RecipeOp", "RecipeParam", "RecipeParamType", "RecipeSimHints", "expandRecipe", "loadRecipe", "loadRecipes", "recipeNames", "resolveRecipeApi",
-    "RecipeDetect", "RecipeStarter", "recipeCredentialEnv", "DetectableProvider", "detectableProviders",
+    "RecipeDetect", "RecipeStarter", "RecipeCredential", "recipeCredentialEnv", "verifyRecipeCredential", "verifyByGet", "DetectableProvider", "detectableProviders",
     "SUPABASE_DEFAULT_API_URL", "supabaseAdapter",
     "RequestSigner", "SignableRequest",
     "CLOUDFLARE_DEFAULT_API_URL", "cloudflareAdapter",

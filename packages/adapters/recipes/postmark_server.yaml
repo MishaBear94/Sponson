@@ -14,6 +14,11 @@ api:
   base_url: https://api.postmarkapp.com
   base_url_env: POSTMARK_API_URL
   auth: { header: X-Postmark-Server-Token, value_env: POSTMARK_SERVER_TOKEN }
+credential:
+  url: "https://postmarkapp.com/developer/api/overview"
+  scope: "The server's Server API token (the server's API Tokens tab); Postmark tokens have no scopes."
+  source: "https://postmarkapp.com/developer/api/overview"
+  verify: "GET /server"
 assumptions:
   - id: PS1
     verified: true

@@ -18,6 +18,10 @@ api:
   base_url_env: HEROKU_API_URL
   auth: { bearer_env: HEROKU_API_KEY }
   media_type: "application/vnd.heroku+json; version=3"
+credential:
+  url: "https://dashboard.heroku.com/account/applications"
+  scope: "A long-lived authorization from `heroku authorizations:create -s write-protected`: the narrowest scope that reads and writes config vars."
+  source: "https://devcenter.heroku.com/articles/oauth"
 detect:
   env: ["HEROKU_*"]
   files: [heroku.yml]

@@ -17,6 +17,11 @@ api:
   base_url: https://api.turso.tech/v1
   base_url_env: TURSO_API_URL
   auth: { bearer_env: TURSO_API_TOKEN }
+credential:
+  url: "https://docs.turso.tech/api-reference/authentication"
+  scope: "A platform API token for the organization (`turso auth api-tokens mint <name> --org <org>`)."
+  source: "https://docs.turso.tech/api-reference/authentication"
+  verify: "GET /auth/validate"
 detect:
   deps: ["@libsql/client", "@tursodatabase/"]
   env: ["TURSO_*"]

@@ -19,6 +19,10 @@ api:
   base_url: https://backboard.railway.com/graphql/v2
   base_url_env: RAILWAY_API_URL
   auth: { bearer_env: RAILWAY_API_TOKEN }
+credential:
+  url: "https://railway.com/account/tokens"
+  scope: "A workspace token for the workspace that holds the project."
+  source: "https://docs.railway.com/guides/public-api"
 detect:
   env: ["RAILWAY_*"]
   files: [railway.json, railway.toml]

@@ -19,6 +19,11 @@ api:
     headers:
       - { header: DD-API-KEY, value_env: DD_API_KEY }
       - { header: DD-APPLICATION-KEY, value_env: DD_APP_KEY }
+credential:
+  url: "https://app.datadoghq.com/organization-settings/api-keys"
+  scope: "An API key, plus an Application key (Organization Settings > Application Keys) limited to the scopes the lines need."
+  source: "https://docs.datadoghq.com/account_management/api-app-keys/"
+  verify: "GET /validate"
 detect:
   deps: [dd-trace, "@datadog/"]
   env: ["DD_*", "DATADOG_*"]

@@ -8,6 +8,7 @@ import { withFormat, type GlobalOpts, type IO } from "./context.js";
 import { ciRunUrl, renderMarkdown } from "./markdown.js";
 import { cliHint, errorEnvelope, exitCodeFor, serialize, toSponsonError } from "./output.js";
 import { defaultRegistry, loadPlugins } from "./registry.js";
+import { NO_TERMINAL, processTerminal, type Terminal } from "./terminal.js";
 import { VERSION } from "./version.js";
 
 /** Where an in-process `run` reads and writes. Every field defaults to the real process. */
@@ -20,6 +21,11 @@ export interface RunIO {
   createRegistry?: () => Registry | Promise<Registry>;
   /** Force colors on or off. Default: on only for a TTY without NO_COLOR. */
   color?: boolean;
+  /**
+   * Who answers `init --setup`'s questions (hidden token input, yes/no). Default: the process's own terminal when
+   * stdout is the process's and stdin and stderr are TTYs; nobody otherwise.
+   */
+  terminal?: Terminal;
 }
 
 /**
@@ -50,6 +56,7 @@ export async function run(argv: string[], init: RunIO = {}): Promise<number> {
     cwd,
     createRegistry: async () => loadPlugins(await baseRegistry(), env, cwd),
     color: init.color ?? (Boolean(process.stdout.isTTY) && env.NO_COLOR === undefined && init.stdout === undefined),
+    terminal: init.terminal ?? (init.stdout === undefined ? processTerminal() : NO_TERMINAL),
   };
 
   const format = formatOf(argv);
@@ -158,6 +165,8 @@ function buildProgram(io: IO, redactor: Redactor, setCode: (c: number) => void):
     .command("init")
     .description("write a starter plan, or adopt unmanaged resources into the existing one")
     .option("--adopt <key>", "adopt only the unmanaged resource with this key, id or label")
+    .option("--setup", "then set up the plan's credentials: where to create each token, check it, store it as a GitHub Actions secret, write the workflow")
+    .option("--yes", "with --setup: store every checked token and write the workflow without asking")
     .action(async (_opts, cmd: Command) => setCode(await initCommand(withFormat(cmd.optsWithGlobals(), "init", false), io, redactor)));
 
   program

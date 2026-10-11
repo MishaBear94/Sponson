@@ -23,6 +23,11 @@ api:
       client_secret_env: AUTH0_CLIENT_SECRET
       audience: /api/v2/
 base_url_example: https://acme.eu.auth0.com/api/v2
+credential:
+  url: "https://manage.auth0.com/#/applications"
+  scope: "A Machine to Machine application authorized for the Auth0 Management API with only the read:clients and update:clients scopes."
+  source: "https://auth0.com/docs/get-started/auth0-overview/create-applications/machine-to-machine-apps"
+  verify: "GET /clients?per_page=1&fields=client_id&include_fields=true"
 detect:
   deps: [auth0, "@auth0/"]
   env: ["AUTH0_*"]

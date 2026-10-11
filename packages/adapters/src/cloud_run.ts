@@ -29,6 +29,8 @@ const TOKEN_COMMAND = ["gcloud", "auth", "print-access-token"] as const;
 const ABOUT = {
   credentialEnv: TOKEN_COMMAND.join(" "),
   credentialCommand: TOKEN_COMMAND,
+  credentialUrl: "https://console.cloud.google.com/iam-admin/iam",
+  credentialScope: "Sign in with `gcloud auth login` as an identity holding Cloud Run Developer (roles/run.developer) and Service Account User on the service's runtime service account.",
   baseUrlEnv: "CLOUD_RUN_API_URL",
   title: "Google Cloud Run",
   category: "deploy",

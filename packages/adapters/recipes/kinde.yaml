@@ -21,6 +21,10 @@ api:
       client_secret_env: KINDE_MANAGEMENT_CLIENT_SECRET
       audience: /api
 base_url_example: https://acme.kinde.com/api/v1
+credential:
+  url: "https://docs.kinde.com/developer-tools/kinde-api/connect-to-kinde-api/"
+  scope: "A Machine to Machine application authorized for the Kinde Management API with only the application redirect and logout URI scopes."
+  source: "https://docs.kinde.com/developer-tools/kinde-api/connect-to-kinde-api/"
 detect:
   deps: ["@kinde-oss/"]
   env: ["KINDE_*"]

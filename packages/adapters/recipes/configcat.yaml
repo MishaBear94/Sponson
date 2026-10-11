@@ -15,6 +15,11 @@ api:
   base_url: https://api.configcat.com
   base_url_env: CONFIGCAT_API_URL
   auth: { basic: { user_env: CONFIGCAT_BASIC_AUTH_USERNAME, password_env: CONFIGCAT_BASIC_AUTH_PASSWORD } }
+credential:
+  url: "https://app.configcat.com/my-account/public-api-credentials"
+  scope: "Public Management API credentials; they act with your user's product permissions, so use a member limited to the product."
+  source: "https://configcat.com/docs/api/reference/configcat-public-management-api/"
+  verify: "GET /v1/me"
 detect:
   deps: [configcat-js, configcat-js-ssr, configcat-js-full, configcat-node, configcat-react]
   env: ["CONFIGCAT_*"]

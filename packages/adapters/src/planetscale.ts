@@ -4,8 +4,8 @@
  * packages/sim/src/routes/planetscale.ts and checked in docs/api-verification.md.
  */
 import { setTimeout as sleep } from "node:timers/promises";
-import { SponsonError, canonicalJson, markerKind, sha256, type AdapterContext, type Ctx, type Literal, type OpSpec, type ResourceAdapter, type ResourceRecord } from "@sponson/core";
-import { ABSENT, assertNoPending, clientFor, deleteIgnoringNotFound, desiredSide, optionalEnv, paramError, requireEnv, requireProvider, stringParam } from "./common.js";
+import { SponsonError, canonicalJson, markerKind, sha256, type AdapterContext, type Ctx, type Literal, type OpSpec, type ResourceAdapter, type ResourceRecord, type CredentialCheck } from "@sponson/core";
+import { ABSENT, assertNoPending, clientFor, deleteIgnoringNotFound, desiredSide, optionalEnv, paramError, requireEnv, requireProvider, stringParam, verifyByGet, optionalProvider } from "./common.js";
 import { isProviderError, listAll, obj, records, ShapeError, type ApiClient, type Page } from "./http.js";
 
 const ADAPTER = "planetscale";
@@ -13,7 +13,7 @@ const ADAPTER = "planetscale";
  * The environment PlanetScale reads; declared once, used by the code below and by the generated docs. A service
  * token is two values, sent as `Authorization: <id>:<token>` (PS1).
  */
-const ABOUT = { credentialEnv: "PLANETSCALE_SERVICE_TOKEN", extraCredentialEnv: ["PLANETSCALE_SERVICE_TOKEN_ID"], baseUrlEnv: "PLANETSCALE_API_URL", title: "PlanetScale", category: "databases", detect: { deps: ["@planetscale/"], env: ["PLANETSCALE_*"], dbHosts: [".psdb.cloud"] } } as const;
+const ABOUT = { credentialEnv: "PLANETSCALE_SERVICE_TOKEN", credentialUrl: "https://planetscale.com/docs/api/reference/service-tokens", credentialScope: "A service token with create_branch, delete_branch, read_branch and connect_branch (and delete_branch_password) on the one database.", extraCredentialEnv: ["PLANETSCALE_SERVICE_TOKEN_ID"], baseUrlEnv: "PLANETSCALE_API_URL", title: "PlanetScale", category: "databases", detect: { deps: ["@planetscale/"], env: ["PLANETSCALE_*"], dbHosts: [".psdb.cloud"] } } as const;
 
 /** PlanetScale's API base URL; `PLANETSCALE_API_URL` overrides it (the sim and tests use that). */
 export const PLANETSCALE_DEFAULT_API_URL = "https://api.planetscale.com/v1";
@@ -365,10 +365,22 @@ const password: OpSpec = {
   },
 };
 
+/** One read-only request that proves the credential works, and reaches the project when the plan names it (`sponson init --setup`). */
+async function verifyCredential(actx: AdapterContext): Promise<CredentialCheck> {
+  const id = requireEnv(actx.env, ABOUT.extraCredentialEnv[0], ADAPTER);
+  const secret = requireEnv(actx.env, ABOUT.credentialEnv, ADAPTER);
+  const api = clientFor(actx, ADAPTER, { baseUrl: optionalEnv(actx.env, ABOUT.baseUrlEnv) ?? PLANETSCALE_DEFAULT_API_URL, token: `${id}:${secret}`, authHeader: "header:authorization" });
+  const organization = optionalProvider(actx, "organization");
+  const database = optionalProvider(actx, "database");
+  if (!organization) return verifyByGet(api, "/organizations", "account");
+  if (!database) return verifyByGet(api, `/organizations/${enc(organization)}/databases?per_page=1`, `organization ${organization}`);
+  return verifyByGet(api, `/organizations/${enc(organization)}/databases/${enc(database)}`, `database ${database}`);
+}
+
 /**
  * PlanetScale (Vitess / MySQL databases): op `branch` creates a development branch per scope and waits until it
  * is ready; op `password` creates a password on it whose `connection_string` and `password` outputs (sensitive)
  * exist only in the run that creates it (`once`). Needs `PLANETSCALE_SERVICE_TOKEN_ID`,
  * `PLANETSCALE_SERVICE_TOKEN` and `providers.planetscale.{organization,database}`.
  */
-export const planetscaleAdapter: ResourceAdapter = { name: ADAPTER, ops: { branch, password }, about: ABOUT };
+export const planetscaleAdapter: ResourceAdapter = { name: ADAPTER, ops: { branch, password }, about: ABOUT, verifyCredential };

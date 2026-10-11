@@ -43,6 +43,11 @@ api:
   encoding: form
   # A preview must never create live-mode objects (ST2): live keys are refused unless this variable says otherwise.
   refuse_credential: { prefixes: [sk_live_, rk_live_], unless_env: SPONSON_STRIPE_ALLOW_LIVE }
+credential:
+  url: "https://dashboard.stripe.com/test/apikeys"
+  scope: "A test-mode restricted key (Create restricted key) with Webhook Endpoints set to Write and everything else None."
+  source: "https://docs.stripe.com/keys/restricted-api-keys"
+  verify: "GET /webhook_endpoints?limit=1"
 detect:
   deps: [stripe, "@stripe/"]
   env: ["STRIPE_*"]

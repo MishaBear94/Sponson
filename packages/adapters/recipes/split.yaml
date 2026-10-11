@@ -21,6 +21,11 @@ api:
   base_url: https://api.split.io/internal/api/v2
   base_url_env: SPLIT_API_URL
   auth: { bearer_env: SPLIT_ADMIN_API_KEY }
+credential:
+  url: "https://developer.harness.io/docs/feature-management-experimentation/api-keys/"
+  scope: "An Admin API key (Admin settings > API keys), restricted to the environments the lines change."
+  source: "https://docs.split.io/reference/authentication"
+  verify: "GET /workspaces"
 detect:
   deps: ["@splitsoftware/"]
   env: ["SPLIT_*"]

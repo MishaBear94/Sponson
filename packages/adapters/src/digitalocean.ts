@@ -12,14 +12,14 @@
  *   create and update starts a deployment, which `apply` waits for (`wait: false` to skip).
  */
 import { setTimeout as sleep } from "node:timers/promises";
-import { SponsonError, canonicalJson, markerKind, sha256, type AdapterContext, type DiffSide, type Literal, type LiveState, type OpSpec, type ResourceAdapter, type ResourceRecord } from "@sponson/core";
+import { SponsonError, canonicalJson, markerKind, sha256, type AdapterContext, type DiffSide, type Literal, type LiveState, type OpSpec, type ResourceAdapter, type ResourceRecord, type CredentialCheck } from "@sponson/core";
 // Only the stable authoring API exported from `@sponson/adapters` (listed in CONTRIBUTING.md).
-import { assertNoPending, clientFor, deleteIgnoringNotFound, desiredSide, optionalEnv, paramError, requireEnv } from "./common.js";
+import { assertNoPending, clientFor, deleteIgnoringNotFound, desiredSide, optionalEnv, paramError, requireEnv, verifyByGet } from "./common.js";
 import { ShapeError, isObject, isProviderError, listAll, type ApiClient } from "./http.js";
 
 const ADAPTER = "digitalocean";
 /** The environment DigitalOcean reads (doctl's variable); declared once, used here and by the generated docs. */
-const ABOUT = { credentialEnv: "DIGITALOCEAN_ACCESS_TOKEN", baseUrlEnv: "DIGITALOCEAN_API_URL", title: "DigitalOcean App Platform", category: "deploy", detect: { env: ["DIGITALOCEAN_*"], files: [".do/app.yaml", ".do/deploy.template.yaml"] } } as const;
+const ABOUT = { credentialEnv: "DIGITALOCEAN_ACCESS_TOKEN", credentialUrl: "https://cloud.digitalocean.com/account/api/tokens", credentialScope: "A personal access token with Custom Scopes: app:read and app:update.", baseUrlEnv: "DIGITALOCEAN_API_URL", title: "DigitalOcean App Platform", category: "deploy", detect: { env: ["DIGITALOCEAN_*"], files: [".do/app.yaml", ".do/deploy.template.yaml"] } } as const;
 
 /** DigitalOcean's API base URL (DO1). `DIGITALOCEAN_API_URL` overrides it; tests point that at the sim. */
 export const DIGITALOCEAN_DEFAULT_API_URL = "https://api.digitalocean.com";
@@ -253,5 +253,10 @@ const app: OpSpec = {
   },
 };
 
+/** One read-only request that proves the credential works, and reaches the project when the plan names it (`sponson init --setup`). */
+async function verifyCredential(actx: AdapterContext): Promise<CredentialCheck> {
+  return verifyByGet(client(actx), "/v2/apps?per_page=1", "account");
+}
+
 /** The DigitalOcean adapter (`adapter: digitalocean` in a plan). Registered in `createRegistry()`; needs `DIGITALOCEAN_ACCESS_TOKEN`. */
-export const digitaloceanAdapter: ResourceAdapter = { name: ADAPTER, ops: { app }, about: ABOUT };
+export const digitaloceanAdapter: ResourceAdapter = { name: ADAPTER, ops: { app }, about: ABOUT, verifyCredential };

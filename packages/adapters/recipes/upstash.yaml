@@ -26,6 +26,11 @@ api:
   base_url: https://api.upstash.com/v2
   base_url_env: UPSTASH_API_URL
   auth: { basic: { user_env: UPSTASH_EMAIL, password_env: UPSTASH_API_KEY } }
+credential:
+  url: "https://console.upstash.com/account/api"
+  scope: "A Developer API key (Account > Developer API) with Read/Write; the account's email is its user name."
+  source: "https://upstash.com/docs/devops/developer-api/authentication"
+  verify: "GET /redis/databases"
 detect:
   deps: ["@upstash/redis"]
   env: ["UPSTASH_REDIS_*"]

@@ -106,6 +106,9 @@ const notFound = () => new Reply(404, { id: "not_found", message: "branch not fo
 
 const routes = router<XataState>(
   [
+    // A token check (`sponson init --setup`): the organizations the key reaches.
+    route("GET", "/organizations", ({ state }) => new Reply(200, { organizations: [...new Set(Object.keys(state.projects).map((k) => k.split("/")[0]!))].map((id) => ({ id, name: id })) })),
+
     route("GET", "/organizations/:org/projects/:project/branches", ({ state, params }) => {
       const p = state.projects[`${params.org}/${params.project}`];
       return p ? new Reply(200, { branches: p.branches.map(publicBranch) }) : new Reply(404, { id: "not_found", message: "project not found" });

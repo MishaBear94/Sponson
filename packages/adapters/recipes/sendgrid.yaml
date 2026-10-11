@@ -27,6 +27,11 @@ api:
   base_url: https://api.sendgrid.com
   base_url_env: SENDGRID_API_URL
   auth: { bearer_env: SENDGRID_API_KEY }
+credential:
+  url: "https://app.sendgrid.com/settings/api_keys"
+  scope: "A Restricted Access key with Mail Settings > Event Notification set to Full Access."
+  source: "https://www.twilio.com/docs/sendgrid/ui/account-and-settings/api-keys"
+  verify: "GET /v3/scopes"
 detect:
   deps: ["@sendgrid/"]
   env: ["SENDGRID_*"]

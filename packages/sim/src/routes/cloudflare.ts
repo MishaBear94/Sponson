@@ -120,6 +120,9 @@ const PROJECT = "/accounts/:account/pages/projects/:project";
 
 const routes = router<CloudflareState>(
   [
+    // A token check (`sponson init --setup`): a user token is `active`.
+    route("GET", "/user/tokens/verify", () => ok({ id: "tok_sim", status: "active" })),
+
     route("GET", PROJECT, ({ state, params }) => {
       const p = state.accounts[params.account]?.projects[params.project];
       return p ? ok(publicProject(p)) : notFound();

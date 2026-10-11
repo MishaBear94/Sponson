@@ -12,13 +12,13 @@
  * checked in docs/api-verification.md.
  */
 import { setTimeout as sleep } from "node:timers/promises";
-import { SponsonError, canonicalJson, isPendingMarker, markerKind, sha256, type AdapterContext, type Literal, type LiveState, type OpSpec, type ResolvedParams, type ResourceAdapter, type ResourceRecord } from "@sponson/core";
-import { ABSENT, assertNoPending, clientFor, deleteIgnoringNotFound, desiredSide, diffValue, optionalEnv, paramError, requireEnv, requireProvider, stringParam } from "./common.js";
+import { SponsonError, canonicalJson, isPendingMarker, markerKind, sha256, type AdapterContext, type Literal, type LiveState, type OpSpec, type ResolvedParams, type ResourceAdapter, type ResourceRecord, type CredentialCheck } from "@sponson/core";
+import { ABSENT, assertNoPending, clientFor, deleteIgnoringNotFound, desiredSide, diffValue, optionalEnv, paramError, requireEnv, requireProvider, stringParam, verifyByGet, optionalProvider } from "./common.js";
 import { ShapeError, isProviderError, isTransient, obj, records, type ApiClient } from "./http.js";
 
 const ADAPTER = "supabase";
 /** The environment Supabase reads; declared once, used by the code below and by the generated docs (`about`). */
-const ABOUT = { credentialEnv: "SUPABASE_ACCESS_TOKEN", baseUrlEnv: "SUPABASE_API_URL", title: "Supabase", category: "databases", detect: { deps: ["@supabase/"], env: ["SUPABASE_*"], files: ["supabase/config.toml", "supabase/.temp/project-ref"], dbHosts: [".supabase.co", ".supabase.com"] } } as const;
+const ABOUT = { credentialEnv: "SUPABASE_ACCESS_TOKEN", credentialUrl: "https://supabase.com/dashboard/account/tokens", credentialScope: "A personal access token limited to the project, with Development Branches, Auth Config and Project Settings set to Read-write.", baseUrlEnv: "SUPABASE_API_URL", title: "Supabase", category: "databases", detect: { deps: ["@supabase/"], env: ["SUPABASE_*"], files: ["supabase/config.toml", "supabase/.temp/project-ref"], dbHosts: [".supabase.co", ".supabase.com"] } } as const;
 
 /** The Supabase Management API's base URL. `SUPABASE_API_URL` overrides it; tests and scenarios point that at the sim. */
 export const SUPABASE_DEFAULT_API_URL = "https://api.supabase.com/v1";
@@ -432,9 +432,16 @@ const auth_redirect: OpSpec = {
   },
 };
 
+/** One read-only request that proves the credential works, and reaches the project when the plan names it (`sponson init --setup`). */
+async function verifyCredential(actx: AdapterContext): Promise<CredentialCheck> {
+  const api = clientFor(actx, ADAPTER, { baseUrl: optionalEnv(actx.env, ABOUT.baseUrlEnv) ?? SUPABASE_DEFAULT_API_URL, token: requireEnv(actx.env, ABOUT.credentialEnv, ADAPTER) });
+  const project = optionalProvider(actx, "project");
+  return project ? verifyByGet(api, `/projects/${encodeURIComponent(project)}`, `project ${project}`) : verifyByGet(api, "/projects", "account");
+}
+
 /**
  * The Supabase adapter (`adapter: supabase` in a plan): op `branch` (a preview branch per scope, with its
  * connection string as a sensitive output) and op `auth_redirect` (one URL in the project's Auth redirect
  * allow-list). Needs `SUPABASE_ACCESS_TOKEN` and `providers.supabase.project` (the parent project's ref).
  */
-export const supabaseAdapter: ResourceAdapter = { name: ADAPTER, ops: { branch, auth_redirect }, about: ABOUT };
+export const supabaseAdapter: ResourceAdapter = { name: ADAPTER, ops: { branch, auth_redirect }, about: ABOUT, verifyCredential };

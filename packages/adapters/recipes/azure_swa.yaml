@@ -21,6 +21,10 @@ api:
   base_url: https://management.azure.com
   base_url_env: AZURE_SWA_API_URL
   auth: { command: [az, account, get-access-token, --query, accessToken, -o, tsv] }
+credential:
+  url: "https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles"
+  scope: "Sign in with `az login` as an identity holding Contributor on the static web app (or a custom role with Microsoft.Web/staticSites/*)."
+  source: "https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/web-and-mobile"
 detect:
   files: [staticwebapp.config.json]
   env: ["AZURE_STATIC_WEB_APPS_*"]

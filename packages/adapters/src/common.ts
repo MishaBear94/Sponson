@@ -1,4 +1,4 @@
-import { SponsonError, markerKind, pendingRef, sha256, type AdapterContext, type DiffSide, type ResolvedParams, type ResourceDiff, type ResourceRecord } from "@sponson/core";
+import { SponsonError, markerKind, pendingRef, sha256, type AdapterContext, type CredentialCheck, type DiffSide, type ResolvedParams, type ResourceDiff, type ResourceRecord } from "@sponson/core";
 import { apiClient, isProviderError, type ApiClient, type ApiClientOptions } from "./http.js";
 
 /**
@@ -136,4 +136,14 @@ export async function deleteIgnoringNotFound(api: ApiClient, path: string): Prom
   } catch (e) {
     if (!isProviderError(e, "PROVIDER_NOT_FOUND")) throw e;
   }
+}
+
+/**
+ * `ResourceAdapter.verifyCredential` as most adapters write it: one GET, whose failure the HTTP client classifies
+ * (401/403 PROVIDER_AUTH, 404 PROVIDER_NOT_FOUND). The request is reported without its query, and `reaches` names what
+ * it proved the credential reaches (`account`, or the project it named).
+ */
+export async function verifyByGet(api: ApiClient, path: string, reaches: string): Promise<CredentialCheck> {
+  await api.get(path);
+  return { request: `GET ${path.split("?")[0]!}`, reaches };
 }

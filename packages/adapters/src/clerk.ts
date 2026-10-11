@@ -1,9 +1,9 @@
-import { isPendingMarker, sha256, type AdapterContext, type OpSpec, type ResourceAdapter, type ResourceRecord } from "@sponson/core";
-import { assertNoPending, clientFor, deleteIgnoringNotFound, diffValue, optionalEnv, requireEnv, stringParam } from "./common.js";
+import { isPendingMarker, sha256, type AdapterContext, type OpSpec, type ResourceAdapter, type ResourceRecord, type CredentialCheck } from "@sponson/core";
+import { assertNoPending, clientFor, deleteIgnoringNotFound, diffValue, optionalEnv, requireEnv, stringParam, verifyByGet } from "./common.js";
 import { ShapeError, isObject, isProviderError, listAll, records, type ApiClient, type Page } from "./http.js";
 
 /** The environment clerk reads; declared once, used by the code below and by the generated docs. */
-const ABOUT = { credentialEnv: "CLERK_SECRET_KEY", baseUrlEnv: "CLERK_API_URL", title: "Clerk", category: "auth", detect: { deps: ["@clerk/"], env: ["CLERK_*"] } } as const;
+const ABOUT = { credentialEnv: "CLERK_SECRET_KEY", credentialUrl: "https://dashboard.clerk.com/last-active?path=api-keys", credentialScope: "The Secret Key of the instance whose redirect URLs the plan manages (sk_test_ for development); Clerk secret keys have no scopes.", baseUrlEnv: "CLERK_API_URL", title: "Clerk", category: "auth", detect: { deps: ["@clerk/"], env: ["CLERK_*"] } } as const;
 
 /** Clerk's API base URL; `CLERK_API_URL` overrides it (the sim and tests use that). */
 export const CLERK_DEFAULT_API_URL = "https://api.clerk.com/v1";
@@ -117,8 +117,13 @@ const redirect_allow: OpSpec = {
   },
 };
 
+/** One read-only request that proves the credential works, and reaches the project when the plan names it (`sponson init --setup`). */
+async function verifyCredential(actx: AdapterContext): Promise<CredentialCheck> {
+  return verifyByGet(client(actx), "/redirect_urls?paginated=true&limit=1", "instance");
+}
+
 /**
  * Clerk: op `redirect_allow` keeps a redirect URL (e.g. a preview URL) on the allow-list. Needs
  * `CLERK_SECRET_KEY`.
  */
-export const clerkAdapter: ResourceAdapter = { name: "clerk", ops: { redirect_allow }, about: ABOUT };
+export const clerkAdapter: ResourceAdapter = { name: "clerk", ops: { redirect_allow }, about: ABOUT, verifyCredential };

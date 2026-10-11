@@ -17,6 +17,11 @@ api:
   base_url: https://api.honeycomb.io
   base_url_env: HONEYCOMB_API_URL
   auth: { header: X-Honeycomb-Team, value_env: HONEYCOMB_API_KEY }
+credential:
+  url: "https://ui.honeycomb.io/"
+  scope: "An environment Configuration Key (Manage Environments > API Keys) with only the permission the lines need, such as Manage Markers."
+  source: "https://docs.honeycomb.io/configure/environments/manage-api-keys/"
+  verify: "GET /1/auth"
 detect:
   deps: ["@honeycombio/"]
   env: ["HONEYCOMB_*"]

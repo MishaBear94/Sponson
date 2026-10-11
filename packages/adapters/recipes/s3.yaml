@@ -20,6 +20,10 @@ api:
   encoding: xml
   auth:
     aws_sigv4: { region: us-east-1, service: s3, access_key_id_env: AWS_ACCESS_KEY_ID, secret_access_key_env: AWS_SECRET_ACCESS_KEY }
+credential:
+  url: "https://console.aws.amazon.com/iam/home#/users"
+  scope: "AWS: an access key whose policy allows s3:GetBucketCORS and s3:PutBucketCORS on the bucket. R2: an API token with Admin Read & Write."
+  source: "https://developers.cloudflare.com/r2/api/tokens/"
 detect:
   deps: ["@aws-sdk/client-s3"]
   starter:

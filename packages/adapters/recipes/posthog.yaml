@@ -19,6 +19,10 @@ api:
   base_url: https://us.posthog.com
   base_url_env: POSTHOG_API_URL
   auth: { bearer_env: POSTHOG_PERSONAL_API_KEY }
+credential:
+  url: "https://us.posthog.com/settings/user-api-keys"
+  scope: "A personal API key with only the feature_flag:read and feature_flag:write scopes, limited to the project (EU: eu.posthog.com)."
+  source: "https://posthog.com/docs/api/personal-api-keys"
 detect:
   deps: [posthog-js, posthog-node, posthog-react-native]
   env: ["POSTHOG_*"]

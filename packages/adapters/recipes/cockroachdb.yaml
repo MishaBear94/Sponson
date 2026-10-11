@@ -15,6 +15,11 @@ api:
   base_url_env: COCKROACH_API_URL
   auth: { bearer_env: COCKROACH_API_KEY }
   headers: { Cc-Version: "2024-09-16" }
+credential:
+  url: "https://cockroachlabs.cloud/access"
+  scope: "A service account (Access Management > Service Accounts) with the Cluster Admin role on the cluster, then Create API Key."
+  source: "https://docs.cockroachlabs.com/docs/cockroachcloud/managing-access"
+  verify: "GET /clusters"
 detect:
   env: ["COCKROACH_*"]
   db_hosts: [.cockroachlabs.cloud]

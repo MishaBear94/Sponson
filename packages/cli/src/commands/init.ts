@@ -5,11 +5,17 @@ import { Document, isMap, isScalar, isSeq, parseDocument, visit, type Pair } fro
 import { UsageError, planPathFor, toRunOptions, withInvocation, type GlobalOpts, type Invocation, type IO } from "../context.js";
 import { withRedactorWarnings } from "../output.js";
 import { detectStack, fsReader, type Finding, type UnsupportedFinding } from "../stack.js";
+import { runSetup, type SetupReport } from "../setup.js";
 import { composeStarter, credentialsFor, type Todo } from "../starter.js";
+import { NO_TERMINAL } from "../terminal.js";
 
 export interface InitOpts extends GlobalOpts {
   /** Adopt only the unmanaged resource whose key, id or label matches. */
   adopt?: string;
+  /** After writing the plan (or with the plan there is), set up its credentials, secrets and workflow (setup.ts). */
+  setup?: boolean;
+  /** With `setup`: accept every offer without asking. */
+  yes?: boolean;
 }
 
 export interface InitDetected {
@@ -37,6 +43,8 @@ export interface InitResult {
   /** Lines appended to an existing plan, with the resource keys each one adopts. */
   added: Array<{ id: string; adapter: string; op: string; keys: string[] }>;
   warnings: string[];
+  /** With `--setup`: each credential's status, the secrets stored and the workflow written. Never a value. */
+  setup?: SetupReport;
 }
 
 /**
@@ -45,6 +53,8 @@ export interface InitResult {
  * and never reformats what is already in the file.
  */
 export async function initCommand(opts: InitOpts, io: IO, redactor: Redactor): Promise<number> {
+  if (opts.yes && !opts.setup) throw new UsageError("--yes accepts the offers of --setup: write `sponson init --setup --yes`");
+  if (opts.setup && opts.adopt !== undefined) throw new UsageError("--adopt and --setup do not combine: set up the credentials first (`sponson init --setup`), then adopt (`sponson init --adopt <key>`)");
   const planPath = planPathFor(opts, io);
   const existing = await readFile(planPath, "utf8").catch(() => null);
   const result: InitResult = { ok: true, command: "init", created: false, path: planPath, detected: null, added: [], warnings: [] };
@@ -55,12 +65,14 @@ export async function initCommand(opts: InitOpts, io: IO, redactor: Redactor): P
     result.created = true;
     result.detected = starter.detected;
     text.push(...starter.text);
-  } else {
+  } else if (!opts.setup) {
+    // Adopting reads live state with the credentials; with --setup they are what is being set up, so it waits.
     text.push(...(await withInvocation(opts, io, redactor, (inv) => adoptUnmanaged(inv, existing, opts, io, result))));
     result.warnings = withRedactorWarnings(result.warnings, redactor);
   }
 
   if (await ensureGitignore(io.cwd)) text.push("Added .sponson/ to .gitignore");
+  if (opts.setup) return setupAfterInit(opts, io, redactor, result, text);
 
   if (opts.json) {
     io.json(result);
@@ -75,6 +87,24 @@ export async function initCommand(opts: InitOpts, io: IO, redactor: Redactor): P
     );
   }
   io.stdout.write(text.join("\n") + "\n");
+  return 0;
+}
+
+/**
+ * `--setup`: what init did so far, then the guided setup (setup.ts) with its progress as it happens: on stdout for
+ * people, on stderr with `--json`, whose stdout is the one report (`setup` in it, never a value).
+ */
+async function setupAfterInit(opts: InitOpts, io: IO, redactor: Redactor, result: InitResult, text: string[]): Promise<number> {
+  const out = opts.json ? io.stderr : io.stdout;
+  // The starter's "Next: set … in your environment" is what setup does now.
+  const before = text.filter((l) => !l.startsWith("Next: set "));
+  if (!opts.json && before.length) out.write(`${before.join("\n")}\n`);
+  const detected = (result.detected?.found ?? []).filter((f) => f.kind === "provider");
+  const say = (...lines: string[]) => void out.write(`${lines.join("\n")}\n`);
+  result.setup = await runSetup({ io, redactor, terminal: io.terminal ?? NO_TERMINAL, opts, planPath: result.path, detected }, say);
+  result.warnings = withRedactorWarnings(result.warnings, redactor);
+  if (opts.json) io.json(result);
+  else if (result.warnings.length) say("", "warnings", ...result.warnings.map((w) => `  ${w}`));
   return 0;
 }
 

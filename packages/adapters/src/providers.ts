@@ -22,6 +22,10 @@ export interface DetectableProvider {
   credentials: string[];
   /** The command whose output is its credential, when it takes a CLI's token instead (`gcloud auth print-access-token`). */
   credentialCommand?: readonly string[];
+  /** Where a person creates the credential (`about.credentialUrl`, a recipe's `credential.url`). */
+  credentialUrl?: string;
+  /** The least the credential needs (`about.credentialScope`, a recipe's `credential.scope`). */
+  credentialScope?: string;
   /** For a recipe provider, its recipe. */
   recipe?: Recipe;
 }
@@ -37,6 +41,8 @@ function adapterProvider(name: string, about: AdapterAbout, detect: ProviderDete
     detect,
     credentials: [...(about.extraCredentialEnv ?? []), ...(command ? [] : [about.credentialEnv])],
     ...(command ? { credentialCommand: command } : {}),
+    ...(about.credentialUrl ? { credentialUrl: about.credentialUrl } : {}),
+    ...(about.credentialScope ? { credentialScope: about.credentialScope } : {}),
   };
 }
 
@@ -59,6 +65,7 @@ export function detectableProviders(registry: Registry, recipes: Recipe[] = load
       via: "recipe",
       detect: { ...(d.deps ? { deps: d.deps } : {}), ...(d.env ? { env: d.env } : {}), ...(d.files ? { files: d.files } : {}), ...(d.db_hosts ? { dbHosts: d.db_hosts } : {}) },
       credentials: recipeCredentialEnv(recipe),
+      ...(recipe.credential ? { credentialUrl: recipe.credential.url, credentialScope: recipe.credential.scope } : {}),
       recipe,
     });
   }

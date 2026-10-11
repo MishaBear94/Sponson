@@ -15,6 +15,7 @@ import {
   type RunOptions,
 } from "@sponson/core";
 import { detectCtx, nonEmpty } from "./detect.js";
+import type { Terminal } from "./terminal.js";
 
 /** Streams and environment for one in-process invocation. Tests and the MCP server supply their own. */
 export interface IO {
@@ -27,6 +28,8 @@ export interface IO {
   cwd: string;
   createRegistry: () => Registry | Promise<Registry>;
   color: boolean;
+  /** The person who can answer `init --setup`'s questions; absent: nobody (nothing is asked). */
+  terminal?: Terminal;
 }
 
 export interface GlobalOpts {

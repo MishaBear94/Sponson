@@ -25,6 +25,11 @@ api:
   base_url: https://api.resend.com
   base_url_env: RESEND_API_URL
   auth: { bearer_env: RESEND_API_KEY }
+credential:
+  url: "https://resend.com/api-keys"
+  scope: "An API key with Full access: Sending access can only send email, not manage webhooks, domains or keys."
+  source: "https://resend.com/docs/dashboard/api-keys/introduction"
+  verify: "GET /domains"
 detect:
   deps: [resend]
   env: ["RESEND_*"]

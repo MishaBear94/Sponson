@@ -10,14 +10,14 @@
  *   drift. A deleted index is `missing`, and the next apply copies it again.
  */
 import { setTimeout as sleep } from "node:timers/promises";
-import { SponsonError, canonicalJson, markerKind, sha256, type AdapterContext, type Literal, type OpSpec, type ResourceAdapter, type ResourceRecord } from "@sponson/core";
+import { SponsonError, canonicalJson, markerKind, sha256, type AdapterContext, type Literal, type OpSpec, type ResourceAdapter, type ResourceRecord, type CredentialCheck } from "@sponson/core";
 // Only the stable authoring API exported from `@sponson/adapters` (listed in CONTRIBUTING.md).
-import { assertNoPending, clientFor, deleteIgnoringNotFound, optionalEnv, paramError, requireEnv, requireProvider, stringParam } from "./common.js";
+import { assertNoPending, clientFor, deleteIgnoringNotFound, optionalEnv, paramError, requireEnv, requireProvider, stringParam, verifyByGet } from "./common.js";
 import { ShapeError, isObject, isProviderError, type ApiClient } from "./http.js";
 
 const ADAPTER = "algolia";
 /** The environment Algolia reads; declared once, used by the code below and by the generated docs (`about`). */
-const ABOUT = { credentialEnv: "ALGOLIA_API_KEY", baseUrlEnv: "ALGOLIA_API_URL", title: "Algolia", category: "search-payments", detect: { deps: ["algoliasearch", "@algolia/", "instantsearch.js", "react-instantsearch"], env: ["ALGOLIA_*"] } } as const;
+const ABOUT = { credentialEnv: "ALGOLIA_API_KEY", credentialUrl: "https://dashboard.algolia.com/account/api-keys/", credentialScope: "A restricted API key (not the Admin key) with the addObject, deleteIndex, editSettings, settings and listIndexes ACLs.", baseUrlEnv: "ALGOLIA_API_URL", title: "Algolia", category: "search-payments", detect: { deps: ["algoliasearch", "@algolia/", "instantsearch.js", "react-instantsearch"], env: ["ALGOLIA_*"] } } as const;
 
 /** How often the copy task is polled, and for how long (milliseconds; overridable for tests). */
 const POLL_MS = { env: "SPONSON_ALGOLIA_POLL_MS", fallback: 1000 };
@@ -149,8 +149,13 @@ const index: OpSpec = {
   },
 };
 
+/** One read-only request that proves the credential works, and reaches the project when the plan names it (`sponson init --setup`). */
+async function verifyCredential(actx: AdapterContext): Promise<CredentialCheck> {
+  return verifyByGet(client(actx), "/1/indexes?page=0&hitsPerPage=1", `application ${String(actx.provider.application_id)}`);
+}
+
 /**
  * The Algolia adapter (`adapter: algolia` in a plan). Registered in `createRegistry()`; needs `ALGOLIA_API_KEY`
  * (with the addObject, deleteIndex and settings ACLs) and `providers.algolia.application_id`.
  */
-export const algoliaAdapter: ResourceAdapter = { name: ADAPTER, ops: { index }, about: ABOUT };
+export const algoliaAdapter: ResourceAdapter = { name: ADAPTER, ops: { index }, about: ABOUT, verifyCredential };

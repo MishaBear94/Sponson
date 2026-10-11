@@ -58,10 +58,58 @@ alias sponson="node --import ~/sponson/node_modules/tsx/dist/loader.mjs ~/sponso
 Then, in your app's repository:
 
 ```bash
-sponson init          # detects the stack, writes release.plan.yaml, adds .sponson/ to .gitignore
+sponson init --setup  # detects the stack, writes release.plan.yaml, then sets up each provider's token (below)
 sponson plan          # read-only diff
 sponson apply         # creates the branch, injects the variable, waits for the deploy
 ```
+
+`--setup` turns the plan into credentials you can run it with, in one pass in your own terminal. For each provider the
+plan uses it shows the page where the token is created and the least it needs, takes the token from the environment
+or asks for it (hidden input, never written to disk), and checks it with one read-only request. Then, after a yes for
+each, it stores the checked tokens as GitHub Actions secrets of your `origin` with your own `gh` (the value goes to
+`gh secret set` on stdin, nowhere else), and writes `.github/workflows/sponson.yml` with the action pinned to the
+commit of the installed version's release tag (an existing file is never overwritten). Run it again any time, also on
+an existing plan; `--yes` accepts every offer for scripted use, `--json` reports each credential's status without a
+value. Agents ask a human to run it rather than handle a token themselves ([SKILL.md](/guides/agents)).
+
+```
+$ sponson init --setup
+Wrote release.plan.yaml
+Detected: Vercel (.vercel/project.json), Neon (package.json: @neondatabase/serverless), Clerk (package.json: @clerk/nextjs), Next.js (package.json: next)
+Credentials for release.plan.yaml:
+
+Neon  NEON_API_KEY
+  create it: https://neon.com/docs/manage/api-keys
+  pick:      A project-scoped API key for the one project (an organization admin creates it); otherwise a personal API key.
+  NEON_API_KEY (input hidden, Enter to skip):
+  ok: GET /projects/proj_quiet_sky (reaches project proj_quiet_sky)
+
+Vercel  VERCEL_TOKEN
+  create it: https://vercel.com/account/tokens
+  pick:      A token whose Scope is the team that owns the project, with an expiration.
+  VERCEL_TOKEN: from the environment
+  ok: GET /v9/projects/prj_acme_web (reaches project prj_acme_web)
+
+Clerk  CLERK_SECRET_KEY
+  create it: https://dashboard.clerk.com/last-active?path=api-keys
+  pick:      The Secret Key of the instance whose redirect URLs the plan manages (sk_test_ for development); Clerk secret keys have no scopes.
+  CLERK_SECRET_KEY (input hidden, Enter to skip):
+  unauthorized: clerk: GET /redirect_urls?paginated=true&limit=1 → 401: {"errors":[…]}
+
+GitHub Actions secrets of acme/web (with your `gh`; the value goes to its stdin only):
+  Store NEON_API_KEY as an Actions secret of acme/web (replaces one of that name)? [y/N] y
+  NEON_API_KEY: stored
+  Store VERCEL_TOKEN as an Actions secret of acme/web (replaces one of that name)? [y/N] y
+  VERCEL_TOKEN: stored
+  CLERK_SECRET_KEY: not offered (no value, or it did not check ok)
+
+  Write .github/workflows/sponson.yml (the action pinned to the commit of sponson@0.7.0)? [y/N] y
+Workflow: wrote .github/workflows/sponson.yml (action pinned to 3f1c0a9e7b2d, sponson@0.7.0).
+
+Not ready yet: fix the credentials above and run `sponson init --setup` again.
+```
+
+Where each provider's token is created and what to pick is listed per provider in [docs/providers.md](/reference/providers).
 
 `sponson init` reads the repository's files only (no network, no credentials): `.vercel/project.json` and
 `vercel.json`, `netlify.toml` and `.netlify/state.json`, `package.json` dependencies, Prisma and Drizzle configs,
@@ -99,7 +147,7 @@ API docs it was checked against and runs through create, re-apply, drift and des
 
 Third-party adapters and secret sources load as plugins: `SPONSON_PLUGINS=sponson-adapter-x,./local-adapter.mjs`, each module exporting `register(registry)`.
 
-Credentials come from the providers' own conventions (`VERCEL_TOKEN` for Vercel; every adapter's variable is listed under [built-in ops](/reference/plan-format#built-in-ops)). Sponson has no credential store of its own.
+Credentials come from the providers' own conventions (`VERCEL_TOKEN` for Vercel; every adapter's variable is listed under [built-in ops](/reference/plan-format#built-in-ops)). Sponson has no credential store of its own: `sponson init --setup` checks them and hands them to GitHub's.
 
 In GitHub Actions, one workflow with three triggers calls the same action:
 
