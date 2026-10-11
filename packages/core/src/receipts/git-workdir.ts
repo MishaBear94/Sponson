@@ -82,9 +82,14 @@ export class GitWorkdir {
   }
 
   /** Remove the clone when this instance created it; the next use makes a fresh mkdtemp directory. */
+  /**
+   * Never throws: the run's outcome is already decided when its temporary clone is cleaned up, and a failed cleanup
+   * must not turn a completed apply into an error. Removal is retried (a git process may still be finishing a write
+   * into .git/objects); a clone that still cannot be removed is left behind (owner-only, under the temp dir).
+   */
   async close(): Promise<void> {
     if (this.owned && this.dir) {
-      await rm(this.dir, { recursive: true, force: true });
+      await rm(this.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => undefined);
       this.dir = ""; // never a recreated, known path
     }
     this.initialized = false;
@@ -98,7 +103,8 @@ export class GitWorkdir {
     return new Promise((resolve, reject) => {
       const child = execFile(
         "git",
-        ["-c", "user.name=sponson", "-c", "user.email=sponson@localhost", "-c", "commit.gpgsign=false", ...args],
+        // No automatic gc or maintenance: a detached background git still writing into the clone races its removal.
+        ["-c", "user.name=sponson", "-c", "user.email=sponson@localhost", "-c", "commit.gpgsign=false", "-c", "gc.auto=0", "-c", "maintenance.auto=false", ...args],
         { cwd: this.dir, maxBuffer: 64 * 1024 * 1024, encoding: "buffer", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
         (err, stdout, stderr) => {
           if (!err) return resolve(stdout);

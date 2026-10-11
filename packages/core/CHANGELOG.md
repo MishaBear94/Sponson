@@ -35,6 +35,7 @@
 
 ### Patch Changes
 
+- The git-branch store's temporary working clone is removed with retries and never fails a finished command; git runs without automatic gc or maintenance, whose background writes raced the removal (`ENOTEMPTY` after a successful apply).
 - d9ab332: Published with npm provenance: each package's `publishConfig` now asks for it. 0.4.0 went out without attestations because `changeset publish` runs `pnpm publish`, which ignores the release workflow's `NPM_CONFIG_PROVENANCE`.
 
 ## 0.4.0
