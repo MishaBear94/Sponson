@@ -5,3 +5,6 @@ dist/
 .sponson/
 coverage/
 packages/*/LICENSE
+
+# Agent scratch files (merge helpers and the like); never part of the repository.
+.scratch/
