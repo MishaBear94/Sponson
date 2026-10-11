@@ -10,6 +10,9 @@ import { launchdarklyAdapter } from "./launchdarkly.js";
 import { supabaseAdapter } from "./supabase.js";
 import { manualAdapter } from "./manual.js";
 import { cloudflareAdapter } from "./cloudflare.js";
+import { algoliaAdapter } from "./algolia.js";
+import { xataAdapter } from "./xata.js";
+import { digitaloceanAdapter } from "./digitalocean.js";
 
 /**
  * The stable adapter authoring API: what templates/adapter (`pnpm new:adapter`) uses, and what an out-of-tree
@@ -32,8 +35,11 @@ export * from "./supabase.js";
 export { manualAdapter } from "./manual.js";
 export * from "./netlify.js";
 export * from "./cloudflare.js";
+export * from "./algolia.js";
+export * from "./xata.js";
+export * from "./digitalocean.js";
 
 /** Every built-in adapter and secret source. The CLI uses this; tests build narrower registries. */
 export function createRegistry(): Registry {
-  return new Registry().addAdapter(neonAdapter).addAdapter(vercelAdapter).addAdapter(clerkAdapter).addAdapter(planetscaleAdapter).addAdapter(launchdarklyAdapter).addAdapter(httpAdapter).addAdapter(supabaseAdapter).addAdapter(netlifyAdapter).addAdapter(cloudflareAdapter).addAdapter(manualAdapter).addSecretSource(envSecretSource).addSecretSource(dopplerSecretSource()).addSecretSource(opSecretSource()).addSecretSource(awsSecretsManagerSource()).addSecretSource(gcpSecretManagerSource());
+  return new Registry().addAdapter(neonAdapter).addAdapter(vercelAdapter).addAdapter(clerkAdapter).addAdapter(planetscaleAdapter).addAdapter(launchdarklyAdapter).addAdapter(httpAdapter).addAdapter(supabaseAdapter).addAdapter(netlifyAdapter).addAdapter(cloudflareAdapter).addAdapter(manualAdapter).addAdapter(algoliaAdapter).addAdapter(xataAdapter).addAdapter(digitaloceanAdapter).addSecretSource(envSecretSource).addSecretSource(dopplerSecretSource()).addSecretSource(opSecretSource()).addSecretSource(awsSecretsManagerSource()).addSecretSource(gcpSecretManagerSource());
 }

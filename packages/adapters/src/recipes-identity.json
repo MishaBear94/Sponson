@@ -50,6 +50,18 @@
     "key": "/v2/features/new-checkout#/rules=Sponson preview pr-42",
     "id": "{\"item\":\"Sponson preview pr-42\",\"item_path\":\"/feature\",\"key_field\":\"description\",\"list\":\"/rules\",\"read\":\"/v2/features/new-checkout\",\"send\":\"field\",\"shape\":\"array\",\"write\":\"POST /v2/features/new-checkout\"}"
   },
+  "heroku.config_var": {
+    "provider": {
+      "base_url": "https://api.heroku.com",
+      "base_url_env": "HEROKU_API_URL",
+      "auth": {
+        "bearer_env": "HEROKU_API_KEY"
+      },
+      "media_type": "application/vnd.heroku+json; version=3"
+    },
+    "key": "/apps/myapp-pr-42/config-vars#=API_URL",
+    "id": "{\"item\":\"API_URL\",\"list\":\"\",\"read\":\"/apps/myapp-pr-42/config-vars\",\"send\":\"field\",\"shape\":\"map\",\"write\":\"PATCH /apps/myapp-pr-42/config-vars\"}"
+  },
   "honeycomb.marker": {
     "provider": {
       "base_url": "https://api.honeycomb.io",
@@ -96,6 +108,50 @@
     },
     "key": "/webhooks[Url=https://pr-42.preview.example.com/api/postmark]",
     "id": "DELETE /webhooks/ID"
+  },
+  "prisma.database": {
+    "provider": {
+      "base_url": "https://api.prisma.io/v1",
+      "base_url_env": "PRISMA_API_URL",
+      "auth": {
+        "bearer_env": "PRISMA_SERVICE_TOKEN"
+      }
+    },
+    "key": "/projects/proj_cm1a2b3c4d5e6f7g8h9/databases[name=app-pr-42]",
+    "id": "DELETE /databases/ID"
+  },
+  "prisma.database_copy": {
+    "provider": {
+      "base_url": "https://api.prisma.io/v1",
+      "base_url_env": "PRISMA_API_URL",
+      "auth": {
+        "bearer_env": "PRISMA_SERVICE_TOKEN"
+      }
+    },
+    "key": "/projects/proj_cm1a2b3c4d5e6f7g8h9/databases[name=app-pr-42]",
+    "id": "DELETE /databases/ID"
+  },
+  "qstash.schedule": {
+    "provider": {
+      "base_url": "https://qstash.upstash.io",
+      "base_url_env": "QSTASH_API_URL",
+      "auth": {
+        "bearer_env": "QSTASH_TOKEN"
+      }
+    },
+    "key": "/v2/schedules/cron-pr-42",
+    "id": "DELETE /v2/schedules/cron-pr-42"
+  },
+  "render.env_var": {
+    "provider": {
+      "base_url": "https://api.render.com/v1",
+      "base_url_env": "RENDER_API_URL",
+      "auth": {
+        "bearer_env": "RENDER_API_KEY"
+      }
+    },
+    "key": "/services/srv-d0a1b2c3d4e5f6g7h8i9/env-vars/API_URL",
+    "id": "DELETE /services/srv-d0a1b2c3d4e5f6g7h8i9/env-vars/API_URL"
   },
   "resend.api_key": {
     "provider": {
@@ -312,6 +368,31 @@
     },
     "key": "/api/admin/projects/default/features/new-checkout/environments/development/strategies[title=preview pr-42]",
     "id": "DELETE /api/admin/projects/default/features/new-checkout/environments/development/strategies/ID"
+  },
+  "upstash.redis_database": {
+    "provider": {
+      "base_url": "https://api.upstash.com/v2",
+      "base_url_env": "UPSTASH_API_URL",
+      "auth": {
+        "basic": {
+          "user_env": "UPSTASH_EMAIL",
+          "password_env": "UPSTASH_API_KEY"
+        }
+      }
+    },
+    "key": "/redis/databases[database_name=app-pr-42]",
+    "id": "DELETE /redis/database/ID"
+  },
+  "vercel.project_domain": {
+    "provider": {
+      "base_url": "https://api.vercel.com",
+      "base_url_env": "VERCEL_API_URL",
+      "auth": {
+        "bearer_env": "VERCEL_TOKEN"
+      }
+    },
+    "key": "/v9/projects/prj_12HKQaOmR5t5Uy6vdcQsNIiZgHGB/domains/pr-42.preview.example.com?teamId=team_1a2b3c4d5e6f7g8h9i0j1k2l",
+    "id": "DELETE /v9/projects/prj_12HKQaOmR5t5Uy6vdcQsNIiZgHGB/domains/pr-42.preview.example.com?teamId=team_1a2b3c4d5e6f7g8h9i0j1k2l"
   },
   "workos.redirect_uri": {
     "provider": {

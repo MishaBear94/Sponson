@@ -394,7 +394,7 @@ export function formEncode(body: unknown): string {
   return new URLSearchParams(pairs).toString();
 }
 
-/** Configured headers, lower-cased (names are case-insensitive) so the client's own headers override them. */
+/** Configured headers, lower-cased (names are case-insensitive) so the credential and content type override them. */
 function extraHeaders(h: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.entries(h).filter(([k]) => k.toLowerCase() !== "content-type").map(([k, v]) => [k.toLowerCase(), v]));
 }

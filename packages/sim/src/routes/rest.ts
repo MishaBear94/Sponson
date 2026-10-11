@@ -28,6 +28,12 @@
  *       parameters other than `cursor` are ignored: a filtered list answers the whole collection. A trailing slash
  *       is ignored (`/releases/` is `/releases`). An alias (R2) names its collection for every method, so it also
  *       serves a provider that lists at another URL than it creates at (`GET /settings/all` lists `/settings`).
+ *       An alias of a collection also addresses its objects (`/databases/<id>` when `/databases` aliases
+ *       `/projects/p/databases`). With the style's `header_fields`, a create also stores those request headers as
+ *       fields; with its `suffix_field`, a POST to `<collection>/<suffix>` creates the object with the suffix in that
+ *       field, or updates the one whose id the request chooses (QStash's schedule upsert). A PUT to
+ *       `<collection>/<id>` that does not exist creates the object with that id (an upsert at a client-chosen key,
+ *       such as an environment variable by name), answering 200.
  *       A style's `item_query` names an object by a query parameter (`<collection>?url=<id>` is the object whose
  *       id is `<id>`, for APIs that key objects by a value such as a URL).
  *   R4. PATCH (and POST to an object, or to an object of a collection, as Stripe updates) is a JSON merge patch
@@ -78,6 +84,16 @@ export interface RestStyle {
   once_fields?: string[];
   /** A query parameter that names an object of the collection by id (`url`), assumption R3. */
   item_query?: string;
+  /**
+   * Request headers (lower-case names) whose values a create or update stores as fields, for an API that takes an
+   * object's settings in headers (QStash: `upstash-cron` → `cron`, `upstash-schedule-id` → `scheduleId`).
+   */
+  header_fields?: Record<string, string>;
+  /**
+   * A POST to `<collection>/<suffix>` creates the object with the suffix (a URL, kept as written) in this field, or
+   * updates the one whose id the request chooses (an upsert): QStash's `POST /v2/schedules/<destination>`.
+   */
+  suffix_field?: string;
 }
 
 /** Simulated REST API state, by path: collections of objects, objects that are not in a collection, and styles. */
@@ -223,7 +239,7 @@ function authorized(headers: IncomingHttpHeaders, declared: string[]): boolean {
   return Object.entries(headers).some(([name, v]) => carries(name) && typeof v === "string" && v.trim() !== "");
 }
 
-type FullStyle = Required<Omit<RestStyle, "next_path" | "item_query">> & Pick<RestStyle, "item_query"> & { next_path: string | null };
+type FullStyle = Required<Omit<RestStyle, "next_path" | "item_query" | "header_fields" | "suffix_field">> & Pick<RestStyle, "item_query"> & { next_path: string | null };
 
 /** The style of the collection at `path`, every default filled in. */
 function styleOf(state: RestState, path: string): FullStyle {
@@ -340,6 +356,13 @@ type Target =
   | { kind: "item"; collection: string; index: number; item: RestItem }
   | { kind: "none" };
 
+/** The collection stored at `path`, or the one an alias there names (R2). */
+function collectionAt(state: RestState, path: string): string | undefined {
+  if (state.collections[path]) return path;
+  const alias = state.aliases[path];
+  return alias !== undefined && state.collections[alias] ? alias : undefined;
+}
+
 function resolve(state: RestState, raw: string, query?: URLSearchParams): Target {
   const path = state.aliases[normPath(raw)] ?? normPath(raw);
   const object = state.objects[path];
@@ -347,7 +370,7 @@ function resolve(state: RestState, raw: string, query?: URLSearchParams): Target
   const items = state.collections[path];
   if (items) return queriedItem(state, path, query) ?? { kind: "collection", path, items };
   const cut = path.lastIndexOf("/");
-  const collection = path.slice(0, cut);
+  const collection = collectionAt(state, path.slice(0, cut)) ?? path.slice(0, cut);
   return itemTarget(state, collection, decodeURIComponent(path.slice(cut + 1)));
 }
 
@@ -372,8 +395,35 @@ function readObject(state: RestState, path: string): Reply {
   return object ? new Reply(200, envelope(state.styles[path]?.item_path ?? "", object)) : notFound();
 }
 
-function create(core: SimCore, state: RestState, path: string, body: unknown): Reply {
+/** The fields the request's headers set, by the collection's `header_fields`. */
+function headerFields(state: RestState, collection: string, headers: Record<string, string>): Record<string, unknown> {
+  const map = state.styles[collection]?.header_fields ?? {};
+  return Object.fromEntries(Object.entries(map).flatMap(([h, f]) => (headers[h.toLowerCase()] === undefined ? [] : [[f, headers[h.toLowerCase()]]])));
+}
+
+/** The collection with a `suffix_field` that `path` is under, and the suffix. */
+function suffixTarget(state: RestState, path: string): { collection: string; suffix: string } | undefined {
+  const collection = Object.keys(state.collections).find((c) => state.styles[c]?.suffix_field !== undefined && path.startsWith(`${c}/`));
+  return collection === undefined ? undefined : { collection, suffix: path.slice(collection.length + 1) };
+}
+
+/** POST `<collection>/<suffix>`: create, or update the object whose id the request chooses (R3, `suffix_field`). */
+function upsertAt(core: SimCore, state: RestState, at: { collection: string; suffix: string }, body: unknown, headers: Record<string, string>): Reply {
   if (!isRecord(body)) return error(400, "body must be a JSON object");
+  const style = styleOf(state, at.collection);
+  const fields = { ...structuredClone(body), ...headerFields(state, at.collection, headers), [state.styles[at.collection]!.suffix_field!]: at.suffix };
+  const list = state.collections[at.collection]!;
+  const chosen = isId(fields[style.id_from]) ? fields[style.id_from] : undefined;
+  const index = chosen === undefined ? -1 : list.findIndex((i) => i[style.id_field] === chosen);
+  const item: RestItem = { ...(index >= 0 ? list[index] : {}), ...fields, [style.id_field]: chosen ?? newId(core, state, at.collection) };
+  if (index >= 0) list[index] = item;
+  else list.push(item);
+  return new Reply(200, envelope(style.item_path, item));
+}
+
+function create(core: SimCore, state: RestState, path: string, raw: unknown, headers: Record<string, string> = {}): Reply {
+  if (!isRecord(raw)) return error(400, "body must be a JSON object");
+  const body = { ...raw, ...headerFields(state, path, headers) };
   const list = (state.collections[path] ??= []);
   const style = styleOf(state, path);
   const chosen = isId(body[style.id_from]) ? body[style.id_from] : undefined;
@@ -400,8 +450,22 @@ function patch(state: RestState, t: Target, body: unknown): Reply {
   return new Reply(200, envelope(style.item_path, t.item));
 }
 
-function put(state: RestState, t: Target, body: unknown): Reply {
+/** A PUT to `<collection>/<id>` that names no item: an upsert at a client-chosen key creates it (R3). */
+function putNew(state: RestState, raw: string, body: Record<string, unknown>): Reply {
+  const path = normPath(raw);
+  const cut = path.lastIndexOf("/");
+  const at = cut < 0 ? undefined : collectionAt(state, path.slice(0, cut));
+  if (!at) return notFound();
+  const style = styleOf(state, at);
+  const id = decodeURIComponent(path.slice(cut + 1));
+  const item: RestItem = { ...structuredClone(body), [style.id_field]: style.numeric_ids && /^\d+$/.test(id) ? Number(id) : id };
+  state.collections[at]!.push(item);
+  return new Reply(200, envelope(style.item_path, item));
+}
+
+function put(state: RestState, t: Target, body: unknown, raw: string): Reply {
   if (!isRecord(body)) return error(400, "body must be a JSON object");
+  if (t.kind === "none") return putNew(state, raw, body);
   if (t.kind === "object") {
     state.objects[t.path] = structuredClone(body);
     return new Reply(200, state.objects[t.path]);
@@ -438,12 +502,14 @@ const routes = router<RestState>(
     route("POST", "/*path", ({ core, state, params, body, headers }) => {
       const read = state.reads[normPath(`/${params.path}`)];
       if (read !== undefined) return readObject(state, read);
+      const suffix = suffixTarget(state, normPath(`/${params.path}`));
+      if (suffix) return upsertAt(core, state, suffix, body, headers);
       const t = resolve(state, `/${params.path}`);
       if (t.kind === "object") return patch(state, t, body);
       if (t.kind === "item") return patch(state, t, bodyFor(state, t.collection, body, headers));
       const raw = normPath(`/${params.path}`);
       const path = t.kind === "collection" ? t.path : (state.aliases[raw] ?? raw);
-      return create(core, state, path, bodyFor(state, path, body, headers));
+      return create(core, state, path, bodyFor(state, path, body, headers), headers);
     }),
 
     route("PATCH", "/*path", ({ state, params, body, headers, url }) => {
@@ -453,7 +519,7 @@ const routes = router<RestState>(
 
     route("PUT", "/*path", ({ state, params, body, headers, url }) => {
       const t = resolve(state, `/${params.path}`, url.searchParams);
-      return put(state, t, t.kind === "item" ? bodyFor(state, t.collection, body, headers) : body);
+      return put(state, t, t.kind === "item" ? bodyFor(state, t.collection, body, headers) : body, `/${params.path}`);
     }),
 
     route("DELETE", "/*path", ({ state, params, url }) => {

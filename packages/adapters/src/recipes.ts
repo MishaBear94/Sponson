@@ -48,6 +48,10 @@ export interface RecipeSimHints {
   numeric_ids?: boolean;
   /** Objects to seed by path (placeholders filled from the example params): a list item's parent. */
   objects?: Record<string, Record<string, unknown>>;
+  /** Request headers a create or update stores as fields (header → field), for an API that takes settings in headers. */
+  header_fields?: Record<string, string>;
+  /** For a create at `<collection>/{+param}`: the field the sim stores that path suffix in (an upsert by chosen id). */
+  suffix_field?: string;
   /** The query parameter the provider names one object with, when objects are keyed by a value (`url`). */
   item_query?: string;
   /**

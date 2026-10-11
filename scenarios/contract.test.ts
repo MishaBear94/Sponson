@@ -48,7 +48,7 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CLERK_DEFAULT_API_URL, CLOUDFLARE_DEFAULT_API_URL, LAUNCHDARKLY_DEFAULT_API_URL, NETLIFY_DEFAULT_API_URL, PLANETSCALE_DEFAULT_API_URL, SUPABASE_DEFAULT_API_URL, clerkAdapter, cloudflareAdapter, launchdarklyAdapter, neonAdapter, netlifyAdapter, planetscaleAdapter, supabaseAdapter, vercelAdapter } from "@sponson/adapters";
+import { CLERK_DEFAULT_API_URL, CLOUDFLARE_DEFAULT_API_URL, algoliaAdapter, digitaloceanAdapter, xataAdapter, LAUNCHDARKLY_DEFAULT_API_URL, NETLIFY_DEFAULT_API_URL, PLANETSCALE_DEFAULT_API_URL, SUPABASE_DEFAULT_API_URL, clerkAdapter, cloudflareAdapter, launchdarklyAdapter, neonAdapter, netlifyAdapter, planetscaleAdapter, supabaseAdapter, vercelAdapter } from "@sponson/adapters";
 import type { AdapterContext, Ctx } from "@sponson/core";
 import { SUPABASE_DEMO_PROJECT, simEnv, startSim, type SimHandle } from "@sponson/sim";
 import { cliEnv, runCli, workspace, type CliRun, type Workspace } from "./support.js";
@@ -587,4 +587,119 @@ describe.skipIf(LIVE && !NETLIFY_LIVE)(`contract netlify (${LIVE ? "@live" : "si
     await op.destroy(nctx(), devLive!.resources);
     expect(await getVar()).toBeNull();
   });
+});
+
+/**
+ * Algolia (`assumption AL…`, packages/sim/src/routes/algolia.ts). Live only with ALGOLIA_API_KEY (addObject,
+ * deleteIndex and settings ACLs), SPONSON_LIVE_ALGOLIA_APP_ID and SPONSON_LIVE_ALGOLIA_TEMPLATE (an index to copy);
+ * it copies the template into `sponson_contract_<tag>` and deletes the copy in `afterAll`.
+ */
+const AL_LIVE = ["ALGOLIA_API_KEY", "SPONSON_LIVE_ALGOLIA_APP_ID", "SPONSON_LIVE_ALGOLIA_TEMPLATE"].every((k) => process.env[k]);
+describe.skipIf(LIVE && !AL_LIVE)(`contract: algolia (${LIVE ? "@live" : "sim"})`, () => {
+  const op = algoliaAdapter.ops.index!;
+  const appId = () => (LIVE ? process.env.SPONSON_LIVE_ALGOLIA_APP_ID! : "APP123");
+  const params = () => ({ name: `sponson_contract_${tag}`, copy_from: LIVE ? process.env.SPONSON_LIVE_ALGOLIA_TEMPLATE! : "products" });
+  const alctx = (): AdapterContext => {
+    const ctx: Ctx = { env: "preview", git: { branch, sha, short_sha: sha.slice(0, 7) }, pr: { number: pr }, scope: `pr-${pr}` };
+    return { ctx, provider: { application_id: appId() }, env: { ...env, SPONSON_ALGOLIA_POLL_MS: LIVE ? "1000" : "1" }, log: () => {}, intend: async () => {}, redact: (t) => t };
+  };
+  const settings = async (name: string) => {
+    const res = await fetch(`${env.ALGOLIA_API_URL ?? `https://${appId()}.algolia.net`}/1/indexes/${encodeURIComponent(name)}/settings`, { headers: { "x-algolia-api-key": env.ALGOLIA_API_KEY ?? "", "x-algolia-application-id": appId() } });
+    return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+  };
+
+  afterAll(async () => {
+    await op.destroy(alctx(), [{ key: `index:${params().name}`, id: params().name, hash: "" }]).catch(() => {});
+  });
+
+  it("assumption AL3, AL4, AL5: a copy, once its task is published, has the template's settings; before, it does not exist", async () => {
+    expect((await settings(params().name)).status).toBe(404);
+    const r = await op.apply(alctx(), params(), null);
+    expect(r.created).toEqual([`index:${params().name}`]);
+    expect((await settings(params().name)).body).toEqual((await settings(params().copy_from)).body);
+    expect(op.diff(await op.read(alctx(), params()), params())[0]!.kind).toBe("unchanged");
+  });
+
+  it("assumption AL6: deleting the copy removes it, and deleting it again succeeds", async () => {
+    const live = await op.read(alctx(), params());
+    await op.destroy(alctx(), live!.resources);
+    expect(await op.read(alctx(), params())).toBeNull();
+    await op.destroy(alctx(), live!.resources);
+  });
+});
+
+/**
+ * Xata (`assumption XA…`, packages/sim/src/routes/xata.ts). Live only with XATA_API_KEY, SPONSON_LIVE_XATA_ORG,
+ * SPONSON_LIVE_XATA_PROJECT and SPONSON_LIVE_XATA_PARENT (a branch id to copy); it creates the branch
+ * `sponson-contract-<tag>` (billed while it exists) and deletes it in `afterAll`.
+ */
+const XA_LIVE = ["XATA_API_KEY", "SPONSON_LIVE_XATA_ORG", "SPONSON_LIVE_XATA_PROJECT", "SPONSON_LIVE_XATA_PARENT"].every((k) => process.env[k]);
+describe.skipIf(LIVE && !XA_LIVE)(`contract: xata (${LIVE ? "@live" : "sim"})`, () => {
+  const op = xataAdapter.ops.branch!;
+  const params = { name: `sponson-contract-${tag}`, parent_id: LIVE ? process.env.SPONSON_LIVE_XATA_PARENT! : "br_main" };
+  const xactx = (): AdapterContext => {
+    const ctx: Ctx = { env: "preview", git: { branch, sha, short_sha: sha.slice(0, 7) }, pr: { number: pr }, scope: `pr-${pr}` };
+    const provider = LIVE ? { organization: process.env.SPONSON_LIVE_XATA_ORG!, project: process.env.SPONSON_LIVE_XATA_PROJECT! } : { organization: "acme", project: "app" };
+    return { ctx, provider, env: { ...env, SPONSON_XATA_POLL_MS: LIVE ? "2000" : "1" }, log: () => {}, intend: async () => {}, redact: (t) => t };
+  };
+  let made: { key: string; id: string; hash: string } | undefined;
+
+  afterAll(async () => {
+    if (made) await op.destroy(xactx(), [made]).catch(() => {});
+  }, 120_000);
+
+  it("assumption XA2, XA5, XA6: a child branch comes up healthy, and its connection string is readable again later", async () => {
+    const r = await op.apply(xactx(), params, null);
+    made = r.resources[0];
+    expect(String(r.outputs.connection_string)).toMatch(/^postgres(ql)?:\/\//);
+    const live = await op.read(xactx(), params);
+    expect(live!.outputs.connection_string).toBe(r.outputs.connection_string);
+    expect(op.diff(live, params)[0]!.kind).toBe("unchanged");
+  }, 15 * 60_000);
+
+  it("assumption XA4: a deleted branch is gone from the list when DELETE returns", async () => {
+    await op.destroy(xactx(), [made!]);
+    expect(await op.read(xactx(), params)).toBeNull();
+    made = undefined;
+  }, 120_000);
+});
+
+/**
+ * DigitalOcean App Platform (`assumption DO…`, packages/sim/src/routes/digitalocean.ts). Live only with
+ * DIGITALOCEAN_ACCESS_TOKEN and SPONSON_LIVE_DIGITALOCEAN=1 (it creates the static-site app `sponson-ct-<tag>` from
+ * a public sample repository, billed while it exists, and deletes it in `afterAll`).
+ */
+const DO_LIVE = !!process.env.DIGITALOCEAN_ACCESS_TOKEN && process.env.SPONSON_LIVE_DIGITALOCEAN === "1";
+describe.skipIf(LIVE && !DO_LIVE)(`contract: digitalocean (${LIVE ? "@live" : "sim"})`, () => {
+  const op = digitaloceanAdapter.ops.app!;
+  const params = {
+    spec: {
+      name: `sponson-ct-${tag}`,
+      static_sites: [{ name: "site", git: { repo_clone_url: "https://github.com/digitalocean/sample-html.git", branch: "main" } }],
+      envs: [{ key: "SPONSON_CONTRACT", value: tag, scope: "BUILD_TIME" }, { key: "SPONSON_SECRET", value: SECRET, type: "SECRET", scope: "BUILD_TIME" }],
+    },
+  };
+  const dctx = (): AdapterContext => {
+    const ctx: Ctx = { env: "preview", git: { branch, sha, short_sha: sha.slice(0, 7) }, pr: { number: pr }, scope: `pr-${pr}` };
+    return { ctx, provider: {}, env: { ...env, SPONSON_DIGITALOCEAN_POLL_MS: LIVE ? "10000" : "1" }, log: () => {}, intend: async () => {}, redact: (t) => t };
+  };
+  let made: { key: string; id: string; hash: string } | undefined;
+
+  afterAll(async () => {
+    if (made) await op.destroy(dctx(), [made]).catch(() => {});
+  }, 120_000);
+
+  it("assumption DO2, DO5, DO6, DO7: a created app deploys, and reads back unchanged (defaults ignored, secret encrypted)", async () => {
+    const r = await op.apply(dctx(), params, null);
+    made = r.resources[0];
+    const live = await op.read(dctx(), params);
+    expect(op.diff(live, params)[0]!.kind).toBe("unchanged");
+    expect(typeof live!.outputs.live_url).toBe("string");
+  }, 25 * 60_000);
+
+  it("assumption DO8: a deleted app is gone from the list", async () => {
+    await op.destroy(dctx(), [made!]);
+    expect(await op.read(dctx(), params)).toBeNull();
+    made = undefined;
+  }, 120_000);
 });

@@ -50,7 +50,8 @@ categories:
         api_shape: REST `PUT /v1/services/{id}/env-vars/{key}`, bearer; object per key; previews created by Render from `render.yaml`
         generic: Y
         priority: P1
-        covered_by: null
+        covered_by: recipe:render.env_var
+        note: "per variable on a service whose id the plan gives (Render creates previews itself; no lookup of PR N's service); writing does not deploy"
       - id: railway-variables
         provider: Railway
         side_effect: Variables in a PR environment (Railway creates PR environments natively)
@@ -71,7 +72,8 @@ categories:
         api_shape: REST `POST /review-apps`, `PATCH /apps/{app}/config-vars`, bearer; **map** merge, `null` deletes; review-app creation async
         generic: Y (config vars); P (review app)
         priority: P2
-        covered_by: null
+        covered_by: recipe:heroku.config_var
+        note: "config vars on an existing app (a review app by name); creating the review app (async, by Heroku's automatic review apps) is not managed"
       - id: amplify-branch
         provider: AWS Amplify
         side_effect: Branch (per-PR previews built in); env vars per branch
@@ -99,7 +101,8 @@ categories:
         api_shape: REST `PUT /v2/apps/{id}` whole spec, bearer; **list** in spec
         generic: P (whole-spec writes)
         priority: P2
-        covered_by: null
+        covered_by: digitalocean.app
+        note: "an app per scope from a whole spec, waited for until deployed (in place of the app DigitalOcean's GitHub action makes); secret values are not compared"
   - id: databases
     title: Databases with branching or per-PR instances
     rows:
@@ -137,10 +140,11 @@ categories:
       - id: xata-branch
         provider: Xata
         side_effect: Copy-on-write Postgres branch
-        api_shape: REST control plane and `xata branch create --from`; API keys. Endpoint paths not confirmed **(unverified)**; the product was re-platformed onto Postgres in 2025
-        generic: P (async; API in flux)
+        api_shape: "REST `POST https://api.xata.tech/organizations/{o}/projects/{p}/branches` `{mode: inherit, parentID, name}`, `DELETE .../branches/{id}`; bearer API key; object; branch comes up asynchronously (`status.statusType`); credentials from `GET .../branches/{id}/credentials` (OpenAPI at api.xata.tech/openapi.json; re-platformed onto Postgres in 2025)"
+        generic: P (async readiness, credentials in a second request)
         priority: P2
-        covered_by: null
+        covered_by: xata.branch
+        note: "waits until the branch is healthy; only its existence is compared for drift"
       - id: mongodb-atlas-user
         provider: MongoDB Atlas
         side_effect: No branching; per-PR database user and database name on a shared cluster (cluster per PR is slow and costly)
@@ -161,7 +165,8 @@ categories:
         api_shape: Management API `POST /v1/projects/{id}/databases`, `POST /v1/databases/{id}/connections`; service token; object; connection string returned on create
         generic: Y
         priority: P2
-        covered_by: null
+        covered_by: ["recipe:prisma.database", "recipe:prisma.database_copy"]
+        note: "connection strings are once-only outputs (in the create answer only); Sponson does not wait for status ready"
   - id: auth
     title: Auth callback and redirect allow-lists
     rows:
@@ -400,7 +405,7 @@ categories:
         api_shape: "`POST /v10/projects/{id}/domains` `{name, gitBranch}`, `DELETE`; bearer; object"
         generic: Y (or a `vercel` op)
         priority: P1
-        covered_by: null
+        covered_by: recipe:vercel.project_domain
   - id: cors
     title: CORS and allowed origins
     rows:
@@ -435,14 +440,14 @@ categories:
         api_shape: Developer API `POST /v2/redis/database`, `DELETE /v2/redis/database/{id}`; Basic (email:key); object
         generic: Y
         priority: P2
-        covered_by: null
+        covered_by: recipe:upstash.redis_database
       - id: qstash-schedule
         provider: Upstash QStash
         side_effect: Schedule that calls the preview URL
         api_shape: "`POST /v2/schedules/{destination}` with `Upstash-Schedule-Id` (idempotent upsert), `DELETE /v2/schedules/{id}`; bearer; object"
         generic: Y
         priority: P2
-        covered_by: null
+        covered_by: recipe:qstash.schedule
       - id: inngest-sync
         provider: Inngest
         side_effect: Sync the preview deployment into its branch environment
@@ -450,6 +455,7 @@ categories:
         generic: Y (one call, no destroy; archive via dashboard)
         priority: P1
         covered_by: null
+        note: "not covered: a sync is a one-off action with nothing to read back or delete (no API archives an app); the REST v2 sync endpoint is beta and does not document how to target a branch environment. Inngest's Vercel and Netlify integrations sync each deploy"
   - id: search-payments
     title: Search, payments test mode
     rows:
@@ -459,7 +465,8 @@ categories:
         api_shape: "`POST /1/indexes/{src}/operation` `{operation: copy, destination}`, `DELETE /1/indexes/{name}`; `X-Algolia-Application-Id` + `X-Algolia-API-Key`; async task to poll"
         generic: P (async task)
         priority: P2
-        covered_by: null
+        covered_by: algolia.index
+        note: "copies records, settings, synonyms and rules (or a scope of them) and waits for the copy task; only the index's existence is compared for drift"
       - id: stripe-test-objects
         provider: Stripe test-mode objects
         side_effect: Products / prices / coupons the preview's code expects

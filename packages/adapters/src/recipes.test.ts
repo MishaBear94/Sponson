@@ -33,7 +33,8 @@ function exampleLine(r: Recipe, name: string, op: RecipeOp): Record<string, unkn
   const text = JSON.stringify(params)
     .replace(/\$\{ctx\.scope\}/g, "pr-42")
     .replace(/\$\{ctx\.env\}/g, "preview")
-    .replace(/\$\{ctx\.git\.sha\}/g, "0123456789abcdef0123456789abcdef01234567");
+    .replace(/\$\{ctx\.git\.sha\}/g, "0123456789abcdef0123456789abcdef01234567")
+    .replace(/\$\{ctx\.git\.branch\}/g, "feat/x");
   return { recipe: `${r.provider}.${name}`, ...(JSON.parse(text) as Record<string, unknown>) };
 }
 

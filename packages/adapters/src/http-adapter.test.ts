@@ -187,6 +187,51 @@ describe("http.resource", () => {
     }
   });
 
+  it("destroy: a delete accepted with an answer that is not JSON (`OK`) succeeds; a failure that is not JSON still fails", async () => {
+    let status = 200;
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(status, { "content-type": "text/plain" });
+        res.end(status === 200 ? "OK" : "Internal error");
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    try {
+      const env = { ...h.env, REST_API_URL: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, SPONSON_HTTP_RETRIES: "0" };
+      const actx = h.actx("http", API, { env });
+      const record = { key: "/dbs/a", id: "DELETE /dbs/a", hash: "h" };
+      await resource.destroy(actx, [record]);
+      status = 500;
+      await expect(resource.destroy(actx, [record])).rejects.toMatchObject({ code: "PROVIDER_TRANSIENT" });
+    } finally {
+      server.close();
+    }
+  });
+
+  it("request headers carry declared fields (send_fields: false), and {+name} writes a URL into the path as it is", async () => {
+    await h.close();
+    const style = { item_path: "", list_path: "", next_path: null, id_field: "scheduleId", header_fields: { "x-cron": "cron", "x-schedule-id": "scheduleId" }, suffix_field: "destination" };
+    h = await harness({ rest: { collections: { "/schedules": [] }, styles: { "/schedules": style } } });
+    const request = { method: "POST", path: "/schedules/{+dest}", headers: { "X-Cron": "*/5 * * * *", "X-Schedule-Id": "s1" }, send_fields: false, body: { ping: true } };
+    const sched = { api: "demo", vars: { sid: "s1", dest: "https://pr-42.example.app/api/cron?x=1" }, read: { path: "/schedules/{sid}" }, create: request, update: request, id_path: "/scheduleId", fields: { cron: "*/5 * * * *", destination: "https://pr-42.example.app/api/cron?x=1" } };
+    const actx = h.actx("http", API);
+    const r = await resource.apply(actx, sched, null);
+    expect(r.created).toEqual(["/schedules/s1"]);
+    // The fields went in the headers and the path, not the body; `?` is escaped so it stays part of the path.
+    expect(h.sim.state.rest.collections["/schedules"]).toEqual([{ ping: true, cron: "*/5 * * * *", scheduleId: "s1", destination: "https://pr-42.example.app/api/cron%3Fx=1" }]);
+    expect(h.sim.state.writes.map((w) => `${w.method} ${w.path}`)).toEqual(["POST /rest/schedules/https://pr-42.example.app/api/cron%3Fx=1"]);
+    h.sim.state.rest.collections["/schedules"]![0]!.destination = "https://pr-42.example.app/api/cron?x=1";
+    const changed = { ...sched, fields: { ...sched.fields, cron: "0 * * * *" }, update: { ...request, headers: { ...request.headers, "X-Cron": "0 * * * *" } } };
+    const { diffs, result } = await readApply(h, resource, changed);
+    expect(diffs[0]!.kind).toBe("update");
+    expect(result.created).toEqual([]);
+    expect(h.sim.state.rest.collections["/schedules"]![0]).toMatchObject({ cron: "0 * * * *", ping: true });
+    expect(() => resource.diff(null, { ...sched, create: { ...request, headers: { Authorization: "x" } } })).toThrow(/`create.headers.Authorization` is set by Sponson/);
+    expect(() => resource.diff(null, { ...sched, create: { ...request, send_fields: "no" } })).toThrow(/`create.send_fields` must be true or false/);
+    await expect(resource.apply(actx, { ...sched, vars: { sid: "s2", dest: "https://x.example" }, create: { ...request, headers: { "X-Cron": { a: 1 } } } }, null)).rejects.toThrow(/`create.headers.X-Cron` must be a string/);
+  });
+
   it("destroy: keep leaves the object in place", async () => {
     const actx = h.actx("http", API);
     const r = await resource.apply(actx, { ...GATE, destroy: "keep" }, null);
@@ -238,6 +283,22 @@ describe("http.resource", () => {
     expect(h.sim.state.rest.collections["/hooks"]![0]!.signing).toBe(secret);
     expect(JSON.stringify(r)).not.toContain(secret);
     expect(JSON.stringify(await resource.read(h.actx("http", API), hook))).not.toContain(secret);
+  });
+
+  it("a once output comes only from the answer to the create this call sent: never from a read, an update or a claimed object", async () => {
+    // The sim echoes the field on every read; a real provider shows it only once. Either way, only the create reports it.
+    const db = { api: "demo", read: { path: "/dbs/{name}" }, vars: { name: "app-pr-42" }, create: { path: "/dbs", body: { id: "app-pr-42", password: "pw_once_123456" } }, item_path: "/data", update: { method: "PATCH" }, fields: { size: 1 }, outputs: { password: { path: "/password", sensitive: true, once: true }, size: "/size" } };
+    const actx = h.actx("http", API);
+    const created = await resource.apply(actx, db, null);
+    expect(created.outputs).toEqual({ id: "app-pr-42", password: "pw_once_123456", size: 1 });
+    const live = await resource.read(actx, db);
+    expect(live!.outputs).toEqual({ id: "app-pr-42", size: 1 });
+    const updated = await resource.apply(actx, { ...db, fields: { size: 2 } }, live);
+    expect(updated.outputs).toEqual({ id: "app-pr-42", size: 2 });
+    // A create answered "exists" (a lost answer, or someone else's) is claimed without the value.
+    const claimed = await resource.apply(actx, db, null);
+    expect(claimed).toMatchObject({ created: [], outputs: { id: "app-pr-42", size: 2 } });
+    expect(claimed.outputs.password).toBeUndefined();
   });
 
   it("idempotency_key makes a create whose connection dropped safe to retry", async () => {
@@ -427,6 +488,7 @@ describe("http: malformed specs name the field", () => {
     expect(() => providerFor({ demo: { ...API, auth: { bearer_env: "sk live" } } }, GATE)).toThrow(/NAME of an environment variable/);
     expect(() => providerFor({ demo: { ...API, auth: { token: "x" } } }, GATE)).toThrow(/must be one of/);
     expect(() => providerFor({ demo: { ...API, headers: { Authorization: "x" } } }, GATE)).toThrow(/is set by Sponson/);
+    expect(() => providerFor({ demo: { ...API, headers: { "Content-Type": "text/plain" } } }, GATE)).toThrow(/is set by Sponson/);
     expect(() => providerFor({ demo: { ...API, base_url: "api.example.test" } }, GATE)).toThrow(/`base_url` must be an http\(s\) URL/);
     expect(() => providerFor({ demo: { ...API, encoding: "yaml" } }, GATE)).toThrow(/`json`/);
     expect(() => providerFor({ demo: { ...API, retries: 3 } }, GATE)).toThrow(/unknown key `retries`/);
@@ -491,6 +553,7 @@ describe("http: malformed specs name the field", () => {
       signing_secret: { available: "immediate", sensitive: true },
       token: { available: "immediate", sensitive: true, once: true },
     });
+    expect(resource.outputsFor!({ ...GATE, outputs: { password: { path: "/password", sensitive: true, once: true } } }).password).toEqual({ available: "immediate", sensitive: true, once: true });
   });
 
   it("a once-only output must be sensitive, and its flags booleans", () => {

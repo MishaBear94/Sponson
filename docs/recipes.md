@@ -42,10 +42,15 @@ names are set.
 | [`configcat.targeting_rule`](#configcattargeting_rule) | `list_item` | Feature flag targeting rule | `CONFIGCAT_BASIC_AUTH_USERNAME` / `CONFIGCAT_BASIC_AUTH_PASSWORD` (basic) |
 | [`github.repo_webhook`](#githubrepo_webhook) | `resource` | Repository webhook | `GITHUB_TOKEN` (bearer) |
 | [`growthbook.force_rule`](#growthbookforce_rule) | `list_item` | Feature force rule | `GROWTHBOOK_API_KEY` (bearer) |
+| [`heroku.config_var`](#herokuconfig_var) | `list_item` | App config var | `HEROKU_API_KEY` (bearer) |
 | [`honeycomb.marker`](#honeycombmarker) | `resource` | Deploy marker | `HONEYCOMB_API_KEY` (header `X-Honeycomb-Team`) |
 | [`posthog.release_condition`](#posthogrelease_condition) | `list_item` | Flag release condition | `POSTHOG_PERSONAL_API_KEY` (bearer) |
 | [`postmark.server`](#postmarkserver) | `resource` | Server | `POSTMARK_ACCOUNT_TOKEN` (header `X-Postmark-Account-Token`) |
 | [`postmark_server.webhook`](#postmark_serverwebhook) | `resource` | Webhook of a server | `POSTMARK_SERVER_TOKEN` (header `X-Postmark-Server-Token`) |
+| [`prisma.database`](#prismadatabase) | `resource` | Database | `PRISMA_SERVICE_TOKEN` (bearer) |
+| [`prisma.database_copy`](#prismadatabase_copy) | `resource` | Database copied from another | `PRISMA_SERVICE_TOKEN` (bearer) |
+| [`qstash.schedule`](#qstashschedule) | `resource` | Schedule | `QSTASH_TOKEN` (bearer) |
+| [`render.env_var`](#renderenv_var) | `resource` | Service environment variable | `RENDER_API_KEY` (bearer) |
 | [`resend.api_key`](#resendapi_key) | `resource` | API key | `RESEND_API_KEY` (bearer) |
 | [`resend.webhook`](#resendwebhook) | `resource` | Webhook | `RESEND_API_KEY` (bearer) |
 | [`sendgrid.event_webhook`](#sendgridevent_webhook) | `resource` | Event Webhook | `SENDGRID_API_KEY` (bearer) |
@@ -62,6 +67,8 @@ names are set.
 | [`svix.endpoint`](#svixendpoint) | `resource` | Application endpoint | `SVIX_AUTH_TOKEN` (bearer) |
 | [`turso.database_branch`](#tursodatabase_branch) | `resource` | Database branch | `TURSO_API_TOKEN` (bearer) |
 | [`unleash.flag_strategy`](#unleashflag_strategy) | `resource` | Flag strategy with constraints | `UNLEASH_AUTH_TOKEN` (header `Authorization`) |
+| [`upstash.redis_database`](#upstashredis_database) | `resource` | Redis database | `UPSTASH_EMAIL` / `UPSTASH_API_KEY` (basic) |
+| [`vercel.project_domain`](#vercelproject_domain) | `resource` | Branch-bound project domain | `VERCEL_TOKEN` (bearer) |
 | [`workos.redirect_uri`](#workosredirect_uri) | `resource` | AuthKit redirect URI | `WORKOS_API_KEY` (bearer) |
 
 ## Cloudflare
@@ -388,6 +395,67 @@ item:
     - { param: environment }
 ```
 
+## Heroku
+
+Recipe file: [`packages/adapters/recipes/heroku.yaml`](../packages/adapters/recipes/heroku.yaml). Verified on 2026-10-11 against:
+
+- [Platform API reference (clients, Config Vars, Review App)](https://devcenter.heroku.com/articles/platform-api-reference)
+- [Platform API JSON schema (config-var)](https://api.heroku.com/schema)
+- [Configuration and config vars](https://devcenter.heroku.com/articles/config-vars)
+- [CLI authentication (HEROKU_API_KEY)](https://devcenter.heroku.com/articles/authentication)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.heroku.com` |
+| `base_url_env` | `HEROKU_API_URL` |
+| Credential | `HEROKU_API_KEY` (bearer) |
+
+Assumptions:
+
+- **HK1** (verified, [source](https://devcenter.heroku.com/articles/authentication)): Requests authenticate as `Authorization: Bearer <token>`; the Heroku CLI reads the token from `HEROKU_API_KEY`.
+- **HK2** (verified, [source](https://devcenter.heroku.com/articles/platform-api-reference)): Every request must send `Accept: application/vnd.heroku+json; version=3`; without it the API refuses the request (documented as 406 `not_acceptable`; a request without it was answered 400 `missing_version` when checked).
+- **HK3** (verified, [source](https://devcenter.heroku.com/articles/platform-api-reference)): `GET /apps/{app_id_or_name}/config-vars` answers the app's config vars as one flat map of name to string value.
+- **HK4** (verified, [source](https://devcenter.heroku.com/articles/platform-api-reference)): `PATCH /apps/{app_id_or_name}/config-vars` with a map sets the named vars and removes those set to `null`, leaving every other var as it is: one var is written without reading or rewriting the others, so concurrent writers of other vars cannot lose them (no lock needed).
+- **HK5** (verified, [source](https://api.heroku.com/schema)): Config var names match `^\w+$` and values are strings (`null` only as a delete in a PATCH).
+- **HK6** (verified, [source](https://devcenter.heroku.com/articles/config-vars)): Every change to config vars creates a new release and restarts the app, so a write takes effect without a separate deploy.
+- **HK7** (verified, [source](https://devcenter.heroku.com/articles/platform-api-reference)): Review apps are created asynchronously (`POST /review-apps` answers `pending` with a nullable `app`), by Heroku itself when the pipeline has automatic review apps; this recipe does not create them, it writes vars on an app that exists (the review app's name or id).
+- **HK9** **(unverified)**: A PATCH whose `Content-Type` is the same vendor media type (`media_type` sends it as both `Accept` and `Content-Type`) is accepted like `application/json`; the reference's examples send `application/json`.
+- **HK8** **(unverified)**: A missing app answers 404 `not_found` on GET and PATCH, which destroy treats as the var being gone.
+
+### `heroku.config_var`
+
+**App config var** (`http.list_item`). One config var on a Heroku app, such as a review app's `API_URL`. Written as a merge patch of that one var (`null` deletes it), so other vars, including other scopes', are never rewritten. A console edit of its value is drift; destroy removes only this var. Heroku restarts the app on every change (HK6).
+
+Covers: `heroku-config-vars` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: none. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `app` | string | yes | — | The app's name or id (a review app's, such as `myapp-pr-42`). |
+| `key` | string | yes | — | The config var's name. Matches `^\\w+$`. |
+| `value` | string | yes | — | The value: a literal, `{ from }` or `{ secret }`. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: config_var
+  adapter: http
+  op: list_item
+  recipe: heroku.config_var
+  app: myapp-${ctx.scope}
+  key: API_URL
+  value: https://api-${ctx.scope}.example.com
+```
+
+What the line expands into: the [`http.list_item`](plan-format.md#httplist_item) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+parent:
+  path: /apps/{app}/config-vars
+list_path: ""
+shape: map
+item: { param: key }
+value: { param: value }
+```
+
 ## Honeycomb
 
 Recipe file: [`packages/adapters/recipes/honeycomb.yaml`](../packages/adapters/recipes/honeycomb.yaml). Verified on 2026-10-11 against:
@@ -684,6 +752,290 @@ fields:
   /Triggers/Open/Enabled: { param: open }
   /Triggers/Click/Enabled: { param: click }
   /Triggers/SubscriptionChange/Enabled: { param: subscription_change }
+```
+
+## Prisma Postgres
+
+Recipe file: [`packages/adapters/recipes/prisma.yaml`](../packages/adapters/recipes/prisma.yaml). Verified on 2026-10-11 against:
+
+- [Management API OpenAPI document](https://api.prisma.io/v1/doc)
+- [Management API guide (base URL, service tokens)](https://www.prisma.io/docs/guides/management-api-basic)
+- [Connecting to your database (connection strings)](https://www.prisma.io/docs/postgres/database/connecting-to-your-database)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.prisma.io/v1` |
+| `base_url_env` | `PRISMA_API_URL` |
+| Credential | `PRISMA_SERVICE_TOKEN` (bearer) |
+
+Assumptions:
+
+- **PP1** (verified, [source](https://www.prisma.io/docs/guides/management-api-basic)): The Management API at `https://api.prisma.io/v1` authenticates with a workspace service token as `Authorization: Bearer`; Prisma's guide keeps it in `PRISMA_SERVICE_TOKEN`.
+- **PP2** (verified, [source](https://api.prisma.io/v1/doc)): Answers are enveloped: one object as `{ data: {…} }`, a list as `{ data: [...], pagination: { nextCursor, hasMore } }`, paged with `?cursor=`.
+- **PP3** (verified, [source](https://api.prisma.io/v1/doc)): `POST /v1/projects/{projectId}/databases` with `{ name, region, source? }` creates a database (201); `source: { type: database, databaseId }` copies an existing one. It answers the database with `id`, `name`, `status` (`provisioning` or `ready`) and `connections[]`.
+- **PP4** (verified, [source](https://api.prisma.io/v1/doc)): `GET /v1/projects/{projectId}/databases` lists the project's databases with `id` and `name`; it has no name filter, so the list is searched page by page.
+- **PP5** **(unverified)**: Database names are not unique (the project-scoped create documents no 409), so two databases with one name make `find.match` ambiguous, which is refused with PARAM_INVALID rather than guessed. Sponson never creates a second one: it looks the name up before every create.
+- **PP6** (verified, [source](https://api.prisma.io/v1/doc)): `GET /v1/databases/{databaseId}` answers the database (404 when it does not exist); `DELETE` on the same path deletes it (204; 404 when gone; 403 for a project's default database).
+- **PP7** **(unverified)**: The connection strings (`connections[0].endpoints.direct.connectionString`, and `.pooled` when there is a pooled endpoint) are in the create answer only: list and get answer the endpoints' host and port without them. So they are once-only outputs (ADR 0018), and a create whose answer was lost leaves dependents to be refused until the database is recreated. Inferred from the schemas; not stated in the docs.
+- **PP8** **(unverified)**: `connections[0]` is the database's default connection, present in every create answer.
+- **PP9** **(unverified)**: A database answered with `status: provisioning` accepts connections within seconds; nothing waits for `ready` (the API has no readiness the http adapter can poll), so a dependent deployment that starts at once may see connection errors for that long.
+- **PP10** (verified, [source](https://www.prisma.io/docs/postgres/database/connecting-to-your-database)): Connection strings have the form `postgres://USER:PASSWORD@db.prisma.io:5432/?sslmode=require` (direct) and `postgres://USER:PASSWORD@pooled.db.prisma.io:5432/?sslmode=require` (pooled).
+
+### `prisma.database`
+
+**Database** (`http.resource`). An empty Postgres database per scope in a Prisma Postgres project, such as `app-pr-42`. Its connection strings exist only in the create answer, so they are once-only outputs: reference them from the line that needs them (an env var) in the same plan. Located by name; only its existence is compared for drift; destroy deletes it and its data.
+
+Covers: `prisma-postgres-database` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`, `status`, `direct_url` (sensitive, [once](plan-format.md#once-only-outputs): only from the create), `pooled_url` (sensitive, [once](plan-format.md#once-only-outputs): only from the create). On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `project_id` | string | yes | — | The project's id. |
+| `name` | string | yes | — | The database's name. |
+| `region` | string | no | `us-east-1` | Where it runs. One of `us-east-1`, `us-west-1`, `eu-west-3`, `eu-central-1`, `ap-northeast-1`, `ap-southeast-1`. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: database
+  adapter: http
+  op: resource
+  recipe: prisma.database
+  project_id: proj_cm1a2b3c4d5e6f7g8h9
+  name: app-${ctx.scope}
+```
+
+What the line expands into: the [`http.resource`](plan-format.md#httpresource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /projects/{project_id}/databases
+  list_path: /data
+  next: /pagination/nextCursor
+  match:
+    name: { param: name }
+read:
+  path: /databases/{id}
+create:
+  path: /projects/{project_id}/databases
+  body:
+    region: { param: region }
+item_path: /data
+outputs:
+  status: /status
+  direct_url:
+    path: /connections/0/endpoints/direct/connectionString
+    sensitive: true
+    once: true
+  pooled_url:
+    path: /connections/0/endpoints/pooled/connectionString
+    sensitive: true
+    once: true
+```
+
+### `prisma.database_copy`
+
+**Database copied from another** (`http.resource`). A Postgres database per scope copied from an existing one (`source: { type: database }`), such as `app-pr-42` with the data of `app`. Otherwise like `prisma.database`: once-only connection strings, existence-only drift, destroy deletes the copy (never the source).
+
+Covers: `prisma-postgres-database` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`, `status`, `direct_url` (sensitive, [once](plan-format.md#once-only-outputs): only from the create), `pooled_url` (sensitive, [once](plan-format.md#once-only-outputs): only from the create). On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `project_id` | string | yes | — | The project's id. |
+| `name` | string | yes | — | The new database's name. |
+| `source_database_id` | string | yes | — | The id of the database to copy. |
+| `region` | string | no | `us-east-1` | Where it runs. One of `us-east-1`, `us-west-1`, `eu-west-3`, `eu-central-1`, `ap-northeast-1`, `ap-southeast-1`. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: database_copy
+  adapter: http
+  op: resource
+  recipe: prisma.database_copy
+  project_id: proj_cm1a2b3c4d5e6f7g8h9
+  name: app-${ctx.scope}
+  source_database_id: db_cm9z8y7x6w5v4u3t2s1
+```
+
+What the line expands into: the [`http.resource`](plan-format.md#httpresource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /projects/{project_id}/databases
+  list_path: /data
+  next: /pagination/nextCursor
+  match:
+    name: { param: name }
+read:
+  path: /databases/{id}
+create:
+  path: /projects/{project_id}/databases
+  body:
+    region: { param: region }
+    source:
+      type: database
+      databaseId: { param: source_database_id }
+item_path: /data
+outputs:
+  status: /status
+  direct_url:
+    path: /connections/0/endpoints/direct/connectionString
+    sensitive: true
+    once: true
+  pooled_url:
+    path: /connections/0/endpoints/pooled/connectionString
+    sensitive: true
+    once: true
+```
+
+## Upstash QStash
+
+Recipe file: [`packages/adapters/recipes/qstash.yaml`](../packages/adapters/recipes/qstash.yaml). Verified on 2026-10-11 against:
+
+- [Authentication](https://upstash.com/docs/qstash/api/authentication)
+- [Create a schedule](https://upstash.com/docs/qstash/api-reference/schedules/create-a-schedule)
+- [Get a schedule](https://upstash.com/docs/qstash/api-reference/schedules/get-a-schedule)
+- [Delete a schedule](https://upstash.com/docs/qstash/api-reference/schedules/delete-a-schedule)
+- [API examples (raw destination URL in the path)](https://upstash.com/docs/qstash/overall/apiexamples)
+- [Multi-region (base URLs, tokens)](https://upstash.com/docs/qstash/howto/multi-region)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://qstash.upstash.io` |
+| `base_url_env` | `QSTASH_API_URL` |
+| Credential | `QSTASH_TOKEN` (bearer) |
+
+Assumptions:
+
+- **QS1** (verified, [source](https://upstash.com/docs/qstash/api/authentication)): Requests authenticate with the QStash token as `Authorization: Bearer`; the SDKs read it from `QSTASH_TOKEN`.
+- **QS2** (verified, [source](https://upstash.com/docs/qstash/howto/multi-region)): Each region (`qstash.upstash.io` = EU, `qstash-us-east-1.upstash.io`) has its own token and its own schedules; the default here is the EU URL, and a US account overrides `base_url` in its block.
+- **QS3** (verified, [source](https://upstash.com/docs/qstash/api-reference/schedules/create-a-schedule)): `POST /v2/schedules/{destination}` creates a schedule: the cron in `Upstash-Cron`, the method used to call the destination in `Upstash-Method` (default POST), the request body as the message delivered on every run. It answers `{ scheduleId }`.
+- **QS4** (verified, [source](https://upstash.com/docs/qstash/api-reference/schedules/create-a-schedule)): With `Upstash-Schedule-Id`, a schedule with that id is updated with the new settings if it exists (an upsert): the id is the client's, the read path names it, and the same request is both create and update.
+- **QS5** (verified, [source](https://upstash.com/docs/qstash/overall/apiexamples)): The official example writes the destination URL in the path as it is (`/v2/schedules/https://example.com`), hence the `{+destination}` placeholder.
+- **QS6** **(unverified)**: A destination URL with a query string arrives intact with its `?` escaped as `%3F` (a raw `?` would end the path); not documented.
+- **QS7** (verified, [source](https://upstash.com/docs/qstash/api-reference/schedules/get-a-schedule)): `GET /v2/schedules/{scheduleId}` answers the schedule bare with `scheduleId`, `cron`, `destination`, `method` and `body`, and 404 when there is none; `DELETE` on the same path removes it.
+- **QS8** **(unverified)**: Deleting a schedule that is already gone answers 404 (only 200 is documented), which destroy treats as done.
+- **QS9** (verified, [source](https://upstash.com/docs/qstash/api-reference/schedules/create-a-schedule)): Schedule ids are alphanumerics, hyphens, periods and underscores (400 otherwise); a cron may carry a `CRON_TZ=<zone>` prefix and runs at most once a minute.
+- **QS10** **(unverified)**: `GET` returns `cron`, `destination` and `method` exactly as they were sent (the cron string unnormalised), so comparing them is not drift on every plan.
+
+### `qstash.schedule`
+
+**Schedule** (`http.resource`). A cron schedule that calls a preview's URL, such as `/api/cron` of `pr-42`, under a schedule id per scope. Created and updated by the same upsert (QS4); a console edit of its cron, destination or method is drift; destroy deletes it. The message body is sent on create and update but not compared.
+
+Covers: `qstash-schedule` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `schedule_id` | string | yes | — | The schedule's id, chosen by the plan (one per scope). Matches `^[A-Za-z0-9._-]+$`. |
+| `destination` | string | yes | — | The URL the schedule calls. Matches `^https?://`. |
+| `cron` | string | yes | — | The cron expression, optionally prefixed `CRON_TZ=<zone> `. |
+| `method` | string | no | `POST` | The HTTP method used to call the destination. One of `GET`, `POST`, `PUT`, `PATCH`, `DELETE`. |
+| `body` | map | no | — | The JSON message delivered on every run (sent, not compared). |
+
+```yaml
+# under changes: (no provider block needed)
+- id: schedule
+  adapter: http
+  op: resource
+  recipe: qstash.schedule
+  schedule_id: cron-${ctx.scope}
+  destination: https://${ctx.scope}.preview.example.com/api/cron
+  cron: "*/15 * * * *"
+```
+
+What the line expands into: the [`http.resource`](plan-format.md#httpresource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+read:
+  path: /v2/schedules/{schedule_id}
+create:
+  path: /v2/schedules/{+destination}
+  headers:
+    Upstash-Schedule-Id: { param: schedule_id }
+    Upstash-Cron: { param: cron }
+    Upstash-Method: { param: method }
+  send_fields: false
+  body: { param: body }
+update:
+  method: POST
+  path: /v2/schedules/{+destination}
+  headers:
+    Upstash-Schedule-Id: { param: schedule_id }
+    Upstash-Cron: { param: cron }
+    Upstash-Method: { param: method }
+  send_fields: false
+  body: { param: body }
+id_path: /scheduleId
+fields:
+  cron: { param: cron }
+  destination: { param: destination }
+  method: { param: method }
+```
+
+## Render
+
+Recipe file: [`packages/adapters/recipes/render.yaml`](../packages/adapters/recipes/render.yaml). Verified on 2026-10-11 against:
+
+- [Authentication](https://api-docs.render.com/reference/authentication)
+- [Retrieve environment variable](https://api-docs.render.com/reference/retrieve-env-var)
+- [Add or update environment variable](https://api-docs.render.com/reference/update-env-var)
+- [Delete environment variable](https://api-docs.render.com/reference/delete-env-var)
+- [Update environment variables (replace all; deploy behaviour)](https://api-docs.render.com/reference/update-env-vars-for-service)
+- [Service previews](https://render.com/docs/service-previews)
+- [Render CLI (RENDER_API_KEY)](https://render.com/docs/cli)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.render.com/v1` |
+| `base_url_env` | `RENDER_API_URL` |
+| Credential | `RENDER_API_KEY` (bearer) |
+
+Assumptions:
+
+- **RE1** (verified, [source](https://api-docs.render.com/reference/authentication)): Requests authenticate with an API key as `Authorization: Bearer`; the Render CLI reads it from `RENDER_API_KEY`.
+- **RE2** (verified, [source](https://api-docs.render.com/reference/retrieve-env-var)): `GET /services/{serviceId}/env-vars/{envVarKey}` answers the variable bare, `{ key, value }`, and 404 when it does not exist.
+- **RE3** (verified, [source](https://api-docs.render.com/reference/update-env-var)): `PUT /services/{serviceId}/env-vars/{envVarKey}` with `{ value }` adds the variable or replaces its value (200, `{ key, value }`): a create whose answer was lost is the same request again, and the variable's name is its identity.
+- **RE4** (verified, [source](https://api-docs.render.com/reference/delete-env-var)): `DELETE /services/{serviceId}/env-vars/{envVarKey}` removes the variable (204).
+- **RE5** **(unverified)**: Deleting a variable that is already gone answers 404 (documented only as "Unable to find the requested resource"), which destroy treats as done.
+- **RE6** (verified, [source](https://api-docs.render.com/reference/update-env-vars-for-service)): Changing environment variables through the API does not deploy the service, whatever its autoDeploy setting (stated for the replace-all endpoint); a running preview sees a new value only after its next deploy.
+- **RE7** **(unverified)**: The single-variable PUT does not deploy either (its page is silent; assumed like the replace-all endpoint).
+- **RE8** (verified, [source](https://render.com/docs/service-previews)): Render creates service previews and preview environments itself (per pull request, from the service's Previews setting or `render.yaml`); a preview copies the base service's variables once, when it is created. No API looks up the preview of pull request N, so the line takes the service's id.
+- **RE9** **(unverified)**: `GET` returns the value in plain text for every variable, including ones generated with `generateValue`, so the value can be compared for drift.
+
+### `render.env_var`
+
+**Service environment variable** (`http.resource`). One environment variable on a Render service, such as a preview service's `API_URL`, written by name (`PUT` adds or replaces it). A console edit of its value is drift; destroy deletes it. The service's id is a param: Render creates preview services itself, and writing a variable does not deploy (RE6).
+
+Covers: `render-env` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `service_id` | string | yes | — | The service's id (`srv-…`, in the service's dashboard URL and settings). Matches `^[a-z]{3}-[a-z0-9]+$`. |
+| `key` | string | yes | — | The variable's name. Matches `^[A-Za-z_][A-Za-z0-9_]*$`. |
+| `value` | string | yes | — | The variable's value: a literal, `{ from }` or `{ secret }`. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: env_var
+  adapter: http
+  op: resource
+  recipe: render.env_var
+  service_id: srv-d0a1b2c3d4e5f6g7h8i9
+  key: API_URL
+  value: https://api-${ctx.scope}.example.com
+```
+
+What the line expands into: the [`http.resource`](plan-format.md#httpresource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+read:
+  path: /services/{service_id}/env-vars/{key}
+create:
+  method: PUT
+  path: /services/{service_id}/env-vars/{key}
+update:
+  method: PUT
+id_path: /key
+fields:
+  value: { param: value }
 ```
 
 ## Resend
@@ -1811,6 +2163,173 @@ fields:
     rollout: { param: rollout }
     stickiness: { param: stickiness }
     groupId: { param: feature }
+```
+
+## Upstash Redis
+
+Recipe file: [`packages/adapters/recipes/upstash.yaml`](../packages/adapters/recipes/upstash.yaml). Verified on 2026-10-11 against:
+
+- [Developer API authentication](https://upstash.com/docs/devops/developer-api/authentication)
+- [Developer API introduction (supported accounts)](https://upstash.com/docs/devops/developer-api/introduction)
+- [Create a Redis database (global)](https://upstash.com/docs/devops/developer-api/redis/create_database_global)
+- [List Redis databases](https://upstash.com/docs/devops/developer-api/redis/list_databases)
+- [Get a Redis database](https://upstash.com/docs/devops/developer-api/redis/get_database)
+- [Delete a Redis database](https://upstash.com/docs/devops/developer-api/redis/delete_database)
+- [Upstash CLI (UPSTASH_EMAIL, UPSTASH_API_KEY)](https://upstash.com/docs/agent-resources/cli)
+- [Terraform upstash_redis_database (exported credentials)](https://upstash.com/docs/devops/terraform/resources/upstash_redis_database)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.upstash.com/v2` |
+| `base_url_env` | `UPSTASH_API_URL` |
+| Credential | `UPSTASH_EMAIL` / `UPSTASH_API_KEY` (basic) |
+
+Assumptions:
+
+- **UR1** (verified, [source](https://upstash.com/docs/devops/developer-api/authentication)): The Developer API authenticates with HTTP Basic, the account's email as user and an API key as password; the Upstash CLI reads them from `UPSTASH_EMAIL` and `UPSTASH_API_KEY`. Accounts created through Vercel or Fly cannot use it.
+- **UR2** (verified, [source](https://upstash.com/docs/devops/developer-api/redis/create_database_global)): `POST /v2/redis/database` with `{ database_name, platform, primary_region, read_regions?, plan?, tls?, eviction? }` creates a global database and answers it bare, with `database_id`, `database_name`, `endpoint`, `port` and `state`.
+- **UR3** (verified, [source](https://upstash.com/docs/devops/developer-api/redis/list_databases)): `GET /v2/redis/databases` answers every database of the account as a bare array (no paging).
+- **UR4** **(unverified)**: Database names are unique in the account, so `database_name` identifies one; a create whose answer was lost is found by it before another is created. (Not documented: a second database with the same name makes `find.match` ambiguous, which is refused with PARAM_INVALID rather than guessed.)
+- **UR5** (verified, [source](https://upstash.com/docs/devops/developer-api/redis/get_database)): `GET /v2/redis/database/{id}` answers the database, with its credentials unless `?credentials=hide` is sent.
+- **UR6** **(unverified)**: The credentials are the fields `password` and `rest_token` (the documented schema omits them; the Terraform resource and the CLI expose them), so they are readable on every run, not only from the create: ordinary sensitive outputs, not once-only ones.
+- **UR7** (verified, [source](https://upstash.com/docs/devops/developer-api/redis/delete_database)): `DELETE /v2/redis/database/{id}` deletes the database and answers 200 `"OK"`.
+- **UR8** **(unverified)**: A database that is gone answers 404 on GET and DELETE (only 200 is documented).
+- **UR9** **(unverified)**: The database is usable when the create answers (`state: active` in the documented example); nothing waits for it.
+- **UR10** **(unverified)**: `endpoint` is the database's host name (`<name>.upstash.io`); the documented example shows only its first label, so check the output before building a URL from it.
+
+### `upstash.redis_database`
+
+**Redis database** (`http.resource`). A global Redis database per scope, such as `app-pr-42`, with its endpoint, port, password and REST token as outputs (the last two sensitive). Located by name; only its existence is compared for drift (region, plan and TLS are set on create and not compared); destroy deletes it and its data.
+
+Covers: `upstash-redis-database` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`, `endpoint`, `port`, `password` (sensitive), `rest_token` (sensitive). On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `name` | string | yes | — | The database's name. |
+| `platform` | string | no | `aws` | The cloud it runs on. One of `aws`, `gcp`. |
+| `primary_region` | string | yes | — | The primary region, such as `us-east-1` or `eu-west-1`. |
+| `read_regions` | list | no | — | Read replica regions. |
+| `plan` | string | no | — | The plan (`free`, `payg`, `fixed_…`); the account's default when left out. |
+| `tls` | boolean | no | `true` | Whether TLS is enabled. |
+| `eviction` | boolean | no | — | Whether keys are evicted when the database is full. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: redis_database
+  adapter: http
+  op: resource
+  recipe: upstash.redis_database
+  name: app-${ctx.scope}
+  primary_region: us-east-1
+```
+
+What the line expands into: the [`http.resource`](plan-format.md#httpresource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /redis/databases
+  match:
+    database_name: { param: name }
+read:
+  path: /redis/database/{id}
+create:
+  path: /redis/database
+  body:
+    platform: { param: platform }
+    primary_region: { param: primary_region }
+    read_regions: { param: read_regions }
+    plan: { param: plan }
+    tls: { param: tls }
+    eviction: { param: eviction }
+id_path: /database_id
+outputs:
+  endpoint: /endpoint
+  port: /port
+  password:
+    path: /password
+    sensitive: true
+  rest_token:
+    path: /rest_token
+    sensitive: true
+```
+
+## Vercel
+
+Recipe file: [`packages/adapters/recipes/vercel.yaml`](../packages/adapters/recipes/vercel.yaml). Verified on 2026-10-11 against:
+
+- [Add a domain to a project](https://vercel.com/docs/rest-api/projects/add-a-domain-to-a-project)
+- [Get a project domain](https://vercel.com/docs/rest-api/projects/get-a-project-domain)
+- [Update a project domain](https://vercel.com/docs/rest-api/projects/update-a-project-domain)
+- [Remove a domain from a project](https://vercel.com/docs/rest-api/projects/remove-a-domain-from-a-project)
+- [Errors](https://vercel.com/docs/rest-api/errors)
+- [CLI global options (VERCEL_TOKEN)](https://vercel.com/docs/cli/global-options)
+- [Working with domains (verification)](https://vercel.com/docs/domains/working-with-domains)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.vercel.com` |
+| `base_url_env` | `VERCEL_API_URL` |
+| Credential | `VERCEL_TOKEN` (bearer) |
+
+Assumptions:
+
+- **VD1** (verified, [source](https://vercel.com/docs/cli/global-options)): Requests authenticate as `Authorization: Bearer <token>`; the Vercel CLI reads the token from `VERCEL_TOKEN` (the built-in `vercel` adapter uses the same variable).
+- **VD2** (verified, [source](https://vercel.com/docs/rest-api/projects/add-a-domain-to-a-project)): `POST /v10/projects/{idOrName}/domains?teamId=` with `{ name, gitBranch, redirect, redirectStatusCode }` adds the domain to the project and answers it bare: `{ name, apexName, projectId, verified, gitBranch, redirect, redirectStatusCode, verification[] }`.
+- **VD3** (verified, [source](https://vercel.com/docs/rest-api/projects/get-a-project-domain)): `GET /v9/projects/{idOrName}/domains/{domain}?teamId=` answers the same shape; the domain's name identifies it within the project, so the read path names it and a create whose answer was lost is found by it.
+- **VD4** **(unverified)**: A domain that is not on the project answers 404 on GET and DELETE (documented with no description).
+- **VD5** (verified, [source](https://vercel.com/docs/rest-api/projects/update-a-project-domain)): `PATCH /v9/projects/{idOrName}/domains/{domain}` changes `gitBranch`, `redirect` and `redirectStatusCode`; `DELETE` on the same path removes the domain from the project (200, `{}`).
+- **VD6** (verified, [source](https://vercel.com/docs/rest-api/projects/add-a-domain-to-a-project)): Adding a domain that is already on a project of the account answers 409 (and, for the same project, the description says 400): someone else's domain is never taken over by name, and the conflict surfaces as an error.
+- **VD7** (verified, [source](https://vercel.com/docs/rest-api/projects/add-a-domain-to-a-project)): `gitBranch` and `redirect` cannot be set together, and the production branch cannot be a `gitBranch` (400).
+- **VD8** (verified, [source](https://vercel.com/docs/domains/working-with-domains)): A domain the account does not own answers `verified: false` with a `verification` challenge (a TXT record) that must be completed before it serves traffic; a domain bought through Vercel needs none.
+- **VD9** **(unverified)**: A free `<name>.vercel.app` domain that no other project uses is verified on the spot (`verified: true`).
+- **VD10** **(unverified)**: Every account has a team id (personal accounts are Hobby teams), so `teamId` can always be sent; the recipe requires it.
+
+### `vercel.project_domain`
+
+**Branch-bound project domain** (`http.resource`). A domain on a Vercel project that serves one git branch's latest preview, such as `pr-42.preview.example.com` for `feat/x`: a stable preview hostname. Located by name; a console edit of its branch or redirect is drift; destroy removes it from the project. Its `verified` output says whether DNS verification is still needed (VD8).
+
+Covers: `vercel-domain` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`, `verified`, `apex_name`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `project` | string | yes | — | The project's id or name. |
+| `team_id` | string | yes | — | The team's id (`team_…`, under Settings → General). Matches `^team_[A-Za-z0-9]+$`. |
+| `name` | string | yes | — | The domain, lower-case. Matches `^[a-z0-9*.-]+$`. |
+| `git_branch` | string | no | — | The git branch whose latest deployment the domain serves. |
+| `redirect` | string | no | — | Redirect to this domain instead of serving a branch (not with `git_branch`). |
+| `redirect_status_code` | integer | no | — | The redirect's status code. One of `301`, `302`, `307`, `308`. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: project_domain
+  adapter: http
+  op: resource
+  recipe: vercel.project_domain
+  project: prj_12HKQaOmR5t5Uy6vdcQsNIiZgHGB
+  team_id: team_1a2b3c4d5e6f7g8h9i0j1k2l
+  name: ${ctx.scope}.preview.example.com
+  git_branch: ${ctx.git.branch}
+```
+
+What the line expands into: the [`http.resource`](plan-format.md#httpresource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+read:
+  path: /v9/projects/{project}/domains/{name}?teamId={team_id}
+create:
+  path: /v10/projects/{project}/domains?teamId={team_id}
+  body:
+    name: { param: name }
+update:
+  method: PATCH
+id_path: /name
+fields:
+  gitBranch: { param: git_branch }
+  redirect: { param: redirect }
+  redirectStatusCode: { param: redirect_status_code }
+outputs:
+  verified: /verified
+  apex_name: /apexName
 ```
 
 ## WorkOS

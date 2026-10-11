@@ -1,0 +1,124 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Upstash Developer API recipes (Redis). QStash has its own API and credential: recipes/qstash.yaml.
+# Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: upstash
+title: Upstash Redis
+category: queues
+verified_on: "2026-10-11"
+docs:
+  - title: Developer API authentication
+    url: https://upstash.com/docs/devops/developer-api/authentication
+  - title: Developer API introduction (supported accounts)
+    url: https://upstash.com/docs/devops/developer-api/introduction
+  - title: Create a Redis database (global)
+    url: https://upstash.com/docs/devops/developer-api/redis/create_database_global
+  - title: List Redis databases
+    url: https://upstash.com/docs/devops/developer-api/redis/list_databases
+  - title: Get a Redis database
+    url: https://upstash.com/docs/devops/developer-api/redis/get_database
+  - title: Delete a Redis database
+    url: https://upstash.com/docs/devops/developer-api/redis/delete_database
+  - title: Upstash CLI (UPSTASH_EMAIL, UPSTASH_API_KEY)
+    url: https://upstash.com/docs/agent-resources/cli
+  - title: Terraform upstash_redis_database (exported credentials)
+    url: https://upstash.com/docs/devops/terraform/resources/upstash_redis_database
+api:
+  base_url: https://api.upstash.com/v2
+  base_url_env: UPSTASH_API_URL
+  auth: { basic: { user_env: UPSTASH_EMAIL, password_env: UPSTASH_API_KEY } }
+assumptions:
+  - id: UR1
+    verified: true
+    text: "The Developer API authenticates with HTTP Basic, the account's email as user and an API key as password; the Upstash CLI reads them from `UPSTASH_EMAIL` and `UPSTASH_API_KEY`. Accounts created through Vercel or Fly cannot use it."
+    source: https://upstash.com/docs/devops/developer-api/authentication
+  - id: UR2
+    verified: true
+    text: "`POST /v2/redis/database` with `{ database_name, platform, primary_region, read_regions?, plan?, tls?, eviction? }` creates a global database and answers it bare, with `database_id`, `database_name`, `endpoint`, `port` and `state`."
+    source: https://upstash.com/docs/devops/developer-api/redis/create_database_global
+  - id: UR3
+    verified: true
+    text: "`GET /v2/redis/databases` answers every database of the account as a bare array (no paging)."
+    source: https://upstash.com/docs/devops/developer-api/redis/list_databases
+  - id: UR4
+    verified: false
+    text: "Database names are unique in the account, so `database_name` identifies one; a create whose answer was lost is found by it before another is created. (Not documented: a second database with the same name makes `find.match` ambiguous, which is refused with PARAM_INVALID rather than guessed.)"
+  - id: UR5
+    verified: true
+    text: "`GET /v2/redis/database/{id}` answers the database, with its credentials unless `?credentials=hide` is sent."
+    source: https://upstash.com/docs/devops/developer-api/redis/get_database
+  - id: UR6
+    verified: false
+    text: "The credentials are the fields `password` and `rest_token` (the documented schema omits them; the Terraform resource and the CLI expose them), so they are readable on every run, not only from the create: ordinary sensitive outputs, not once-only ones."
+    source: https://upstash.com/docs/devops/terraform/resources/upstash_redis_database
+  - id: UR7
+    verified: true
+    text: "`DELETE /v2/redis/database/{id}` deletes the database and answers 200 `\"OK\"`."
+    source: https://upstash.com/docs/devops/developer-api/redis/delete_database
+  - id: UR8
+    verified: false
+    text: "A database that is gone answers 404 on GET and DELETE (only 200 is documented)."
+  - id: UR9
+    verified: false
+    text: "The database is usable when the create answers (`state: active` in the documented example); nothing waits for it."
+    source: https://upstash.com/docs/devops/developer-api/redis/create_database_global
+  - id: UR10
+    verified: false
+    text: "`endpoint` is the database's host name (`<name>.upstash.io`); the documented example shows only its first label, so check the output before building a URL from it."
+    source: https://upstash.com/docs/devops/developer-api/redis/create_database_global
+ops:
+  redis_database:
+    kind: resource
+    title: Redis database
+    summary: "A global Redis database per scope, such as `app-pr-42`, with its endpoint, port, password and REST token as outputs (the last two sensitive). Located by name; only its existence is compared for drift (region, plan and TLS are set on create and not compared); destroy deletes it and its data."
+    covers: [upstash-redis-database]
+    params:
+      name:
+        type: string
+        required: true
+        description: The database's name.
+        example: "app-${ctx.scope}"
+      platform:
+        type: string
+        default: aws
+        enum: [aws, gcp]
+        description: The cloud it runs on.
+      primary_region:
+        type: string
+        required: true
+        description: The primary region, such as `us-east-1` or `eu-west-1`.
+        example: us-east-1
+      read_regions:
+        type: list
+        description: Read replica regions.
+      plan:
+        type: string
+        description: The plan (`free`, `payg`, `fixed_…`); the account's default when left out.
+      tls:
+        type: boolean
+        default: true
+        description: Whether TLS is enabled.
+      eviction:
+        type: boolean
+        description: Whether keys are evicted when the database is full.
+    http:
+      find:
+        path: /redis/databases
+        match: { database_name: { param: name } }
+      read: { path: "/redis/database/{id}" }
+      create:
+        path: /redis/database
+        body:
+          platform: { param: platform }
+          primary_region: { param: primary_region }
+          read_regions: { param: read_regions }
+          plan: { param: plan }
+          tls: { param: tls }
+          eviction: { param: eviction }
+      id_path: /database_id
+      outputs:
+        endpoint: /endpoint
+        port: /port
+        password: { path: /password, sensitive: true }
+        rest_token: { path: /rest_token, sensitive: true }
+    live:
+      params: { primary_region: SPONSON_LIVE_UPSTASH_REGION }

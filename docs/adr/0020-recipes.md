@@ -232,3 +232,23 @@ in the code.
 
 "Stripe's webhook endpoint was not chosen" (under *First recipes*) is superseded: `stripe.webhook_endpoint` ships with
 the catalog ops `stripe.product`, `stripe.price` and `stripe.coupon`.
+
+## Amendment 4 (2026-10-11): headers, URLs in paths, and polling stays out
+
+The deploy, database and queue recipes (Render, Heroku, Vercel domains, Upstash, Prisma Postgres, QStash) needed:
+
+- **A vendor `Accept`.** Heroku refuses requests that do not pin its version in `Accept`; its recipe uses the API
+  block's `media_type` (added by another amendment) rather than a header of its own.
+- **Per-request headers and fields carried in them.** QStash takes a schedule's cron and id in headers and its message
+  as the body. `create` and `update` take `headers` (values from params) and `send_fields: false` (the declared
+  `fields` are compared but not put in the body); a path placeholder `{+name}` writes a URL as it is (RFC 6570
+  reserved expansion; only `?` and `#` escaped). A delete answered 2xx with a body that is not JSON (`OK`) succeeds.
+- **Sim shapes.** A PUT to `<collection>/<id>` that does not exist creates the object (Render's upsert by name); an
+  alias of a collection also addresses its objects (`/databases/<id>`), which the harness derives from the read,
+  update and delete paths; recipe sim hints `header_fields` and `suffix_field` stand in for an API that takes settings
+  in headers and a URL as the path's last segment.
+
+Rows whose lifecycle needs waiting (Algolia's copy task, a Xata branch coming up, an App Platform deployment) got
+first-class adapters instead of a polling extension: each waits on a different signal, and polling in a request
+template would be a small language. Inngest's sync stays uncovered (a one-off action with nothing to read back or
+delete).

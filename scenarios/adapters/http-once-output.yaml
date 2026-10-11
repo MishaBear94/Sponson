@@ -1,0 +1,77 @@
+# An http.resource output the provider shows only in the create answer (`outputs.<name>.once: true`, ADR 0018), such
+# as a database's connection string, into a config var by reference. It reaches `env` in the run that creates the
+# database; later runs keep what `env` holds and write nothing; a dependent that lost the value is refused, never fed
+# an empty one, until the database is recreated on request. Format: see the top of scenarios/runner.test.ts.
+name: "http.resource once output: passed on in the creating run, kept after, refused when lost, --recreate passes a new one"
+plan: |
+  version: 1
+  providers:
+    http:
+      dbs:
+        base_url: https://dbs.example.test/v1
+        base_url_env: REST_API_URL
+        auth: { bearer_env: REST_API_TOKEN }
+  changes:
+    - id: db
+      adapter: http
+      op: resource
+      api: dbs
+      read: { path: "/databases/{name}" }
+      vars: { name: "app-${ctx.scope}" }
+      create:
+        path: /databases
+        body: { id: "app-${ctx.scope}", password: { secret: "env://DB_SIM_PASSWORD" } }
+      item_path: /data
+      outputs:
+        password: { path: /password, sensitive: true, once: true }
+    - id: env
+      adapter: http
+      op: list_item
+      api: dbs
+      parent: { path: /apps/demo }
+      list_path: /env_vars
+      shape: map
+      item: DATABASE_PASSWORD
+      value: { from: db.password }
+env:
+  REST_API_TOKEN: tok_rest_scenario_once_0042
+  DB_SIM_PASSWORD: dbpw_scenario_once_0042
+secrets: [tok_rest_scenario_once_0042, dbpw_scenario_once_0042]
+steps:
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { db: create, env: pending } }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { db: applied, env: applied } }
+  - sim:
+      state:
+        rest.objects./apps/demo.env_vars: { DATABASE_PASSWORD: dbpw_scenario_once_0042 }
+  # The value is not revealed again (even though the sim would echo it): `env` is proven to hold it, so it is kept.
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { db: unchanged, env: unchanged } }
+  - run: apply --json
+    expect: { exit: 0, writes: 0, lines: { db: unchanged, env: unchanged } }
+  # The variable is removed by hand: `env` would need the value, which no later run has. Refused, nothing written.
+  - chaos:
+      drift: { "rest.objects./apps/demo.env_vars": "{}" }
+  - run: apply --json
+    expect:
+      exit: 1
+      status: failed
+      writes: 0
+      lines: { db: unchanged, env: blocked }
+      errors: { env: "db.password" }
+  # The remedy: recreate the database in the same run, so its new value reaches `env`.
+  - run: apply --recreate db --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { db: applied, env: applied }
+      notes: { db: { recreated: true } }
+  - run: apply --json
+    expect: { exit: 0, writes: 0, lines: { db: unchanged, env: unchanged } }
+  - run: apply --destroy --json
+    expect: { exit: 0, status: complete, lines: { env: destroyed, db: destroyed } }
+  - sim:
+      state:
+        rest.objects./apps/demo.env_vars: {}
+        rest.collections./databases: { length: 0 }

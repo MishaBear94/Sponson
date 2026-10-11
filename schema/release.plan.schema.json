@@ -20,6 +20,23 @@
       "type": "object",
       "additionalProperties": { "type": "object" },
       "properties": {
+        "digitalocean": {
+          "type": "object",
+          "description": "Nothing to configure: the account is the token's. Credential: DIGITALOCEAN_ACCESS_TOKEN in the environment.",
+          "additionalProperties": false
+        },
+        "xata": {
+          "type": "object",
+          "description": "Xata organization and project ids. Credential: XATA_API_KEY in the environment.",
+          "required": ["organization", "project"],
+          "properties": { "organization": { "type": "string", "minLength": 1 }, "project": { "type": "string", "minLength": 1 } }
+        },
+        "algolia": {
+          "type": "object",
+          "description": "The Algolia application id. Credential: ALGOLIA_API_KEY in the environment (addObject, deleteIndex and settings ACLs).",
+          "required": ["application_id"],
+          "properties": { "application_id": { "type": "string", "minLength": 1 } }
+        },
         "planetscale": {
           "type": "object",
           "description": "PlanetScale organization and database (their name slugs). Credentials: PLANETSCALE_SERVICE_TOKEN_ID and PLANETSCALE_SERVICE_TOKEN in the environment.",
@@ -210,7 +227,7 @@
       "required": ["id", "adapter", "op"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk, planetscale, launchdarkly, supabase, netlify, cloudflare, http (any JSON REST API described in the plan), and manual (a step a person does by hand). Plugins (SPONSON_PLUGINS) add more." },
+        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk, planetscale, launchdarkly, supabase, netlify, cloudflare, algolia, xata, digitalocean, http (any JSON REST API described in the plan), and manual (a step a person does by hand). Plugins (SPONSON_PLUGINS) add more." },
         "op": { "type": "string", "minLength": 1 },
         "environments": { "$ref": "#/$defs/nameList", "description": "Environments this line applies to. Absent: all." },
         "depends_on": { "type": "array", "items": { "$ref": "#/$defs/id" }, "description": "Ordering without a data dependency. Prefer `from:` references." }
@@ -276,6 +293,18 @@
         {
           "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "manual" }, "op": { "const": "step" } } },
           "then": { "$ref": "#/$defs/op_manual_step" }
+        },
+        {
+          "if": { "required":  ["adapter", "op"], "properties":  { "adapter":  { "const":  "algolia" }, "op":  { "const":  "index" }}},
+          "then": { "$ref": "#/$defs/op_algolia_index" }
+        },
+        {
+          "if": { "required":  ["adapter", "op"], "properties":  { "adapter":  { "const":  "xata" }, "op":  { "const":  "branch" }}},
+          "then": { "$ref": "#/$defs/op_xata_branch" }
+        },
+        {
+          "if": { "required":  ["adapter", "op"], "properties":  { "adapter":  { "const":  "digitalocean" }, "op":  { "const":  "app" }}},
+          "then": { "$ref": "#/$defs/op_digitalocean_app" }
         }
       ]
     },
@@ -530,7 +559,7 @@
         "idempotent": { "type": "boolean", "description": "The mutation sets state, so a dropped connection may be retried." }
       }
     },
-    "httpPath": { "type": "string", "pattern": "^/", "description": "A path relative to the API's base_url. `{id}` is the object's id; `{name}` is `vars.name`." },
+    "httpPath": { "type": "string", "pattern": "^/", "description": "A path relative to the API's base_url. `{id}` is the object's id; `{name}` is `vars.name`, URI-encoded as one segment; `{+name}` writes it as it is (a URL), escaping only ? and #." },
     "jsonPointer": { "type": "string", "pattern": "^(/.*)?$", "description": "A JSON pointer: \"\" for the whole body, \"/data/id\" for a field." },
     "httpStatuses": { "type": "array", "items": { "type": "integer", "minimum": 400, "maximum": 599 } },
     "httpDestroy": { "enum": ["delete", "keep"], "description": "What destroying the scope does: delete (default) or keep (leave it in place)." },
@@ -543,7 +572,9 @@
         "graphql": { "$ref": "#/$defs/httpGraphql" },
         "body": { "type": "object", "description": "Extra body fields sent with this request only (not compared)." },
         "content_type": { "type": "string", "description": "A media type other than the API's encoding, e.g. application/merge-patch+json." },
-        "idempotency_key": { "type": "boolean", "description": "Create only: send an Idempotency-Key so a create whose answer was lost can be retried." }
+        "idempotency_key": { "type": "boolean", "description": "Create only: send an Idempotency-Key so a create whose answer was lost can be retried." },
+        "headers": { "type": "object", "additionalProperties": true, "description": "Create and update: headers sent with this request only (values may be references), e.g. Upstash-Cron. Not Authorization, Accept, Content-Type or Idempotency-Key." },
+        "send_fields": { "type": "boolean", "description": "Create and update: false when the request carries the declared fields elsewhere (in headers), so they are compared but not put in its body. Default true." }
       }
     },
     "op_http_resource": {
@@ -773,6 +804,92 @@
             "match": { "type": "object", "description": "JSON pointer → the value the answer must have there.", "propertyNames": { "pattern": "^/" } },
             "absent_status": { "$ref": "#/$defs/httpStatuses" }
           }
+        }
+      },
+      "additionalProperties": false
+    },
+    "op_algolia_index": {
+      "description": "algolia.index: an index per scope, copied from a template index; apply waits for the copy task. Outputs: name.",
+      "required": [
+        "name",
+        "copy_from"
+      ],
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "name": {
+          "$ref": "#/$defs/stringOrRef",
+          "description": "The new index's name, e.g. products_${ctx.scope}."
+        },
+        "copy_from": {
+          "$ref": "#/$defs/stringOrRef",
+          "description": "The template index to copy; it must exist."
+        },
+        "scope": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "settings",
+              "synonyms",
+              "rules"
+            ]
+          },
+          "description": "Copy only these (no records). Left out: records, settings, synonyms and rules."
+        }
+      },
+      "additionalProperties": false
+    },
+    "op_xata_branch": {
+      "description": "xata.branch: a copy-on-write Postgres branch per scope, child of a parent branch; apply waits until it is healthy. Outputs: branch_id, connection_string (sensitive).",
+      "required": [
+        "name",
+        "parent_id"
+      ],
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "name": {
+          "$ref": "#/$defs/stringOrRef",
+          "description": "The branch's name, e.g. ${ctx.scope}; its identity."
+        },
+        "parent_id": {
+          "$ref": "#/$defs/stringOrRef",
+          "description": "The id of the branch to copy (not its name)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "op_digitalocean_app": {
+      "description": "digitalocean.app: an App Platform app per scope from a whole app spec, waited for until deployed. Outputs: app_id, live_url.",
+      "required": [
+        "spec"
+      ],
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "spec": {
+          "type": "object",
+          "required": [
+            "name"
+          ],
+          "properties": {
+            "name": true
+          },
+          "description": "The whole app spec (https://docs.digitalocean.com/products/app-platform/reference/app-spec/); spec.name is the app's identity. Values may be references."
+        },
+        "wait": {
+          "type": "boolean",
+          "description": "Wait for the deployment a create or update starts. Default true."
         }
       },
       "additionalProperties": false

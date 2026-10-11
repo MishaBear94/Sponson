@@ -31,6 +31,9 @@ All fetched on 2026-10-10 (LaunchDarkly, PlanetScale, Supabase, Netlify: 2026-10
 | Netlify | OpenAPI document, https://github.com/netlify/open-api/blob/master/swagger.yml (rendered at https://open-api.netlify.com/), fetched 2026-10-11 | `master` on that date |
 | Netlify | Docs, fetched 2026-10-11: API guide https://docs.netlify.com/api-and-cli-guides/api-guides/get-started-with-api/, env vars https://docs.netlify.com/build/environment-variables/overview/ and …/get-started/, Secrets Controller https://docs.netlify.com/build/environment-variables/secrets-controller/, deploy overview https://docs.netlify.com/deploy/deploy-overview/ | as served on that date |
 | Cloudflare | OpenAPI document, https://github.com/cloudflare/api-schemas (`openapi.json`); API reference https://developers.cloudflare.com/api/resources/pages/subresources/projects/methods/get/ and [`…/methods/edit/`](https://developers.cloudflare.com/api/resources/pages/subresources/projects/methods/edit/); the Pages and fundamentals pages cited below | fetched 2026-10-11 |
+| Algolia | Search API reference https://www.algolia.com/doc/rest-api/search/, generated from https://github.com/algolia/api-clients-automation (`specs/search`: `spec.yml`, `operationIndex.yml`, `getTask.yml`, `settings.yml`, `listIndices.yml`); copy guide https://www.algolia.com/doc/guides/sending-and-managing-data/manage-indices-and-apps/manage-indices/how-to/copy-indices; CLI authentication https://www.algolia.com/doc/tools/cli/authentication | fetched 2026-10-11 |
+| Xata | OpenAPI document https://api.xata.tech/openapi.json; docs https://xata.io/docs/cli, https://xata.io/docs/cli/branch, https://xata.io/docs/platform/branch | fetched 2026-10-11 |
+| DigitalOcean | OpenAPI document https://github.com/digitalocean/openapi (`specification/resources/apps`: `apps_create.yml`, `apps_get.yml`, `apps_update.yml`, `apps_delete.yml`, `apps_list.yml`, `apps_get_deployment.yml`, `models/app.yml`, `models/app_spec.yml`, `models/app_variable_definition.yml`, `models/apps_deployment_phase.yml`), rendered at https://docs.digitalocean.com/reference/api/digitalocean/#tag/Apps; app spec reference https://docs.digitalocean.com/products/app-platform/reference/app-spec/ | fetched 2026-10-11 |
 
 Vercel, Neon and Clerk use bearer authentication (`securitySchemes`), which is what the shared HTTP client sends
 by default: ✅. LaunchDarkly takes the access token as the whole `Authorization` value, without `Bearer`; the adapter
@@ -363,6 +366,82 @@ Deploy Previews cannot be rebuilt through any documented call (the docs describe
   which may differ from its name. Computing it from the branch would sometimes be wrong, so `pages_env` has no
   outputs. The deployment object's documented `aliases` list is the reliable source, for a later deployment op.
 
+## Algolia
+
+### Calls the adapter makes
+
+| Call | What the adapter sends and reads | Spec | Notes |
+|---|---|---|---|
+| base URL and auth | `https://<application_id>.algolia.net`, headers `X-Algolia-Application-Id` and `X-Algolia-API-Key: <ALGOLIA_API_KEY>` | ✅ | `spec.yml` servers and security schemes; the CLI reads `ALGOLIA_API_KEY` (AL2). |
+| `GET /1/indexes/{name}/settings` | existence only; `404` means absent | ✅ | `settings.yml` documents `404` "Index not found" (AL4). Used for the line's index and to refuse a template that does not exist. |
+| `POST /1/indexes/{copy_from}/operation` | `{ operation: "copy", destination, scope? }`; reads `taskID` | ✅ | `operationIndex.yml` (AL3). Overwrites an existing destination; copying a missing source makes an empty index, hence the adapter's check. Sent as idempotent: a repeated copy writes the same template again. |
+| `GET /1/indexes/{name}/task/{taskID}` | `status` until `published` | ✅ | `getTask.yml` (AL5). Whether the destination is visible before then is not stated ❓; the sim shows it only when published. |
+| `DELETE /1/indexes/{name}` | answer not read | ✅ | Deleting a missing index "is ignored without warning" (AL6); a `404` is treated as gone too. |
+
+### Sim assumptions (`packages/sim/src/routes/algolia.ts`)
+
+| Id | Assumption | Status |
+|---|---|---|
+| AL1 | the index name is its identity in the application | ✅ verified |
+| AL2 | host and the two authentication headers; `ALGOLIA_API_KEY` | ✅ verified |
+| AL3 | copy answers `{ taskID }`; scope; overwrite; a missing source makes an empty index | ✅ verified |
+| AL4 | settings of a missing index answer `404` | ✅ verified |
+| AL5 | task status `published` / `notPublished`; destination absent until published | status ✅; visibility ❓ (pinned) |
+| AL6 | deleting a missing index is ignored | ✅ verified (status ❓) |
+| AL7 | the index list without `page` is unpaginated | ✅ verified (not used by the adapter) |
+| AL8 | a copy is published within minutes | ❓ (the wait is bounded by `SPONSON_ALGOLIA_TASK_TIMEOUT_MS`) |
+
+## Xata
+
+### Calls the adapter makes
+
+| Call | What the adapter sends and reads | Spec | Notes |
+|---|---|---|---|
+| base URL and auth | `https://api.xata.tech`, `Authorization: Bearer <XATA_API_KEY>` | ✅ | Spec security scheme `apiKey`; the CLI reads `XATA_API_KEY` (XA1). |
+| `GET /organizations/{org}/projects/{project}/branches` | `branches[].id`, `.name` | ✅ | Unpaginated (XA3). Name uniqueness is not documented ❓: more than one match is refused. |
+| `POST` of the same path | `{ mode: "inherit", parentID, name }`; reads `id`, `name` | ✅ | `201`, no `409` documented (XA2), hence the lookup by name before every create. |
+| `GET …/branches/{branchID}` | `status.statusType` until it ends in `HEALTHY`; one ending in `FAULT` fails | ✅ field, ❓ spelling | The CLI's `branch wait-ready` "blocks until the branch is healthy" (XA5). |
+| `GET …/branches/{branchID}/credentials?username=xata` | `connectionString` | ✅ | (XA6). The branch's own `connectionString` field is deprecated; not used. |
+| `DELETE …/branches/{branchID}` | answer not read; `404` is gone | ✅ | Permanent (XA4). |
+
+### Sim assumptions (`packages/sim/src/routes/xata.ts`)
+
+| Id | Assumption | Status |
+|---|---|---|
+| XA1 | base URL, bearer API key, `XATA_API_KEY` | ✅ verified |
+| XA2 | create a child by `parentID` with `mode: inherit`; `201` with the branch | ✅ verified |
+| XA3 | the list is `{ branches }`, unpaginated; names may repeat | list ✅; uniqueness ❓ |
+| XA4 | detail with `status`; `404`; permanent `DELETE` (`204`) | ✅ verified |
+| XA5 | ready when healthy, broken on a fault | field ✅; enum spelling ❓ (pinned) |
+| XA6 | credentials readable at any time | endpoint ✅; "any time" inferred |
+| XA7 | ready within minutes | ❓ (bounded by `SPONSON_XATA_READY_TIMEOUT_MS`) |
+
+## DigitalOcean
+
+### Calls the adapter makes
+
+| Call | What the adapter sends and reads | Spec | Notes |
+|---|---|---|---|
+| base URL and auth | `https://api.digitalocean.com`, `Authorization: Bearer <DIGITALOCEAN_ACCESS_TOKEN>` | ✅ | (DO1) |
+| `GET /v2/apps?per_page=100&page=` | `apps[].id`, `.spec`, `.live_url`; follows `links.pages.next` | ✅ | No name filter; the adapter matches `spec.name` as DigitalOcean's own GitHub action does (DO2). |
+| `POST /v2/apps` | `{ spec }`; reads `app.id`, `app.pending_deployment.id` | ✅ | Duplicate name: unique per account, status undocumented ❓; any conflict is re-read and claimed (DO3). |
+| `PUT /v2/apps/{id}` | `{ spec }`, the whole spec | ✅ | Replaces the spec; starts a deployment (DO4, inferred). |
+| `GET /v2/apps/{app_id}/deployments/{deployment_id}` | `deployment.phase` until `ACTIVE` or `SUPERSEDED`; `ERROR`/`CANCELED` fail | ✅ | (DO5) |
+| `DELETE /v2/apps/{id}` | answer not read; `404` is gone | ✅ | (DO8) |
+
+### Sim assumptions (`packages/sim/src/routes/digitalocean.ts`)
+
+| Id | Assumption | Status |
+|---|---|---|
+| DO1 | base URL, bearer token, `DIGITALOCEAN_ACCESS_TOKEN` | ✅ verified |
+| DO2 | create/get/list shapes; no name filter | ✅ verified |
+| DO3 | names unique per account; duplicate status | uniqueness ✅; status ❓ |
+| DO4 | `PUT` replaces the whole spec and deploys | ✅ replace; deploy inferred |
+| DO5 | `pending_deployment`; deployment phases | ✅ verified |
+| DO6 | stored spec adds defaults, keeps sent fields and list order | ❓ (pinned) |
+| DO7 | `SECRET` values read back encrypted (`EV[…]`) | encryption ✅; read-back form ❓ |
+| DO8 | `DELETE` removes the app | ✅ verified |
+
 ## What still needs a live account
 
 - Vercel: V1 (propagation of env writes), the deployment list's order, whether `decrypt=true` still decrypts,
@@ -385,6 +464,12 @@ Deploy Previews cannot be rebuilt through any documented call (the docs describe
   on PATCH), NL11 (a build of a branch whose branch deploys are off).
 - Cloudflare: CF3 (what a secret's `value` looks like in GET), CF4 (that PATCH merges the map), CF6 (status of an
   unknown project), CF7 (a write is readable at once).
+- Algolia: AL5 (whether a copy's destination is visible before its task is published), AL6 (status of deleting a
+  missing index), AL8 (how long a copy takes).
+- Xata: XA3 (whether branch names are unique), XA5 (the spelling of `statusType`), XA6 (credentials of a branch still
+  coming up), XA7 (how long a branch takes).
+- DigitalOcean: DO3 (status of a duplicate name), DO6 (that the stored spec keeps every sent field in order), DO7
+  (what a secret reads back as).
 
 - The generic adapter's authentication forms and GraphQL examples: every ❓ above, and each provider end to end
   (the examples run against sims, not the live APIs).

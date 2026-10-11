@@ -253,6 +253,9 @@ The base URL override replaces the provider's API base URL (the test suites poin
 | `netlify` | [`netlify.env`](/reference/plan-format#netlify-env) | `NETLIFY_AUTH_TOKEN` | `NETLIFY_API_URL` |
 | `cloudflare` | [`cloudflare.pages_env`](/reference/plan-format#cloudflare-pages_env) | `CLOUDFLARE_API_TOKEN` | `CLOUDFLARE_API_URL` |
 | `manual` | [`manual.step`](/reference/plan-format#manual-step) | `none (verify: providers.manual.<api>.auth, optional)` | `providers.manual.<api>.base_url_env` |
+| `algolia` | [`algolia.index`](/reference/plan-format#algolia-index) | `ALGOLIA_API_KEY` | `ALGOLIA_API_URL` |
+| `xata` | [`xata.branch`](/reference/plan-format#xata-branch) | `XATA_API_KEY` | `XATA_API_URL` |
+| `digitalocean` | [`digitalocean.app`](/reference/plan-format#digitalocean-app) | `DIGITALOCEAN_ACCESS_TOKEN` | `DIGITALOCEAN_API_URL` |
 
 A missing credential fails the line with `PROVIDER_AUTH`. Every resource has a key that identifies it within the
 adapter and provider block; the ledger treats two resources with the same key as the same resource.
@@ -530,7 +533,8 @@ providers:
 
 A malformed block, or a line naming an API that is not configured, is `PLAN_INVALID` before any request is sent;
 a malformed line is `PARAM_INVALID` naming the field. Paths take `{id}` (the object's id, once known) and
-`{name}` placeholders filled from the line's `vars:` (literals or references; URI-encoded). Fields are a top-level
+`{name}` placeholders filled from the line's `vars:` (literals or references; URI-encoded as one path segment, or
+written as they are with `{+name}`, for an API that takes a URL in the path). Fields are a top-level
 name (`url`) or a JSON pointer (`/config/url`); write a key that is literally `from`, `secret` or `keep` as a pointer
 (`/from`), since a map holding one of those keys is a [reference](/reference/plan-format#values).
 
@@ -642,9 +646,9 @@ One object per item: a feature flag, a webhook endpoint, a DNS record.
 | `vars` | map | `{}` | Values for `{name}` placeholders in paths. |
 | `find` | `{ path, list_path?, match, next?, cursor_param? }` | — | Locate the object by natural key: GET `path`, take the array at `list_path` (default: the whole body), keep the objects whose fields equal every `match` value. More than one is `PARAM_INVALID`. With `next` (a pointer to the next page's cursor), pages are followed, sending the cursor as `cursor_param` (default `cursor`); without it only the first page is read. |
 | `read` | `{ path }` | — | GET the object. With `find`, the path takes `{id}` and fetches the found object's detail; without `find`, it must be a path that names the object (a client-chosen id or key). One of `find` and `read` is required. 404 means it does not exist. |
-| `create` | `{ method?, path, body?, content_type?, idempotency_key?, locate? }` | (required) | `POST` (or `PUT`, `PATCH`) to create. The body is `match`, then `fields`, then `body` merged. `idempotency_key: true` sends an `Idempotency-Key` derived from the resource key, the commit and the body, and lets a create whose connection dropped be sent again. `locate: true` for an API whose create answers with something other than the object (the parent it was added to): the new object is then located with `find` (or `read`) instead. |
-| `update` | `{ method?, path?, body?, content_type? }` | none | `PATCH` (or `PUT`, `POST`) when `fields` differ from live; path defaults to `read.path`. `PATCH` and `POST` send the declared fields; `PUT` sends the whole declared state (`match`, `fields`, kept values). Without `update`, a difference is `PARAM_INVALID`. |
-| `delete` | `{ method?, path?, body? }` | `DELETE read.path` | How the object is removed (`DELETE` or `POST`). A `POST` with a `body` of literal values archives instead (`{ active: false }`, for objects a provider never deletes); the body is part of the record id. |
+| `create` | `{ method?, path, body?, content_type?, idempotency_key?, locate?, headers?, send_fields? }` | (required) | `POST` (or `PUT`, `PATCH`) to create. The body is `match`, then `fields`, then `body` merged (`send_fields: false`: `body` alone, for an API that takes the declared fields in headers). `headers` are sent with this request only (values may be references; not `Authorization`, `Accept`, `Content-Type` or `Idempotency-Key`). `idempotency_key: true` sends an `Idempotency-Key` derived from the resource key, the commit and the body, and lets a create whose connection dropped be sent again. `locate: true` for an API whose create answers with something other than the object (the parent it was added to): the new object is then located with `find` (or `read`) instead. |
+| `update` | `{ method?, path?, body?, content_type?, headers?, send_fields? }` | none | `PATCH` (or `PUT`, `POST`) when `fields` differ from live; path defaults to `read.path`. `PATCH` and `POST` send the declared fields; `PUT` sends the whole declared state (`match`, `fields`, kept values); `send_fields: false` sends `body` alone. `headers` as for `create`. Without `update`, a difference is `PARAM_INVALID`. |
+| `delete` | `{ method?, path?, body? }` | `DELETE read.path` | How the object is removed (`DELETE` or `POST`). A `POST` with a `body` of literal values archives instead (`{ active: false }`, for objects a provider never deletes); the body is part of the record id. The answer is not read: any 2xx is success, JSON or not (`OK`). |
 | `destroy` | `delete` \| `keep` | `delete` | `keep` leaves the object in place when the scope is destroyed. |
 | `item_path` | JSON pointer | `""` | Where the object is in read, create and update answers (`/data` for a `{ data: {...} }` envelope). |
 | `id_path` | JSON pointer | `/id` | Where the id is in the object. |
@@ -904,6 +908,64 @@ branch alias URL of a preview (`<alias>.<project>.pages.dev`) is not an output: 
 the branch name lowercased with other characters replaced by `-`, but not how long names are shortened or collisions
 resolved.
 
+### `algolia.index`
+
+An Algolia index per scope, copied from a template index (`POST /1/indexes/{copy_from}/operation`). The copy is an
+asynchronous task: `apply` polls it until it is published, so the index is ready when the line is applied (a copy
+not published within `SPONSON_ALGOLIA_TASK_TIMEOUT_MS`, five minutes by default, is `WAIT_TIMEOUT`; the next run
+finds the copy). Requires `providers.algolia.application_id` and `ALGOLIA_API_KEY` with the addObject, deleteIndex
+and settings ACLs.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | string | (required) | The new index, such as `products_${ctx.scope}`; its identity (key `index:<name>`). |
+| `copy_from` | string | (required) | The template index. It must exist (copying a missing index would make an empty one), and differ from `name`. |
+| `scope` | list of `settings`, `synonyms`, `rules` | everything | Copy only these, without records. |
+
+**Drift**: only existence. An index does not record what it was copied from, so changing `copy_from` or `scope`
+later copies nothing, and an edit of the copy's records or settings is not drift; a deleted copy is `missing` and
+is copied again. Destroy deletes the copy, never the template. Not listed for drift or adoption.
+
+### `xata.branch`
+
+A copy-on-write Postgres branch per scope on the Xata platform, a child of a parent branch
+(`POST /organizations/{org}/projects/{project}/branches`, `mode: inherit`). A new branch takes a moment to come up:
+`apply` polls it until its status is healthy (a fault fails the line; not healthy within
+`SPONSON_XATA_READY_TIMEOUT_MS`, ten minutes by default, is `WAIT_TIMEOUT`, and the next run finds the branch by
+name), then reads its credentials. Requires `providers.xata.organization` and `providers.xata.project` (ids) and
+`XATA_API_KEY`.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | string | (required) | The branch's name, such as `${ctx.scope}`; its identity (key `branch:<name>`). Xata does not keep names unique, so two branches with this name are refused (`PARAM_INVALID`), never guessed between. |
+| `parent_id` | string | (required) | The id of the branch to copy (`XATA_BRANCH_ID` of the parent), not its name. |
+
+Outputs: `branch_id`, and `connection_string` (sensitive), read from the credentials endpoint on every run, so a
+dependent added later gets it too. **Drift**: only existence. The parent is used when the branch is created and a
+branch cannot be moved, so changing `parent_id` later changes nothing; a deleted branch is `missing` and is created
+again (with a new connection string, passed on in that run). Destroy deletes the branch, never the parent. Not
+listed for drift or adoption.
+
+### `digitalocean.app`
+
+A DigitalOcean App Platform app per scope, created from an app spec the line carries whole, its environment
+variables included (App Platform has no pull request previews of its own; this is the app per pull request that
+DigitalOcean's GitHub action otherwise makes). Every create and update starts a deployment, which `apply` waits for
+until it is `ACTIVE` (`ERROR` or `CANCELED` fails the line; not live within `SPONSON_DIGITALOCEAN_DEPLOY_TIMEOUT_MS`,
+twenty minutes by default, is `WAIT_TIMEOUT`). Requires `DIGITALOCEAN_ACCESS_TOKEN` with the app scopes; no
+provider block.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `spec` | map | (required) | The whole [app spec](https://docs.digitalocean.com/products/app-platform/reference/app-spec/). `spec.name` (unique in the account) is the app's identity (key `app:<name>`), such as `web-${ctx.scope}`. Values may be literals, `${ctx.*}`, `{ from }` or `{ secret }`, at any depth. |
+| `wait` | boolean | `true` | Wait for the deployment. |
+
+Outputs: `app_id`, and `live_url` once the app has been deployed. **Drift** covers the fields the spec declares, read
+back from the live spec: the platform's defaults and anything else not declared are ignored, and the values of
+`type: SECRET` variables are not compared (they read back encrypted), so a console edit of a declared field is
+`changed`, an edit of a secret's value is not seen. An update sends the whole spec (`PUT`): a field set only in the
+console is removed by the next update. Destroy deletes the app. Not listed for drift or adoption.
+
 ### Outputs
 
 The outputs each built-in op declares. `immediate` outputs exist once the line is applied; `external` ones only after
@@ -942,6 +1004,11 @@ the named event. Sensitive outputs are never displayed, logged or written to rec
 | `netlify.env` | `deploy_preview_url` | external (`deploy`) | no |
 | `cloudflare.pages_env` | (none) | | |
 | `manual.step` | (none) | | |
+| `algolia.index` | `name` | immediate | no |
+| `xata.branch` | `branch_id` | immediate | no |
+| `xata.branch` | `connection_string` | immediate | yes |
+| `digitalocean.app` | `app_id` | immediate | no |
+| `digitalocean.app` | `live_url` | immediate | no |
 
 ### Once-only outputs
 
