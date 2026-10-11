@@ -1,5 +1,14 @@
 # sponson
 
+## 0.6.1
+
+### Patch Changes
+
+- 25c1dc4: Every package now carries an npm provenance attestation, so you can check it was built from this repository by its release workflow (`npm audit signatures`). 0.4.0 to 0.6.0 were published without one.
+- Updated dependencies [25c1dc4]
+  - @sponson/core@0.6.1
+  - @sponson/adapters@0.6.1
+
 ## 0.6.0
 
 ### Minor Changes
