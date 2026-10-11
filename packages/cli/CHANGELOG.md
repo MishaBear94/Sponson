@@ -1,5 +1,19 @@
 # sponson
 
+## 0.6.0
+
+### Minor Changes
+
+- 379caf9: New `cloud_run` adapter with one op, `cloud_run.revision`: a revision of an existing Google Cloud Run service per scope, made from the service's template with the line's image and environment variables (`{ from }` and `{ secret }` values included), tagged (`pr-42` by default) with its own URL as the `url` output, and given no traffic; `apply` waits for Cloud Run's operations and for the revision to be ready, drift covers the image and the declared variables, and destroy removes the tag. It authenticates with the token `gcloud auth print-access-token` prints and needs `providers.cloud_run.project` and `.region`; `production: true` in that block makes its lines need approval. Traffic is never moved: when a share of the service's traffic follows LATEST, the line is refused before any write unless it sets `pin_latest: true`, which pins that share to the revision serving it, as `gcloud run deploy --no-traffic` does (see docs/plan-format.md for what that means for later production deploys). `sponson init` detects Cloud Run, `AdapterAbout` gains `credentialCommand` for adapters that take a CLI's token, and the sim gained a Cloud Run provider. Covers the last uncovered row of the coverage matrix, `cloud-run-tag`.
+
+### Patch Changes
+
+- 7a7f598: The GitLab, CircleCI and Bitbucket templates under `integrations/` have now been run end to end in Docker against the fake cloud (`scripts/try-ci-templates.sh`: GitLab's through gitlab-ci-local, CircleCI's and Bitbucket's job by job in their images), which found two bugs. Bitbucket's `branches: main` pipeline started with its manual production step, which Pipelines rejects; it now starts with an automatic step. And in a CircleCI tag build or a Bitbucket tag pipeline, where there is no branch variable and the commit is checked out detached, the run context took the branch from git, so every tag got the scope `branch-HEAD`; the tag (`CIRCLE_TAG`, `BITBUCKET_TAG`) now stands for the branch, as `CI_COMMIT_REF_NAME` and `GITHUB_REF_NAME` already do. The templates now pin `sponson@0.5.0`.
+- Updated dependencies [379caf9]
+- Updated dependencies [379caf9]
+  - @sponson/adapters@0.6.0
+  - @sponson/core@0.6.0
+
 ## 0.5.0
 
 ### Minor Changes
