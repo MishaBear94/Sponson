@@ -1,0 +1,167 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Auth0 Management API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: auth0
+title: Auth0
+category: auth
+verified_on: "2026-10-11"
+docs:
+  - title: Get Management API access tokens for production
+    url: https://auth0.com/docs/secure/tokens/access-tokens/management-api-access-tokens/get-management-api-access-tokens-for-production
+  - title: Management API v2, get a client
+    url: https://auth0.com/docs/api/management/v2/clients/get-clients-by-id
+  - title: Management API v2, update a client
+    url: https://auth0.com/docs/api/management/v2/clients/patch-clients-by-id
+  - title: Auth0 Terraform provider, configuration (conventional variable names)
+    url: https://raw.githubusercontent.com/auth0/terraform-provider-auth0/main/docs/index.md
+api:
+  base_url_env: AUTH0_API_URL
+  auth:
+    oauth2_client_credentials:
+      token_url: /oauth/token
+      token_url_env: AUTH0_TOKEN_URL
+      client_id_env: AUTH0_CLIENT_ID
+      client_secret_env: AUTH0_CLIENT_SECRET
+      audience: /api/v2/
+base_url_example: https://acme.eu.auth0.com/api/v2
+assumptions:
+  - id: AU1
+    verified: true
+    text: "A machine-to-machine application gets a Management API token from `POST https://<tenant>/oauth/token` (form-encoded `grant_type=client_credentials`, `client_id`, `client_secret`, `audience`); the audience is the Management API's identifier `https://<tenant>/api/v2/`. The answer has `access_token`, `expires_in` (86400 in the example) and `token_type: Bearer`. The recipe writes both as paths, so a plan's `base_url: https://<tenant>/api/v2` names the tenant once."
+    source: https://auth0.com/docs/secure/tokens/access-tokens/management-api-access-tokens/get-management-api-access-tokens-for-production
+  - id: AU2
+    verified: true
+    text: "`GET /api/v2/clients/{id}` answers the application with its `callbacks`, `allowed_logout_urls`, `web_origins` and `allowed_origins` arrays, which only a token with `read:clients` (or `read:client_keys`) receives. `fields` with `include_fields=true` limits the answer to the listed fields, so the recipe never reads the client secret."
+    source: https://auth0.com/docs/api/management/v2/clients/get-clients-by-id
+  - id: AU3
+    verified: true
+    text: "`PATCH /api/v2/clients/{id}` (scope `update:clients`) updates an application; `callbacks`, `allowed_logout_urls`, `web_origins` and `allowed_origins` are arrays of strings, and the body needs at least one property, so a write sends the one array alone."
+    source: https://auth0.com/docs/api/management/v2/clients/patch-clients-by-id
+  - id: AU4
+    verified: false
+    text: "An array sent in a PATCH replaces the stored array whole (it is not merged), so the recipe sends the full list read just before with one URL added or removed. The reference does not say so for these fields."
+  - id: AU5
+    verified: false
+    text: "Updates have no precondition (no ETag or version): the line locks the application (`lockOn`, one lock per tenant and client id, shared by the four ops) against other Sponson runs, and a console edit made between the read and the write can still be lost (the next apply then reports it as drift)."
+  - id: AU6
+    verified: false
+    text: "URLs are stored and read back exactly as written (no trailing slash added or case changed), so a URL identifies its entry."
+  - id: AU7
+    verified: true
+    text: "`AUTH0_CLIENT_ID` and `AUTH0_CLIENT_SECRET` are the variables the Auth0 Terraform provider reads for a machine-to-machine client."
+    source: https://raw.githubusercontent.com/auth0/terraform-provider-auth0/main/docs/index.md
+  - id: AU8
+    verified: false
+    text: "The audience stays the tenant's canonical domain when the tenant has a custom domain, so `base_url` names the canonical domain (`<tenant>.<region>.auth0.com`), not the custom one."
+ops:
+  callback_url:
+    kind: list_item
+    title: Application callback URL
+    summary: "One URL in an Auth0 application's Allowed Callback URLs (`callbacks`), such as the preview's `/callback`; usually `{ from: <deploy line>.preview_url }` joined with the path in the app. Added by read-modify-write of the list under a lock on the application, removed on destroy; every other URL is left as it is. A URL removed in the Dashboard is drift (`missing`) that the next apply puts back."
+    covers: [auth0-callbacks]
+    params:
+      client_id:
+        type: string
+        required: true
+        description: The application's Client ID.
+        example: AbC123dEf456GhI789jKl012MnO345pQ
+      url:
+        type: string
+        required: true
+        pattern: "^https?://\\S+$"
+        description: "The callback URL, exactly as the application sends it as `redirect_uri`."
+        example: "https://${ctx.scope}.preview.example.app/callback"
+    http:
+      parent:
+        path: "/clients/{client_id}"
+        read_path: "/clients/{client_id}?fields=callbacks,allowed_logout_urls,web_origins,allowed_origins&include_fields=true"
+      list_path: /callbacks
+      item: { param: url }
+    sim:
+      objects:
+        "/clients/{client_id}": { callbacks: [https://app.example.com/callback], allowed_logout_urls: [https://app.example.com], web_origins: [https://app.example.com], allowed_origins: [] }
+    live:
+      params: { client_id: SPONSON_LIVE_AUTH0_APP_CLIENT_ID }
+  logout_url:
+    kind: list_item
+    title: Application allowed logout URL
+    summary: "One URL in an Auth0 application's Allowed Logout URLs (`allowed_logout_urls`), where `/v2/logout` may return the user, such as the preview's home page. Read-modify-write of the list under the application's lock; removed on destroy; every other URL is left as it is."
+    covers: [auth0-callbacks]
+    params:
+      client_id:
+        type: string
+        required: true
+        description: The application's Client ID.
+        example: AbC123dEf456GhI789jKl012MnO345pQ
+      url:
+        type: string
+        required: true
+        pattern: "^https?://\\S+$"
+        description: "The URL the application passes as `returnTo` on logout."
+        example: "https://${ctx.scope}.preview.example.app"
+    http:
+      parent:
+        path: "/clients/{client_id}"
+        read_path: "/clients/{client_id}?fields=callbacks,allowed_logout_urls,web_origins,allowed_origins&include_fields=true"
+      list_path: /allowed_logout_urls
+      item: { param: url }
+    sim:
+      objects:
+        "/clients/{client_id}": { callbacks: [https://app.example.com/callback], allowed_logout_urls: [https://app.example.com], web_origins: [https://app.example.com], allowed_origins: [] }
+    live:
+      params: { client_id: SPONSON_LIVE_AUTH0_APP_CLIENT_ID }
+  web_origin:
+    kind: list_item
+    title: Application allowed web origin
+    summary: "One origin in an Auth0 application's Allowed Web Origins (`web_origins`), which silent authentication and the SPA SDKs' token refresh need for the preview's origin. Read-modify-write of the list under the application's lock; removed on destroy; every other origin is left as it is."
+    covers: [auth0-callbacks]
+    params:
+      client_id:
+        type: string
+        required: true
+        description: The application's Client ID.
+        example: AbC123dEf456GhI789jKl012MnO345pQ
+      origin:
+        type: string
+        required: true
+        pattern: "^https?://[^/\\s]+$"
+        description: "The origin, scheme and host without a path (`https://pr-42.preview.example.app`)."
+        example: "https://${ctx.scope}.preview.example.app"
+    http:
+      parent:
+        path: "/clients/{client_id}"
+        read_path: "/clients/{client_id}?fields=callbacks,allowed_logout_urls,web_origins,allowed_origins&include_fields=true"
+      list_path: /web_origins
+      item: { param: origin }
+    sim:
+      objects:
+        "/clients/{client_id}": { callbacks: [https://app.example.com/callback], allowed_logout_urls: [https://app.example.com], web_origins: [https://app.example.com], allowed_origins: [] }
+    live:
+      params: { client_id: SPONSON_LIVE_AUTH0_APP_CLIENT_ID }
+  allowed_origin:
+    kind: list_item
+    title: Application allowed origin (CORS)
+    summary: "One origin in an Auth0 application's Allowed Origins (CORS, `allowed_origins`), for a preview that calls Auth0 from the browser across origins (embedded login, cross-origin authentication). Read-modify-write of the list under the application's lock; removed on destroy; every other origin is left as it is."
+    covers: [auth0-callbacks]
+    params:
+      client_id:
+        type: string
+        required: true
+        description: The application's Client ID.
+        example: AbC123dEf456GhI789jKl012MnO345pQ
+      origin:
+        type: string
+        required: true
+        pattern: "^https?://[^/\\s]+$"
+        description: "The origin, scheme and host without a path (`https://pr-42.preview.example.app`)."
+        example: "https://${ctx.scope}.preview.example.app"
+    http:
+      parent:
+        path: "/clients/{client_id}"
+        read_path: "/clients/{client_id}?fields=callbacks,allowed_logout_urls,web_origins,allowed_origins&include_fields=true"
+      list_path: /allowed_origins
+      item: { param: origin }
+    sim:
+      objects:
+        "/clients/{client_id}": { callbacks: [https://app.example.com/callback], allowed_logout_urls: [https://app.example.com], web_origins: [https://app.example.com], allowed_origins: [] }
+    live:
+      params: { client_id: SPONSON_LIVE_AUTH0_APP_CLIENT_ID }

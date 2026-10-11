@@ -1,0 +1,109 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Kinde Management API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: kinde
+title: Kinde
+category: auth
+verified_on: "2026-10-11"
+docs:
+  - title: Kinde Management API (OpenAPI specification)
+    url: https://api-spec.kinde.com/kinde-management-api-spec.yaml
+  - title: Access the Kinde Management API
+    url: https://docs.kinde.com/developer-tools/kinde-api/connect-to-kinde-api/
+  - title: Kinde Management API JS SDK (conventional variable names)
+    url: https://github.com/kinde-oss/management-api-js
+api:
+  base_url_env: KINDE_API_URL
+  auth:
+    oauth2_client_credentials:
+      token_url: /oauth2/token
+      token_url_env: KINDE_TOKEN_URL
+      client_id_env: KINDE_MANAGEMENT_CLIENT_ID
+      client_secret_env: KINDE_MANAGEMENT_CLIENT_SECRET
+      audience: /api
+base_url_example: https://acme.kinde.com/api/v1
+assumptions:
+  - id: KI1
+    verified: true
+    text: "A machine-to-machine application authorized for the Management API gets a token from `POST https://<business>.kinde.com/oauth2/token` (form-encoded `grant_type=client_credentials`, `client_id`, `client_secret`, `audience=https://<business>.kinde.com/api`); API calls go to `https://<business>.kinde.com/api/v1/…`. The recipe writes the token URL and audience as paths, so a plan's `base_url: https://<business>.kinde.com/api/v1` names the business once."
+    source: https://docs.kinde.com/developer-tools/kinde-api/connect-to-kinde-api/
+  - id: KI2
+    verified: true
+    text: "`GET /api/v1/applications/{app_id}/auth_redirect_urls` (scope `read:applications_redirect_uris`) answers `{ redirect_urls: [...] }`; `PUT` on the same path (scope `update:applications_redirect_uris`) replaces all of an application's callback URLs with the body's `urls` array. (`POST` adds and `DELETE ?urls=` removes; the recipe replaces the list it read, under a lock, so that one apply is one idempotent write.)"
+    source: https://api-spec.kinde.com/kinde-management-api-spec.yaml
+  - id: KI3
+    verified: true
+    text: "`GET /api/v1/applications/{app_id}/auth_logout_urls` answers `{ logout_urls: [...] }` and `PUT` replaces them with the body's `urls` array, as for callback URLs."
+    source: https://api-spec.kinde.com/kinde-management-api-spec.yaml
+  - id: KI4
+    verified: true
+    text: "The audience is always the business's kinde.com subdomain (`https://<business>.kinde.com/api`), even when a custom domain serves sign-in, so `base_url` names the kinde.com subdomain."
+    source: https://docs.kinde.com/developer-tools/kinde-api/connect-to-kinde-api/
+  - id: KI5
+    verified: true
+    text: "`KINDE_MANAGEMENT_CLIENT_ID` and `KINDE_MANAGEMENT_CLIENT_SECRET` are the variables Kinde's Management API SDK reads for the machine-to-machine client."
+    source: https://github.com/kinde-oss/management-api-js
+  - id: KI6
+    verified: false
+    text: "A `PUT` with an empty `urls` list is accepted and leaves the application with no URLs of that kind (destroying the last preview URL of an application that has no others)."
+  - id: KI7
+    verified: false
+    text: "URLs are read back exactly as written (no normalisation), and the replace has no precondition: the line locks the list (`lockOn`) against other Sponson runs; a console edit made between the read and the write can still be lost."
+ops:
+  callback_url:
+    kind: list_item
+    title: Application callback URL
+    summary: "One URL in a Kinde application's Allowed callback URLs, such as the preview's `/api/auth/kinde_callback`. Read-modify-write: the list is read (`redirect_urls`) and replaced (`urls`) with the URL added, under a lock on the list; removed on destroy; every other URL is left as it is."
+    covers: [kinde-callbacks]
+    params:
+      app_id:
+        type: string
+        required: true
+        description: The application's id (its Client ID in the Kinde dashboard).
+        example: 3b0b5c6c8fcc464fab397f4969b5f482
+      url:
+        type: string
+        required: true
+        pattern: "^https?://\\S+$"
+        description: "The callback URL, exactly as the SDK sends it (`KINDE_REDIRECT_URL` / `KINDE_SITE_URL` + the callback path)."
+        example: "https://${ctx.scope}.preview.example.app/api/auth/kinde_callback"
+    http:
+      parent:
+        path: "/applications/{app_id}/auth_redirect_urls"
+        method: PUT
+        write_list_path: /urls
+      list_path: /redirect_urls
+      item: { param: url }
+    sim:
+      objects:
+        "/applications/{app_id}/auth_redirect_urls": { redirect_urls: [https://app.example.com/api/auth/kinde_callback] }
+    live:
+      params: { app_id: SPONSON_LIVE_KINDE_APP_ID }
+  logout_url:
+    kind: list_item
+    title: Application allowed logout redirect URL
+    summary: "One URL in a Kinde application's Allowed logout redirect URLs, such as the preview's home page. Read (`logout_urls`) and replaced (`urls`) with the URL added, under a lock on the list; removed on destroy; every other URL is left as it is."
+    covers: [kinde-callbacks]
+    params:
+      app_id:
+        type: string
+        required: true
+        description: The application's id (its Client ID in the Kinde dashboard).
+        example: 3b0b5c6c8fcc464fab397f4969b5f482
+      url:
+        type: string
+        required: true
+        pattern: "^https?://\\S+$"
+        description: "The URL the SDK redirects to after logout (`KINDE_POST_LOGOUT_REDIRECT_URL`)."
+        example: "https://${ctx.scope}.preview.example.app"
+    http:
+      parent:
+        path: "/applications/{app_id}/auth_logout_urls"
+        method: PUT
+        write_list_path: /urls
+      list_path: /logout_urls
+      item: { param: url }
+    sim:
+      objects:
+        "/applications/{app_id}/auth_logout_urls": { logout_urls: [https://app.example.com] }
+    live:
+      params: { app_id: SPONSON_LIVE_KINDE_APP_ID }

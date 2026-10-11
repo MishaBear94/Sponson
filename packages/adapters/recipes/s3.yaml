@@ -92,8 +92,9 @@ ops:
         ID: { param: rule_id }
         MaxAgeSeconds: { param: max_age_seconds }
     sim:
-      provider_sim:
-        name: aws
-        path: /s3/assets
-        seed: { buckets: { assets: { cors: null } } }
-        list: /buckets/assets/cors
+      provider: aws
+      base_path: /aws/s3/assets
+      seed: { buckets: { assets: { cors: null } } }
+      present: /buckets/assets/cors/0
+      drift:
+        missing: { s3.assets.cors: "remove:sponson-pr-42" }

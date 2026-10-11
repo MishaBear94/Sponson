@@ -118,6 +118,11 @@ Adapters that do not define them behave exactly as before.
   `send: parent` the whole object back), then read again; the write counts only once the item is seen as planned,
   and is retried up to three times if a concurrent writer dropped it. Writes are sent as idempotent (`PUT`, or
   `PATCH`/`POST` with `idempotent: true`), since they set state, so a dropped connection is retried.
+- *Amended:* `parent.read_method: POST` reads the parent with a POST without a body, for an API whose read is an
+  action that changes nothing (Azure Resource Manager's `…/listAppSettings`, which has no GET). The read is sent as
+  idempotent, like a GET. The method joins the locator (`read_method`) only when it is `POST`, so existing record ids
+  are unchanged; the REST sim lists such paths in its seed's `reads` and keeps them out of the write log (R8), for
+  which `ProviderSim.isWrite` now also receives the provider's state.
 - Key: `<parent.path>#<list_path>=<item>`. The record id is the item's locator (paths, method, shape, item), so
   destroy removes exactly that item and nothing else. Every other item is left as it is and reported as
   `unmanaged` (`listScope`).
@@ -358,7 +363,7 @@ declared is real drift.
 
 - The Postmark server-and-webhook row is covered by two recipe lines in one plan
   (`scenarios/adapters/http-line-credential.yaml`, against a REST sim that accepts the server API only with a token it
-  generated for a server, assumption R8); Datadog's Synthetic tests are a recipe (R9: the sim's bulk delete), and S3's
+  generated for a server, assumption R9); Datadog's Synthetic tests are a recipe (R10: the sim's bulk delete), and S3's
   one-method CORS rules compare equal.
 - A line with `credential` leaves what it made when the scope is destroyed and its credential's object is kept: an
   explicit, per-line exception to invariant 8, like `destroy: keep`.

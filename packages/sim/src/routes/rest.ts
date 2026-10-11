@@ -19,8 +19,9 @@
  *       not in a collection are answered bare. A collection's style (seed `styles`, by collection path) changes the
  *       envelopes, the cursor's place, and the id's field and type, so that a recipe is tested in its provider's
  *       own response shapes. An object's style (by its path) may give it an `item_path` envelope for reads; writes
- *       go to the object itself. A create may be posted to another path than the collection's (seed `aliases`:
- *       `POST /gates/g/rule` adds to `/gates/g/rules`).
+ *       go to the object itself, and its `write_fields` store a written field under another name (an API that
+ *       reads `{ redirect_urls }` and replaces it with `{ urls }`). A create may be posted to another path than the
+ *       collection's (seed `aliases`: `POST /gates/g/rule` adds to `/gates/g/rules`).
  *   R3. A path is known once seeded or created: a POST to an unknown path creates the collection; a GET of an
  *       unknown path is 404. A create may choose the id (the id field, or the style's `id_from` field, in the
  *       body, like a flag key or a database name); otherwise the sim assigns `it_<n>` (the next integer with
@@ -51,10 +52,12 @@
  *       behind a scheme prefix such as `Authorization: Api-Key <key>`), HTTP Digest (RFC 7616, qop=auth; a
  *       request without valid credentials gets a 401 with a fresh challenge), and AWS SigV4 (the signature
  *       recomputed and compared; see ../auth.ts). Anything else is 401.
- *   R8. A style's `generated` fields (JSON pointers) are generated on create (`<field>_sim_<n>`) and stored, so every
+ *   R8. A path the seed lists in `reads` is a read sent as a POST (an Azure Resource Manager list action such as
+ *       `…/listAppSettings`): it answers the object it names, as a GET of that object would, and is not a write.
+ *   R9. A style's `generated` fields (JSON pointers) are generated on create (`<field>_sim_<n>`) and stored, so every
  *       read shows them: a server's API token. With the auth seed's `generated_header`, that header is accepted when
  *       it carries a value the sim generated (a credential that is another object's output).
- *   R9. A seeded `deletes` path takes a POST whose body names objects of a collection (a JSON pointer to an id or a
+ *   R10. A seeded `deletes` path takes a POST whose body names objects of a collection (a JSON pointer to an id or a
  *       list of ids, `{ public_ids: [...] }`) and removes them, answering `{ deleted: [ids] }`; 404 when none of
  *       them exists.
  */
@@ -88,6 +91,8 @@ export interface RestStyle {
   once_fields?: string[];
   /** A query parameter that names an object of the collection by id (`url`), assumption R3. */
   item_query?: string;
+  /** For an object: top-level fields a write names otherwise than a read, written name → stored name (R2). */
+  write_fields?: Record<string, string>;
   /**
    * Request headers (lower-case names) whose values a create or update stores as fields, for an API that takes an
    * object's settings in headers (QStash: `upstash-cron` → `cron`, `upstash-schedule-id` → `scheduleId`).
@@ -98,11 +103,11 @@ export interface RestStyle {
    * updates the one whose id the request chooses (an upsert): QStash's `POST /v2/schedules/<destination>`.
    */
   suffix_field?: string;
-  /** Fields (JSON pointers, `/ApiTokens/0`) generated on create and stored (assumption R8). */
+  /** Fields (JSON pointers, `/ApiTokens/0`) generated on create and stored (assumption R9). */
   generated?: string[];
 }
 
-/** A path whose POST deletes objects its body names (assumption R9): the collection, and where the ids are. */
+/** A path whose POST deletes objects its body names (assumption R10): the collection, and where the ids are. */
 export interface RestBulkDelete {
   collection: string;
   /** JSON pointer to the id, or to a list of ids, in the body. */
@@ -114,15 +119,17 @@ export interface RestState {
   collections: Record<string, RestItem[]>;
   objects: Record<string, Record<string, unknown>>;
   styles: Record<string, RestStyle>;
-  /** Paths whose POST deletes the objects its body names (R9). */
+  /** Paths whose POST deletes the objects its body names (R10). */
   deletes: Record<string, RestBulkDelete>;
-  /** Every value generated for a style's `generated` fields (R8). */
+  /** Every value generated for a style's `generated` fields (R9). */
   generated: string[];
   /** Paths that name a collection kept under another path, by path: a create posted elsewhere
    * (`/gates/g/rule` adds to `/gates/g/rules`), or a list at another URL (`/settings/all` lists `/settings`). */
   aliases: Record<string, string>;
   /** Further header names (lower-case) that carry a credential (assumption R1). */
   auth_headers: string[];
+  /** Paths read with a POST, by path: the object each answers (assumption R8). */
+  reads: Record<string, string>;
   /** Present when the seed configures real credentials (R7). */
   auth?: RestAuthState;
 }
@@ -147,7 +154,7 @@ export interface RestAuthSeed {
   digest?: DigestConfig;
   /** SigV4 access keys (id → secret) and the region and service requests must be signed for. */
   sigv4?: Omit<SigV4Config, "now">;
-  /** A header (lower-case) accepted when it carries a value the sim generated (R8): another object's token. */
+  /** A header (lower-case) accepted when it carries a value the sim generated (R9): another object's token. */
   generated_header?: string;
 }
 
@@ -169,9 +176,11 @@ export interface RestSeed {
   aliases?: Record<string, string>;
   /** Further header names that carry a credential, for an API whose header is not named `*-Key` or `*-Token`. */
   auth_headers?: string[];
+  /** Paths read with a POST (an ARM list action), by path: the object each answers (assumption R8). */
+  reads?: Record<string, string>;
   /** Real credentials (R7). */
   auth?: RestAuthSeed;
-  /** Paths whose POST deletes the objects its body names (R9), by path. */
+  /** Paths whose POST deletes the objects its body names (R10), by path. */
   deletes?: Record<string, RestBulkDelete>;
 }
 
@@ -188,8 +197,9 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
       collections: {},
       objects: byPath(structuredClone(seed?.objects ?? {})),
       styles: byPath(structuredClone(seed?.styles ?? {})),
-      aliases: Object.fromEntries(Object.entries(seed?.aliases ?? {}).map(([a, p]) => [normPath(a), normPath(p)])),
+      aliases: pathPairs(seed?.aliases),
       auth_headers: (seed?.auth_headers ?? []).map((h) => h.toLowerCase()),
+      reads: pathPairs(seed?.reads),
       deletes: bulkDeletesOf(seed?.deletes),
       generated: [],
     };
@@ -220,8 +230,8 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
     return false;
   },
 
-  isWrite(req) {
-    return !(req.method === "POST" && req.path === "/oauth/token");
+  isWrite(req, state) {
+    return !(req.method === "POST" && (req.path === "/oauth/token" || normPath(req.path) in state.reads));
   },
 
   authorized(headers, state, req) {
@@ -238,12 +248,12 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
   },
 };
 
-/** The seed's bulk-delete paths (R9), paths normalised. */
+/** The seed's bulk-delete paths (R10), paths normalised. */
 function bulkDeletesOf(seed: Record<string, RestBulkDelete> | undefined): Record<string, RestBulkDelete> {
   return Object.fromEntries(Object.entries(seed ?? {}).map(([p, d]) => [normPath(p), { collection: normPath(d.collection), ids: d.ids }]));
 }
 
-/** R8: the seed's `generated_header` carries a value the sim generated for an object. */
+/** R9: the seed's `generated_header` carries a value the sim generated for an object. */
 function carriesGenerated(headers: IncomingHttpHeaders, state: RestState): boolean {
   const name = state.auth?.generated_header?.toLowerCase();
   const v = name === undefined ? undefined : headers[name];
@@ -269,7 +279,7 @@ function authorized(headers: IncomingHttpHeaders, declared: string[]): boolean {
   return Object.entries(headers).some(([name, v]) => carries(name) && typeof v === "string" && v.trim() !== "");
 }
 
-type FullStyle = Required<Omit<RestStyle, "next_path" | "item_query" | "header_fields" | "suffix_field">> & Pick<RestStyle, "item_query"> & { next_path: string | null };
+type FullStyle = Required<Omit<RestStyle, "next_path" | "item_query" | "header_fields" | "suffix_field" | "write_fields">> & Pick<RestStyle, "item_query"> & { next_path: string | null };
 
 /** The style of the collection at `path`, every default filled in. */
 function styleOf(state: RestState, path: string): FullStyle {
@@ -375,6 +385,11 @@ function normPath(path: string): string {
   return path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
 }
 
+/** A seed map of path to path, both normalised. */
+function pathPairs(m: Record<string, string> | undefined): Record<string, string> {
+  return Object.fromEntries(Object.entries(m ?? {}).map(([a, p]) => [normPath(a), normPath(p)]));
+}
+
 /** A seed map keyed by normalised paths. */
 function byPath<T>(m: Record<string, T>): Record<string, T> {
   return Object.fromEntries(Object.entries(m).map(([p, v]) => [normPath(p), v]));
@@ -420,6 +435,12 @@ function queriedItem(state: RestState, path: string, query: URLSearchParams | un
 
 const notFound = (): Reply => error(404, "not found");
 
+/** R8: the object a read sent as a POST names, answered as a GET of it would be. */
+function readObject(state: RestState, path: string): Reply {
+  const object = state.objects[path];
+  return object ? new Reply(200, envelope(state.styles[path]?.item_path ?? "", object)) : notFound();
+}
+
 /** The fields the request's headers set, by the collection's `header_fields`. */
 function headerFields(state: RestState, collection: string, headers: Record<string, string>): Record<string, unknown> {
   const map = state.styles[collection]?.header_fields ?? {};
@@ -455,7 +476,7 @@ function create(core: SimCore, state: RestState, path: string, raw: unknown, hea
   const clash = list.find((i) => (chosen !== undefined && i[style.id_field] === chosen) || (body.name !== undefined && i.name === body.name));
   if (clash) return error(409, `already exists: ${String(clash[style.id_field])}`);
   const item: RestItem = { ...structuredClone(body), [style.id_field]: chosen ?? newId(core, state, path) };
-  // Fields generated and stored (assumption R8): a server's token, readable afterwards.
+  // Fields generated and stored (assumption R9): a server's token, readable afterwards.
   for (const pointer of style.generated) {
     const value = `${pointer.split("/")[1] ?? "field"}_sim_${core.nextId("")}`;
     state.generated.push(value);
@@ -479,7 +500,7 @@ function setPointer(doc: Record<string, unknown>, pointer: string, value: unknow
   });
 }
 
-/** POST to a `deletes` path (assumption R9): remove the objects the body names. */
+/** POST to a `deletes` path (assumption R10): remove the objects the body names. */
 function bulkDelete(state: RestState, spec: RestBulkDelete, body: unknown): Reply {
   const named = spec.ids.slice(1).split("/").reduce<unknown>((cur, t) => (isRecord(cur) ? cur[t] : Array.isArray(cur) ? cur[Number(t)] : undefined), body);
   const ids = (Array.isArray(named) ? named : [named]).filter(isId).map(String);
@@ -491,10 +512,16 @@ function bulkDelete(state: RestState, spec: RestBulkDelete, body: unknown): Repl
   return new Reply(200, { deleted: gone.map((i) => i[idf]) });
 }
 
+/** A write to the object at `path` with its style's `write_fields` stored under their read names (R2). */
+function renamed(state: RestState, path: string, body: Record<string, unknown>): Record<string, unknown> {
+  const names = state.styles[path]?.write_fields ?? {};
+  return Object.fromEntries(Object.entries(body).map(([k, v]) => [names[k] ?? k, v]));
+}
+
 function patch(state: RestState, t: Target, body: unknown): Reply {
   if (!isRecord(body)) return error(400, "body must be a JSON object");
   if (t.kind === "object") {
-    mergePatch(t.object, body);
+    mergePatch(t.object, renamed(state, t.path, body));
     return new Reply(200, t.object);
   }
   if (t.kind !== "item") return notFound();
@@ -522,7 +549,7 @@ function put(state: RestState, t: Target, body: unknown, raw: string): Reply {
   if (!isRecord(body)) return error(400, "body must be a JSON object");
   if (t.kind === "none") return putNew(state, raw, body);
   if (t.kind === "object") {
-    state.objects[t.path] = structuredClone(body);
+    state.objects[t.path] = structuredClone(renamed(state, t.path, body));
     return new Reply(200, state.objects[t.path]);
   }
   if (t.kind !== "item") return notFound();
@@ -555,6 +582,8 @@ const routes = router<RestState>(
     }),
 
     route("POST", "/*path", ({ core, state, params, body, headers }) => {
+      const read = state.reads[normPath(`/${params.path}`)];
+      if (read !== undefined) return readObject(state, read);
       const bulk = state.deletes[normPath(`/${params.path}`)];
       if (bulk) return bulkDelete(state, bulk, body);
       const suffix = suffixTarget(state, normPath(`/${params.path}`));

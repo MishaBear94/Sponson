@@ -57,15 +57,16 @@ async function handle(state: SimState, req: IncomingMessage, res: ServerResponse
 }
 
 /** `/<provider>` → its own say on which POSTs change nothing (a token endpoint, a GraphQL query). */
-const WRITES: Record<string, (req: { method: string; path: string; body: unknown }) => boolean> = Object.fromEntries(
-  providerEntries().flatMap(([name, p]) => (p.isWrite ? [[`/${name}`, (req: { method: string; path: string; body: unknown }) => p.isWrite!(req)]] : [])),
+type WriteCheck = (state: SimState, req: { method: string; path: string; body: unknown }) => boolean;
+const WRITES: Record<string, WriteCheck> = Object.fromEntries(
+  providerEntries().flatMap(([name, p]): Array<[string, WriteCheck]> => (p.isWrite ? [[`/${name}`, (state, req) => p.isWrite!(req, state.provider(name))]] : [])),
 );
 
 /** Whether a POST, PUT, PATCH or DELETE goes into the write log. */
-function changesState(method: string, url: URL, body: unknown): boolean {
+function changesState(state: SimState, method: string, url: URL, body: unknown): boolean {
   const prefix = url.pathname.match(/^\/[^/]+/)?.[0] ?? "";
   const check = WRITES[prefix];
-  return check ? check({ method, path: url.pathname.slice(prefix.length) || "/", body }) : true;
+  return check ? check(state, { method, path: url.pathname.slice(prefix.length) || "/", body }) : true;
 }
 
 type AuthCheck = (state: SimState, headers: IncomingHttpHeaders, req: AuthRequest) => boolean | Reply;
@@ -86,7 +87,7 @@ function authorized(state: SimState, headers: IncomingHttpHeaders, req: AuthRequ
 async function serveProvider(state: SimState, req: IncomingMessage, res: ServerResponse, { method, url, raw, body }: { method: string; url: URL; raw: string; body: unknown }): Promise<void> {
   if (state.chaos.latency_ms > 0) await sleep(state.chaos.latency_ms);
 
-  const isWrite = WRITE_METHODS.has(method) && changesState(method, url, body);
+  const isWrite = WRITE_METHODS.has(method) && changesState(state, method, url, body);
   const action = state.chaosFor(method, url.pathname);
   // Held: performed (and logged) only once released, like a request stuck in the provider's queue.
   if (action?.kind === "hold") await state.hold();

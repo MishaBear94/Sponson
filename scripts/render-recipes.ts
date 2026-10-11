@@ -17,23 +17,27 @@ export function recipeLink(provider: string, op: string): string {
   return `[\`${provider}.${op}\`](recipes.md#${slug(recipeHeading(provider, op).slice(4))})`;
 }
 
-/** One credential header, as the docs show it: the variable, the header and any literal prefix. */
-function header(h: Record<string, unknown>): string {
-  const prefix = typeof h.prefix === "string" ? `, sent as \`${h.prefix}<value>\`` : "";
-  return `\`${String(h.value_env)}\` (header \`${String(h.header)}\`${prefix})`;
-}
-
-/** The recipe's credential, by form: the variables it reads (never values), or the command that prints a token. */
 function credential(api: Record<string, unknown>): string {
   const auth = api.auth as Record<string, unknown>;
-  const pair = (form: string) => auth[form] as Record<string, string>;
   if (typeof auth.bearer_env === "string") return `\`${auth.bearer_env}\` (bearer)`;
-  if (typeof auth.value_env === "string") return header(auth);
-  if (Array.isArray(auth.headers)) return (auth.headers as Array<Record<string, unknown>>).map(header).join(" and ");
-  if (Array.isArray(auth.command)) return `the token \`${(auth.command as string[]).join(" ")}\` prints (bearer)`;
-  if (auth.aws_sigv4) return `\`${pair("aws_sigv4").access_key_id_env}\` / \`${pair("aws_sigv4").secret_access_key_env}\` (AWS SigV4, ${pair("aws_sigv4").service} in ${pair("aws_sigv4").region})`;
-  const form = auth.digest ? "digest" : "basic";
-  return `\`${pair(form).user_env}\` / \`${pair(form).password_env}\` (${form === "digest" ? "HTTP Digest" : "basic"})`;
+  if (typeof auth.value_env === "string") return `\`${String(auth.value_env)}\` (header \`${String(auth.header)}\`${typeof auth.prefix === "string" ? `, after \`${auth.prefix.trimEnd()}\`` : ""})`;
+  const oauth = auth.oauth2_client_credentials as Record<string, string> | undefined;
+  if (oauth) return `\`${oauth.client_id_env}\` / \`${oauth.client_secret_env}\` (OAuth2 client credentials)`;
+  if (Array.isArray(auth.command)) return `the token \`${auth.command.join(" ")}\` prints (bearer)`;
+  if (typeof auth.aws_sigv4 === "object" && auth.aws_sigv4 !== null) {
+    const s = auth.aws_sigv4 as Record<string, string>;
+    return `\`${s.access_key_id_env}\` / \`${s.secret_access_key_env}\`${s.session_token_env ? ` (and \`${s.session_token_env}\`)` : ""} (AWS SigV4, \`${s.service}\` in \`${s.region}\`)`;
+  }
+  return otherCredential(auth);
+}
+
+/** The forms `credential` leaves: several headers, HTTP Digest, Basic. */
+function otherCredential(auth: Record<string, unknown>): string {
+  if (Array.isArray(auth.headers)) return (auth.headers as Array<Record<string, string>>).map((h) => `\`${h.value_env}\` (header \`${h.header}\`)`).join(" and ");
+  const digest = auth.digest as Record<string, string> | undefined;
+  if (digest) return `\`${digest.user_env}\` / \`${digest.password_env}\` (HTTP Digest)`;
+  const basic = auth.basic as Record<string, string>;
+  return `\`${basic.user_env}\` / \`${basic.password_env}\` (basic)`;
 }
 
 /** A recipe's http spec as YAML, each `{ param: <name> }` on one line as the recipe file writes it. */
@@ -115,6 +119,18 @@ function refused(r: { prefixes: string[]; unless_env: string }): string {
   return `credentials starting ${r.prefixes.map((p) => `\`${p}\``).join(" or ")} are refused (\`PROVIDER_AUTH\`) unless \`${r.unless_env}=1\`; a plan cannot override this`;
 }
 
+/** An OAuth2 recipe's token endpoint and audience (a path: on the origin of the plan's `base_url`), as table rows. */
+function tokenRows(api: Record<string, unknown>): string[] {
+  const oauth = (api.auth as Record<string, unknown>).oauth2_client_credentials as Record<string, string> | undefined;
+  if (!oauth) return [];
+  const where = (v: string) => (v.startsWith("/") ? `\`${v}\` on the origin of \`base_url\`` : `\`${v}\``);
+  return [
+    `| Token endpoint | ${where(oauth.token_url!)}; override: \`${oauth.token_url_env}\` |`,
+    ...(oauth.audience ? [`| Audience | ${where(oauth.audience)} |`] : []),
+    ...(oauth.scope ? [`| Scope | \`${oauth.scope}\` |`] : []),
+  ];
+}
+
 function providerSection(r: Recipe): string[] {
   const api = r.api;
   return [
@@ -129,6 +145,7 @@ function providerSection(r: Recipe): string[] {
     `| \`base_url\` | ${typeof api.base_url === "string" ? `\`${api.base_url}\`` : "none: set it in the provider block"} |`,
     `| \`base_url_env\` | \`${String(api.base_url_env)}\` |`,
     `| Credential | ${credential(api)} |`,
+    ...tokenRows(api),
     ...(api.headers ? [`| \`headers\` | ${cell(JSON.stringify(api.headers))} |`] : []),
     ...(api.encoding ? [`| \`encoding\` | \`${String(api.encoding)}\` |`] : []),
     ...(api.refuse_credential ? [`| \`refuse_credential\` | ${refused(api.refuse_credential as { prefixes: string[]; unless_env: string })} |`] : []),

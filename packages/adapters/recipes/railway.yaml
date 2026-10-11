@@ -1,0 +1,122 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Railway public GraphQL API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: railway
+title: Railway
+category: deploy
+verified_on: "2026-10-11"
+docs:
+  - title: Public API (endpoint, tokens, errors)
+    url: https://docs.railway.com/reference/public-api
+  - title: Manage Variables with the Public API
+    url: https://docs.railway.com/guides/manage-variables
+  - title: Environments (PR environments)
+    url: https://docs.railway.com/reference/environments
+  - title: CLI (RAILWAY_TOKEN and RAILWAY_API_TOKEN)
+    url: https://docs.railway.com/guides/cli
+  - title: railwayapp/cli GraphQL schema
+    url: https://github.com/railwayapp/cli/blob/master/src/gql/schema.json
+api:
+  base_url: https://backboard.railway.com/graphql/v2
+  base_url_env: RAILWAY_API_URL
+  auth: { bearer_env: RAILWAY_API_TOKEN }
+assumptions:
+  - id: RY1
+    verified: true
+    text: "The public API is one GraphQL endpoint, `https://backboard.railway.com/graphql/v2`; account, workspace and OAuth tokens are sent as `Authorization: Bearer <token>`, project tokens in `Project-Access-Token` instead (a project token therefore needs a hand-written block with `auth: { header: Project-Access-Token, value_env: RAILWAY_TOKEN }`)."
+    source: https://docs.railway.com/reference/public-api
+  - id: RY2
+    verified: true
+    text: "The Railway CLI reads an account or workspace token from `RAILWAY_API_TOKEN` and a project token from `RAILWAY_TOKEN`, so the bearer credential of this recipe is `RAILWAY_API_TOKEN`."
+    source: https://docs.railway.com/guides/cli
+  - id: RY3
+    verified: true
+    text: "Failures may be HTTP 200 with an `errors` array (a denied query among them); 400 is a parse or validation failure, 429 a rate limit with `Retry-After`. Queries are safe to retry; a mutation only when no answer arrived."
+    source: https://docs.railway.com/reference/public-api
+  - id: RY4
+    verified: true
+    text: "`variables(projectId, environmentId, serviceId?, unrendered?)` answers the variables of a service in an environment (without `serviceId`, the environment's shared variables) as a map of name to value; `unrendered: true` answers references such as `${{Postgres.DATABASE_URL}}` as written instead of resolved, so a value is compared as it was set."
+    source: https://docs.railway.com/guides/manage-variables
+  - id: RY5
+    verified: true
+    text: "`variableUpsert(input: { projectId, environmentId, serviceId?, name, value, skipDeploys? })` creates or replaces one variable (without `serviceId`, a shared variable); by default it triggers a redeploy of the service (`skipDeploys` defaults to false)."
+    source: https://docs.railway.com/guides/manage-variables
+  - id: RY6
+    verified: true
+    text: "`variableDelete(input: { projectId, environmentId, serviceId?, name })` deletes one variable."
+    source: https://docs.railway.com/guides/manage-variables
+  - id: RY7
+    verified: true
+    text: "Railway creates a PR environment when a pull request is opened (with PR environments enabled) and deletes it, with its variables, when the pull request is merged or closed. The recipe takes the environment's id as a param: the plan copies it from the dashboard, `railway status`, or a line that outputs it; the recipe does not look environments up by name (their naming is not documented)."
+    source: https://docs.railway.com/reference/environments
+  - id: RY8
+    verified: false
+    text: "Deleting a variable whose environment Railway already removed (the pull request closed) is an error saying the environment was not found, which the adapter reads as already gone; deleting a variable that does not exist answers `true`."
+  - id: RY9
+    verified: false
+    text: "Sponson does not wait for the redeploy a write triggers (RY5): a step that needs the running service to see the value waits on Railway's deployment status itself. A reference value written as `${{…}}` is not supported in a plan, where `${…}` is Sponson's own interpolation."
+ops:
+  variable:
+    kind: resource
+    title: Variable of a service in an environment
+    summary: "One variable of a service (or, without `service_id`, a shared variable) in a Railway environment, typically the PR environment Railway created. Upserted with `variableUpsert`, read unrendered from `variables`, removed with `variableDelete`. A console edit of the value is drift. Railway redeploys the service after each write unless `skip_deploys` is set; Sponson does not wait for that deploy (RY9)."
+    covers: [railway-variables]
+    params:
+      project_id:
+        type: string
+        required: true
+        description: The project's id.
+        example: prj-railway-demo
+      environment_id:
+        type: string
+        required: true
+        description: The environment's id (for a PR environment, the one Railway created for the pull request; RY7).
+        example: env-pr-42
+      service_id:
+        type: string
+        description: The service's id; without it, the variable is shared by the environment's services.
+        example: svc-web
+      name:
+        type: string
+        required: true
+        pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+        description: The variable's name.
+        example: API_URL
+      value:
+        type: string
+        required: true
+        description: The variable's value (may be a `{ secret }` reference).
+        example: "https://api-${ctx.scope}.example.app"
+      skip_deploys:
+        type: boolean
+        description: Do not redeploy the service after a write (Railway's default is to redeploy).
+    http:
+      read:
+        graphql:
+          query: "query variables($projectId: String!, $environmentId: String!, $serviceId: String, $unrendered: Boolean) { variables(projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId, unrendered: $unrendered) }"
+          variables: { projectId: { param: project_id }, environmentId: { param: environment_id }, serviceId: { param: service_id }, unrendered: true }
+          data_path: { join: ["/variables/", { param: name }] }
+      create:
+        graphql:
+          query: "mutation variableUpsert($input: VariableUpsertInput!) { variableUpsert(input: $input) }"
+          variables: { input: { projectId: { param: project_id }, environmentId: { param: environment_id }, serviceId: { param: service_id }, name: { param: name }, value: { param: value }, skipDeploys: { param: skip_deploys } } }
+          idempotent: true
+      update:
+        graphql:
+          query: "mutation variableUpsert($input: VariableUpsertInput!) { variableUpsert(input: $input) }"
+          variables: { input: { projectId: { param: project_id }, environmentId: { param: environment_id }, serviceId: { param: service_id }, name: { param: name }, value: { param: value }, skipDeploys: { param: skip_deploys } } }
+          idempotent: true
+      delete:
+        graphql:
+          query: "mutation variableDelete($input: VariableDeleteInput!) { variableDelete(input: $input) }"
+          variables: { input: { projectId: { param: project_id }, environmentId: { param: environment_id }, serviceId: { param: service_id }, name: { param: name } } }
+      fields:
+        value: { param: value }
+    sim:
+      provider: railway
+      seed: { environments: { env-pr-42: { projectId: prj-railway-demo, name: pr-42 } } }
+      present: /variables/env-pr-42~1svc-web/API_URL
+      drift:
+        changed: { vars.env-pr-42.svc-web.API_URL: "https://somewhere-else.example" }
+        missing: { vars.env-pr-42.svc-web.API_URL: delete }
+    live:
+      params: { project_id: SPONSON_LIVE_RAILWAY_PROJECT_ID, environment_id: SPONSON_LIVE_RAILWAY_ENVIRONMENT_ID, service_id: SPONSON_LIVE_RAILWAY_SERVICE_ID }

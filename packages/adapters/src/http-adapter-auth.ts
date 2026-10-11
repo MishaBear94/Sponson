@@ -67,7 +67,7 @@ export function envName(v: unknown, where: string, credential: boolean): string 
 }
 
 const AUTH_FORMS =
-  "`{ bearer_env: NAME }`, `{ header: X-Api-Key, value_env: NAME, prefix?: \"Api-Key \" }`, `{ headers: [{ header, value_env }, …] }`, `{ basic: { user_env, password_env } }`, `{ oauth2_client_credentials: { token_url, client_id_env, client_secret_env } }`, `{ command: [argv…] }`, `{ aws_sigv4: { region, service, access_key_id_env, secret_access_key_env } }` or `{ digest: { user_env, password_env } }`";
+  "`{ bearer_env: NAME }`, `{ header: X-Api-Key, value_env: NAME, prefix?: \"Api-Key \" }`, `{ headers: [{ header, value_env }, …] }`, `{ basic: { user_env, password_env } }`, `{ oauth2_client_credentials: { token_url, client_id_env, client_secret_env } }` (`token_url` and `audience` may be paths on the base URL's origin), `{ command: [argv…] }`, `{ aws_sigv4: { region, service, access_key_id_env, secret_access_key_env } }` or `{ digest: { user_env, password_env } }`";
 
 function subBlock(v: unknown, where: string, known: string[]): Record<string, unknown> {
   if (!isObject(v)) throw planError(`must be a map (${known.join(", ")})`, where);
@@ -87,6 +87,19 @@ function httpUrl(v: unknown, where: string): string {
   return v;
 }
 
+/**
+ * A value written as an absolute path (`/oauth/token`, `/api/v2/`) resolved against the origin of the block's own
+ * `base_url` (never its `base_url_env` override, so every runner and the ledger see one value); anything else as it
+ * is. A per-account API (an Auth0 tenant, a Kinde business) then names its account once, in `base_url`, and a
+ * recipe can say where the token endpoint and the audience are without knowing the account.
+ */
+function onBase(v: unknown, base: string | undefined, where: string): unknown {
+  if (typeof v !== "string" || !v.startsWith("/")) return v;
+  if (v.startsWith("//")) throw planError('must be an http(s) URL, or a path starting with a single "/" (resolved against the origin of `base_url`)', where);
+  if (base === undefined) throw planError("is a path, which needs the block's `base_url` to resolve against", where);
+  return new URL(v, base).href;
+}
+
 /** Form parameters every client-credentials request sets itself; `extra` may not override them. */
 const OAUTH_RESERVED = new Set(["grant_type", "client_id", "client_secret", "audience", "scope", "client_assertion", "client_assertion_type"]);
 
@@ -98,15 +111,15 @@ function stringMap(v: unknown, where: string): Record<string, string> {
   return v as Record<string, string>;
 }
 
-function parseOauth2(v: unknown, where: string): Auth {
+function parseOauth2(v: unknown, where: string, base?: string): Auth {
   const o = subBlock(v, where, ["token_url", "token_url_env", "client_id_env", "client_secret_env", "audience", "scope", "extra", "auth_method"]);
   const method = o.auth_method ?? "client_secret_post";
   if (method !== "client_secret_post" && method !== "client_secret_basic") throw planError("must be `client_secret_post` (the default) or `client_secret_basic`; `private_key_jwt` is not supported", `${where}.auth_method`);
-  const audience = optionalString(o.audience, `${where}.audience`);
+  const audience = onBase(optionalString(o.audience, `${where}.audience`), base, `${where}.audience`) as string | undefined;
   const scope = optionalString(o.scope, `${where}.scope`);
   return {
     kind: "oauth2",
-    tokenUrl: httpUrl(o.token_url, `${where}.token_url`),
+    tokenUrl: httpUrl(onBase(o.token_url, base, `${where}.token_url`), `${where}.token_url`),
     ...(o.token_url_env !== undefined ? { tokenUrlEnv: envName(o.token_url_env, `${where}.token_url_env`, false) } : {}),
     clientIdEnv: envName(o.client_id_env, `${where}.client_id_env`, false),
     clientSecretEnv: envName(o.client_secret_env, `${where}.client_secret_env`, true),
@@ -153,7 +166,7 @@ function parseUserPassword(v: unknown, where: string, kind: "basic" | "digest"):
   return { kind, userEnv: envName(o.user_env, `${where}.user_env`, false), passwordEnv: envName(o.password_env, `${where}.password_env`, true) };
 }
 
-const PARSERS: Record<string, (v: unknown, where: string) => Auth> = {
+const PARSERS: Record<string, (v: unknown, where: string, base?: string) => Auth> = {
   basic: (v, w) => parseUserPassword(v, w, "basic"),
   digest: (v, w) => parseUserPassword(v, w, "digest"),
   oauth2_client_credentials: parseOauth2,
@@ -161,8 +174,11 @@ const PARSERS: Record<string, (v: unknown, where: string) => Auth> = {
   aws_sigv4: parseSigv4,
 };
 
-/** `providers.http.<api>.auth`, checked: PLAN_INVALID naming the key at fault otherwise. */
-export function parseAuth(v: unknown, where: string): Auth {
+/**
+ * `providers.http.<api>.auth`, checked: PLAN_INVALID naming the key at fault otherwise. `base`: the block's
+ * `base_url`, which an OAuth2 `token_url` or `audience` written as a path is resolved against.
+ */
+export function parseAuth(v: unknown, where: string, base?: string): Auth {
   if (!isObject(v)) throw planError(`is required: ${AUTH_FORMS}`, where);
   const forms = Object.keys(PARSERS).filter((k) => v[k] !== undefined);
   if (forms.length > 1) throw planError(`declares ${forms.join(" and ")}: choose one`, where);
@@ -170,7 +186,7 @@ export function parseAuth(v: unknown, where: string): Auth {
     const key = forms[0]!;
     const extra = Object.keys(v).find((k) => k !== key);
     if (extra) throw planError(`unknown key \`${extra}\` next to \`${key}\``, where);
-    return PARSERS[key]!(v[key], `${where}.${key}`);
+    return PARSERS[key]!(v[key], `${where}.${key}`, base);
   }
   if (v.bearer_env !== undefined) {
     onlyKeys(v, ["bearer_env"], where);

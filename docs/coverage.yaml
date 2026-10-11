@@ -56,16 +56,20 @@ categories:
         provider: Railway
         side_effect: Variables in a PR environment (Railway creates PR environments natively)
         api_shape: GraphQL `variableUpsert(projectId, environmentId, serviceId, name, value)`, bearer; object per name; deployment status for a barrier
-        generic: Y (GraphQL requests, tested example in scenarios/adapters/http-graphql-railway.yaml; a deploy barrier is not expressible)
+        generic: Y (GraphQL requests; a deploy barrier is not expressible)
         priority: P1
-        covered_by: null
+        covered_by: recipe:railway.variable
+        note: the PR environment's id is a param; Sponson does not wait for the redeploy a write triggers
       - id: fly-secrets
         provider: Fly.io
         side_effect: Per-PR app (the usual pattern is one app per PR) plus its secrets
         api_shape: Machines API `api.machines.dev/v1/apps/{app}/secrets` (secret writes return a version, changed 2025) and GraphQL `setSecrets`; bearer; object; machines must be updated to see new secrets
-        generic: "P (secrets: Y with GraphQL requests, tested example in scenarios/adapters/http-graphql-fly.yaml; app lifecycle, restart: no)"
+        generic: "Y (the app through the Machines API; secrets through GraphQL requests, presence only: values are never readable)"
         priority: P1
-        covered_by: null
+        covered_by:
+          - recipe:fly_machines.app
+          - recipe:fly.secret
+        note: secrets before the PR's deploy; a later change needs `fly secrets deploy`
       - id: heroku-config-vars
         provider: Heroku
         side_effect: Review app per PR; config vars on it
@@ -78,23 +82,28 @@ categories:
         provider: AWS Amplify
         side_effect: Branch (per-PR previews built in); env vars per branch
         api_shape: "`UpdateBranch` `environmentVariables`, SigV4; **map** full replace"
-        generic: Y (`aws_sigv4`, the map sent whole; tested example in scenarios/adapters/http-sigv4-aws.yaml)
+        generic: Y (`aws_sigv4`, the map sent whole)
         priority: P2
-        covered_by: null
+        covered_by:
+          - recipe:amplify.branch
+          - recipe:amplify.branch_variable
+        note: variables before the branch's first build (no rebuild)
       - id: cloud-run-tag
         provider: Google Cloud Run
         side_effect: Tagged revision per PR (`--tag pr-42`), env vars on it
         api_shape: Admin API v2 / `gcloud run deploy --tag --update-env-vars`, Google OAuth; revision = whole service spec
-        generic: N (part of the deploy, not beside it)
+        generic: "P (the tag: `recipe:cloud_run.traffic_tag`, read-modify-write of `traffic` with the etag; the revision and its env vars are the deploy's)"
         priority: P2
         covered_by: null
+        note: "the tag only: recipe cloud_run.traffic_tag; the revision's env vars are set by the deploy"
       - id: azure-swa-settings
         provider: Azure Static Web Apps
         side_effect: Preview environment per PR (built in); app settings
         api_shape: ARM `PUT .../staticSites/{s}/builds/{env}/config/appsettings`, AAD token; **map** full replace
-        generic: P (AAD token)
+        generic: Y (`command` token from `az`; read with a POST list action, the map written whole)
         priority: P2
-        covered_by: null
+        covered_by: recipe:azure_swa.build_app_setting
+        note: after the PR's first deploy (the environment exists only then)
       - id: digitalocean-app
         provider: DigitalOcean App Platform
         side_effect: No native PR previews; app per PR via its GitHub action; envs in the app spec
@@ -185,7 +194,11 @@ categories:
         api_shape: Management API `PATCH /api/v2/clients/{id}`, bearer from client-credentials; **list** (each array replaced whole); no ETag
         generic: Y (list mode, token exchange)
         priority: P0
-        covered_by: null
+        covered_by:
+          - recipe:auth0.callback_url
+          - recipe:auth0.logout_url
+          - recipe:auth0.web_origin
+          - recipe:auth0.allowed_origin
       - id: supabase-auth-redirect
         provider: Supabase Auth
         side_effect: Preview URL in "Additional Redirect URLs"
@@ -199,7 +212,7 @@ categories:
         api_shape: Identity Toolkit `PATCH admin/v2/projects/{p}/config?updateMask=authorizedDomains`, Google OAuth; **list** full replace
         generic: Y (list mode, Google token)
         priority: P1
-        covered_by: null
+        covered_by: recipe:firebase.authorized_domain
       - id: workos-redirect
         provider: WorkOS
         side_effect: Redirect URI for AuthKit
@@ -220,14 +233,19 @@ categories:
         api_shape: "`PUT /api/v1/apps/{id}` (**list**, whole app object), `POST /api/v1/trustedOrigins` (object); `SSWS` token or OAuth"
         generic: Y (list mode; trusted origins object)
         priority: P2
-        covered_by: null
+        covered_by:
+          - recipe:okta.redirect_uri
+          - recipe:okta.post_logout_redirect_uri
+          - recipe:okta.trusted_origin
       - id: kinde-callbacks
         provider: Kinde
         side_effect: Callback and logout URLs on an application
-        api_shape: Management API `POST`/`PUT /api/v1/applications/{id}/auth_redirect_urls` (add / replace); M2M client-credentials token. Path from SDK docs, not the reference **(unverified)**
-        generic: Y (token exchange)
+        api_shape: Management API `GET`/`PUT /api/v1/applications/{id}/auth_redirect_urls` and `…/auth_logout_urls` (read `{ redirect_urls }` / `{ logout_urls }`, replace with `{ urls }`; `POST` adds, `DELETE ?urls=` removes); M2M client-credentials token (audience `https://<business>.kinde.com/api`)
+        generic: Y (list mode, token exchange; written under another name than read)
         priority: P2
-        covered_by: null
+        covered_by:
+          - recipe:kinde.callback_url
+          - recipe:kinde.logout_url
       - id: google-oauth-redirect
         provider: Google OAuth clients
         side_effect: Preview URL in a web client's authorized redirect URIs
