@@ -1,0 +1,106 @@
+# One-off actions (ADR 0022) end to end through the CLI: an Inngest sync (the recipe: a PUT to the app's own serve
+# endpoint, no Inngest credential) and a hand-written purge with an idempotency key, an `expect`, an output a later
+# line reads and an undo. Format: see the top of scenarios/runner.test.ts. The app's URL is a secret here only so
+# that it can point at the sim; it also shows a secret trigger value is never displayed.
+name: "http.action: run once per trigger, unchanged with zero writes, run again on a new trigger, never rolled back, undo on destroy"
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    http:
+      demo: { base_url: https://api.example.test/v1, base_url_env: REST_API_URL, auth: { bearer_env: REST_API_TOKEN } }
+  changes:
+    - id: sync
+      adapter: http
+      op: action
+      recipe: inngest.sync
+      url: { secret: "env://INNGEST_APP_URL" }
+      revision: "${ctx.git.sha}"
+      headers: { x-vercel-protection-bypass: { secret: "env://VERCEL_AUTOMATION_BYPASS_SECRET" } }
+    - id: purge
+      adapter: http
+      op: action
+      api: demo
+      trigger: { sha: "${ctx.git.sha}" }
+      vars: { zone: z1 }
+      request: { method: POST, path: "/zones/{zone}/purge", body: { everything: true }, idempotency_key: true }
+      expect: { /result/ok: true }
+      outputs: { purge_id: /result/id }
+      undo: { method: DELETE, path: "/zones/{zone}/purges/{purge_id}" }
+    - id: note
+      adapter: vercel
+      op: env
+      target: preview
+      values: { LAST_PURGE: { from: purge.purge_id } }
+env:
+  INNGEST_APP_URL: "${SIM_URL}/rest"
+  VERCEL_AUTOMATION_BYPASS_SECRET: bypass-0123456789abcdef
+secrets: [bypass-0123456789abcdef]
+seed:
+  rest:
+    collections: {}
+    endpoints:
+      /api/inngest: { public: true, reply: { message: Successfully registered, modified: true } }
+      /zones/z1/purge: { reply: { result: { ok: true, id: p1 } } }
+      /zones/z1/purges/p1: {}
+steps:
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { sync: run, purge: run, note: pending } }
+  - run: plan
+    expect: { exit: 0, stdout: ["> sync", "> purge", "to run"] }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { sync: applied, purge: applied, note: applied }, outputs: { purge: { purge_id: p1 }, sync: { modified: true } } }
+  - sim:
+      vercel_env: { preview: { LAST_PURGE: "p1" } }
+      state:
+        rest.calls: { length: 2 }
+      write_order: ["PUT /rest/api/inngest", "POST /rest/zones/z1/purge"]
+  # The same triggers: nothing is sent, the recorded outputs still reach `note`.
+  - run: apply --json
+    expect: { exit: 0, writes: 0, lines: { sync: unchanged, purge: unchanged, note: unchanged } }
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { sync: unchanged, purge: unchanged, note: unchanged }, drift: [] }
+  # A new revision runs the sync again; the purge's trigger did not change.
+  - plan: |
+      version: 1
+      providers:
+        vercel: { project: prj_demo }
+        http:
+          demo: { base_url: https://api.example.test/v1, base_url_env: REST_API_URL, auth: { bearer_env: REST_API_TOKEN } }
+      changes:
+        - id: sync
+          adapter: http
+          op: action
+          recipe: inngest.sync
+          url: { secret: "env://INNGEST_APP_URL" }
+          revision: v2
+          headers: { x-vercel-protection-bypass: { secret: "env://VERCEL_AUTOMATION_BYPASS_SECRET" } }
+        - id: purge
+          adapter: http
+          op: action
+          api: demo
+          trigger: { sha: "${ctx.git.sha}" }
+          vars: { zone: z1 }
+          request: { method: POST, path: "/zones/{zone}/purge", body: { everything: true }, idempotency_key: true }
+          expect: { /result/ok: true }
+          outputs: { purge_id: /result/id }
+          undo: { method: DELETE, path: "/zones/{zone}/purges/{purge_id}" }
+        - id: note
+          adapter: vercel
+          op: env
+          target: preview
+          values: { LAST_PURGE: { from: purge.purge_id } }
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { sync: run, purge: unchanged, note: unchanged } }
+  - run: apply --json
+    expect: { exit: 0, status: complete, writes: 1, lines: { sync: applied, purge: unchanged, note: unchanged } }
+  - sim:
+      state:
+        rest.calls: { length: 3 }
+  # Destroy sends the purge's undo and only forgets the sync (nothing undoes a sync).
+  - run: apply --destroy --json
+    expect: { exit: 0, status: complete, lines: { sync: destroyed, purge: destroyed, note: destroyed } }
+  - sim:
+      state:
+        rest.calls: { length: 4 }
+      write_order: ["DELETE /rest/zones/z1/purges/p1"]

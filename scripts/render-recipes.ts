@@ -17,7 +17,8 @@ export function recipeLink(provider: string, op: string): string {
   return `[\`${provider}.${op}\`](recipes.md#${slug(recipeHeading(provider, op).slice(4))})`;
 }
 
-function credential(api: Record<string, unknown>): string {
+function credential(api: Record<string, unknown> | undefined): string {
+  if (!api) return "none (calls the app's own URL)";
   const auth = api.auth as Record<string, unknown>;
   if (typeof auth.bearer_env === "string") return `\`${auth.bearer_env}\` (bearer)`;
   if (typeof auth.value_env === "string") return `\`${String(auth.value_env)}\` (header \`${String(auth.header)}\`${typeof auth.prefix === "string" ? `, after \`${auth.prefix.trimEnd()}\`` : ""})`;
@@ -59,7 +60,7 @@ export function exampleParams(op: RecipeOp): Record<string, unknown> {
 
 function exampleLine(r: Recipe, name: string, op: RecipeOp): string {
   const line = { id: name, adapter: "http", op: op.kind, recipe: `${r.provider}.${name}`, ...exampleParams(op) };
-  if (typeof r.api.base_url === "string") return `# under changes: (no provider block needed)\n${stringify([line], { lineWidth: 0 }).trimEnd()}`;
+  if (!r.api || typeof r.api.base_url === "string") return `# under changes: (no provider block needed)\n${stringify([line], { lineWidth: 0 }).trimEnd()}`;
   // A per-account API: the block names the account's base URL.
   const block = stringify({ providers: { http: { [r.provider]: { recipe: r.provider, base_url: r.base_url_example } } } }, { lineWidth: 0 }).trimEnd();
   return `${block}\nchanges:\n${stringify([line], { lineWidth: 0 }).trimEnd().replace(/^/gm, "  ")}`;
@@ -76,6 +77,7 @@ function paramsTable(op: RecipeOp): string[] {
 
 function outputsOf(op: RecipeOp): string {
   if (op.kind === "list_item") return "none";
+  if (op.kind === "action") return Object.keys((op.http.outputs as Record<string, unknown> | undefined) ?? {}).map((o) => `\`${o}\``).join(", ") || "none";
   const outputs = Object.entries((op.http.outputs as Record<string, unknown> | undefined) ?? {});
   const mark = (d: unknown) => {
     const decl = (typeof d === "object" && d !== null ? d : {}) as { sensitive?: boolean; once?: boolean };
@@ -86,6 +88,7 @@ function outputsOf(op: RecipeOp): string {
 
 /** What destroying the scope does with what the op made. */
 function destroyOf(op: RecipeOp): string {
+  if (op.kind === "action") return op.http.undo ? "its `undo` request is sent, then the record is forgotten." : "nothing is sent (there is nothing to undo); the record is forgotten.";
   if (op.destroy === "never") return "left in place: the provider offers no way to delete it (`destroy: delete` is refused).";
   if (op.destroy === "keep") return "left in place by default (`destroy: delete` on the line removes it).";
   return "deleted (`destroy: keep` on the line leaves it).";
@@ -131,15 +134,10 @@ function tokenRows(api: Record<string, unknown>): string[] {
   ];
 }
 
-function providerSection(r: Recipe): string[] {
-  const api = r.api;
+/** The API defaults table, or what a recipe without an API block does instead. */
+function apiTable(api: Record<string, unknown> | undefined): string[] {
+  if (!api) return ["No API block: its ops send their request to the app's own URL (a param), with no credential."];
   return [
-    `## ${r.title}`,
-    "",
-    `Recipe file: [\`packages/adapters/recipes/${r.provider}.yaml\`](../packages/adapters/recipes/${r.provider}.yaml). Verified on ${r.verified_on} against:`,
-    "",
-    ...r.docs.map((d) => `- [${d.title}](${d.url})`),
-    "",
     "| API default | Value |",
     "|---|---|",
     `| \`base_url\` | ${typeof api.base_url === "string" ? `\`${api.base_url}\`` : "none: set it in the provider block"} |`,
@@ -149,6 +147,18 @@ function providerSection(r: Recipe): string[] {
     ...(api.headers ? [`| \`headers\` | ${cell(JSON.stringify(api.headers))} |`] : []),
     ...(api.encoding ? [`| \`encoding\` | \`${String(api.encoding)}\` |`] : []),
     ...(api.refuse_credential ? [`| \`refuse_credential\` | ${refused(api.refuse_credential as { prefixes: string[]; unless_env: string })} |`] : []),
+  ];
+}
+
+function providerSection(r: Recipe): string[] {
+  return [
+    `## ${r.title}`,
+    "",
+    `Recipe file: [\`packages/adapters/recipes/${r.provider}.yaml\`](../packages/adapters/recipes/${r.provider}.yaml). Verified on ${r.verified_on} against:`,
+    "",
+    ...r.docs.map((d) => `- [${d.title}](${d.url})`),
+    "",
+    ...apiTable(r.api),
     "",
     "Assumptions:",
     "",

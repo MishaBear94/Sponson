@@ -339,8 +339,8 @@ names a provider in the code:
   another line" by `credential` (with `destroy: keep`), and "a delete that names the object in its body" by `{id}` in
   `delete.body`. "A list request sent as a POST" stays out: Datadog's deployment events are listed so, over a time
   window, and are never deleted, so that row is covered by a Synthetic test and the marker is recorded as out of reach.
-- **Sim shapes.** The REST sim stores generated fields and accepts them as a credential header (R9: a server's token,
-  derived by the harness from a sensitive output that is not `once`), and deletes by body (R10, derived from a delete
+- **Sim shapes.** The REST sim stores generated fields and accepts them as a credential header (R10: a server's token,
+  derived by the harness from a sensitive output that is not `once`), and deletes by body (R11, derived from a delete
   body holding `{id}`).
 
 Decisions per row, recorded on the rows and in the recipes' assumptions: Atlas users are located by their own URL
@@ -349,3 +349,12 @@ databases (no SQL needed) and SQL users (with the SQL `admin` role, CR5); GCS CO
 origin and written without `ifMetagenerationMatch` (the parent lock serialises Sponson's writers); one S3 recipe serves
 R2 too (R2 accepts `us-east-1` as its region); Flagsmith is covered by an environment per preview (identity and
 segment overrides are not recipes: Edge identities are addressed by UUID, a segment override is two objects).
+
+## Amendment 8 (2026-10-11): action recipes
+
+(Numbered 8 because Amendment 7 is reserved by a branch in flight.) "Inngest's sync stays uncovered" (Amendment 4)
+is superseded by [ADR 0022](0022-one-off-actions.md): a recipe op may be `kind: action` (an `http.action`, one request
+sent when its trigger changes), and a recipe whose ops are all actions sent to the app's own `url` has no `api` block
+(it needs no credential). `inngest.sync` is the first. The identity lock records an action op's key as
+`action:<line id>` (the engine's) and its record id as `FORGET` or the undo request template; the recipe harness runs
+an action op as run → unchanged → new trigger → run → destroy, against REST sim endpoints that log every call (R9).

@@ -209,8 +209,8 @@ They describe a conventional JSON REST API, not one provider; the adapter's test
 | R6 | a style's `once_fields` appear only in the create's answer, never stored or listed | Stripe's webhook signing secret (ST5–ST6 in its recipe) |
 | R7 | with an `auth` seed, credentials are checked for real: an OAuth2 client-credentials token endpoint, fixed bearer tokens, HTTP Digest, SigV4 | RFC 6749 §4.4, RFC 7616 (its §3.9.1 example is a test vector), AWS SigV4 (its published test suite is a test vector; ../auth.ts is written independently of the client) |
 | R8 | a path the seed lists in `reads` is a read sent as a POST: it answers the object it names and is not a write | Azure Resource Manager list actions (`POST …/builds/{environmentName}/listAppSettings`, https://learn.microsoft.com/en-us/rest/api/appservice/static-sites/list-static-site-build-app-settings) |
-| R9 | a style's `generated` fields are generated on create and stored; with the auth seed's `generated_header`, that header is accepted when it carries a value the sim generated | Postmark's server token (`ApiTokens`, PM4 in its recipe), which authenticates the Server API (PS1) |
-| R10 | a seeded `deletes` path takes a POST naming objects of a collection in its body and removes them; 404 when none exists | Datadog's `POST /synthetics/tests/delete` (DD5 in its recipe) |
+| R10 | a style's `generated` fields are generated on create and stored; with the auth seed's `generated_header`, that header is accepted when it carries a value the sim generated | Postmark's server token (`ApiTokens`, PM4 in its recipe), which authenticates the Server API (PS1) |
+| R11 | a seeded `deletes` path takes a POST naming objects of a collection in its body and removes them; 404 when none exists | Datadog's `POST /synthetics/tests/delete` (DD5 in its recipe) |
 
 ### Authentication forms (`packages/adapters/src/http-adapter-auth.ts`)
 

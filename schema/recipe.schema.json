@@ -4,9 +4,9 @@
   "title": "Sponson recipe",
   "description": "One provider's recipes for the generic http adapter: packages/adapters/recipes/<provider>.yaml. See docs/adr/0020-recipes.md and CONTRIBUTING.md (Adding a recipe).",
   "type": "object",
-  "required": ["provider", "title", "category", "verified_on", "docs", "api", "assumptions", "ops"],
+  "required": ["provider", "title", "category", "verified_on", "docs", "assumptions", "ops"],
   "additionalProperties": false,
-  "if": { "properties": { "api": { "not": { "properties": { "base_url": true }, "required": ["base_url"] } } } },
+  "if": { "required": ["api"], "properties": { "api": { "not": { "properties": { "base_url": true }, "required": ["base_url"] } } } },
   "then": { "properties": { "base_url_example": true }, "required": ["base_url_example"] },
   "properties": {
     "provider": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$", "description": "The provider's name: the file's name, and the first half of a line's `recipe: <provider>.<op>`." },
@@ -26,7 +26,7 @@
     },
     "api": {
       "type": "object",
-      "description": "The API block defaults: what `providers.http.<api>: { recipe: <provider> }` means. `base_url` may be left out only for per-account APIs; then every plan sets it.",
+      "description": "The API block defaults: what `providers.http.<api>: { recipe: <provider> }` means. `base_url` may be left out only for per-account APIs; then every plan sets it. The whole block is left out only by a recipe whose ops are all `action`s sent to the app's own `url` (no credential).",
       "required": ["base_url_env", "auth"],
       "additionalProperties": false,
       "properties": {
@@ -196,7 +196,7 @@
       "required": ["kind", "title", "summary", "covers", "params", "http"],
       "additionalProperties": false,
       "properties": {
-        "kind": { "enum": ["resource", "list_item"], "description": "The http op it expands into; the plan line's `op`." },
+        "kind": { "enum": ["resource", "list_item", "action"], "description": "The http op it expands into; the plan line's `op`. `action`: one request sent when its trigger changes (ADR 0022)." },
         "title": { "type": "string", "minLength": 1 },
         "summary": { "type": "string", "minLength": 20 },
         "covers": { "type": "array", "items": { "type": "string", "pattern": "^[a-z0-9-]+$" }, "description": "Ids of docs/coverage.yaml rows this op covers." },
@@ -208,7 +208,7 @@
         },
         "http": {
           "type": "object",
-          "description": "The http.resource or http.list_item params, without api, vars and destroy. `{ param: <name> }` stands for a param's value; `{<name>}` in a path for its URI-encoded value.",
+          "description": "The http.resource, http.list_item or http.action params, without api, vars and destroy. `{ param: <name> }` stands for a param's value; `{<name>}` in a path for its URI-encoded value.",
           "properties": { "api": false, "vars": false, "destroy": false }
         },
         "destroy": {

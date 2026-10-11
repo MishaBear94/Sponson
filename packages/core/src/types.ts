@@ -179,8 +179,8 @@ export interface LiveState {
   outputs: Record<string, Literal>;
 }
 
-/** What apply would do to one resource. */
-export type DiffKind = "create" | "update" | "unchanged";
+/** What apply would do to one resource; `run`: send a one-off action (`OpSpec.action`, ADR 0022). */
+export type DiffKind = "create" | "update" | "unchanged" | "run";
 
 /**
  * One side of a diff, as data. Renderers turn it into text; JSON carries it as-is.
@@ -334,6 +334,21 @@ export interface OpSpec {
    * `destroy` are never called. Pure: no provider calls.
    */
   manual?(params: ResolvedParams, ctx: Ctx): ManualStep | null;
+  /**
+   * For an op that is a one-off action rather than a resource (the built-in `http.action`, ADR 0022: an Inngest
+   * sync, a cache purge, a deploy notification): its trigger, from resolved params; null while a trigger value is
+   * still pending. The engine then owns the line's state. The ledger key is `action:<line id>` and its hash the
+   * keyed `sha256(canonicalJson(trigger))`: `plan` shows `run` when no run of this trigger is recorded and
+   * `unchanged` otherwise, with no other drift. `apply` calls `apply` only to run it, passing as `live` one resource
+   * (the ledger key, the previous record id or "", and the raw trigger hash, from which the op derives an
+   * idempotency key), then records the trigger hash, the record id `apply` returned (`resources[0].id`: how to undo
+   * it) and the outputs. Nothing is recorded before the request is sent (at-least-once: a crash in between sends it
+   * again with the same idempotency key), `intend` is never called, rollback never undoes it, and another scope's
+   * record of the same key does not block it. `apply --destroy` passes the record to `destroy` (send the undo, or
+   * nothing) and forgets it. `read` is never called. Outputs must not be sensitive: an unchanged line's outputs come
+   * from the ledger. Pure: no provider calls.
+   */
+  action?(params: ResolvedParams, ctx: Ctx): ActionTrigger | null;
   /** Find what currently exists for this change. Null when nothing exists. Must not write. */
   read(actx: AdapterContext, params: ResolvedParams): Promise<LiveState | null>;
   /**
@@ -388,6 +403,14 @@ export interface ManualStep {
   hash: string;
   /** Whether `read` can observe that the step is done (a verify request); otherwise only a confirmation can tell. */
   observable: boolean;
+}
+
+/** The trigger of a one-off action, as `OpSpec.action` describes it (ADR 0022). */
+export interface ActionTrigger {
+  /** The values whose change makes the action run again (a commit, a preview URL), resolved; hashed, never stored. */
+  trigger: Record<string, unknown>;
+  /** What the action does, for display (`PUT https://…/api/inngest`). */
+  label: string;
 }
 
 /**
@@ -555,6 +578,8 @@ export interface LedgerEntry {
    * saw it done (`how: verified`). Text is stored masked, as every output is.
    */
   manual?: { title: string; undo?: string; how: "confirmed" | "verified"; by?: string; at: string };
+  /** For a one-off action (ADR 0022): when it last ran. `hash` is its trigger's; `id` says how to undo it. */
+  action?: { at: string };
 }
 
 /**

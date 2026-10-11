@@ -54,10 +54,14 @@
  *       recomputed and compared; see ../auth.ts). Anything else is 401.
  *   R8. A path the seed lists in `reads` is a read sent as a POST (an Azure Resource Manager list action such as
  *       `…/listAppSettings`): it answers the object it names, as a GET of that object would, and is not a write.
- *   R9. A style's `generated` fields (JSON pointers) are generated on create (`<field>_sim_<n>`) and stored, so every
- *       read shows them: a server's API token. With the auth seed's `generated_header`, that header is accepted when
- *       it carries a value the sim generated (a credential that is another object's output).
- *   R10. A seeded `deletes` path takes a POST whose body names objects of a collection (a JSON pointer to an id or a
+ *   R9. A seeded endpoint (seed `endpoints`, by path) stands for a one-off action's target (an app's sync URL, a
+ *       purge or notification endpoint): it answers every method with its fixed status and reply (default 200
+ *       `{}`), keeps nothing but a log of the calls (`calls`: method, path, headers, body), and with `public: true`
+ *       answers without a credential, as an app's own endpoint does.
+ *   R10. A style's `generated` fields (JSON pointers) are generated on create (`<field>_sim_<n>`) and stored, so
+ *       every read shows them: a server's API token. With the auth seed's `generated_header`, that header is accepted
+ *       when it carries a value the sim generated (a credential that is another object's output).
+ *   R11. A seeded `deletes` path takes a POST whose body names objects of a collection (a JSON pointer to an id or a
  *       list of ids, `{ public_ids: [...] }`) and removes them, answering `{ deleted: [ids] }`; 404 when none of
  *       them exists.
  */
@@ -103,15 +107,34 @@ export interface RestStyle {
    * updates the one whose id the request chooses (an upsert): QStash's `POST /v2/schedules/<destination>`.
    */
   suffix_field?: string;
-  /** Fields (JSON pointers, `/ApiTokens/0`) generated on create and stored (assumption R9). */
+  /** Fields (JSON pointers, `/ApiTokens/0`) generated on create and stored (assumption R10). */
   generated?: string[];
 }
 
-/** A path whose POST deletes objects its body names (assumption R10): the collection, and where the ids are. */
+/** A path whose POST deletes objects its body names (assumption R11): the collection, and where the ids are. */
 export interface RestBulkDelete {
   collection: string;
   /** JSON pointer to the id, or to a list of ids, in the body. */
   ids: string;
+}
+
+/** A one-off action's endpoint (assumption R9): a fixed answer to every method, and whether it needs a credential. */
+export interface RestEndpoint {
+  /** Default 200. */
+  status?: number;
+  /** Default `{}`. */
+  reply?: unknown;
+  /** Answers without a credential (an app's own endpoint). */
+  public?: boolean;
+}
+
+/** One call to a seeded endpoint (R9), as received. */
+export interface RestCall {
+  method: string;
+  path: string;
+  /** Lower-case names. */
+  headers: Record<string, string>;
+  body: unknown;
 }
 
 /** Simulated REST API state, by path: collections of objects, objects that are not in a collection, and styles. */
@@ -119,9 +142,9 @@ export interface RestState {
   collections: Record<string, RestItem[]>;
   objects: Record<string, Record<string, unknown>>;
   styles: Record<string, RestStyle>;
-  /** Paths whose POST deletes the objects its body names (R10). */
+  /** Paths whose POST deletes the objects its body names (R11). */
   deletes: Record<string, RestBulkDelete>;
-  /** Every value generated for a style's `generated` fields (R9). */
+  /** Every value generated for a style's `generated` fields (R10). */
   generated: string[];
   /** Paths that name a collection kept under another path, by path: a create posted elsewhere
    * (`/gates/g/rule` adds to `/gates/g/rules`), or a list at another URL (`/settings/all` lists `/settings`). */
@@ -132,6 +155,9 @@ export interface RestState {
   reads: Record<string, string>;
   /** Present when the seed configures real credentials (R7). */
   auth?: RestAuthState;
+  /** One-off action endpoints by path (R9), and every call they received. */
+  endpoints: Record<string, RestEndpoint>;
+  calls: RestCall[];
 }
 
 /**
@@ -154,7 +180,7 @@ export interface RestAuthSeed {
   digest?: DigestConfig;
   /** SigV4 access keys (id → secret) and the region and service requests must be signed for. */
   sigv4?: Omit<SigV4Config, "now">;
-  /** A header (lower-case) accepted when it carries a value the sim generated (R9): another object's token. */
+  /** A header (lower-case) accepted when it carries a value the sim generated (R10): another object's token. */
   generated_header?: string;
 }
 
@@ -180,7 +206,9 @@ export interface RestSeed {
   reads?: Record<string, string>;
   /** Real credentials (R7). */
   auth?: RestAuthSeed;
-  /** Paths whose POST deletes the objects its body names (R10), by path. */
+  /** One-off action endpoints by path (R9). */
+  endpoints?: Record<string, RestEndpoint>;
+  /** Paths whose POST deletes the objects its body names (R11), by path. */
   deletes?: Record<string, RestBulkDelete>;
 }
 
@@ -193,16 +221,7 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
   },
 
   reset(core, seed) {
-    const state: RestState = {
-      collections: {},
-      objects: byPath(structuredClone(seed?.objects ?? {})),
-      styles: byPath(structuredClone(seed?.styles ?? {})),
-      aliases: pathPairs(seed?.aliases),
-      auth_headers: (seed?.auth_headers ?? []).map((h) => h.toLowerCase()),
-      reads: pathPairs(seed?.reads),
-      deletes: bulkDeletesOf(seed?.deletes),
-      generated: [],
-    };
+    const state = emptyState(seed ?? {});
     for (const [path, items] of Object.entries(byPath(seed?.collections ?? {}))) {
       const field = styleOf(state, path).id_field;
       state.collections[path] = items.map((i) => ({ ...structuredClone(i), [field]: isId(i[field]) ? i[field] : newId(core, state, path) }));
@@ -235,6 +254,7 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
   },
 
   authorized(headers, state, req) {
+    if (state.endpoints[normPath(req.url.pathname.replace(/^\/rest(?=\/)/, ""))]?.public) return true;
     if (!state.auth) return authorized(headers, state.auth_headers);
     // The token endpoint authenticates the client itself.
     if (req.method === "POST" && req.url.pathname === "/rest/oauth/token") return true;
@@ -244,16 +264,35 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
   },
 
   routes(core, state, req) {
-    return routes(core, state, req);
+    const endpoint = state.endpoints[normPath(req.path)];
+    if (!endpoint) return routes(core, state, req);
+    state.calls.push({ method: req.method, path: normPath(req.path), headers: { ...(req.headers ?? {}) }, body: structuredClone(req.body) });
+    return new Reply(endpoint.status ?? 200, structuredClone(endpoint.reply ?? {}));
   },
 };
 
-/** The seed's bulk-delete paths (R10), paths normalised. */
+/** The state a seed describes, before its collections get their ids. */
+function emptyState(seed: RestSeed): RestState {
+  return {
+    collections: {},
+    objects: byPath(structuredClone(seed.objects ?? {})),
+    styles: byPath(structuredClone(seed.styles ?? {})),
+    aliases: pathPairs(seed.aliases),
+    auth_headers: (seed.auth_headers ?? []).map((h) => h.toLowerCase()),
+    reads: pathPairs(seed.reads),
+    endpoints: byPath(structuredClone(seed.endpoints ?? {})),
+    calls: [],
+    deletes: bulkDeletesOf(seed.deletes),
+    generated: [],
+  };
+}
+
+/** The seed's bulk-delete paths (R11), paths normalised. */
 function bulkDeletesOf(seed: Record<string, RestBulkDelete> | undefined): Record<string, RestBulkDelete> {
   return Object.fromEntries(Object.entries(seed ?? {}).map(([p, d]) => [normPath(p), { collection: normPath(d.collection), ids: d.ids }]));
 }
 
-/** R9: the seed's `generated_header` carries a value the sim generated for an object. */
+/** R10: the seed's `generated_header` carries a value the sim generated for an object. */
 function carriesGenerated(headers: IncomingHttpHeaders, state: RestState): boolean {
   const name = state.auth?.generated_header?.toLowerCase();
   const v = name === undefined ? undefined : headers[name];
@@ -476,7 +515,7 @@ function create(core: SimCore, state: RestState, path: string, raw: unknown, hea
   const clash = list.find((i) => (chosen !== undefined && i[style.id_field] === chosen) || (body.name !== undefined && i.name === body.name));
   if (clash) return error(409, `already exists: ${String(clash[style.id_field])}`);
   const item: RestItem = { ...structuredClone(body), [style.id_field]: chosen ?? newId(core, state, path) };
-  // Fields generated and stored (assumption R9): a server's token, readable afterwards.
+  // Fields generated and stored (assumption R10): a server's token, readable afterwards.
   for (const pointer of style.generated) {
     const value = `${pointer.split("/")[1] ?? "field"}_sim_${core.nextId("")}`;
     state.generated.push(value);
@@ -500,7 +539,7 @@ function setPointer(doc: Record<string, unknown>, pointer: string, value: unknow
   });
 }
 
-/** POST to a `deletes` path (assumption R10): remove the objects the body names. */
+/** POST to a `deletes` path (assumption R11): remove the objects the body names. */
 function bulkDelete(state: RestState, spec: RestBulkDelete, body: unknown): Reply {
   const named = spec.ids.slice(1).split("/").reduce<unknown>((cur, t) => (isRecord(cur) ? cur[t] : Array.isArray(cur) ? cur[Number(t)] : undefined), body);
   const ids = (Array.isArray(named) ? named : [named]).filter(isId).map(String);

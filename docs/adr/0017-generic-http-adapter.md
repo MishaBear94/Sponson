@@ -363,10 +363,19 @@ declared is real drift.
 
 - The Postmark server-and-webhook row is covered by two recipe lines in one plan
   (`scenarios/adapters/http-line-credential.yaml`, against a REST sim that accepts the server API only with a token it
-  generated for a server, assumption R9); Datadog's Synthetic tests are a recipe (R10: the sim's bulk delete), and S3's
+  generated for a server, assumption R10); Datadog's Synthetic tests are a recipe (R11: the sim's bulk delete), and S3's
   one-method CORS rules compare equal.
 - A line with `credential` leaves what it made when the scope is destroyed and its credential's object is kept: an
   explicit, per-line exception to invariant 8, like `destroy: keep`.
 - One plan must not manage the same key through two different credentials (two servers' webhooks with one URL): their
   identity would be the same. Other scopes' resources with the same key are refused as foreign, never deleted.
 - `OpSpec.credentialInputs` is a new optional part of the adapter contract; ops that do not define it behave as before.
+
+## Amendment: a third op, `http.action` (2026-10-11)
+
+One-off side effects with nothing to read back or delete (an Inngest sync, a cache purge, a deploy notification) are
+neither a `resource` nor a `list_item`. [ADR 0022](0022-one-off-actions.md) adds `http.action`: one request (or
+GraphQL request) sent when its declared `trigger` changes, its state owned by the engine through a new optional hook,
+`OpSpec.action`. It reuses this record's API blocks, credentials and GraphQL requests, and adds a request form this
+record did not have: an absolute `url` (the app's own endpoint), sent without any credential or API header, by a line
+that names no `api`.

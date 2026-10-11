@@ -476,8 +476,8 @@ categories:
         api_shape: "`PUT {preview_url}/api/inngest` (the app registers itself) or the Vercel integration; branch env selected by `INNGEST_ENV` var"
         generic: Y (one call, no destroy; archive via dashboard)
         priority: P1
-        covered_by: null
-        note: "not covered: a sync is a one-off action with nothing to read back or delete (no API archives an app); the REST v2 sync endpoint is beta and does not document how to target a branch environment. Inngest's Vercel and Netlify integrations sync each deploy"
+        covered_by: recipe:inngest.sync
+        note: "an `http.action` (ADR 0022): `PUT` to the deployment's serve endpoint once per deployment URL and revision, no Inngest credential; the app must set `INNGEST_ENV` (automatic on Vercel); nothing to undo (branch environments archive themselves); the beta REST v2 sync endpoint is not used (no way to target a branch environment)"
   - id: search-payments
     title: Search, payments test mode
     rows:

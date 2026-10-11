@@ -9,7 +9,7 @@ export interface RenderOptions {
   color: boolean;
 }
 
-export const PLAN_SYMBOL: Record<PlanLineStatus, string> = { create: "+", update: "~", unchanged: "=", pending: "?", todo: "*", blocked: "-", error: "!" };
+export const PLAN_SYMBOL: Record<PlanLineStatus, string> = { create: "+", update: "~", unchanged: "=", run: ">", pending: "?", todo: "*", blocked: "-", error: "!" };
 export const LINE_SYMBOL: Record<LineStatus, string> = {
   applied: "+",
   unchanged: "=",
@@ -123,7 +123,7 @@ function planRow(l: PlanLine): Row {
 export function planSummary(lines: PlanLine[]): string {
   const counts = new Map<PlanLineStatus, number>();
   for (const l of lines) counts.set(l.status, (counts.get(l.status) ?? 0) + 1);
-  const label: Record<PlanLineStatus, string> = { create: "to create", update: "to update", unchanged: "unchanged", pending: "pending", todo: "to do by hand", blocked: "blocked", error: "error" };
+  const label: Record<PlanLineStatus, string> = { create: "to create", update: "to update", unchanged: "unchanged", run: "to run", pending: "pending", todo: "to do by hand", blocked: "blocked", error: "error" };
   const parts = (Object.keys(label) as PlanLineStatus[]).filter((s) => counts.has(s)).map((s) => `${counts.get(s)} ${label[s]}`);
   return parts.length ? parts.join(", ") : "nothing to do";
 }

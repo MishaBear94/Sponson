@@ -6,6 +6,7 @@ import { sha256 } from "../hash.js";
 import { dependenciesOf } from "../plan.js";
 import type { LineOutputs } from "../resolve.js";
 import type { ApplyResult, Change, LedgerEntry, LiveState, Literal, OpSpec, Receipt, ReceiptLine, ResourceRecord, RunStatus } from "../types.js";
+import type { ActionState } from "./action.js";
 import { scopeDrift } from "./drift.js";
 import { staleness } from "./history.js";
 import { identity } from "./ledger.js";
@@ -203,6 +204,7 @@ class ApplyRun {
       return false;
     }
     if (inspection.manual) this.writeManual(c, inspection);
+    else if (inspection.action) await this.writeAction(c, op, inspection, inspection.action);
     else await this.writeAndRecord(c, op, inspection);
     return true;
   }
@@ -358,6 +360,36 @@ class ApplyRun {
     line.resources = this.resourcesOf(c.id);
     line.createdBy = "sponson";
     this.setOutputs(c, {});
+  }
+
+  /**
+   * A one-off action (ADR 0022): sent when its trigger has not run in this scope, then recorded, never before (no
+   * intent: a crash in between sends it again, at least once, under the same idempotency key). Never rollback
+   * material: it is not added to the run's created set. An unchanged action passes on the outputs it recorded.
+   */
+  private async writeAction(c: Change, op: OpSpec, inspection: Inspection, state: ActionState): Promise<void> {
+    const line = this.line(c, { status: "applied" });
+    this.receipt.lines[c.id] = line;
+    const { provider } = inspection;
+    const prev = this.rc.ledger.get(c.adapter, provider, state.key);
+    let outputs: Record<string, Literal> = prev?.outputs ?? {};
+    if (!state.run) line.status = "unchanged";
+    else {
+      const actx = this.rc.adapterContext(c.adapter, provider, () => Promise.reject(new SponsonError("INTERNAL", `${c.adapter}.${c.op}: an action creates nothing, so it never announces a create (intend)`)));
+      actx.log(`run ${c.id}`);
+      this.parentLease?.assertHeld();
+      const live: LiveState = { resources: [{ key: state.key, id: prev?.id ?? "", hash: state.hash, label: state.label }], outputs };
+      const result = await op.apply(actx, inspection.resolved.params, live);
+      this.rc.guardOutputs(result.outputs, op.outputs);
+      const at = this.now().toISOString();
+      this.rc.ledger.put({ adapter: c.adapter, op: c.op, provider, key: state.key, id: result.resources[0]?.id ?? "", hash: this.rc.ledger.keyed(state.hash), label: state.label, createdBy: "sponson", line: c.id, action: { at } });
+      line.notes = { ...line.notes, ...result.notes, action: { ranAt: at } };
+      outputs = result.outputs;
+    }
+    this.claimed.set(c.id, new Set([state.key]));
+    line.resources = this.resourcesOf(c.id);
+    line.createdBy = "sponson";
+    this.setOutputs(c, outputs);
   }
 
   /** Persist the intent before the adapter sends the create, so nothing created can be forgotten. */

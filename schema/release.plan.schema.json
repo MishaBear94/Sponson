@@ -267,6 +267,10 @@
           "then": { "$ref": "#/$defs/op_http_list_item" }
         },
         {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "http" }, "op": { "const": "action" } }, "not": { "properties": { "recipe": true }, "required": ["recipe"] } },
+          "then": { "$ref": "#/$defs/op_http_action" }
+        },
+        {
           "if": { "required": ["adapter", "recipe"], "properties": { "adapter": { "const": "http" }, "recipe": true } },
           "then": { "$ref": "#/$defs/op_http_recipe" }
         },
@@ -642,12 +646,48 @@
       "description": "A recipe line of the http adapter: `recipe: <provider>.<op>` and that recipe op's params (docs/recipes.md), which `sponson plan` checks. `op` is the recipe's kind.",
       "required": ["recipe"],
       "properties": {
-        "op": { "enum": ["resource", "list_item"] },
+        "op": { "enum": ["resource", "list_item", "action"] },
         "recipe": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*\\.[a-z0-9_]+$", "description": "The recipe op, `<provider>.<op>` (docs/recipes.md)." },
         "api": { "type": "string", "minLength": 1, "description": "The block under providers.http. Default: the recipe's provider (the block may then be left out)." },
         "destroy": { "$ref": "#/$defs/httpDestroy" },
         "credential": { "$ref": "#/$defs/httpCredential" }
       }
+    },
+    "httpActionRequest": {
+      "type": "object",
+      "description": "One request of an action: exactly one of `path` (relative to the API's base_url, with its credential), `url` (an absolute URL, sent with no credential and no API headers) or `graphql`.",
+      "oneOf": [{ "required": ["path"], "properties": { "path": true } }, { "required": ["url"], "properties": { "url": true } }, { "required": ["graphql"], "properties": { "graphql": true } }],
+      "additionalProperties": false,
+      "properties": {
+        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"], "description": "Default: POST." },
+        "path": { "$ref": "#/$defs/httpPath" },
+        "url": { "$ref": "#/$defs/stringOrRef", "description": "An absolute http(s) URL, usually `{ from: <deploy line>.preview_url }`-based. Never sent the API's credential." },
+        "body": { "description": "The request body (values may be references). Absent: no body." },
+        "headers": { "type": "object", "additionalProperties": true, "description": "Headers sent with it (values may be references; a `{ secret }` only in `request`, never in `undo`). Not Authorization, Accept, Content-Type or Idempotency-Key." },
+        "content_type": { "type": "string" },
+        "graphql": { "$ref": "#/$defs/httpGraphql" },
+        "idempotency_key": { "type": "boolean", "description": "request only: send an Idempotency-Key derived from the action's ledger key and trigger hash, so a run sent again after a crash is answered once." }
+      }
+    },
+    "op_http_action": {
+      "description": "http.action: one request sent when its trigger changes (an Inngest sync, a cache purge, a deploy notification), with nothing to read back or delete (ADR 0022). Plan shows `run` until this trigger has run in the scope, then `unchanged`. Outputs: those under `outputs`.",
+      "required": ["trigger", "request"],
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "api": { "type": "string", "minLength": 1, "description": "The API (a block under providers.http), for `path` and `graphql` requests. A line whose requests all use `url` takes none." },
+        "vars": { "type": "object", "description": "Values for `{name}` placeholders in paths: literals or references." },
+        "trigger": { "type": "object", "minProperties": 1, "description": "The values whose change makes it run again, e.g. { sha: \"${ctx.git.sha}\", url: { from: web.preview_url } }. Hashed into the ledger, never stored." },
+        "request": { "$ref": "#/$defs/httpActionRequest" },
+        "undo": { "allOf": [{ "$ref": "#/$defs/httpActionRequest" }, { "properties": { "idempotency_key": false } }], "description": "Sent by apply --destroy (its path may use the outputs as placeholders); absent: destroy only forgets the record. Never undone by rollback." },
+        "ok_status": { "type": "array", "items": { "type": "integer", "minimum": 400, "maximum": 499 }, "description": "Statuses that also mean success (an 'already done' 409); there is then no answer to read." },
+        "expect": { "type": "object", "description": "JSON pointer → value the answer must hold, e.g. { /data/status: success }; otherwise the action failed and nothing is recorded." },
+        "outputs": { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonPointer" }, "description": "Output name → JSON pointer into the answer. Never sensitive: an unchanged line passes on the recorded values." }
+      },
+      "additionalProperties": false
     },
     "op_http_list_item": {
       "description": "http.list_item: one value kept in an array, delimited string or keyed map on a parent object, by read-modify-write. No outputs.",

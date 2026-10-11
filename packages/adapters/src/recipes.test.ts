@@ -10,12 +10,14 @@ import { parse as parseYaml } from "yaml";
 import { describe, expect, it } from "vitest";
 import { isSponsonError, resolveParams } from "@sponson/core";
 import { httpAdapter } from "./http-adapter.js";
+import { actionIdentity, parseAction } from "./http-adapter-action.js";
 import { listItemIdentity } from "./http-adapter-list.js";
 import { resourceIdentity } from "./http-adapter-resource.js";
 import { apiBlock, parseListItem, parseResource, placeholders } from "./http-adapter-spec.js";
 import { RECIPES_DIR, expandRecipe, loadRecipe, loadRecipes, recipeNames, resolveRecipeApi, substitute, useRecipe, type Recipe, type RecipeOp } from "./recipes.js";
 import { harness } from "./testing.js";
 
+const CTX = { env: "preview", git: { branch: "feat/x", sha: "0123456789abcdef0123456789abcdef01234567", short_sha: "0123456" }, pr: { number: 42 }, scope: "pr-42" };
 const REPO = fileURLToPath(new URL("../../../", import.meta.url));
 const schema = JSON.parse(readFileSync(`${REPO}schema/recipe.schema.json`, "utf8")) as Record<string, unknown>;
 const validate = new Ajv2020({ allErrors: true, strict: true, strictTypes: false }).compile(schema);
@@ -24,6 +26,7 @@ const ROWS = new Map(coverage.categories.flatMap((c) => c.rows.map((r) => [r.id,
 
 const resource = httpAdapter.ops.resource!;
 const listItem = httpAdapter.ops.list_item!;
+const action = httpAdapter.ops.action!;
 
 const cases = loadRecipes().flatMap((r) => Object.entries(r.ops).map(([name, op]) => [`${r.provider}.${name}`, r, name, op] as const));
 
@@ -43,11 +46,13 @@ function exampleLine(r: Recipe, name: string, op: RecipeOp): Record<string, unkn
  * that sets the recipe's `base_url_example`.
  */
 function blocksFor(r: Recipe): Record<string, unknown> {
-  return r.api.base_url === undefined ? { [r.provider]: { recipe: r.provider, base_url: r.base_url_example } } : {};
+  return r.api && r.api.base_url === undefined ? { [r.provider]: { recipe: r.provider, base_url: r.base_url_example } } : {};
 }
 
 /** The API block an example line resolves to. */
 function resolvedApi(r: Recipe): Record<string, unknown> {
+  // A recipe without an API block (only `url` actions): its lines use no block at all.
+  if (!r.api) return {};
   return r.api.base_url === undefined ? { ...r.api, base_url: r.base_url_example } : r.api;
 }
 
@@ -78,6 +83,11 @@ describe.each(recipeNames())("recipes/%s.yaml", (name) => {
     const r = loadRecipe(name);
     expect(coverage.categories.map((c) => c.id), "category is a docs/coverage.yaml category").toContain(r.category);
     expect(new Set(r.assumptions.map((a) => a.id)).size, "assumption ids are unique").toBe(r.assumptions.length);
+    if (!r.api) {
+      // Only actions sent to the app's own URL may do without an API block (and its credential).
+      for (const op of Object.values(r.ops)) expect({ kind: op.kind, url: (op.http.request as { url?: unknown } | undefined)?.url !== undefined }).toEqual({ kind: "action", url: true });
+      return;
+    }
     const block = apiBlock(blocksFor(r), { recipe: `${name}.${Object.keys(r.ops)[0]!}` });
     expect(block).toEqual(resolvedApi(r));
   });
@@ -106,15 +116,19 @@ describe.each(cases)("recipe %s", (_ref, r, name, op) => {
 
   it("expands its example into a valid http spec, its outputs and its provider block", () => {
     const expanded = expandRecipe(line, op.kind);
-    expect(expanded.api).toBe(r.provider);
-    if (op.kind === "resource") {
+    expect(expanded.api).toBe(r.api ? r.provider : undefined);
+    if (op.kind === "action") {
+      expect(() => parseAction(line)).not.toThrow();
+      expect(Object.keys(action.outputsFor!(line))).toEqual(Object.keys((op.http.outputs as object | undefined) ?? {}));
+      expect(action.action!(resolveParams(line, new Map(), new Map()).params, CTX)).toMatchObject({ trigger: expect.any(Object) });
+    } else if (op.kind === "resource") {
       expect(() => parseResource(line)).not.toThrow();
       expect(Object.keys(resource.outputsFor!(line))).toEqual(["id", ...Object.keys((op.http.outputs as object | undefined) ?? {})]);
     } else {
       expect(() => parseListItem(line)).not.toThrow();
       expect(listItem.outputsFor!(line)).toEqual({});
     }
-    expect(resource.providerFor!(blocksFor(r), line)).toEqual(resolvedApi(r));
+    expect(httpAdapter.ops[op.kind]!.providerFor!(blocksFor(r), line)).toEqual(resolvedApi(r));
   });
 
   it("checks its params at plan time: missing, unknown and mistyped are PARAM_INVALID naming the param", () => {
@@ -156,7 +170,7 @@ describe("recipe errors", () => {
     expect(eu).toEqual({ ...loadRecipe("cloudflare").api, base_url: "https://eu.example.test/v4", auth: { bearer_env: "EU_CLOUDFLARE_TOKEN" } });
     expect(codeOf(() => apiBlock({ x: { recipe: "cloudflare", nope: 1 } }, { api: "x", recipe: ref }))).toMatch(/^PLAN_INVALID: .*unknown key `nope`/);
     // A recipe's credential refusal is a safety rule: a block cannot override it.
-    const guarded = loadRecipes().find((x) => x.api.refuse_credential !== undefined);
+    const guarded = loadRecipes().find((x) => x.api?.refuse_credential !== undefined);
     if (guarded) {
       const gref = `${guarded.provider}.${Object.keys(guarded.ops)[0]!}`;
       expect(codeOf(() => apiBlock({ [guarded.provider]: { recipe: guarded.provider, refuse_credential: null } }, { recipe: gref }))).toMatch(/^PLAN_INVALID: .*`refuse_credential` comes from the recipe and cannot be overridden/);
@@ -226,8 +240,8 @@ const LOCK = fileURLToPath(new URL("./recipes-identity.json", import.meta.url));
 /** What the ledger would record for the op's example line: the resolved API block, the key and the record id. */
 function identityOf(r: Recipe, name: string, op: RecipeOp): unknown {
   const line = exampleLine(r, name, op);
-  const provider = resource.providerFor!(blocksFor(r), line);
-  const ident = op.kind === "resource" ? resourceIdentity(parseResource(line), "ID") : listItemIdentity(parseListItem(line));
+  const provider = httpAdapter.ops[op.kind]!.providerFor!(blocksFor(r), line);
+  const ident = op.kind === "resource" ? resourceIdentity(parseResource(line), "ID") : op.kind === "action" ? actionIdentity(parseAction(line)) : listItemIdentity(parseListItem(line));
   return { provider, ...ident };
 }
 

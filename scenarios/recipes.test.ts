@@ -15,6 +15,10 @@
  * applied, and `sim.drift`, that sim's drift keys that edit a declared field and remove what the op made. The same
  * lifecycle then runs against it.
  *
+ * An `action` op (ADR 0022) runs instead: run → re-apply unchanged (zero writes) → its trigger changed in the plan →
+ * run again → destroy (its undo sent, or nothing), against REST sim endpoints that log every call (R9) and answer
+ * what the op expects; a request to the app's own `url` must carry no credential.
+ *
  * Live (`pnpm test:live`, SPONSON_LIVE=1): an op runs create → re-apply → destroy against the real API when its
  * credential variable and every `SPONSON_LIVE_*` variable its recipe's `live.params` names are set; otherwise it is
  * skipped. Use throwaway projects: it creates the example object under a unique scope and destroys it.
@@ -46,7 +50,7 @@ interface RecipeAuth {
   aws_sigv4?: { region: string; service: string; access_key_id_env: string; secret_access_key_env: string; session_token_env?: string };
 }
 
-const authOf = (r: Recipe): RecipeAuth => r.api.auth as RecipeAuth;
+const authOf = (r: Recipe): RecipeAuth => (r.api?.auth ?? {}) as RecipeAuth;
 
 /** Every credential variable of the recipe's API block (an OAuth2 client's id and secret, a SigV4 key pair included). */
 function credentialVars(r: Recipe): string[] {
@@ -141,7 +145,7 @@ function planText(r: Recipe, name: string, op: RecipeOp, params: Record<string, 
   const line = { id: "it", adapter: "http", op: op.kind, recipe: `${r.provider}.${name}`, ...params };
   // A per-account API (no default base_url) needs its block; the test points base_url_env at the fake cloud. Live, the
   // block names the real account, so that what the recipe resolves against it (an OAuth2 token URL) is the account's.
-  const block = r.api.base_url === undefined ? `providers:\n  http:\n    ${r.provider}: ${JSON.stringify({ recipe: r.provider, base_url: base })}\n` : "";
+  const block = r.api && r.api.base_url === undefined ? `providers:\n  http:\n    ${r.provider}: ${JSON.stringify({ recipe: r.provider, base_url: base })}\n` : "";
   return `version: 1\n${block}changes:\n  - ${JSON.stringify(line)}\n`;
 }
 
@@ -204,7 +208,7 @@ function simSeed(r: Recipe, op: RecipeOp, spec: Record<string, unknown>) {
       ...(op.sim?.header_fields ? { header_fields: op.sim.header_fields } : {}),
       ...(op.sim?.suffix_field ? { suffix_field: op.sim.suffix_field } : {}),
       ...(op.sim?.item_query ? { item_query: op.sim.item_query } : {}),
-      ...(r.api.encoding === "form" ? { form_types: true } : {}),
+      ...(r.api?.encoding === "form" ? { form_types: true } : {}),
       ...(once.length ? { once_fields: once } : {}),
       ...generatedOf(spec),
     };
@@ -219,11 +223,11 @@ function simSeed(r: Recipe, op: RecipeOp, spec: Record<string, unknown>) {
   if (op.kind === "list_item") writeFieldStyle(spec, styles);
   const reads = op.kind === "list_item" && parent?.read_method === "POST" ? { [fill(parent.read_path ?? parent.path, vars)]: parentPath(spec) } : {};
   // A credential header the sim would not recognise by its name (`X-Honeycomb-Team`).
-  const header = (r.api.auth as { header?: string }).header;
+  const header = authOf(r).header;
   return { rest: { collections, objects, styles, aliases, reads, ...(header ? { auth_headers: [header] } : {}), ...restAuth(r), ...bulkDeletes(op, spec) } };
 }
 
-/** A delete that names the object in its body (`{ public_ids: ["{id}"] }`): the sim's bulk delete at that path (R10). */
+/** A delete that names the object in its body (`{ public_ids: ["{id}"] }`): the sim's bulk delete at that path (R11). */
 function bulkDeletes(op: RecipeOp, spec: Record<string, unknown>): { deletes?: Record<string, { collection: string; ids: string }> } {
   const del = spec.delete as { path?: string; body?: unknown } | undefined;
   const at = del?.body === undefined ? undefined : pointerTo(del.body, "{id}");
@@ -244,7 +248,7 @@ function pointerTo(doc: unknown, needle: string, at = ""): string | undefined {
   return undefined;
 }
 
-/** Fields the provider generates and shows on every read (a server's token: a sensitive output that is not once), R9. */
+/** Fields the provider generates and shows on every read (a server's token: a sensitive output that is not once), R10. */
 function generatedOf(spec: Record<string, unknown>): { generated?: string[] } {
   const outputs = Object.values((spec.outputs as Record<string, unknown> | undefined) ?? {});
   const pointers = outputs.flatMap((d) => (typeof d === "object" && d !== null && (d as { sensitive?: boolean }).sensitive && !(d as { once?: boolean }).once ? [(d as { path: string }).path] : []));
@@ -333,13 +337,84 @@ function parentList(sim: SimHandle, spec: Record<string, unknown>): { parent: Re
 
 const SIM_CTX = ["--env", "preview", "--pr", "42", "--branch", "feat/x", "--sha", SHA];
 
+/** The params a template's `{ param }` parts name, in order. */
+function paramsIn(tpl: unknown): string[] {
+  return [...JSON.stringify(tpl ?? null).matchAll(/\{"param":"([^"]+)"\}/g)].map((m) => m[1]!);
+}
+
+/** Where the sim stands in for the app in an action recipe's example: its `url` param, rewritten per run. */
+const APP = "http://app.invalid";
+
+/** The sim path an action's request goes to: under the app's URL, or the API's path. */
+function endpointOf(req: { url?: unknown; path?: string }, vars: Record<string, unknown>): string {
+  return req.url !== undefined ? String(req.url).slice(APP.length) : fill(req.path!, vars);
+}
+
+/** A reply that meets an action's `expect` and has a value at each declared output. */
+function replyFor(spec: Record<string, unknown>): Record<string, unknown> {
+  const reply: Record<string, unknown> = {};
+  for (const [name, pointer] of Object.entries((spec.outputs as Record<string, string> | undefined) ?? {})) setAt(reply, pointer, `sim-${name}`);
+  for (const [pointer, v] of Object.entries((spec.expect as Record<string, unknown> | undefined) ?? {})) setAt(reply, pointer, v);
+  return reply;
+}
+
+/** The REST sim's endpoints for an action op (R9): its request's, answering what it expects, and its undo's. */
+function actionEndpoints(spec: Record<string, unknown>): Record<string, unknown> {
+  const vars = spec.vars as Record<string, unknown>;
+  const req = spec.request as { url?: unknown; path?: string };
+  const undo = spec.undo as { url?: unknown; path?: string } | undefined;
+  return { [endpointOf(req, vars)]: { public: req.url !== undefined, reply: replyFor(spec) }, ...(undo ? { [endpointOf(undo, vars)]: { public: undo.url !== undefined } } : {}) };
+}
+
+async function actionInSim(r: Recipe, name: string, op: RecipeOp): Promise<void> {
+  const urlParam = paramsIn((op.http.request as { url?: unknown }).url)[0];
+  const params = { ...exampleParams(op), ...(urlParam ? { [urlParam]: APP } : {}) };
+  const spec = expandRecipe({ recipe: `${r.provider}.${name}`, ...interpolate(params, "pr-42") }, "action");
+  const sim = await startSim({ seed: { rest: { collections: {}, endpoints: actionEndpoints(spec), ...restAuth(r) } } as Partial<SimSeed> });
+  // The app's URL is the sim's (its REST provider), so every call lands in the sim's log.
+  const at = (p: Record<string, unknown>) => (urlParam ? { ...p, [urlParam]: `${sim.url}/rest` } : p);
+  const ws = await workspace("recipe", { plan: planText(r, name, op, at(params)) });
+  const env = cliEnv(sim, r.api ? { [String(r.api.base_url_env)]: `${sim.url}/rest`, ...credentialEnv(r), ...tokenUrlEnv(r, sim), ...(await fakeCli(r, ws.dir)) } : {});
+  const run = new Run(ws, env, SIM_CTX, secretOf(r));
+  const calls = () => sim.state.rest.calls;
+  const method = String((spec.request as { method?: string }).method ?? "POST").toUpperCase();
+  try {
+    let res = await run.cli("plan --json", sim);
+    expect({ code: res.code, status: lineOf(res).status }, `plan${diag(res)}`).toEqual({ code: 0, status: "run" });
+
+    res = await run.cli("apply --json", sim);
+    expect({ code: res.code, status: lineOf(res).status, calls: calls().length, method: calls()[0]?.method }, `run${diag(res)}`).toEqual({ code: 0, status: "applied", calls: 1, method });
+    // A request to the app's own URL never carries a credential.
+    if (urlParam) expect(calls()[0]!.headers.authorization).toBeUndefined();
+
+    res = await run.cli("apply --json", sim);
+    expect({ code: res.code, writes: res.writes, status: lineOf(res).status }, `re-apply${diag(res)}`).toEqual({ code: 0, writes: 0, status: "unchanged" });
+
+    // A new trigger value (a new revision) runs it again.
+    const triggerParam = paramsIn(op.http.trigger).find((p) => p !== urlParam && op.params[p]?.type === "string" && params[p] !== undefined);
+    expect(triggerParam, "the trigger has a string param besides the URL to change").toBeDefined();
+    await writeFile(join(ws.dir, "release.plan.yaml"), planText(r, name, op, at({ ...params, [triggerParam!]: edited(params[triggerParam!]) })));
+    res = await run.cli("plan --json", sim);
+    expect({ code: res.code, status: lineOf(res).status }, `trigger changed${diag(res)}`).toEqual({ code: 0, status: "run" });
+    res = await run.cli("apply --json", sim);
+    expect({ code: res.code, status: lineOf(res).status, calls: calls().length }, `run again${diag(res)}`).toEqual({ code: 0, status: "applied", calls: 2 });
+
+    res = await run.cli("apply --destroy --json", sim);
+    const undo = spec.undo !== undefined;
+    expect({ code: res.code, status: lineOf(res).status, writes: res.writes, calls: calls().length }, `destroy${diag(res)}`).toEqual({ code: 0, status: "destroyed", writes: undo ? 1 : 0, calls: undo ? 3 : 2 });
+  } finally {
+    await sim.close();
+    await ws.cleanup();
+  }
+}
+
 async function lifecycleInSim(r: Recipe, name: string, op: RecipeOp): Promise<void> {
   if (op.sim?.provider) return lifecycleInProviderSim(r, name, op);
   const params = exampleParams(op);
   const spec = expandRecipe({ recipe: `${r.provider}.${name}`, ...interpolate(params, "pr-42") }, op.kind);
   const sim = await startSim({ seed: simSeed(r, op, spec) as Partial<SimSeed> });
   const ws = await workspace("recipe", { plan: planText(r, name, op, params) });
-  const env = cliEnv(sim, { [String(r.api.base_url_env)]: `${sim.url}/rest`, ...credentialEnv(r), ...exampleSecrets(params), ...tokenUrlEnv(r, sim), ...(await fakeCli(r, ws.dir)) });
+  const env = cliEnv(sim, { [String(r.api?.base_url_env)]: `${sim.url}/rest`, ...credentialEnv(r), ...exampleSecrets(params), ...tokenUrlEnv(r, sim), ...(await fakeCli(r, ws.dir)) });
   const run = new Run(ws, env, SIM_CTX, secretOf(r));
   const seededObjects = structuredClone(sim.state.rest.objects);
   try {
@@ -384,7 +459,7 @@ function expectTokenFlow(r: Recipe, sim: SimHandle): void {
   if (!oauth) return;
   const issued = sim.state.rest.auth?.issued ?? [];
   expect(issued.length, "an access token was issued").toBeGreaterThan(0);
-  const base = String(r.api.base_url ?? r.base_url_example);
+  const base = String(r.api?.base_url ?? r.base_url_example);
   const audience = oauth.audience?.startsWith("/") ? new URL(oauth.audience, base).href : oauth.audience;
   for (const t of issued) expect(t.audience).toBe(audience);
 }
@@ -445,7 +520,7 @@ async function lifecycleInProviderSim(r: Recipe, name: string, op: RecipeOp): Pr
   const params = exampleParams(op);
   const sim = await startSim({ seed: { [provider]: structuredClone(hints.seed ?? {}) } as Partial<SimSeed> });
   const ws = await workspace("recipe", { plan: planText(r, name, op, params) });
-  const env = cliEnv(sim, { [String(r.api.base_url_env)]: `${sim.url}${hints.base_path ?? `/${provider}`}`, ...credentialEnv(r), ...exampleSecrets(params), ...(await fakeCli(r, ws.dir)) });
+  const env = cliEnv(sim, { [String(r.api?.base_url_env)]: `${sim.url}${hints.base_path ?? `/${provider}`}`, ...credentialEnv(r), ...exampleSecrets(params), ...(await fakeCli(r, ws.dir)) });
   const run = new Run(ws, env, SIM_CTX, secretOf(r));
   const present = () => valueAt(sim.state.provider(provider), hints.present ?? "") !== undefined;
   const drift = (d: Record<string, string>) => sim.state.applyChaos({ drift: Object.fromEntries(Object.entries(d).map(([k, v]) => [`${provider}.${k}`, v])) });
@@ -475,7 +550,7 @@ async function lifecycleInProviderSim(r: Recipe, name: string, op: RecipeOp): Pr
 
 async function lifecycleLive(r: Recipe, name: string, op: RecipeOp): Promise<void> {
   const scope = `pr-${900000 + (parseInt(randomBytes(4).toString("hex"), 16) % 99999)}`;
-  const ws = await workspace("recipe-live", { plan: planText(r, name, op, exampleParams(op, process.env), process.env[String(r.api.base_url_env)]) });
+  const ws = await workspace("recipe-live", { plan: planText(r, name, op, exampleParams(op, process.env), process.env[String(r.api?.base_url_env)]) });
   const run = new Run(ws, { ...process.env }, ["--env", "preview", "--pr", scope.slice(3), "--branch", `sponson-recipe-${scope}`, "--sha", randomBytes(20).toString("hex")]);
   try {
     let res = await run.cli("apply --json");
@@ -490,9 +565,10 @@ async function lifecycleLive(r: Recipe, name: string, op: RecipeOp): Promise<voi
 }
 
 describe.each(cases)("recipe %s", (_ref, r, name, op) => {
-  it("create, idempotent re-apply, drift and destroy against the fake cloud", () => lifecycleInSim(r, name, op), 60_000);
+  if (op.kind === "action") it("run, unchanged re-apply, run again on a new trigger, and destroy against the fake cloud", () => actionInSim(r, name, op), 60_000);
+  else it("create, idempotent re-apply, drift and destroy against the fake cloud", () => lifecycleInSim(r, name, op), 60_000);
 
   // A per-account API is reached live through its base_url_env.
-  const live = [...credentialVars(r), ...(r.api.base_url === undefined ? [String(r.api.base_url_env)] : []), ...Object.values(op.live?.params ?? {})];
+  const live = [...credentialVars(r), ...(r.api && r.api.base_url === undefined ? [String(r.api.base_url_env)] : []), ...Object.values(op.live?.params ?? {})];
   it.skipIf(!LIVE || live.some((v) => !process.env[v]))(`@live: create, re-apply and destroy against the real API (needs ${live.join(", ")})`, () => lifecycleLive(r, name, op), 120_000);
 });

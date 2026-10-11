@@ -60,6 +60,7 @@ names are set.
 | [`growthbook.force_rule`](#growthbookforce_rule) | `list_item` | Feature force rule | `GROWTHBOOK_API_KEY` (bearer) |
 | [`heroku.config_var`](#herokuconfig_var) | `list_item` | App config var | `HEROKU_API_KEY` (bearer) |
 | [`honeycomb.marker`](#honeycombmarker) | `resource` | Deploy marker | `HONEYCOMB_API_KEY` (header `X-Honeycomb-Team`) |
+| [`inngest.sync`](#inngestsync) | `action` | App sync into its branch environment | none (calls the app's own URL) |
 | [`kinde.callback_url`](#kindecallback_url) | `list_item` | Application callback URL | `KINDE_MANAGEMENT_CLIENT_ID` / `KINDE_MANAGEMENT_CLIENT_SECRET` (OAuth2 client credentials) |
 | [`kinde.logout_url`](#kindelogout_url) | `list_item` | Application allowed logout redirect URL | `KINDE_MANAGEMENT_CLIENT_ID` / `KINDE_MANAGEMENT_CLIENT_SECRET` (OAuth2 client credentials) |
 | [`mongodb_atlas.database_user`](#mongodb_atlasdatabase_user) | `resource` | Database user | `MONGODB_ATLAS_PUBLIC_API_KEY` / `MONGODB_ATLAS_PRIVATE_API_KEY` (HTTP Digest) |
@@ -1505,6 +1506,71 @@ delete:
   path: /1/markers/{dataset}/{id}
 fields:
   url: { param: url }
+```
+
+## Inngest
+
+Recipe file: [`packages/adapters/recipes/inngest.yaml`](../packages/adapters/recipes/inngest.yaml). Verified on 2026-10-11 against:
+
+- [Syncing an Inngest app (curl -X PUT on the serve endpoint), Inngest's integration guide](https://www.inngest.com/llm-context.md)
+- [Apps in Inngest Cloud (sync methods, when to sync)](https://www.inngest.com/docs/apps/cloud)
+- [Environments and branch environments](https://www.inngest.com/docs/platform/environments)
+- [The TypeScript SDK's serve handler (InngestCommHandler, PUT = register)](https://github.com/inngest/inngest-js/blob/main/packages/inngest/src/components/InngestCommHandler.ts)
+- [REST API v2 OpenAPI document (V2_SyncApp)](https://api-docs.inngest.com/api-specs/v2.json)
+
+No API block: its ops send their request to the app's own URL (a param), with no credential.
+
+Assumptions:
+
+- **IN1** (verified, [source](https://www.inngest.com/llm-context.md)): A `PUT` to the app's serve endpoint (by convention `/api/inngest`, `curl -X PUT https://your-app.com/api/inngest --fail-with-body`) makes the app's SDK register its functions with Inngest; the SDK authenticates that registration with the app's own `INNGEST_SIGNING_KEY`, so the caller sends no credential.
+- **IN2** (verified, [source](https://www.inngest.com/docs/platform/environments)): The app registers into the environment its SDK is configured for: `INNGEST_ENV` (or the client's `env` option) names the branch environment and always wins; Vercel's `VERCEL_GIT_COMMIT_REF` is detected automatically, while Netlify, Cloudflare Pages, Railway and Render must pass their branch variable. Sponson does not choose the environment: the app must be configured so.
+- **IN3** (verified, [source](https://www.inngest.com/docs/platform/environments)): A branch environment is created on demand the first time an app syncs with it (or events are sent to it), and every branch environment shares one signing key and one event key, so a preview needs no per-branch key.
+- **IN4** (verified, [source](https://github.com/inngest/inngest-js/blob/main/packages/inngest/src/components/InngestCommHandler.ts)): Without `x-inngest-sync-kind: in-band` (which this recipe never sends) the serve handler syncs out of band: it calls Inngest's register endpoint itself and answers with that call's status and a JSON body `{ message, modified }`; a failed registration answers 500 (`Failed to register`).
+- **IN5** (verified, [source](https://www.inngest.com/docs/apps/cloud)): Sync only once the new version of the code is live: some hosts roll a deploy out over seconds or minutes and an early sync registers the old functions. The recipe's trigger is the deployment's URL (a deploy line's external output, so the line waits for the deploy) and a revision.
+- **IN6** (verified, [source](https://www.inngest.com/docs/platform/environments)): Branch environments are archived automatically three days after their latest deployment (archiving stops functions from triggering and keeps the data), and archiving cannot be undone per app; there is no request to undo a sync, so destroy sends nothing and forgets the record.
+- **IN7** (verified, [source](https://api-docs.inngest.com/api-specs/v2.json)): The REST API's `POST /v2/apps/{appId}/syncs` (marked beta, `x-beta: true`) takes `{ url }` and answers a sync with `status` pending, success, error or duplicate, but the operation declares no header or parameter that selects a branch environment; this recipe does not use it.
+- **IN8** **(unverified)**: Syncing the same deployment again is harmless (the same functions registered again, `modified: false`), so the at-least-once delivery of an action (sent again after a crash before it was recorded) needs no idempotency key.
+- **IN9** **(unverified)**: A preview behind Vercel Deployment Protection answers the `PUT` with 401 unless it carries `x-vercel-protection-bypass` with the project's automation bypass secret; pass it with `headers`, as a `{ secret }`.
+
+### `inngest.sync`
+
+**App sync into its branch environment** (`http.action`). Registers a preview deployment's Inngest functions by sending `PUT` to its serve endpoint, once per deployment URL and revision; the app's SDK picks the branch environment (`INNGEST_ENV`, IN2) and signs the registration with its own key (IN1), so no Inngest credential is needed.
+
+Covers: `inngest-sync` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `modified`. On destroy: nothing is sent (there is nothing to undo); the record is forgotten.
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `url` | string | yes | — | The deployment's base URL, without a trailing slash: usually `{ from: <deploy line>.preview_url }`, so the sync waits for the deploy (IN5). Matches `^https?://\\S+[^/]$`. |
+| `path` | string | no | `/api/inngest` | Where the app serves Inngest's `serve()` handler, appended to `url`. Matches `^/\\S*$`. |
+| `revision` | string | yes | — | What else makes it sync again when it changes, usually the commit: `"${ctx.git.sha}"`. |
+| `headers` | map | no | — | Extra request headers, such as `x-vercel-protection-bypass: { secret: env://VERCEL_AUTOMATION_BYPASS_SECRET }` for a protected preview (IN9). |
+
+```yaml
+# under changes: (no provider block needed)
+- id: sync
+  adapter: http
+  op: action
+  recipe: inngest.sync
+  url: https://acme-git-feat-x-acme.vercel.app
+  revision: ${ctx.git.sha}
+```
+
+What the line expands into: the [`http.action`](plan-format.md#httpaction) params, `{ param: <name> }` standing for a param's value, `{ join: [...] }` for its parts joined into one string, and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+trigger:
+  url: { param: url }
+  path: { param: path }
+  revision: { param: revision }
+request:
+  method: PUT
+  url:
+    join:
+      - { param: url }
+      - { param: path }
+  headers: { param: headers }
+outputs:
+  modified: /modified
 ```
 
 ## Kinde

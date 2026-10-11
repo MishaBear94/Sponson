@@ -94,6 +94,11 @@ beforeAll(async () => {
   const manual = await cli("apply manual", ["apply", "--json"], 9);
   if (manual.code !== 2 || manual.json?.error?.code !== "MANUAL_STEP_PENDING") throw new Error(`apply manual: ${manual.stdout}`);
 
+  // 10. a one-off action whose trigger has not run (ADR 0022): `run` in plan
+  const withAction = previewPlan([{ id: "notify", adapter: "http", op: "action", api: "demo", trigger: { sha: "${ctx.git.sha}" }, request: { path: "/deploys" }, environments: ["preview"] }]);
+  await w.writePlan({ ...withAction, providers: { ...withAction.providers, http: { demo: { base_url: "https://api.example.test", base_url_env: "REST_API_URL", auth: { bearer_env: "REST_API_TOKEN" } } } } });
+  await cli("plan action", ["plan", "--json"], 10);
+
   // 8. top-level errors
   await cli("apply production", ["apply", "--env", "production", "--json"], 8);
   await cli("plan unknown env", ["plan", "--env", "stagging", "--json"], 8);

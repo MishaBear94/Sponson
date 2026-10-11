@@ -90,7 +90,8 @@ Root-level suites (`scenarios/`, `property/`) import the packages by name; `vite
    read-only `awaitExternal` check, so a finished deploy turns `pending` into `create`.
 6. **Line status**: `blocked` (a refusal, or a dependency in error), `error` (inspect threw), `pending` (an input is
    not known yet; `waitingOn`, `waitingFor`), `todo` (a manual step a person has not done; `manual` carries its
-   instructions), else `create`, `update` or `unchanged` from the diff.
+   instructions), `run` (a one-off action whose trigger has not run in this scope, ADR 0022), else `create`,
+   `update` or `unchanged` from the diff.
 7. **Scope drift** (`engine/drift.ts`): `orphan` entries (in the ledger, declared by no line) and `unmanaged`
    resources (listed by an op's `listScope`, managed by no scope).
 8. **Output.** `planJson()` / `renderPlan()` in `packages/cli/src/render.ts`; JSON goes through `serialize()` in
@@ -129,7 +130,11 @@ Steps 1–3 are the same. Then `applyRun()` (`engine/apply.ts`):
      [ADR 0021](docs/adr/0021-manual-steps.md)) is never sent anywhere: it is done when its verify `read` sees it or
      the ledger records a person's confirmation of these instructions; a todo is recorded only when the run confirms
      it (`confirm`, `confirmedBy`), and otherwise waits (`waitingFor: confirmation`, `MANUAL_STEP_PENDING`) with its
-     dependents, never rolled back; the CLI then exits 2 and prints the instructions.
+     dependents, never rolled back; the CLI then exits 2 and prints the instructions;
+   - a one-off action (an op with `action()`, such as `http.action`; `engine/action.ts`,
+     [ADR 0022](docs/adr/0022-one-off-actions.md)) is judged against the ledger only (`read` is never called): its
+     trigger's hash was recorded, so it is `unchanged`, or it is sent (`apply`) and recorded afterwards, never as an
+     intent (at least once, with an idempotency key where the API takes one), and never rolled back;
 5. **On failure or refusal**: remaining lines are `skipped`; `rollback()` first re-reads lines with unresolved intents (a create
    whose answer was lost may have succeeded), then destroys what *this run* created, newest first. A destroy that fails
    leaves `rollback_failed` with the resources named.
@@ -169,7 +174,8 @@ says what Sponson *manages* in this environment and scope after the run, indepen
   provider shows only on create (`OutputSpec.once`), on the producer and on each dependent written with them, which
   decide whether a later run may keep the dependent as it is ([ADR 0018](docs/adr/0018-once-only-outputs.md));
   **`manual`** records a manual step's title and undo, and who confirmed it and when, or when a verify request first
-  saw it done ([ADR 0021](docs/adr/0021-manual-steps.md)).
+  saw it done ([ADR 0021](docs/adr/0021-manual-steps.md)); **`action`** says when a one-off action last ran (its
+  `hash` is the trigger's, its `id` the undo request, its key `action:<line id>`; [ADR 0022](docs/adr/0022-one-off-actions.md)).
 - Every run starts from the previous ledger and changes only entries it observed or wrote, so failed, skipped,
   waiting and refused lines never make Sponson forget what it owns.
 
