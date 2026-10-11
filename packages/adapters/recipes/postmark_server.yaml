@@ -1,0 +1,90 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Postmark Server API recipes (one server's token). The Account API is postmark.yaml. Format and checklist:
+# docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: postmark_server
+title: Postmark (Server API)
+category: email
+verified_on: "2026-10-11"
+docs:
+  - title: Webhooks API
+    url: https://postmarkapp.com/developer/api/webhooks-api
+  - title: API overview (authentication)
+    url: https://postmarkapp.com/developer/api/overview
+api:
+  base_url: https://api.postmarkapp.com
+  base_url_env: POSTMARK_API_URL
+  auth: { header: X-Postmark-Server-Token, value_env: POSTMARK_SERVER_TOKEN }
+assumptions:
+  - id: PS1
+    verified: true
+    text: "The Webhooks API authenticates with a server's token in `X-Postmark-Server-Token`, so it manages the webhooks of that one server."
+    source: https://postmarkapp.com/developer/api/webhooks-api
+  - id: PS2
+    verified: true
+    text: "`POST /webhooks` creates a webhook from `Url` (required), `MessageStream` (default `outbound`), `HttpAuth`, `HttpHeaders` and `Triggers` (`Open { Enabled, PostFirstOpenOnly }`, `Click`, `Delivery`, `Bounce { Enabled, IncludeContent }`, `SpamComplaint { Enabled, IncludeContent }`, `SubscriptionChange`, each with `Enabled`), answering the webhook with its integer `ID`."
+    source: https://postmarkapp.com/developer/api/webhooks-api
+  - id: PS3
+    verified: true
+    text: "`GET /webhooks` (optionally `?MessageStream=`) answers `{ Webhooks: [...] }` with each webhook's `ID`, `Url`, `MessageStream` and `Triggers`."
+    source: https://postmarkapp.com/developer/api/webhooks-api
+  - id: PS4
+    verified: true
+    text: "`PUT /webhooks/{Id}` changes `Url`, `HttpAuth`, `HttpHeaders` and `Triggers` (not `MessageStream`), re-verifying the endpoint when the URL or the triggers change; `DELETE /webhooks/{Id}` removes it."
+    source: https://postmarkapp.com/developer/api/webhooks-api
+  - id: PS5
+    verified: true
+    text: "Postmark tests the endpoint when a webhook is created; `Verify: false` saves it without the test (a preview that is not deployed yet would fail it)."
+    source: https://postmarkapp.com/developer/api/webhooks-api
+  - id: PS6
+    verified: false
+    text: "A URL identifies one webhook of the server (two webhooks with the same URL, on different streams, make `find` refuse with PARAM_INVALID), and every trigger's `Enabled` is answered as a boolean even when it was not sent."
+  - id: PS7
+    verified: false
+    text: "`PostFirstOpenOnly` and `IncludeContent` are left at Postmark's defaults; only which events are delivered is compared."
+ops:
+  webhook:
+    kind: resource
+    title: Webhook of a server
+    summary: "A webhook of one Postmark server delivering to an environment's URL, such as the preview's `/api/postmark` handler, with the events it enables. Located by its URL; a console edit of an event's `Enabled` is drift. It works with a server whose token is in `POSTMARK_SERVER_TOKEN` (a shared staging server, say): a server the same plan creates per environment has its token only as an output, which cannot be a credential."
+    covers: []
+    params:
+      url:
+        type: string
+        required: true
+        pattern: "^https?://\\S+$"
+        description: The URL events are posted to; its identity (PS6).
+        example: "https://${ctx.scope}.preview.example.com/api/postmark"
+      message_stream:
+        type: string
+        default: outbound
+        description: The message stream whose events are delivered (sent on create only).
+      verify:
+        type: boolean
+        default: false
+        description: Have Postmark test the URL when the webhook is created (PS5).
+      delivery: { type: boolean, default: true, description: Deliver `Delivery` events. }
+      bounce: { type: boolean, default: true, description: Deliver `Bounce` events. }
+      spam_complaint: { type: boolean, default: true, description: Deliver `SpamComplaint` events. }
+      open: { type: boolean, default: false, description: Deliver `Open` events. }
+      click: { type: boolean, default: false, description: Deliver `Click` events. }
+      subscription_change: { type: boolean, default: false, description: Deliver `SubscriptionChange` events. }
+    http:
+      find:
+        path: /webhooks
+        list_path: /Webhooks
+        match: { Url: { param: url } }
+      create:
+        path: /webhooks
+        body: { MessageStream: { param: message_stream }, Verify: { param: verify } }
+      update: { method: PUT, path: "/webhooks/{id}" }
+      delete: { path: "/webhooks/{id}" }
+      id_path: /ID
+      fields:
+        /Triggers/Delivery/Enabled: { param: delivery }
+        /Triggers/Bounce/Enabled: { param: bounce }
+        /Triggers/SpamComplaint/Enabled: { param: spam_complaint }
+        /Triggers/Open/Enabled: { param: open }
+        /Triggers/Click/Enabled: { param: click }
+        /Triggers/SubscriptionChange/Enabled: { param: subscription_change }
+    sim:
+      numeric_ids: true

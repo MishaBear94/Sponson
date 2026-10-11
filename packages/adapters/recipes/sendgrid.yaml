@@ -1,0 +1,158 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Twilio SendGrid v3 API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: sendgrid
+title: SendGrid
+category: email
+verified_on: "2026-10-11"
+docs:
+  - title: Create an Event Webhook
+    url: https://www.twilio.com/docs/sendgrid/api-reference/webhooks/create-an-event-webhook
+  - title: Get all Event Webhooks
+    url: https://www.twilio.com/docs/sendgrid/api-reference/webhooks/get-all-event-webhooks
+  - title: Get an Event Webhook
+    url: https://www.twilio.com/docs/sendgrid/api-reference/webhooks/get-an-event-webhook
+  - title: Update an Event Webhook
+    url: https://www.twilio.com/docs/sendgrid/api-reference/webhooks/update-an-event-webhook
+  - title: Delete an Event Webhook
+    url: https://www.twilio.com/docs/sendgrid/api-reference/webhooks/delete-an-event-webhook
+  - title: Create a parse setting
+    url: https://www.twilio.com/docs/sendgrid/api-reference/settings-inbound-parse/create-a-parse-setting
+  - title: Retrieve a specific parse setting
+    url: https://www.twilio.com/docs/sendgrid/api-reference/settings-inbound-parse/retrieve-a-specific-parse-setting
+  - title: Update a parse setting
+    url: https://www.twilio.com/docs/sendgrid/api-reference/settings-inbound-parse/update-a-parse-setting
+  - title: Delete a parse setting
+    url: https://www.twilio.com/docs/sendgrid/api-reference/settings-inbound-parse/delete-a-parse-setting
+api:
+  base_url: https://api.sendgrid.com
+  base_url_env: SENDGRID_API_URL
+  auth: { bearer_env: SENDGRID_API_KEY }
+assumptions:
+  - id: SG1
+    verified: true
+    text: "`POST /v3/user/webhooks/event/settings` creates an Event Webhook from `url` (required), `enabled`, one boolean per event type (`processed`, `delivered`, `dropped`, `deferred`, `bounce`, `open`, `click`, `spam_report`, `unsubscribe`, `group_unsubscribe`, `group_resubscribe`) and `friendly_name`, answering 201 with the webhook and its string `id`; requests carry the API key as `Authorization: Bearer`. EU regional subusers use `https://api.eu.sendgrid.com`."
+    source: https://www.twilio.com/docs/sendgrid/api-reference/webhooks/create-an-event-webhook
+  - id: SG2
+    verified: true
+    text: "Each URL can be used by only one Event Webhook (a second create answers 400 naming the existing id), so the URL identifies the webhook; the number of webhooks is limited by the plan (400 beyond it)."
+    source: https://www.twilio.com/docs/sendgrid/api-reference/webhooks/create-an-event-webhook
+  - id: SG3
+    verified: true
+    text: "`GET /v3/user/webhooks/event/settings/all` answers `{ max_allowed, webhooks: [...] }` with every webhook's settings and `id`."
+    source: https://www.twilio.com/docs/sendgrid/api-reference/webhooks/get-all-event-webhooks
+  - id: SG4
+    verified: true
+    text: "`PATCH /v3/user/webhooks/event/settings/{id}` requires `url` and updates the fields sent; `DELETE` on the same path answers 204, and 404 for an unknown id. Without an id these paths act on the oldest webhook, which the recipe never does (its paths always carry the id)."
+    source: https://www.twilio.com/docs/sendgrid/api-reference/webhooks/update-an-event-webhook
+  - id: SG5
+    verified: true
+    text: "Signature verification and its public key are set through a separate endpoint and are not part of the webhook's create or update; this recipe does not manage them."
+    source: https://www.twilio.com/docs/sendgrid/api-reference/webhooks/create-an-event-webhook
+  - id: SG6
+    verified: true
+    text: "`POST /v3/user/webhooks/parse/settings` creates an Inbound Parse setting from `url`, `hostname`, `spam_check` and `send_raw`, answering 201 with those four fields bare; `GET`, `PATCH` and `DELETE` (204) `/v3/user/webhooks/parse/settings/{hostname}` read, update and remove it. The hostname must be on a domain authenticated in SendGrid, with an MX record pointing at SendGrid."
+    source: https://www.twilio.com/docs/sendgrid/api-reference/settings-inbound-parse/create-a-parse-setting
+  - id: SG7
+    verified: false
+    text: "A PATCH that leaves out an event flag keeps its current value (the documentation's examples send only `url`); the recipe sends every flag it compares anyway."
+  - id: SG8
+    verified: false
+    text: "A parse setting for a hostname that exists already is refused with an error status (not documented which); the next run then finds it by its hostname."
+ops:
+  event_webhook:
+    kind: resource
+    title: Event Webhook
+    summary: An Event Webhook delivering an environment's email events to its URL, such as the preview's `/api/sendgrid/events` handler. Located by its URL (unique in SendGrid); a console edit of its enabled flag, an event flag or its friendly name is drift.
+    covers: [sendgrid-webhook]
+    params:
+      url:
+        type: string
+        required: true
+        pattern: "^https?://\\S+$"
+        description: The URL events are posted to; its identity (SG2).
+        example: "https://${ctx.scope}.preview.example.com/api/sendgrid/events"
+      enabled:
+        type: boolean
+        default: true
+        description: Whether events are posted.
+      friendly_name:
+        type: string
+        description: A label for the webhook (not unique).
+        example: "sponson ${ctx.env} ${ctx.scope}"
+      processed: { type: boolean, default: false, description: Post `processed` events. }
+      delivered: { type: boolean, default: true, description: Post `delivered` events. }
+      dropped: { type: boolean, default: true, description: Post `dropped` events. }
+      deferred: { type: boolean, default: false, description: Post `deferred` events. }
+      bounce: { type: boolean, default: true, description: Post `bounce` events. }
+      open: { type: boolean, default: false, description: Post `open` events. }
+      click: { type: boolean, default: false, description: Post `click` events. }
+      spam_report: { type: boolean, default: true, description: Post `spam_report` events. }
+      unsubscribe: { type: boolean, default: false, description: Post `unsubscribe` events. }
+      group_unsubscribe: { type: boolean, default: false, description: Post `group_unsubscribe` events. }
+      group_resubscribe: { type: boolean, default: false, description: Post `group_resubscribe` events. }
+    http:
+      find:
+        path: /v3/user/webhooks/event/settings/all
+        list_path: /webhooks
+        match: { url: { param: url } }
+      create: { path: /v3/user/webhooks/event/settings }
+      update:
+        method: PATCH
+        path: "/v3/user/webhooks/event/settings/{id}"
+        body: { url: { param: url } }
+      delete: { path: "/v3/user/webhooks/event/settings/{id}" }
+      fields:
+        enabled: { param: enabled }
+        friendly_name: { param: friendly_name }
+        processed: { param: processed }
+        delivered: { param: delivered }
+        dropped: { param: dropped }
+        deferred: { param: deferred }
+        bounce: { param: bounce }
+        open: { param: open }
+        click: { param: click }
+        spam_report: { param: spam_report }
+        unsubscribe: { param: unsubscribe }
+        group_unsubscribe: { param: group_unsubscribe }
+        group_resubscribe: { param: group_resubscribe }
+  parse_setting:
+    kind: resource
+    title: Inbound Parse setting
+    summary: An Inbound Parse host per environment, such as `pr-42.parse.example.com`, posting the mail it receives to the environment's URL. Named by its hostname; a console edit of its URL, spam check or raw flag is drift. The hostname's domain must be authenticated in SendGrid and its MX record point at SendGrid (a wildcard record serves every environment).
+    covers: [sendgrid-webhook]
+    params:
+      hostname:
+        type: string
+        required: true
+        pattern: "^[a-z0-9.-]+$"
+        description: The host mail is received for, lower-case; its identity.
+        example: "${ctx.scope}.parse.example.com"
+      url:
+        type: string
+        required: true
+        pattern: "^https?://\\S+$"
+        description: The URL parsed mail is posted to.
+        example: "https://${ctx.scope}.preview.example.com/api/sendgrid/inbound"
+      spam_check:
+        type: boolean
+        default: false
+        description: Check mail for spam before posting it.
+      send_raw:
+        type: boolean
+        default: false
+        description: Post the original MIME message.
+    http:
+      read: { path: "/v3/user/webhooks/parse/settings/{hostname}" }
+      create:
+        path: /v3/user/webhooks/parse/settings
+        body: { hostname: { param: hostname } }
+      update: { method: PATCH }
+      id_path: /hostname
+      fields:
+        url: { param: url }
+        spam_check: { param: spam_check }
+        send_raw: { param: send_raw }
+    sim:
+      id_from: hostname
+    live:
+      params: { hostname: SPONSON_LIVE_SENDGRID_PARSE_HOSTNAME }

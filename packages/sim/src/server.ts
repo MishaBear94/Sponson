@@ -46,20 +46,20 @@ async function handle(state: SimState, req: IncomingMessage, res: ServerResponse
   }
 
   // Any non-empty credential is accepted; missing-token bugs must surface as 401.
-  if (!authorized(url, req.headers)) return send(res, 401, { error: "unauthorized" });
+  if (!authorized(state, url, req.headers)) return send(res, 401, { error: "unauthorized" });
   await serveProvider(state, req, res, { method, url, raw, body });
 }
 
 /** `/<provider>` → how that provider takes its credential, when not as a bearer token. */
-const AUTH: Record<string, (headers: IncomingHttpHeaders) => boolean> = Object.fromEntries(
-  providerEntries().flatMap(([name, p]) => (p.authorized ? [[`/${name}`, (h: IncomingHttpHeaders) => p.authorized!(h)]] : [])),
+const AUTH: Record<string, (state: SimState, headers: IncomingHttpHeaders) => boolean> = Object.fromEntries(
+  providerEntries().flatMap(([name, p]) => (p.authorized ? [[`/${name}`, (state: SimState, h: IncomingHttpHeaders) => p.authorized!(h, state.provider(name))]] : [])),
 );
 
 /** The credential check of the provider the path belongs to; a non-empty bearer token by default. */
-function authorized(url: URL, headers: IncomingHttpHeaders): boolean {
+function authorized(state: SimState, url: URL, headers: IncomingHttpHeaders): boolean {
   const prefix = url.pathname.match(/^\/[^/]+/)?.[0] ?? "";
   const check = AUTH[prefix];
-  return check ? check(headers) : /^Bearer\s+\S+$/.test(headers.authorization ?? "");
+  return check ? check(state, headers) : /^Bearer\s+\S+$/.test(headers.authorization ?? "");
 }
 
 /** An authenticated provider request: latency, chaos, the write log, then the provider's routes. */

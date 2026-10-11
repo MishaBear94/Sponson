@@ -6,7 +6,8 @@
 #   priority     P0 | P1 | P2 (weights below)
 #   generic      whether the generic http adapter can express it: Y, P (partly, why) or N (why)
 #   covered_by   what manages it today: `<adapter>.<op>` (a registered op), `recipe:<provider>.<op>` (a shipped
-#                recipe op), a list of those, `manual` (no API reaches it: a person does it; `why` says so), or
+#                recipe op), a list of those, `manual.step` (no API reaches it: a person does it, tracked by a
+#                manual step line, never counted as automated; `why` says so), `manual` (the same, untracked), or
 #                null (not yet). scenarios/docs/coverage.test.ts checks every reference resolves and is tested.
 #   counted      false for a row kept for completeness that has nothing to manage (`why` says so)
 #   note         shown after the coverage mark
@@ -186,7 +187,7 @@ categories:
       - id: supabase-auth-redirect
         provider: Supabase Auth
         side_effect: Preview URL in "Additional Redirect URLs"
-        api_shape: Management API `PATCH /v1/projects/{ref}/config/auth` with `uri_allow_list`, bearer; **list** encoded as one comma-separated string; send only that field
+        api_shape: Management API `PATCH /v1/projects/{ref}/config/auth` with `uri_allow_list`, bearer; **list** encoded as one comma-separated string; send only that field; no precondition, so the op locks the list (`lockOn`)
         generic: Y (list mode over a delimited string)
         priority: P0
         covered_by: supabase.auth_redirect
@@ -231,7 +232,7 @@ categories:
         api_shape: "**No public API** for standard OAuth web clients (Console only); only IAM workforce OAuth clients and IAP are programmable"
         generic: N
         priority: P1
-        covered_by: manual
+        covered_by: manual.step
         why: no public API for standard OAuth web clients
   - id: flags
     title: Feature flags and targeting
@@ -250,49 +251,56 @@ categories:
         api_shape: "`PATCH /api/projects/{id}/feature_flags/{id}` `filters.groups`, personal API key bearer; **list** in `filters`"
         generic: Y (list mode)
         priority: P1
-        covered_by: null
+        covered_by: recipe:posthog.release_condition
+        note: condition on a person or group property; needs the merging `filters` PATCH of current PostHog (PH5)
       - id: statsig-gate-rule
         provider: Statsig
         side_effect: Gate rule for the preview (condition `url` or `environment_tier`)
-        api_shape: Console API `POST /console/v1/gates/{id}/rule`, `PATCH`/`DELETE .../rules/{ruleID}`, `STATSIG-API-KEY` header; object per rule; reviews may gate changes
+        api_shape: Console API `POST /console/v1/gates/{id}/rule` (answers the whole gate), `GET .../rules`, `PATCH`/`DELETE .../rules/{ruleID}`, `STATSIG-API-KEY` header; object per rule; reviews may gate changes
         generic: Y
         priority: P1
-        covered_by: null
+        covered_by: recipe:statsig.gate_rule
+        note: "gates requiring reviews: write behaviour undocumented (SG8)"
       - id: growthbook-force-rule
         provider: GrowthBook
         side_effect: Force rule in a per-environment feature
-        api_shape: REST `POST /api/v1/features/{id}` with `environments.{env}.rules`, bearer; **list** per environment
+        api_shape: REST v2 `POST /api/v2/features/{id}` replacing the top-level `rules` (each rule names its environments; v1's `environments.{env}.rules` is deprecated), bearer; **list**
         generic: Y (list mode)
         priority: P2
-        covered_by: null
+        covered_by: recipe:growthbook.force_rule
+        note: v2 API (rules with per-rule environments); approval-gated features refuse the write
       - id: unleash-strategy
         provider: Unleash
         side_effect: Strategy (with constraints) on a flag in an environment
         api_shape: Admin API `POST /api/admin/projects/{p}/features/{f}/environments/{env}/strategies`, `DELETE .../{id}`; token header; object
         generic: Y
         priority: P2
-        covered_by: null
+        covered_by: recipe:unleash.flag_strategy
+        note: deleting the last strategy turns the flag off in that environment (UN8)
       - id: flagsmith-override
         provider: Flagsmith
         side_effect: Segment override or a per-PR environment
-        api_shape: "`POST /api/v1/environments/`, feature-state endpoints; `Token` header; object"
-        generic: Y
+        api_shape: "`POST /api/v1/environments/`, feature-state endpoints; `Authorization: Api-Key <key>` (organisation key) or `Token <key>`; object"
+        generic: P (credential needs an `Api-Key` scheme prefix)
         priority: P2
         covered_by: null
+        note: "not yet: the Admin API takes `Authorization: Api-Key <key>`, a scheme prefix the http adapter's auth forms do not send (Bearer only for short-lived OIDC-exchanged tokens)"
       - id: configcat-rule
         provider: ConfigCat
         side_effect: Targeting rule on a setting in an environment
-        api_shape: Management API v2 `PATCH /v2/environments/{e}/settings/{s}/value` (JSON Patch), Basic; **list** of rules
-        generic: Y (JSON Patch body)
+        api_shape: Management API v2 `PUT /v2/environments/{e}/settings/{s}/value` (replaces `defaultValue`, `targetingRules`, `percentageEvaluationAttribute`; `PATCH` is JSON Patch), Basic; **list** of rules
+        generic: Y (list mode, PUT with the other fields sent back)
         priority: P2
-        covered_by: null
+        covered_by: recipe:configcat.targeting_rule
+        note: boolean flags; products requiring a change reason or approval refuse the write
       - id: split-rule
         provider: Split (Harness FME)
         side_effect: Targeting rule / individual target in an environment
-        api_shape: Admin API `PATCH /internal/api/v2/splits/ws/{ws}/{split}/environments/{env}` (JSON Patch), bearer; **list** **(unverified paths since the Harness migration)**
+        api_shape: Admin API `PUT /internal/api/v2/splits/ws/{ws}/{split}/environments/{env}` (full definition; `PATCH` is JSON Patch), bearer; **list**; same host and paths after the Harness migration
         generic: Y
         priority: P2
-        covered_by: null
+        covered_by: recipe:split.targeting_rule
+        note: targeting rule (not individual targets); projects requiring title/comment refuse the write
   - id: webhooks
     title: Webhooks registered per environment
     rows:
@@ -309,21 +317,21 @@ categories:
         api_shape: "`POST /repos/{o}/{r}/hooks`, `DELETE .../hooks/{id}`; bearer; object; secret write-only (caller supplies it)"
         generic: Y
         priority: P2
-        covered_by: null
+        covered_by: recipe:github.repo_webhook
       - id: svix-endpoint
         provider: Svix (as a sender)
         side_effect: Endpoint per environment on an application
         api_shape: "`POST /api/v1/app/{app}/endpoint` with caller-chosen `uid`; bearer; object, idempotent by `uid`; secret readable via `GET .../secret`"
         generic: Y
         priority: P2
-        covered_by: null
+        covered_by: recipe:svix.endpoint
       - id: clerk-webhook
         provider: Clerk webhooks
         side_effect: Preview URL as a webhook endpoint
         api_shape: Clerk's Backend API only creates/deletes the Svix app and a dashboard link; **no endpoint API** through Clerk
         generic: N
         priority: P1
-        covered_by: manual
+        covered_by: manual.step
         why: Clerk's API manages the Svix app, not its endpoints
   - id: email
     title: "Email: sending domains, webhooks, test inboxes"
@@ -334,21 +342,26 @@ categories:
         api_shape: "`POST /api-keys` (token returned once), `POST /webhooks`; bearer; object"
         generic: Y
         priority: P2
-        covered_by: null
+        covered_by:
+          - recipe:resend.api_key
+          - recipe:resend.webhook
       - id: postmark-server-webhook
         provider: Postmark
         side_effect: Server per environment, webhook per server
         api_shape: Account API `POST /servers` (`X-Postmark-Account-Token`), Server API `POST /webhooks` (`X-Postmark-Server-Token`); object
-        generic: Y
+        generic: P (the webhook API takes the server's own token, an output of the server line)
         priority: P2
         covered_by: null
+        note: "server: recipe `postmark.server`; webhook: recipe `postmark_server.webhook`, on a server whose token is configured. Not chained in one plan: a created server's token cannot be a credential"
       - id: sendgrid-webhook
         provider: SendGrid
         side_effect: Event webhook or inbound-parse host per environment
         api_shape: "`POST /v3/user/webhooks/event/settings`, `POST /v3/user/webhooks/parse/settings`; bearer; object"
         generic: Y
         priority: P2
-        covered_by: null
+        covered_by:
+          - recipe:sendgrid.event_webhook
+          - recipe:sendgrid.parse_setting
   - id: observability
     title: Observability per release
     rows:
@@ -358,21 +371,24 @@ categories:
         api_shape: "`POST /api/0/organizations/{o}/releases/`, `POST .../releases/{v}/deploys/`; bearer; object; environments appear on first event"
         generic: Y (destroy = leave; history)
         priority: P1
-        covered_by: null
+        covered_by:
+          - recipe:sentry.release
+          - recipe:sentry.deploy
       - id: datadog-marker
         provider: Datadog
         side_effect: Deployment marker / synthetic test against the preview URL
         api_shape: "`datadog-ci deployment mark`; `POST /api/v1/synthetics/tests/api`; `DD-API-KEY` + `DD-APPLICATION-KEY` headers; object"
-        generic: Y
+        generic: P (two credential headers on every read; deployment events listed by POST)
         priority: P2
         covered_by: null
+        note: "blocked for recipes: reads need two credentials at once (`DD-API-KEY` + `DD-APPLICATION-KEY`); deployment events are listed by POST"
       - id: honeycomb-marker
         provider: Honeycomb
         side_effect: Marker per deploy in the environment's dataset
         api_shape: "`POST /1/markers/{dataset}`, `X-Honeycomb-Team` header; object"
         generic: Y
         priority: P2
-        covered_by: null
+        covered_by: recipe:honeycomb.marker
   - id: dns
     title: DNS and preview domains
     rows:
@@ -464,7 +480,7 @@ categories:
         api_shape: No public API for account sandboxes; anonymous "claimable" sandboxes are private preview
         generic: N
         priority: P2
-        covered_by: manual
+        covered_by: manual.step
         why: no public API for account sandboxes
 secret_sources:
   - id: doppler

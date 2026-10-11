@@ -312,6 +312,16 @@ describe("supabase auth_redirect", () => {
     await branchOp.destroy(actx, b.resources);
     await redirectOp.destroy(actx, r.resources);
   });
+
+  it("locks the allow-list it edits (ADR 0019): the project's, or the line's own project; never before it is known", () => {
+    const lockOn = redirectOp.lockOn!;
+    expect(lockOn({ url: URL1 }, provider)).toBe(`supabase:${P}:auth-uri-allow-list`);
+    expect(lockOn({ url: URL1, project: "" }, provider)).toBe(`supabase:${P}:auth-uri-allow-list`);
+    expect(lockOn({ url: URL1, project: "branchrefabc" }, provider)).toBe("supabase:branchrefabc:auth-uri-allow-list");
+    expect(lockOn({ url: URL1, project: pendingMarker("db.project_ref") }, provider)).toBeNull();
+    expect(lockOn({ url: URL1 }, {})).toBeNull();
+    expect(branchOp.lockOn).toBeUndefined();
+  });
 });
 
 /**

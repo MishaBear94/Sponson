@@ -47,8 +47,8 @@ describe("rest sim styles", () => {
     expect((await call("PUT", "/services/srv-2/env-vars/API_URL", { value: "x" })).status).toBe(404);
   });
 
-  it("lists and addresses a collection at its other paths too (also_at)", async () => {
-    sim = await startSim({ seed: { rest: { collections: { "/projects/p/databases": [] }, styles: { "/projects/p/databases": { also_at: ["/databases", "/all-databases"] } } } } });
+  it("an alias of a collection lists it and addresses its objects too", async () => {
+    sim = await startSim({ seed: { rest: { collections: { "/projects/p/databases": [] }, aliases: { "/databases": "/projects/p/databases", "/all-databases": "/projects/p/databases" } } } });
     const created = await call("POST", "/projects/p/databases", { name: "app-pr-1" });
     const id = (created.body.data as { id: string }).id;
     expect((await call("GET", `/databases/${id}`)).body).toEqual({ data: { name: "app-pr-1", id } });
@@ -68,10 +68,40 @@ describe("rest sim styles", () => {
     expect((await call("POST", "/schedules", { name: "plain" }, { ...headers, "x-cron": "1 * * * *" })).body).toMatchObject({ name: "plain", cron: "1 * * * *" });
   });
 
-  it("accepts a credential in any *-Key or *-Token header", async () => {
+  it("accepts a credential in any *-Key or *-Token header, or bare in Authorization", async () => {
     sim = await startSim();
     expect((await call("GET", "/gates", undefined, { "x-auth-token": "t" })).status).toBe(200);
     expect((await call("GET", "/gates", undefined, { "x-postmark-server-key": "t" })).status).toBe(200);
+    expect((await call("GET", "/gates", undefined, { authorization: "user:abc123" })).status).toBe(200);
     expect((await call("GET", "/gates", undefined, { "x-other": "t" })).status).toBe(401);
+    expect((await call("GET", "/gates", undefined, { authorization: "Bearer" })).status).toBe(401);
+    expect((await call("GET", "/gates", undefined, { authorization: "two words" })).status).toBe(401);
+  });
+
+  it("adds a create posted to an alias to its collection, and answers a styled object in its envelope", async () => {
+    sim = await startSim({ seed: { rest: { collections: { "/gates/g/rules": [] }, aliases: { "/gates/g/rule": "/gates/g/rules" }, objects: { "/features/f": { rules: [] } }, styles: { "/features/f": { item_path: "/feature" } } } } });
+    expect((await call("POST", "/gates/g/rule", { name: "a" })).status).toBe(201);
+    expect(sim.state.rest.collections["/gates/g/rules"]).toEqual([{ name: "a", id: expect.stringMatching(/^it_/) }]);
+    expect((await call("GET", "/features/f")).body).toEqual({ feature: { rules: [] } });
+    await call("POST", "/features/f", { rules: [{ id: "r1" }] });
+    expect((await call("GET", "/features/f")).body).toEqual({ feature: { rules: [{ id: "r1" }] } });
+  });
+
+  it("accepts a credential in a header the seed declares, and only there", async () => {
+    sim = await startSim({ seed: { rest: { collections: { "/markers": [] }, auth_headers: ["X-Honeycomb-Team"] } } });
+    expect((await call("GET", "/markers", undefined, { "x-honeycomb-team": "t" })).status).toBe(200);
+    expect((await call("GET", "/markers", undefined, { "x-honeycomb-team": " " })).status).toBe(401);
+    expect((await call("GET", "/markers", undefined, { "x-other": "t" })).status).toBe(401);
+  });
+
+  it("ignores a trailing slash, and lists a collection under its aliases", async () => {
+    sim = await startSim({ seed: { rest: { collections: { "/releases/": [] }, styles: { "/releases/": { id_field: "version", item_path: "" } }, aliases: { "/hooks/all": "/hooks" } } } });
+    const created = await call("POST", "/releases/", { version: "1.0" });
+    expect(created).toEqual({ status: 201, body: { version: "1.0" } });
+    expect((await call("GET", "/releases/1.0/")).body).toEqual({ version: "1.0" });
+    expect(Object.keys(sim.state.rest.collections)).toContain("/releases");
+    await call("POST", "/hooks/", { url: "https://a" });
+    expect(((await call("GET", "/hooks/all")).body.data as unknown[]).length).toBe(1);
+    expect(sim.state.rest.collections["/hooks"]).toHaveLength(1);
   });
 });

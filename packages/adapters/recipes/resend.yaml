@@ -1,0 +1,124 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Resend API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: resend
+title: Resend
+category: email
+verified_on: "2026-10-11"
+docs:
+  - title: Create API key
+    url: https://resend.com/docs/api-reference/api-keys/create-api-key
+  - title: List API keys
+    url: https://resend.com/docs/api-reference/api-keys/list-api-keys
+  - title: Delete API key
+    url: https://resend.com/docs/api-reference/api-keys/delete-api-key
+  - title: Create webhook
+    url: https://resend.com/docs/api-reference/webhooks/create-webhook
+  - title: Retrieve webhook
+    url: https://resend.com/docs/api-reference/webhooks/get-webhook
+  - title: List webhooks
+    url: https://resend.com/docs/api-reference/webhooks/list-webhooks
+  - title: Update webhook
+    url: https://resend.com/docs/api-reference/webhooks/update-webhook
+  - title: Delete webhook
+    url: https://resend.com/docs/api-reference/webhooks/delete-webhook
+api:
+  base_url: https://api.resend.com
+  base_url_env: RESEND_API_URL
+  auth: { bearer_env: RESEND_API_KEY }
+assumptions:
+  - id: RS1
+    verified: true
+    text: "`POST /api-keys` creates an API key from `name` (at most 50 characters), `permission` (`full_access` or `sending_access`) and `domain_id` (with `sending_access` only), answering `{ id, token }`; requests carry `Authorization: Bearer <key>`."
+    source: https://resend.com/docs/api-reference/api-keys/create-api-key
+  - id: RS2
+    verified: true
+    text: "`GET /api-keys` answers `{ object: list, has_more, data: [{ id, name, created_at, last_used_at }] }`, every key when no `limit` is sent, and never the token: the token is shown only in the create answer, so it is a once-only output."
+    source: https://resend.com/docs/api-reference/api-keys/list-api-keys
+  - id: RS3
+    verified: true
+    text: "`DELETE /api-keys/{api_key_id}` removes a key; there is no endpoint to read or change one key, so its permission and domain are sent on create and never compared."
+    source: https://resend.com/docs/api-reference/api-keys/delete-api-key
+  - id: RS4
+    verified: true
+    text: "`POST /webhooks` creates a webhook from `endpoint` and `events` (both required), answering `{ object, id, signing_secret }`."
+    source: https://resend.com/docs/api-reference/webhooks/create-webhook
+  - id: RS5
+    verified: true
+    text: "`GET /webhooks/{webhook_id}` answers the webhook with `status` (`enabled`/`disabled`), `endpoint`, `events` and `signing_secret`: the secret stays readable, so it is an ordinary sensitive output."
+    source: https://resend.com/docs/api-reference/webhooks/get-webhook
+  - id: RS6
+    verified: true
+    text: "`GET /webhooks` answers `{ object: list, has_more, data: [{ id, created_at, status, endpoint, events }] }`, every webhook when no `limit` is sent."
+    source: https://resend.com/docs/api-reference/webhooks/list-webhooks
+  - id: RS7
+    verified: true
+    text: "`PATCH /webhooks/{webhook_id}` changes `endpoint`, `events` and `status`; `DELETE` on the same path removes the webhook."
+    source: https://resend.com/docs/api-reference/webhooks/update-webhook
+  - id: RS8
+    verified: false
+    text: "Key names and webhook endpoints are not unique in Resend: the recipe takes the name (keys) and the endpoint URL (webhooks) as the identity, and refuses (PARAM_INVALID) when two match, so give each environment its own name and URL."
+  - id: RS9
+    verified: false
+    text: "Creating a key or a webhook needs a `full_access` key; a deleted object answers 404."
+ops:
+  api_key:
+    kind: resource
+    title: API key
+    summary: "A restricted API key per environment, such as `sponson-preview-pr-42` allowed only to send from one domain. Its token is a once-only output: pass it to the app's environment line in the same run (`{ from: <line>.token }`); later runs keep what that line holds, and `apply --recreate <line>` issues a new one. Only its existence is compared for drift: Resend shows no permission or domain for a key."
+    covers: [resend-key-webhook]
+    params:
+      name:
+        type: string
+        required: true
+        pattern: "^.{1,50}$"
+        description: The key's name, unique among the account's keys (RS8); its identity.
+        example: "sponson-${ctx.env}-${ctx.scope}"
+      permission:
+        type: string
+        default: sending_access
+        enum: [full_access, sending_access]
+        description: What the key may do.
+      domain_id:
+        type: string
+        description: With `sending_access`, the only domain the key may send from.
+    http:
+      find:
+        path: /api-keys
+        list_path: /data
+        match: { name: { param: name } }
+      create:
+        path: /api-keys
+        body: { permission: { param: permission }, domain_id: { param: domain_id } }
+      delete: { path: "/api-keys/{id}" }
+      outputs:
+        token: { path: /token, sensitive: true, once: true }
+  webhook:
+    kind: resource
+    title: Webhook
+    summary: "A webhook delivering an environment's email events to its URL, such as the preview's `/api/resend` handler. Located by its endpoint URL; a console edit of its events is drift (its enabled/disabled status is left to the console: the create request takes none). Its signing secret is a sensitive output, readable on every run."
+    covers: [resend-key-webhook]
+    params:
+      endpoint:
+        type: string
+        required: true
+        pattern: "^https://\\S+$"
+        description: The URL events are delivered to; its identity (RS8).
+        example: "https://${ctx.scope}.preview.example.com/api/resend"
+      events:
+        type: list
+        required: true
+        description: The event types to deliver, such as `email.delivered` and `email.bounced`.
+        example: [email.delivered, email.bounced]
+    http:
+      find:
+        path: /webhooks
+        list_path: /data
+        match: { endpoint: { param: endpoint } }
+      read: { path: "/webhooks/{id}" }
+      create: { path: /webhooks }
+      update: { method: PATCH, path: "/webhooks/{id}" }
+      delete: { path: "/webhooks/{id}" }
+      fields:
+        events: { param: events }
+      outputs:
+        signing_secret: { path: /signing_secret, sensitive: true }

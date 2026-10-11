@@ -1,0 +1,45 @@
+# A manual step with a verify request (ADR 0021): a person changes a setting only a dashboard can change, and a GET
+# on the provider's API sees whether it is done. Format: see the top of scenarios/runner.test.ts.
+name: "manual.step with verify: done once its GET sees it (no confirmation needed), missing drift when it stops seeing it, destroy without undo needs nobody"
+plan: |
+  version: 1
+  providers:
+    manual:
+      app:
+        base_url: https://api.example.test/v1
+        base_url_env: REST_API_URL
+        auth: { bearer_env: REST_API_TOKEN }
+  changes:
+    - id: webhook
+      adapter: manual
+      op: step
+      title: "Point app {app}'s webhook at ${ctx.scope}"
+      vars: { app: demo }
+      instructions: "In the dashboard of app {app}, set the webhook URL to https://${ctx.scope}.preview.example.app/hooks and save."
+      verify: { api: app, path: "/apps/{app}", match: { /webhook_url: "https://${ctx.scope}.preview.example.app/hooks" } }
+seed:
+  rest:
+    objects:
+      /apps/demo: { name: demo, webhook_url: "https://app.example.app/hooks" }
+steps:
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { webhook: todo }, stdout: ['/"observable":\s*true/', "https://pr-42.preview.example.app/hooks"] }
+  - run: apply --json
+    expect: { exit: 2, status: partial, error: MANUAL_STEP_PENDING, writes: 0, lines: { webhook: waiting } }
+  # A person makes the change in the dashboard; the verify request sees it.
+  - chaos: { drift: { "rest.objects./apps/demo.webhook_url": "https://pr-42.preview.example.app/hooks" } }
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { webhook: unchanged } }
+  - run: apply --json
+    expect: { exit: 0, status: complete, writes: 0, lines: { webhook: applied }, stdout: ['/"how":\s*"verified"/', '/"verifiedAt"/'] }
+  - run: apply --json
+    expect: { exit: 0, status: complete, writes: 0, lines: { webhook: unchanged } }
+  # Someone changes it back: the step is missing drift, and a step to do again.
+  - chaos: { drift: { "rest.objects./apps/demo.webhook_url": "https://app.example.app/hooks" } }
+  - run: plan --json
+    expect: { exit: 0, drift: [{ kind: missing, line: webhook }], plan_lines: { webhook: todo } }
+  - run: apply --json
+    expect: { exit: 2, error: MANUAL_STEP_PENDING, lines: { webhook: waiting } }
+  # No `undo`: destroy forgets the step without asking anyone.
+  - run: apply --destroy --json
+    expect: { exit: 0, status: complete, lines: { webhook: destroyed }, notes: { webhook: { manual: { nothingToUndo: true } } } }

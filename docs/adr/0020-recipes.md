@@ -127,8 +127,8 @@ chosen: its signing secret exists only in the create response, which the `http` 
   recipe's text, and the lock makes the identity-changing edits explicit.
 - **No schema per recipe in `schema/release.plan.schema.json`**: an editor checks `recipe:`'s form, `sponson plan`
   checks the params.
-- Everything ADR 0017 leaves out stays out (polling, OAuth exchanges, SigV4). Once-only outputs were added to the
-  `http` adapter later, so recipes declare them too (ADR 0018, "Amendment: once-only outputs of the http adapter").
+- Everything ADR 0017 leaves out stays out (polling, OAuth exchanges, SigV4). Once-only outputs were left out too,
+  until Amendment 2 below.
 
 ## Alternatives considered
 
@@ -152,3 +152,74 @@ chosen: its signing secret exists only in the create response, which the `http` 
 - The rest sim's answers are shaped per collection; the default shape is unchanged.
 - The sim proves a recipe consistent with its own declarations, not with the provider: the verified assumptions and
   `pnpm test:live` are what tie a recipe to the real API.
+
+## Amendment 1 (2026-10-11): what the feature-flag recipes needed
+
+Writing the feature-flag recipes (Statsig, GrowthBook, Unleash, PostHog, ConfigCat, Split) found four shapes the
+framework could not express. Each was added as a general option, with no provider named in the code:
+
+- **`create.locate: true`** (`http.resource`): the create answers with something other than the object (Statsig's
+  add-rule answers with the whole gate, whose own `id` would be taken for the rule's). The new object is located with
+  `find`/`read` after the create, as for an empty answer. Identity is unchanged.
+- **`parent.item_path`** (`http.list_item`): the parent is read in an envelope (`{ feature: {...} }`) but written
+  bare. `list_path` and `send` are relative to it. It joins the locator only when set, so existing record ids are
+  unchanged.
+- **`parent.send: [fields]`** (`http.list_item`): a `PUT` that resets what it is not sent and is not documented to
+  take the read-only fields of its own GET (ConfigCat's value, Split's definition) gets those fields back and nothing
+  else.
+- **Per-account recipes in the tests and docs**: a recipe without a default `base_url` names a `base_url_example`
+  (required then, by the schema); the unit checks, the sim harness and docs/recipes.md write the provider block
+  with it. The sim harness also follows `sim.collection` (a create posted to another path than the list: the sim's
+  new `aliases`), list and key fields given as JSON pointers, and parent envelopes; the rest sim accepts a bare
+  token in `Authorization` (Unleash), and answers a styled object in its `item_path` envelope (assumptions R1, R2).
+
+Flagsmith was not written: its Admin API takes `Authorization: Api-Key <key>` (or `Token <key>`), a scheme prefix the
+three auth forms do not send, and Bearer only for short-lived OIDC-exchanged tokens. Adding a prefix form to `auth`
+was left for a decision of its own.
+## Amendment 2 (2026-10-11): once-only outputs, destroy defaults, and sim shapes
+
+Writing the webhook, API key and release-marker recipes of [docs/coverage.yaml](../coverage.yaml) found three gaps.
+Each is closed by the smallest general change; none names a provider.
+
+- **Once-only outputs in `http.resource`.** An API key's token is in the create answer only. `outputs` now takes
+  `{ path, sensitive: true, once: true }`: the op declares the output `once` ([ADR 0018](0018-once-only-outputs.md))
+  and takes its value only from the answer of the create that made the object, never from a read, an update, an answer
+  without the object (found afterwards), or a create the provider refused as existing (a lost answer, retried). The
+  engine's fingerprints and `--recreate` then work as for `planetscale.password`. `once` without `sensitive: true` is
+  `PARAM_INVALID`: a value shown once is a credential.
+- **Destroy defaults per recipe op.** A release or a deploy record is history shared beyond one scope, and some
+  providers offer no way to delete it at all (deploy records). A recipe op may say `destroy: keep` (lines leave what
+  they made unless they write `destroy: delete`) or `destroy: never` (no delete request exists: always left, and a
+  line's `destroy: delete` is `PARAM_INVALID` naming the recipe). The record id is then `KEEP <path>`, as for a
+  hand-written line with `destroy: keep`, so identity follows ADR 0017 unchanged; a `never` op still declares the
+  object's URL as `delete.path`, used only as its identity.
+- **Sim shapes.** Amendment 1's `aliases` now name their collection for every method, not only for a create, so a
+  provider that lists at another URL than its objects' collection (`GET /settings/all`) is served too (the recipe
+  harness derives that alias from `find.path`); seeded paths, aliases and create paths ignore a trailing slash
+  (`/releases/` is `/releases`); and the sim accepts the credential in a header the seed names (`auth_headers`,
+  derived from the recipe's `auth.header`, for header names that do not end in `-Key` or `-Token`, such as
+  `X-Honeycomb-Team`). `ProviderSim.authorized` receives the provider's state for this.
+
+Still out of reach for recipes, and recorded on the coverage rows that need them: an API that needs two credentials on
+every request, a list request sent as a POST, a delete that names the object in its body, and a credential that is
+itself an output of another line (a per-environment server's token).
+
+## Amendment 3 (2026-10-11): headers, URLs in paths, and polling stays out
+
+The deploy, database and queue recipes (Render, Heroku, Vercel domains, Upstash, Prisma Postgres, QStash) needed:
+
+- **A vendor `Accept`.** Heroku refuses requests that do not pin its version in `Accept`. An API block's `headers`
+  may now set `Accept` to a JSON media type; `Authorization` and `Content-Type` stay Sponson's.
+- **Per-request headers and fields carried in them.** QStash takes a schedule's cron and id in headers and its message
+  as the body. `create` and `update` take `headers` (values from params) and `send_fields: false` (the declared
+  `fields` are compared but not put in the body); a path placeholder `{+name}` writes a URL as it is (RFC 6570
+  reserved expansion; only `?` and `#` escaped). A delete answered 2xx with a body that is not JSON (`OK`) succeeds.
+- **Sim shapes.** A PUT to `<collection>/<id>` that does not exist creates the object (Render's upsert by name); an
+  alias of a collection also addresses its objects (`/databases/<id>`), which the harness derives from the read,
+  update and delete paths; recipe sim hints `header_fields` and `suffix_field` stand in for an API that takes settings
+  in headers and a URL as the path's last segment.
+
+Rows whose lifecycle needs waiting (Algolia's copy task, a Xata branch coming up, an App Platform deployment) got
+first-class adapters instead of a polling extension: each waits on a different signal, and polling in a request
+template would be a small language. Inngest's sync stays uncovered (a one-off action with nothing to read back or
+delete).

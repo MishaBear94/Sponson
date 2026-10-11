@@ -87,7 +87,8 @@ const item: OpSpec = {
     return { name: `sponson-${ctx.env}-${ctx.scope}`, ...params };
   },
 
-  // TODO: if items belong to a deployment environment (like Vercel's `target`), implement writesEnvironment()
+  // TODO: if items belong to a deployment environment (like Vercel's `target`, or a provider block naming a
+  // production environment), implement writesEnvironment(params, ctx, provider)
   // so that a line writing to production requires approval.
 
   async read(actx, params) {

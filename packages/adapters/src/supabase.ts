@@ -12,7 +12,7 @@
  * checked in docs/api-verification.md.
  */
 import { setTimeout as sleep } from "node:timers/promises";
-import { SponsonError, canonicalJson, isPendingMarker, sha256, type AdapterContext, type Literal, type LiveState, type OpSpec, type ResourceAdapter, type ResourceRecord } from "@sponson/core";
+import { SponsonError, canonicalJson, isPendingMarker, markerKind, sha256, type AdapterContext, type Literal, type LiveState, type OpSpec, type ResolvedParams, type ResourceAdapter, type ResourceRecord } from "@sponson/core";
 import { ABSENT, assertNoPending, clientFor, deleteIgnoringNotFound, desiredSide, diffValue, optionalEnv, paramError, requireEnv, requireProvider, stringParam } from "./common.js";
 import { ShapeError, isProviderError, isTransient, obj, records, type ApiClient } from "./http.js";
 
@@ -333,7 +333,8 @@ function conflict(c: Client, what: string): SponsonError {
 
 /**
  * Add `url` unless present: read, append, write, re-read. There is no precondition to make the write
- * conditional (S7), so a concurrent writer can overwrite ours; the re-read notices and the round repeats.
+ * conditional (S7); Sponson's own writers are serialised by the parent lock (`lockOn`), so only a writer outside
+ * Sponson (the dashboard) can overwrite ours, and the re-read notices that and repeats the round.
  * Returns whether this call wrote it.
  */
 async function addEntry(c: Client, actx: AdapterContext, url: string): Promise<boolean> {
@@ -360,8 +361,22 @@ async function removeEntries(c: Client, actx: AdapterContext, urls: Set<string>)
   }
 }
 
+/**
+ * The allow-list is one field of one project's Auth config, written whole by every scope and environment that adds a
+ * URL to it: the engine serialises Sponson's writers with a lock on it (ADR 0019). Named by the project's ref only
+ * (`supabase:<ref>:auth-uri-allow-list`), never the token. Null while the project is not known yet.
+ */
+function authAllowListLock(params: ResolvedParams, provider: Record<string, unknown>): string | null {
+  const explicit = params.project !== undefined && params.project !== null && params.project !== "";
+  const project = explicit ? params.project : provider.project;
+  if (typeof project !== "string" || project === "" || markerKind(project) !== null) return null;
+  return `${ADAPTER}:${project}:auth-uri-allow-list`;
+}
+
 const auth_redirect: OpSpec = {
   outputs: { url: { available: "immediate" } },
+
+  lockOn: authAllowListLock,
 
   async read(actx, params) {
     // The URL or the project may come from a line not applied yet: nothing to read.

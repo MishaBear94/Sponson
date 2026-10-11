@@ -90,5 +90,7 @@ ops:
       id_path: /key
       fields:
         value: { param: value }
+    sim:
+      collection: "/services/{service_id}/env-vars"
     live:
       params: { service_id: SPONSON_LIVE_RENDER_SERVICE_ID }

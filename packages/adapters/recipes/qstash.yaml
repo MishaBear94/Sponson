@@ -119,6 +119,7 @@ ops:
         destination: { param: destination }
         method: { param: method }
     sim:
+      collection: /v2/schedules
       header_fields: { upstash-schedule-id: scheduleId, upstash-cron: cron, upstash-method: method }
       suffix_field: destination
     live:
