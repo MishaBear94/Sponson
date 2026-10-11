@@ -1,6 +1,6 @@
 {
   "name": "@sponson/sim",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Local fake cloud for Sponson: Vercel, Neon and Clerk API subsets with chaos injection.",
   "keywords": [
     "sponson",
