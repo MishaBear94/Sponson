@@ -6,7 +6,8 @@
  * its create posts to, answering in its `item_path`/`find.list_path` envelopes with its id field; the parent objects
  * of its `sim.objects`), then the example line runs create → idempotent re-apply (zero writes) → drift (a declared
  * field edited in the console is refused until --reconcile; the object or item removed by hand is recreated) →
- * destroy (only what Sponson made is removed). The credential never reaches any output.
+ * destroy (only what Sponson made is removed; an op its recipe keeps on destroy is left, with no request). The
+ * credential never reaches any output.
  *
  * Live (`pnpm test:live`, SPONSON_LIVE=1): an op runs create → re-apply → destroy against the real API when its
  * credential variable and every `SPONSON_LIVE_*` variable its recipe's `live.params` names are set; otherwise it is
@@ -31,7 +32,7 @@ function credentialVars(r: Recipe): string[] {
 
 /** `${ctx.*}` as the CLI fills it for `scope`. */
 function interpolate<T>(v: T, scope: string): T {
-  return JSON.parse(JSON.stringify(v).replace(/\$\{ctx\.scope\}/g, scope).replace(/\$\{ctx\.env\}/g, "preview")) as T;
+  return JSON.parse(JSON.stringify(v).replace(/\$\{ctx\.scope\}/g, scope).replace(/\$\{ctx\.env\}/g, "preview").replace(/\$\{ctx\.git\.sha\}/g, SHA)) as T;
 }
 
 /** The op's example params (live: with the `live.params` variables' values over them). */
@@ -67,6 +68,13 @@ function tokens(field: string): string[] {
   return field.slice(1).split("/").map((t) => t.replace(/~1/g, "/").replace(/~0/g, "~"));
 }
 
+/** `v` set at a field name or JSON pointer of `doc`, creating maps on the way. */
+function setAt(doc: Record<string, unknown>, field: string, v: unknown): void {
+  const path = tokens(field);
+  const parent = path.slice(0, -1).reduce<Record<string, unknown>>((cur, t) => (cur[t] ??= {}) as Record<string, unknown>, doc);
+  parent[path.at(-1)!] = v;
+}
+
 /** The value at a field name or JSON pointer. */
 function valueAt(doc: unknown, field: string): unknown {
   return tokens(field).reduce<unknown>((cur, t) => (cur !== null && typeof cur === "object" ? (cur as Record<string, unknown>)[t] : undefined), doc);
@@ -78,7 +86,7 @@ function collectionOf(op: RecipeOp, spec: Record<string, unknown>): string {
 }
 
 /** The sim, shaped like the provider: the create's collection (envelopes, id field) and the seeded parents. */
-function simSeed(op: RecipeOp, spec: Record<string, unknown>) {
+function simSeed(r: Recipe, op: RecipeOp, spec: Record<string, unknown>) {
   const vars = spec.vars as Record<string, unknown>;
   const collections: Record<string, Array<Record<string, unknown>>> = {};
   const styles: Record<string, RestStyle> = {};
@@ -98,11 +106,16 @@ function simSeed(op: RecipeOp, spec: Record<string, unknown>) {
       ...(op.sim?.numeric_ids ? { numeric_ids: true } : {}),
     };
   }
+  // A provider that lists at another URL than its objects' collection (`GET /settings/all`): the same collection.
+  const findPath = (spec.find as { path?: string } | undefined)?.path;
+  if (op.kind === "resource" && create?.path && findPath && fill(findPath, vars) !== collectionOf(op, spec)) aliases[fill(findPath, vars)] = collectionOf(op, spec);
   const objects = Object.fromEntries(Object.entries(op.sim?.objects ?? {}).map(([p, o]) => [fill(p, vars), structuredClone(o)]));
   // A parent read in an envelope (`parent.item_path`) is answered in it.
   const parent = spec.parent as { path: string; read_path?: string; item_path?: string } | undefined;
   if (op.kind === "list_item" && parent?.item_path) styles[fill(parent.read_path ?? parent.path, vars)] = { item_path: parent.item_path };
-  return { rest: { collections, objects, styles, aliases } };
+  // A credential header the sim would not recognise by its name (`X-Honeycomb-Team`).
+  const header = (r.api.auth as { header?: string }).header;
+  return { rest: { collections, objects, styles, aliases, ...(header ? { auth_headers: [header] } : {}) } };
 }
 
 class Run {
@@ -172,7 +185,7 @@ function parentList(sim: SimHandle, spec: Record<string, unknown>): { parent: Re
 async function lifecycleInSim(r: Recipe, name: string, op: RecipeOp): Promise<void> {
   const params = exampleParams(op);
   const spec = expandRecipe({ recipe: `${r.provider}.${name}`, ...interpolate(params, "pr-42") }, op.kind);
-  const sim = await startSim({ seed: simSeed(op, spec) });
+  const sim = await startSim({ seed: simSeed(r, op, spec) });
   const ws = await workspace("recipe", { plan: planText(r, name, op, params) });
   const env = cliEnv(sim, { [String(r.api.base_url_env)]: `${sim.url}/rest`, ...Object.fromEntries(credentialVars(r).map((v) => [v, TOKEN])) });
   const run = new Run(ws, env, ["--env", "preview", "--pr", "42", "--branch", "feat/x", "--sha", SHA]);
@@ -199,7 +212,9 @@ async function lifecycleInSim(r: Recipe, name: string, op: RecipeOp): Promise<vo
     res = await run.cli("apply --destroy --json", sim);
     expect(res.code, `destroy${diag(res)}`).toBe(0);
     expect(lineOf(res).status).toBe("destroyed");
-    if (op.kind === "resource") expect(simItems(sim, op, spec)).toEqual([]);
+    // An op the recipe keeps on destroy (shared history, or no delete API) is left in place, and nothing is sent.
+    if (op.kind === "resource" && spec.destroy === "keep") expect({ items: simItems(sim, op, spec).length, writes: res.writes }).toEqual({ items: 1, writes: 0 });
+    else if (op.kind === "resource") expect(simItems(sim, op, spec)).toEqual([]);
     else expect(sim.state.rest.objects, "destroy left every other item as seeded").toEqual(seededObjects);
   } finally {
     await sim.close();
@@ -208,15 +223,15 @@ async function lifecycleInSim(r: Recipe, name: string, op: RecipeOp): Promise<vo
 }
 
 async function resourceDrift(run: Run, sim: SimHandle, op: RecipeOp, spec: Record<string, unknown>): Promise<void> {
-  const fields = Object.entries((spec.fields as Record<string, unknown> | undefined) ?? {}).filter(([f]) => !f.startsWith("/"));
+  const fields = Object.entries((spec.fields as Record<string, unknown> | undefined) ?? {});
   if (fields.length > 0) {
     const [f, v] = fields[0]!;
-    simItems(sim, op, spec)[0]![f] = edited(v);
+    setAt(simItems(sim, op, spec)[0]!, f, edited(v));
     let res = await run.cli("plan --json", sim);
     expect({ code: res.code, status: lineOf(res).status, drift: (res.json?.drift as Array<{ kind: string }>).map((d) => d.kind) }, `changed drift${diag(res)}`).toEqual({ code: 1, status: "blocked", drift: ["changed"] });
     res = await run.cli("apply --reconcile --json", sim);
     expect(res.code, `reconcile${diag(res)}`).toBe(0);
-    expect(simItems(sim, op, spec)[0]![f]).toEqual(v);
+    expect(valueAt(simItems(sim, op, spec)[0], f)).toEqual(v);
   }
   sim.state.rest.collections[collectionOf(op, spec)] = [];
   let res = await run.cli("plan --json", sim);

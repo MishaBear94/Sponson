@@ -11,8 +11,9 @@
  * Assumptions it encodes (about "a conventional JSON REST API", not about one provider; every real API the adapter
  * is pointed at is described by its plan line or recipe instead, see docs/api-verification.md):
  *   R1. Credentials arrive as `Authorization: Bearer <token>`, `Authorization: Basic <base64>`, a bare token in
- *       `Authorization` (`Authorization: <token>`, as Unleash takes it) or a header whose name ends in `-api-key`,
- *       `-key` or `-token` (`X-Api-Key`, `Statsig-Api-Key`, `X-Auth-Token`); anything else is 401.
+ *       `Authorization` (`Authorization: <token>`, as Unleash takes it), a header whose name ends in `-api-key`,
+ *       `-key` or `-token` (`X-Api-Key`, `Statsig-Api-Key`, `X-Auth-Token`), or one the seed declares in
+ *       `auth_headers` (`X-Honeycomb-Team`); anything else is 401.
  *   R2. Collection objects are answered in a `{ data: <object> }` envelope, lists as `{ data: [...], next_cursor }`,
  *       paged with `?cursor=` under chaos `page_size` (`next_cursor` is null on the last page). Objects that are
  *       not in a collection are answered bare. A collection's style (seed `styles`, by collection path) changes the
@@ -24,7 +25,9 @@
  *       unknown path is 404. A create may choose the id (the id field, or the style's `id_from` field, in the
  *       body, like a flag key or a database name); otherwise the sim assigns `it_<n>` (the next integer with
  *       `numeric_ids`). A create whose `name` (or chosen id) already exists in the collection answers 409. Query
- *       parameters other than `cursor` are ignored: a filtered list answers the whole collection.
+ *       parameters other than `cursor` are ignored: a filtered list answers the whole collection. A trailing slash
+ *       is ignored (`/releases/` is `/releases`). An alias (R2) names its collection for every method, so it also
+ *       serves a provider that lists at another URL than it creates at (`GET /settings/all` lists `/settings`).
  *   R4. PATCH (and POST to an object) is a JSON merge patch (RFC 7396: maps merge recursively, `null` deletes a
  *       field, lists are replaced whole); PUT replaces everything but a collection object's id. Bodies may be JSON
  *       or form-encoded (`a[b]=c`, every value a string). No write has a precondition (no ETag): the last write
@@ -69,8 +72,11 @@ export interface RestState {
   collections: Record<string, RestItem[]>;
   objects: Record<string, Record<string, unknown>>;
   styles: Record<string, RestStyle>;
-  /** A path a create is posted to → the collection it adds to. */
+  /** Paths that name a collection kept under another path, by path: a create posted elsewhere
+   * (`/gates/g/rule` adds to `/gates/g/rules`), or a list at another URL (`/settings/all` lists `/settings`). */
   aliases: Record<string, string>;
+  /** Further header names (lower-case) that carry a credential (assumption R1). */
+  auth_headers: string[];
   /** Present when the seed configures real credentials (R6). */
   auth?: RestAuthState;
 }
@@ -111,8 +117,10 @@ export interface RestSeed {
   objects?: Record<string, Record<string, unknown>>;
   /** How each collection answers, by collection path (assumption R2). */
   styles?: Record<string, RestStyle>;
-  /** Create paths that add to another collection, by path: `{ "/gates/g/rule": "/gates/g/rules" }`. */
+  /** Paths that name a collection kept under another path, by path: `{ "/gates/g/rule": "/gates/g/rules" }`. */
   aliases?: Record<string, string>;
+  /** Further header names that carry a credential, for an API whose header is not named `*-Key` or `*-Token`. */
+  auth_headers?: string[];
   /** Real credentials (R6). */
   auth?: RestAuthSeed;
 }
@@ -126,8 +134,14 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
   },
 
   reset(core, seed) {
-    const state: RestState = { collections: {}, objects: structuredClone(seed?.objects ?? {}), styles: structuredClone(seed?.styles ?? {}), aliases: structuredClone(seed?.aliases ?? {}) };
-    for (const [path, items] of Object.entries(seed?.collections ?? {})) {
+    const state: RestState = {
+      collections: {},
+      objects: byPath(structuredClone(seed?.objects ?? {})),
+      styles: byPath(structuredClone(seed?.styles ?? {})),
+      aliases: Object.fromEntries(Object.entries(seed?.aliases ?? {}).map(([a, p]) => [normPath(a), normPath(p)])),
+      auth_headers: (seed?.auth_headers ?? []).map((h) => h.toLowerCase()),
+    };
+    for (const [path, items] of Object.entries(byPath(seed?.collections ?? {}))) {
       const field = styleOf(state, path).id_field;
       state.collections[path] = items.map((i) => ({ ...structuredClone(i), [field]: isId(i[field]) ? i[field] : newId(core, state, path) }));
     }
@@ -158,8 +172,8 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
     return !(req.method === "POST" && req.path === "/oauth/token");
   },
 
-  authorized(headers, req, state) {
-    if (!state.auth) return authorized(headers);
+  authorized(headers, state, req) {
+    if (!state.auth) return authorized(headers, state.auth_headers);
     // The token endpoint authenticates the client itself.
     if (req.method === "POST" && req.url.pathname === "/rest/oauth/token") return true;
     if (strictlyAuthorized(headers, req, state.auth)) return true;
@@ -184,10 +198,11 @@ function strictlyAuthorized(headers: IncomingHttpHeaders, req: AuthRequest, auth
   return false;
 }
 
-function authorized(headers: IncomingHttpHeaders): boolean {
+function authorized(headers: IncomingHttpHeaders, declared: string[]): boolean {
   const a = headers.authorization ?? "";
   if (/^(Bearer|Basic)\s+\S+$/.test(a) || (/^\S+$/.test(a) && !/^(Bearer|Basic)$/i.test(a))) return true;
-  return Object.entries(headers).some(([name, v]) => /(^|-)(api-key|key|token)$/.test(name) && typeof v === "string" && v.trim() !== "");
+  const carries = (name: string) => /(^|-)(api-key|key|token)$/.test(name) || declared.includes(name);
+  return Object.entries(headers).some(([name, v]) => carries(name) && typeof v === "string" && v.trim() !== "");
 }
 
 type FullStyle = Required<Omit<RestStyle, "next_path">> & { next_path: string | null };
@@ -273,6 +288,16 @@ function parseValue(v: string): unknown {
   }
 }
 
+/** A path without its trailing slash (`/releases/` and `/releases` name the same thing, assumption R3). */
+function normPath(path: string): string {
+  return path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
+}
+
+/** A seed map keyed by normalised paths. */
+function byPath<T>(m: Record<string, T>): Record<string, T> {
+  return Object.fromEntries(Object.entries(m).map(([p, v]) => [normPath(p), v]));
+}
+
 /** What a path names in the state. */
 type Target =
   | { kind: "object"; path: string; object: Record<string, unknown> }
@@ -281,7 +306,7 @@ type Target =
   | { kind: "none" };
 
 function resolve(state: RestState, raw: string): Target {
-  const path = raw.length > 1 && raw.endsWith("/") ? raw.slice(0, -1) : raw;
+  const path = state.aliases[normPath(raw)] ?? normPath(raw);
   const object = state.objects[path];
   if (object) return { kind: "object", path, object };
   const items = state.collections[path];
@@ -358,11 +383,11 @@ const routes = router<RestState>(
     }),
 
     route("POST", "/*path", ({ core, state, params, body }) => {
-      const alias = state.aliases[`/${params.path}`];
-      const t = resolve(state, alias ?? `/${params.path}`);
+      const t = resolve(state, `/${params.path}`);
       if (t.kind === "object") return patch(state, t, body);
       if (t.kind === "item") return error(405, "cannot POST to an object of a collection");
-      return create(core, state, t.kind === "collection" ? t.path : (alias ?? `/${params.path}`), body);
+      const path = normPath(`/${params.path}`);
+      return create(core, state, t.kind === "collection" ? t.path : (state.aliases[path] ?? path), body);
     }),
 
     route("PATCH", "/*path", ({ state, params, body }) => patch(state, resolve(state, `/${params.path}`), body)),

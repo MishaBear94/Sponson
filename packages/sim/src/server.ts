@@ -72,7 +72,7 @@ type AuthCheck = (state: SimState, headers: IncomingHttpHeaders, req: AuthReques
 
 /** `/<provider>` → how that provider takes its credential, when not as a bearer token. */
 const AUTH: Record<string, AuthCheck> = Object.fromEntries(
-  providerEntries().flatMap(([name, p]): Array<[string, AuthCheck]> => (p.authorized ? [[`/${name}`, (state, h, req) => p.authorized!(h, req, state.provider(name), state)]] : [])),
+  providerEntries().flatMap(([name, p]): Array<[string, AuthCheck]> => (p.authorized ? [[`/${name}`, (state, h, req) => p.authorized!(h, state.provider(name), req, state)]] : [])),
 );
 
 /** The credential check of the provider the path belongs to; a non-empty bearer token by default. */

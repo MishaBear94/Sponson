@@ -81,9 +81,11 @@ export interface ProviderSim<S, Seed> {
   /**
    * Whether a request carries a credential this provider accepts. Absent: any non-empty bearer token. Like the
    * default, accept any non-empty value unless the provider's seed configures real credentials: the point is that a
-   * missing credential surfaces as 401. A `Reply` answers the request instead (a 401 with a Digest challenge).
+   * missing credential surfaces as 401. `state` is the provider's current state, for a provider whose seed declares
+   * how credentials arrive; `req` what a signature (SigV4) or a Digest answer covers. A `Reply` answers the request
+   * instead (a 401 with a Digest challenge).
    */
-  authorized?(headers: IncomingHttpHeaders, req: AuthRequest, state: S, core: SimCore): boolean | Reply;
+  authorized?(headers: IncomingHttpHeaders, state: S, req: AuthRequest, core: SimCore): boolean | Reply;
   /**
    * Whether a POST, PUT, PATCH or DELETE changes state, for the write log (I4: `plan` writes nothing). Absent: every
    * one does. A token endpoint or a GraphQL query is a POST that does not.

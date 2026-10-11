@@ -103,7 +103,7 @@ the tables below are generated from it: edit the data, then run `pnpm docs:gen`.
 | Statsig | Gate rule for the preview (condition `url` or `environment_tier`) | Console API `POST /console/v1/gates/{id}/rule` (answers the whole gate), `GET .../rules`, `PATCH`/`DELETE .../rules/{ruleID}`, `STATSIG-API-KEY` header; object per rule; reviews may gate changes | Y | P1 | **yes** (recipe [`statsig.gate_rule`](recipes.md#statsiggate_rule): gates requiring reviews: write behaviour undocumented (SG8)) |
 | GrowthBook | Force rule in a per-environment feature | REST v2 `POST /api/v2/features/{id}` replacing the top-level `rules` (each rule names its environments; v1's `environments.{env}.rules` is deprecated), bearer; **list** | Y (list mode) | P2 | **yes** (recipe [`growthbook.force_rule`](recipes.md#growthbookforce_rule): v2 API (rules with per-rule environments); approval-gated features refuse the write) |
 | Unleash | Strategy (with constraints) on a flag in an environment | Admin API `POST /api/admin/projects/{p}/features/{f}/environments/{env}/strategies`, `DELETE .../{id}`; token header; object | Y | P2 | **yes** (recipe [`unleash.flag_strategy`](recipes.md#unleashflag_strategy): deleting the last strategy turns the flag off in that environment (UN8)) |
-| Flagsmith | Segment override or a per-PR environment | `POST /api/v1/environments/`, feature-state endpoints; `Authorization: Api-Key <key>` (organisation key) or `Token <key>`; object | P (credential needs an `Api-Key` scheme prefix) | P2 | no |
+| Flagsmith | Segment override or a per-PR environment | `POST /api/v1/environments/`, feature-state endpoints; `Authorization: Api-Key <key>` (organisation key) or `Token <key>`; object | P (credential needs an `Api-Key` scheme prefix) | P2 | no (not yet: the Admin API takes `Authorization: Api-Key <key>`, a scheme prefix the http adapter's auth forms do not send (Bearer only for short-lived OIDC-exchanged tokens)) |
 | ConfigCat | Targeting rule on a setting in an environment | Management API v2 `PUT /v2/environments/{e}/settings/{s}/value` (replaces `defaultValue`, `targetingRules`, `percentageEvaluationAttribute`; `PATCH` is JSON Patch), Basic; **list** of rules | Y (list mode, PUT with the other fields sent back) | P2 | **yes** (recipe [`configcat.targeting_rule`](recipes.md#configcattargeting_rule): boolean flags; products requiring a change reason or approval refuse the write) |
 | Split (Harness FME) | Targeting rule / individual target in an environment | Admin API `PUT /internal/api/v2/splits/ws/{ws}/{split}/environments/{env}` (full definition; `PATCH` is JSON Patch), bearer; **list**; same host and paths after the Harness migration | Y | P2 | **yes** (recipe [`split.targeting_rule`](recipes.md#splittargeting_rule): targeting rule (not individual targets); projects requiring title/comment refuse the write) |
 
@@ -112,25 +112,25 @@ the tables below are generated from it: edit the data, then run `pnpm docs:gen`.
 | Provider | Side effect | API shape | Generic? | Pri | Now |
 |---|---|---|---|---|---|
 | Stripe | Test-mode webhook endpoint pointing at the preview URL; its signing secret into the app's env | `POST /v1/webhook_endpoints` (form-encoded), `DELETE /v1/webhook_endpoints/{id}`; bearer; object; `Idempotency-Key`; **`secret` returned only on create** | P (once-only secret must flow into an env line in the same run) | P0 | no |
-| GitHub | Repository webhook to the preview URL | `POST /repos/{o}/{r}/hooks`, `DELETE .../hooks/{id}`; bearer; object; secret write-only (caller supplies it) | Y | P2 | no |
-| Svix (as a sender) | Endpoint per environment on an application | `POST /api/v1/app/{app}/endpoint` with caller-chosen `uid`; bearer; object, idempotent by `uid`; secret readable via `GET .../secret` | Y | P2 | no |
+| GitHub | Repository webhook to the preview URL | `POST /repos/{o}/{r}/hooks`, `DELETE .../hooks/{id}`; bearer; object; secret write-only (caller supplies it) | Y | P2 | **yes** (recipe [`github.repo_webhook`](recipes.md#githubrepo_webhook)) |
+| Svix (as a sender) | Endpoint per environment on an application | `POST /api/v1/app/{app}/endpoint` with caller-chosen `uid`; bearer; object, idempotent by `uid`; secret readable via `GET .../secret` | Y | P2 | **yes** (recipe [`svix.endpoint`](recipes.md#svixendpoint)) |
 | Clerk webhooks | Preview URL as a webhook endpoint | Clerk's Backend API only creates/deletes the Svix app and a dashboard link; **no endpoint API** through Clerk | N | P1 | manual step (`manual.step`) |
 
 ### Email: sending domains, webhooks, test inboxes
 
 | Provider | Side effect | API shape | Generic? | Pri | Now |
 |---|---|---|---|---|---|
-| Resend | Restricted API key or webhook per environment (domains are long-lived; test addresses like `delivered@resend.dev` need no API) | `POST /api-keys` (token returned once), `POST /webhooks`; bearer; object | Y | P2 | no |
-| Postmark | Server per environment, webhook per server | Account API `POST /servers` (`X-Postmark-Account-Token`), Server API `POST /webhooks` (`X-Postmark-Server-Token`); object | Y | P2 | no |
-| SendGrid | Event webhook or inbound-parse host per environment | `POST /v3/user/webhooks/event/settings`, `POST /v3/user/webhooks/parse/settings`; bearer; object | Y | P2 | no |
+| Resend | Restricted API key or webhook per environment (domains are long-lived; test addresses like `delivered@resend.dev` need no API) | `POST /api-keys` (token returned once), `POST /webhooks`; bearer; object | Y | P2 | **yes** (recipe [`resend.api_key`](recipes.md#resendapi_key), recipe [`resend.webhook`](recipes.md#resendwebhook)) |
+| Postmark | Server per environment, webhook per server | Account API `POST /servers` (`X-Postmark-Account-Token`), Server API `POST /webhooks` (`X-Postmark-Server-Token`); object | P (the webhook API takes the server's own token, an output of the server line) | P2 | no (server: recipe `postmark.server`; webhook: recipe `postmark_server.webhook`, on a server whose token is configured. Not chained in one plan: a created server's token cannot be a credential) |
+| SendGrid | Event webhook or inbound-parse host per environment | `POST /v3/user/webhooks/event/settings`, `POST /v3/user/webhooks/parse/settings`; bearer; object | Y | P2 | **yes** (recipe [`sendgrid.event_webhook`](recipes.md#sendgridevent_webhook), recipe [`sendgrid.parse_setting`](recipes.md#sendgridparse_setting)) |
 
 ### Observability per release
 
 | Provider | Side effect | API shape | Generic? | Pri | Now |
 |---|---|---|---|---|---|
-| Sentry | Release for the commit, deploy record for the environment; finalize | `POST /api/0/organizations/{o}/releases/`, `POST .../releases/{v}/deploys/`; bearer; object; environments appear on first event | Y (destroy = leave; history) | P1 | no |
-| Datadog | Deployment marker / synthetic test against the preview URL | `datadog-ci deployment mark`; `POST /api/v1/synthetics/tests/api`; `DD-API-KEY` + `DD-APPLICATION-KEY` headers; object | Y | P2 | no |
-| Honeycomb | Marker per deploy in the environment's dataset | `POST /1/markers/{dataset}`, `X-Honeycomb-Team` header; object | Y | P2 | no |
+| Sentry | Release for the commit, deploy record for the environment; finalize | `POST /api/0/organizations/{o}/releases/`, `POST .../releases/{v}/deploys/`; bearer; object; environments appear on first event | Y (destroy = leave; history) | P1 | **yes** (recipe [`sentry.release`](recipes.md#sentryrelease), recipe [`sentry.deploy`](recipes.md#sentrydeploy)) |
+| Datadog | Deployment marker / synthetic test against the preview URL | `datadog-ci deployment mark`; `POST /api/v1/synthetics/tests/api`; `DD-API-KEY` + `DD-APPLICATION-KEY` headers; object | P (two credential headers on every read; deployment events listed by POST) | P2 | no (blocked for recipes: reads need two credentials at once (`DD-API-KEY` + `DD-APPLICATION-KEY`); deployment events are listed by POST) |
+| Honeycomb | Marker per deploy in the environment's dataset | `POST /1/markers/{dataset}`, `X-Honeycomb-Team` header; object | Y | P2 | **yes** (recipe [`honeycomb.marker`](recipes.md#honeycombmarker)) |
 
 ### DNS and preview domains
 
@@ -195,20 +195,20 @@ Counted over the 56 side-effect rows of the matrix (rows marked `n/a` have nothi
 
 | Measure | Covered | Coverage |
 |---|---|---|
-| Rows | 17 of 56 | **30.4%** |
-| Weighted by priority | 37 of 90 | **41.1%** |
+| Rows | 23 of 56 | **41.1%** |
+| Weighted by priority | 44 of 90 | **48.9%** |
 | P0 rows only | 7 of 9 | 77.8% |
-| Rows an API reaches (all but `manual`) | 17 of 53 | 32.1% |
-| Weighted, rows an API reaches | 37 of 85 | 43.5% |
-| Rows, including manual steps (`manual.step`) | 20 of 56 | 35.7% |
-| Weighted, including manual steps | 42 of 90 | 46.7% |
+| Rows an API reaches (all but `manual`) | 23 of 53 | 43.4% |
+| Weighted, rows an API reaches | 44 of 85 | 51.8% |
+| Rows, including manual steps (`manual.step`) | 26 of 56 | 46.4% |
+| Weighted, including manual steps | 49 of 90 | 54.4% |
 | Secret sources (separate) | 4 of 9 vendors; weighted 7 of 14 | 44.4%; 50.0% |
 
-Covered: Vercel (`vercel.env`, `vercel.deploy`); Netlify (`netlify.env`); Cloudflare Pages / Workers (`cloudflare.pages_env`); Neon (`neon.branch`); Supabase (`supabase.branch`); PlanetScale (`planetscale.branch`, `planetscale.password`); Turso (recipe [`turso.database_branch`](recipes.md#tursodatabase_branch)); Clerk (`clerk.redirect_allow`); Supabase Auth (`supabase.auth_redirect`); LaunchDarkly (`launchdarkly.flag_target`); PostHog (recipe [`posthog.release_condition`](recipes.md#posthogrelease_condition)); Statsig (recipe [`statsig.gate_rule`](recipes.md#statsiggate_rule)); GrowthBook (recipe [`growthbook.force_rule`](recipes.md#growthbookforce_rule)); Unleash (recipe [`unleash.flag_strategy`](recipes.md#unleashflag_strategy)); ConfigCat (recipe [`configcat.targeting_rule`](recipes.md#configcattargeting_rule)); Split (Harness FME) (recipe [`split.targeting_rule`](recipes.md#splittargeting_rule)); Cloudflare DNS (recipe [`cloudflare.dns_cname`](recipes.md#cloudflaredns_cname)).
+Covered: Vercel (`vercel.env`, `vercel.deploy`); Netlify (`netlify.env`); Cloudflare Pages / Workers (`cloudflare.pages_env`); Neon (`neon.branch`); Supabase (`supabase.branch`); PlanetScale (`planetscale.branch`, `planetscale.password`); Turso (recipe [`turso.database_branch`](recipes.md#tursodatabase_branch)); Clerk (`clerk.redirect_allow`); Supabase Auth (`supabase.auth_redirect`); LaunchDarkly (`launchdarkly.flag_target`); PostHog (recipe [`posthog.release_condition`](recipes.md#posthogrelease_condition)); Statsig (recipe [`statsig.gate_rule`](recipes.md#statsiggate_rule)); GrowthBook (recipe [`growthbook.force_rule`](recipes.md#growthbookforce_rule)); Unleash (recipe [`unleash.flag_strategy`](recipes.md#unleashflag_strategy)); ConfigCat (recipe [`configcat.targeting_rule`](recipes.md#configcattargeting_rule)); Split (Harness FME) (recipe [`split.targeting_rule`](recipes.md#splittargeting_rule)); GitHub (recipe [`github.repo_webhook`](recipes.md#githubrepo_webhook)); Svix (as a sender) (recipe [`svix.endpoint`](recipes.md#svixendpoint)); Resend (recipe [`resend.api_key`](recipes.md#resendapi_key), recipe [`resend.webhook`](recipes.md#resendwebhook)); SendGrid (recipe [`sendgrid.event_webhook`](recipes.md#sendgridevent_webhook), recipe [`sendgrid.parse_setting`](recipes.md#sendgridparse_setting)); Sentry (recipe [`sentry.release`](recipes.md#sentryrelease), recipe [`sentry.deploy`](recipes.md#sentrydeploy)); Honeycomb (recipe [`honeycomb.marker`](recipes.md#honeycombmarker)); Cloudflare DNS (recipe [`cloudflare.dns_cname`](recipes.md#cloudflaredns_cname)).
 
 Automated coverage counts only rows an op manages without a person. Rows no API reaches (`manual`, or a `manual.step` line that records the step a person does; weight 5): Google OAuth clients (no public API for standard OAuth web clients); Clerk webhooks (Clerk's API manages the Svix app, not its endpoints); Stripe sandboxes (no public API for account sandboxes). They cap coverage at 53 rows, 85 of 90 weighted (94.4%).
 
-Recipe candidates, rows the generic adapter can express fully (`Y`) that nothing covers yet: 27 (Render, Railway, Heroku, AWS Amplify, MongoDB Atlas, Prisma Postgres, Auth0, Firebase Auth, WorkOS, Stytch, Okta, Kinde, GitHub, Svix (as a sender), Resend, Postmark, SendGrid, Sentry, Datadog, Honeycomb, Vercel domains, Firebase Storage (GCS bucket), S3 / R2, Upstash Redis, Upstash QStash, Inngest, Stripe test-mode objects).
+Recipe candidates, rows the generic adapter can express fully (`Y`) that nothing covers yet: 19 (Render, Railway, Heroku, AWS Amplify, MongoDB Atlas, Prisma Postgres, Auth0, Firebase Auth, WorkOS, Stytch, Okta, Kinde, Vercel domains, Firebase Storage (GCS bucket), S3 / R2, Upstash Redis, Upstash QStash, Inngest, Stripe test-mode objects).
 <!-- generated:coverage-numbers:end -->
 
 ## Strategy
@@ -254,7 +254,8 @@ yet are listed under [Current coverage](#current-coverage).
    delete), "busy" (retry), on top of `packages/adapters/src/http.ts`'s defaults; plus pagination styles (cursor,
    `next` link, page number).
 8. **Destroy modes**: `delete`, `update` to an archived state (Stripe prices `active=false`), remove-from-list, or
-   `leave` (Sentry releases are history).
+   `leave` (Sentry releases are history). `delete` and `leave` exist (`destroy: keep`); a recipe op sets the default
+   (`destroy: keep`, or `never` when the provider cannot delete; [ADR 0020](adr/0020-recipes.md), amendment).
 9. **Simple polling**: after create, poll a URL until a JSON path equals a value, with a timeout (Algolia tasks, Turso
    or Prisma readiness). Long multi-step lifecycles stay first-class.
 10. **Scope listing** for drift and `sponson init`: a list request plus a filter (name prefix, URL host) so unmanaged
@@ -262,7 +263,8 @@ yet are listed under [Current coverage](#current-coverage).
 11. **Once-only outputs**: an output that is only in the create response must be declared as such, so the engine
     feeds it to dependent lines in the same run and refuses a later run that needs it (instead of reading an empty
     value). Needed for Stripe webhook secrets, API keys and DB passwords even in first-class adapters. The engine
-    side exists: `OutputSpec.once` ([ADR 0018](adr/0018-once-only-outputs.md)), first used by `planetscale.password`.
+    side exists: `OutputSpec.once` ([ADR 0018](adr/0018-once-only-outputs.md)), first used by `planetscale.password`;
+    `http.resource` declares one as `{ path, sensitive: true, once: true }` ([ADR 0020](adr/0020-recipes.md), amendment).
 12. **Sim support**: a generic sim route set driven by the same declaration, so every `http` line gets the chaos and
     drift scenarios the built-in adapters get.
 

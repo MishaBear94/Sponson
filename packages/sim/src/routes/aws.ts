@@ -90,7 +90,7 @@ export const awsSim: ProviderSim<AwsState, AwsSeed> = {
     return false;
   },
 
-  authorized(headers, req, state) {
+  authorized(headers, state, req) {
     return authorized(headers, req, state);
   },
 

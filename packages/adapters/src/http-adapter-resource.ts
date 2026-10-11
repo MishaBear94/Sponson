@@ -106,9 +106,14 @@ function record(spec: ResourceSpec, key: string, l: Located): ResourceRecord {
   return { key, id: locator(spec, l.id), hash: stateHash(projection(l.item, fieldNames(spec))), label: label(spec, key) };
 }
 
-function outputsOf(spec: ResourceSpec, item: Record<string, unknown> | undefined, id: string): Record<string, Literal> {
+/**
+ * The outputs read from `item`. A `once` output only from `revealed`, the answer of the create that made the object:
+ * anywhere else the provider does not show it, and a value taken from a read would be a fake (ADR 0018).
+ */
+function outputsOf(spec: ResourceSpec, item: Record<string, unknown> | undefined, id: string, revealed = false): Record<string, Literal> {
   const out: Record<string, Literal> = { id };
   for (const [name, d] of Object.entries(spec.outputs)) {
+    if (d.once && !revealed) continue;
     const v = literalOf(at(item, pointerTokens(d.path)));
     if (v !== undefined) out[name] = v;
   }
@@ -308,15 +313,16 @@ async function create(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, 
   // `create.locate`: the answer is not the object (the parent it was added to, an acknowledgement).
   let item = spec.create.locate ? undefined : createdItem(spec, sent.response);
   let id = idOf(item, spec.idPath);
+  const revealed = id !== undefined;
   if (id === undefined) {
     // Some APIs answer a create with no body (201, 204), with something else, or (GraphQL) with a boolean: find
-    // what was created.
+    // what was created. Found so, it reveals no once-only value.
     const l = await locate(actx, api, spec);
     if (!l) throw noId(spec, spec.create.graphql ? `the answer to ${requestName(spec.create.graphql)}` : `the answer to ${spec.create.method} ${path}`);
     ({ id, item } = l);
   }
   const resource = { key, id: locator(spec, id), hash: stateHash(desiredState(spec, undefined)), label: label(spec, key) };
-  return { resources: [resource], outputs: outputsOf(spec, item, id), created: [key] };
+  return { resources: [resource], outputs: outputsOf(spec, item, id, revealed), created: [key] };
 }
 
 /** Send the update (REST, or the GraphQL mutation); the updated object when the answer holds one. */
