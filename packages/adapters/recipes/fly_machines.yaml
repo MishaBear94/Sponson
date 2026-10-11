@@ -1,0 +1,67 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Fly.io Machines API recipes (the per-PR app). Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+# The app's secrets are in fly.yaml (the GraphQL API has another base URL).
+provider: fly_machines
+title: Fly.io Machines API
+category: deploy
+verified_on: "2026-10-11"
+docs:
+  - title: Working with the Machines API
+    url: https://docs.fly.io/machines/api/working-with-machines-api/
+  - title: Apps resource
+    url: https://docs.fly.io/machines/api/apps-resource/
+api:
+  base_url: https://api.machines.dev/v1
+  base_url_env: FLY_MACHINES_API_URL
+  auth: { bearer_env: FLY_API_TOKEN }
+assumptions:
+  - id: FM1
+    verified: true
+    text: "The Machines API's public base URL is `https://api.machines.dev`, its paths start with `/v1`, and requests carry `Authorization: Bearer <fly_api_token>`."
+    source: https://docs.fly.io/machines/api/working-with-machines-api/
+  - id: FM2
+    verified: true
+    text: "`POST /v1/apps` with `app_name` (unique) and `org_slug` (both required) and optional `network` creates an app and answers 201 with `id` and `created_at`."
+    source: https://docs.fly.io/machines/api/apps-resource/
+  - id: FM3
+    verified: true
+    text: "`GET /v1/apps/{app_name}` answers the app (`id`, `name`, `status`, `organization { name, slug }`), so the name the plan chooses locates it."
+    source: https://docs.fly.io/machines/api/apps-resource/
+  - id: FM4
+    verified: true
+    text: "`DELETE /v1/apps/{app_name}` answers 202; Machines should be stopped first, and `?force=true` stops them and deletes the app at once, which is what the recipe's destroy sends (a PR app has the PR's Machines running)."
+    source: https://docs.fly.io/machines/api/apps-resource/
+  - id: FM5
+    verified: false
+    text: "Deleting the app deletes its secrets and its Machines with it; an app name another organization holds is refused with a conflict, which the adapter then fails to read (403/404) and reports."
+ops:
+  app:
+    kind: resource
+    title: App
+    summary: "A Fly app per pull request, such as `demo-${ctx.scope}`, in an organization: created with `POST /v1/apps`, located by its name, deleted with its Machines on destroy (`?force=true`). Its secrets are `fly.secret` lines; the Machines are what the PR's `fly deploy` creates. Nothing about the app is compared besides its existence."
+    covers: [fly-secrets]
+    params:
+      app_name:
+        type: string
+        required: true
+        pattern: "^[a-z0-9][a-z0-9-]*$"
+        description: The app's name, unique across Fly.io.
+        example: "demo-${ctx.scope}"
+      org_slug:
+        type: string
+        required: true
+        description: The organization the app is created in.
+        example: acme
+      network:
+        type: string
+        description: A private network (6PN) to put the app on.
+    http:
+      read: { path: "/apps/{app_name}" }
+      create:
+        path: /apps
+        body: { app_name: { param: app_name }, org_slug: { param: org_slug }, network: { param: network } }
+      delete: { path: "/apps/{app_name}?force=true" }
+    sim:
+      id_from: app_name
+    live:
+      params: { org_slug: SPONSON_LIVE_FLY_ORG }

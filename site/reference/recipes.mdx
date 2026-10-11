@@ -43,8 +43,14 @@ names are set.
 
 | Recipe | Op | What it manages | Credential |
 |---|---|---|---|
+| [`amplify.branch`](/reference/recipes#amplify-branch) | `resource` | Branch | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (AWS SigV4, `amplify` in `us-east-1`) |
+| [`amplify.branch_variable`](/reference/recipes#amplify-branch_variable) | `list_item` | Branch environment variable | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (AWS SigV4, `amplify` in `us-east-1`) |
+| [`azure_swa.build_app_setting`](/reference/recipes#azure_swa-build_app_setting) | `list_item` | App setting of a preview environment | the token `az account get-access-token --query accessToken -o tsv` prints (bearer) |
+| [`cloud_run.traffic_tag`](/reference/recipes#cloud_run-traffic_tag) | `list_item` | Traffic tag of a revision | the token `gcloud auth print-access-token` prints (bearer) |
 | [`cloudflare.dns_cname`](/reference/recipes#cloudflare-dns_cname) | `resource` | DNS CNAME record | `CLOUDFLARE_API_TOKEN` (bearer) |
 | [`configcat.targeting_rule`](/reference/recipes#configcat-targeting_rule) | `list_item` | Feature flag targeting rule | `CONFIGCAT_BASIC_AUTH_USERNAME` / `CONFIGCAT_BASIC_AUTH_PASSWORD` (basic) |
+| [`fly.secret`](/reference/recipes#fly-secret) | `resource` | App secret | `FLY_API_TOKEN` (bearer) |
+| [`fly_machines.app`](/reference/recipes#fly_machines-app) | `resource` | App | `FLY_API_TOKEN` (bearer) |
 | [`github.repo_webhook`](/reference/recipes#github-repo_webhook) | `resource` | Repository webhook | `GITHUB_TOKEN` (bearer) |
 | [`growthbook.force_rule`](/reference/recipes#growthbook-force_rule) | `list_item` | Feature force rule | `GROWTHBOOK_API_KEY` (bearer) |
 | [`heroku.config_var`](/reference/recipes#heroku-config_var) | `list_item` | App config var | `HEROKU_API_KEY` (bearer) |
@@ -55,6 +61,7 @@ names are set.
 | [`prisma.database`](/reference/recipes#prisma-database) | `resource` | Database | `PRISMA_SERVICE_TOKEN` (bearer) |
 | [`prisma.database_copy`](/reference/recipes#prisma-database_copy) | `resource` | Database copied from another | `PRISMA_SERVICE_TOKEN` (bearer) |
 | [`qstash.schedule`](/reference/recipes#qstash-schedule) | `resource` | Schedule | `QSTASH_TOKEN` (bearer) |
+| [`railway.variable`](/reference/recipes#railway-variable) | `resource` | Variable of a service in an environment | `RAILWAY_API_TOKEN` (bearer) |
 | [`render.env_var`](/reference/recipes#render-env_var) | `resource` | Service environment variable | `RENDER_API_KEY` (bearer) |
 | [`resend.api_key`](/reference/recipes#resend-api_key) | `resource` | API key | `RESEND_API_KEY` (bearer) |
 | [`resend.webhook`](/reference/recipes#resend-webhook) | `resource` | Webhook | `RESEND_API_KEY` (bearer) |
@@ -75,6 +82,260 @@ names are set.
 | [`upstash.redis_database`](/reference/recipes#upstash-redis_database) | `resource` | Redis database | `UPSTASH_EMAIL` / `UPSTASH_API_KEY` (basic) |
 | [`vercel.project_domain`](/reference/recipes#vercel-project_domain) | `resource` | Branch-bound project domain | `VERCEL_TOKEN` (bearer) |
 | [`workos.redirect_uri`](/reference/recipes#workos-redirect_uri) | `resource` | AuthKit redirect URI | `WORKOS_API_KEY` (bearer) |
+
+## AWS Amplify Hosting
+
+Recipe file: [`packages/adapters/recipes/amplify.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/amplify.yaml). Verified on 2026-10-11 against:
+
+- [CreateBranch](https://docs.aws.amazon.com/amplify/latest/APIReference/API_CreateBranch.html)
+- [GetBranch](https://docs.aws.amazon.com/amplify/latest/APIReference/API_GetBranch.html)
+- [UpdateBranch](https://docs.aws.amazon.com/amplify/latest/APIReference/API_UpdateBranch.html)
+- [DeleteBranch](https://docs.aws.amazon.com/amplify/latest/APIReference/API_DeleteBranch.html)
+- [Amplify endpoints and quotas](https://docs.aws.amazon.com/general/latest/gr/amplify.html)
+- [Create a signed AWS API request (SigV4)](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv-create-signed-request.html)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://amplify.us-east-1.amazonaws.com` |
+| `base_url_env` | `AMPLIFY_API_URL` |
+| Credential | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (AWS SigV4, `amplify` in `us-east-1`) |
+
+Assumptions:
+
+- **AM1** (verified, [source](https://docs.aws.amazon.com/general/latest/gr/amplify.html)): The Amplify API is regional (`https://amplify.<region>.amazonaws.com`) and signed with SigV4 for the service `amplify`. The recipe defaults to `us-east-1`; an app in another region sets `base_url` and `auth` (with its `region`) in the provider block, and temporary credentials (a CI role) add `session_token_env: AWS_SESSION_TOKEN` there.
+- **AM2** (verified, [source](https://docs.aws.amazon.com/amplify/latest/APIReference/API_CreateBranch.html)): `POST /apps/{appId}/branches` (CreateBranch) creates a branch from `branchName` (required) and optional `description`, `stage` (PRODUCTION, BETA, DEVELOPMENT, EXPERIMENTAL, PULL_REQUEST), `enableAutoBuild`, `environmentVariables`, …; it answers 200 with `{ branch }`.
+- **AM3** (verified, [source](https://docs.aws.amazon.com/amplify/latest/APIReference/API_GetBranch.html)): `GET /apps/{appId}/branches/{branchName}` (GetBranch) answers `{ branch }` with `branchName`, `stage`, `description`, `enableAutoBuild` and `environmentVariables` (a map of string to string).
+- **AM4** (verified, [source](https://docs.aws.amazon.com/amplify/latest/APIReference/API_UpdateBranch.html)): `POST /apps/{appId}/branches/{branchName}` (UpdateBranch) takes the same optional fields and answers `{ branch }`; `environmentVariables` is the branch's whole map of variables.
+- **AM5** (verified, [source](https://docs.aws.amazon.com/amplify/latest/APIReference/API_DeleteBranch.html)): `DELETE /apps/{appId}/branches/{branchName}` (DeleteBranch) deletes a branch; an unknown app or branch is 404 `NotFoundException`.
+- **AM6** **(unverified)**: UpdateBranch leaves the fields it is not sent as they are (so the branch op's update does not reset the variables, and the variable op's write does not reset the branch's settings), while an `environmentVariables` it is sent replaces the whole map, as the sim models it (assumption A4 of packages/sim/src/routes/aws.ts).
+- **AM7** **(unverified)**: A build that ran before a variable was written does not see it: Sponson does not start a new job (StartJob), so order the variable lines before the branch's first build (`enable_auto_build: false` and a CI-started job, or the branch line, then the variables, then the push). The branches Amplify's own pull request previews make are not modelled; this recipe manages a branch the plan names.
+
+### `amplify.branch`
+
+**Branch** (`http.resource`). An Amplify branch named by the plan (the git branch of the pull request, `${ctx.git.branch}`), created with CreateBranch and deleted on destroy. Its `stage`, `description` and auto-build setting are compared: a console edit is drift. Variables on it are `amplify.branch_variable` lines.
+
+Covers: `amplify-branch` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `app_id` | string | yes | — | The Amplify app's id. Matches `^d[a-z0-9]+$`. |
+| `branch_name` | string | yes | — | The branch's name, as the repository names it. |
+| `stage` | string | no | — | The branch's stage. One of `PRODUCTION`, `BETA`, `DEVELOPMENT`, `EXPERIMENTAL`, `PULL_REQUEST`. |
+| `description` | string | no | — | The branch's description. |
+| `enable_auto_build` | boolean | no | — | Build automatically on every push (false lets CI start the build after the variables are written; AM7). |
+
+```yaml
+# under changes: (no provider block needed)
+- id: branch
+  adapter: http
+  op: resource
+  recipe: amplify.branch
+  app_id: d1demo
+  branch_name: ${ctx.scope}
+  stage: PULL_REQUEST
+  description: Preview of ${ctx.scope}
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+read:
+  path: /apps/{app_id}/branches/{branch_name}
+create:
+  path: /apps/{app_id}/branches
+  body:
+    branchName: { param: branch_name }
+update:
+  method: POST
+item_path: /branch
+id_path: /branchName
+fields:
+  stage: { param: stage }
+  description: { param: description }
+  enableAutoBuild: { param: enable_auto_build }
+```
+
+### `amplify.branch_variable`
+
+**Branch environment variable** (`http.list_item`). One entry of a branch's `environmentVariables`, by read-modify-write of the whole map (UpdateBranch replaces the map it is sent); other variables are left alone, and the branch is locked while Sponson writes it. A branch that is not there yet reads as having no variables, so a plan that also creates the branch shows a create. Builds started before the write do not see it (AM7).
+
+Covers: `amplify-branch` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: none. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `app_id` | string | yes | — | The Amplify app's id. Matches `^d[a-z0-9]+$`. |
+| `branch_name` | string | yes | — | The branch's name (a `{ from }` of the `amplify.branch` line orders the two). |
+| `name` | string | yes | — | The variable's name. |
+| `value` | string | yes | — | The variable's value. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: branch_variable
+  adapter: http
+  op: list_item
+  recipe: amplify.branch_variable
+  app_id: d1demo
+  branch_name: ${ctx.scope}
+  name: API_URL
+  value: https://api-${ctx.scope}.example.app
+```
+
+What the line expands into: the [`http.list_item`](/reference/plan-format#http-list_item) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+parent:
+  path: /apps/{app_id}/branches/{branch_name}
+  method: POST
+  send: collection
+  item_path: /branch
+  if_missing: empty
+list_path: /environmentVariables
+shape: map
+item: { param: name }
+value: { param: value }
+```
+
+## Azure Static Web Apps
+
+Recipe file: [`packages/adapters/recipes/azure_swa.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/azure_swa.yaml). Verified on 2026-10-11 against:
+
+- [Static Sites - Create Or Update Static Site Build App Settings](https://learn.microsoft.com/en-us/rest/api/appservice/static-sites/create-or-update-static-site-build-app-settings?view=rest-appservice-2024-04-01)
+- [Static Sites - List Static Site Build App Settings](https://learn.microsoft.com/en-us/rest/api/appservice/static-sites/list-static-site-build-app-settings?view=rest-appservice-2024-04-01)
+- [Static Sites - Get Static Site Builds](https://learn.microsoft.com/en-us/rest/api/appservice/static-sites/get-static-site-builds?view=rest-appservice-2024-04-01)
+- [Preview environments in Azure Static Web Apps](https://learn.microsoft.com/en-us/azure/static-web-apps/preview-environments)
+- [Configure application settings for Azure Static Web Apps](https://learn.microsoft.com/en-us/azure/static-web-apps/application-settings)
+- [az account get-access-token](https://learn.microsoft.com/en-us/cli/azure/account#az-account-get-access-token)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://management.azure.com` |
+| `base_url_env` | `AZURE_SWA_API_URL` |
+| Credential | the token `az account get-access-token --query accessToken -o tsv` prints (bearer) |
+
+Assumptions:
+
+- **AZ1** (verified, [source](https://learn.microsoft.com/en-us/rest/api/appservice/static-sites/create-or-update-static-site-build-app-settings?view=rest-appservice-2024-04-01)): `PUT https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Web/staticSites/{name}/builds/{environmentName}/config/appsettings?api-version=2024-04-01` with `{ properties: { <name>: <value>, … } }` sets the app settings of one environment (build) and answers 200 with the same `properties`.
+- **AZ2** (verified, [source](https://learn.microsoft.com/en-us/rest/api/appservice/static-sites/list-static-site-build-app-settings?view=rest-appservice-2024-04-01)): The settings are read with `POST …/builds/{environmentName}/listAppSettings?api-version=2024-04-01` (no body), which answers a StringDictionary `{ id, properties }`; there is no GET, so the recipe reads with `parent.read_method: POST`.
+- **AZ3** (verified, [source](https://learn.microsoft.com/en-us/rest/api/appservice/static-sites/get-static-site-builds?view=rest-appservice-2024-04-01)): Each environment is a `builds/{environmentName}` resource: production is `default`, a pull request's preview environment is named by the pull request's number (`builds/12`).
+- **AZ4** (verified, [source](https://learn.microsoft.com/en-us/azure/static-web-apps/preview-environments)): A preview environment exists from the pull request's first deployment and is deleted, with its settings, when the pull request is closed; app settings reach the app's managed API (Functions), not the front-end build.
+- **AZ5** (verified, [source](https://learn.microsoft.com/en-us/cli/azure/account#az-account-get-access-token)): `az account get-access-token --query accessToken -o tsv` prints an Azure Resource Manager access token for the signed-in account (the default resource is `https://management.azure.com/`), sent as a bearer token.
+- **AZ6** **(unverified)**: The PUT replaces the whole settings map (a setting it is not sent is removed), so the recipe sends the map as read with the one entry changed (`send: collection`); there is no ETag on this resource, so only Sponson's own writers are serialised (the parent lock), and a setting added in the portal between the read and the write is lost.
+- **AZ7** **(unverified)**: Listing the settings of an environment that does not exist (not deployed yet, or deleted with its pull request) answers 404, which the recipe reads as no settings (`if_missing: empty`): plan shows a create before the first deploy, and destroy after the pull request closed is a no-op. A write before the first deploy fails with that 404; order the line after the deploy.
+
+### `azure_swa.build_app_setting`
+
+**App setting of a preview environment** (`http.list_item`). One app setting of a Static Web App environment (a pull request's preview environment is named by its number), by read-modify-write of the environment's settings: read with `listAppSettings`, written whole with a PUT. Other settings are left alone and the environment is locked while Sponson writes it. Settings reach the app's managed API, not the front-end build (AZ4); the environment exists only after the PR's first deploy (AZ7).
+
+Covers: `azure-swa-settings` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: none. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `subscription_id` | string | yes | — | The Azure subscription id. |
+| `resource_group` | string | yes | — | The resource group of the static web app. |
+| `site` | string | yes | — | The static web app's name. |
+| `environment` | string | yes | — | The environment's name (the pull request's number for its preview environment; `default` is production). Matches `^[a-zA-Z0-9]+$`. |
+| `name` | string | yes | — | The setting's name. |
+| `value` | string | yes | — | The setting's value. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: build_app_setting
+  adapter: http
+  op: list_item
+  recipe: azure_swa.build_app_setting
+  subscription_id: 00000000-0000-0000-0000-000000000000
+  resource_group: rg-web
+  site: web
+  environment: "42"
+  name: API_URL
+  value: https://api-${ctx.scope}.example.app
+```
+
+What the line expands into: the [`http.list_item`](/reference/plan-format#http-list_item) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+parent:
+  path: /subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Web/staticSites/{site}/builds/{environment}/config/appsettings?api-version=2024-04-01
+  read_path: /subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Web/staticSites/{site}/builds/{environment}/listAppSettings?api-version=2024-04-01
+  read_method: POST
+  method: PUT
+  send: collection
+  if_missing: empty
+list_path: /properties
+shape: map
+item: { param: name }
+value: { param: value }
+```
+
+## Google Cloud Run
+
+Recipe file: [`packages/adapters/recipes/cloud_run.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/cloud_run.yaml). Verified on 2026-10-11 against:
+
+- [REST Resource: projects.locations.services (Service, TrafficTarget)](https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.services)
+- [Method: projects.locations.services.patch](https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.services/patch)
+- [Method: projects.locations.services.get](https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.services/get)
+- [Rollbacks, gradual rollouts, and traffic migration (tags)](https://cloud.google.com/run/docs/rollouts-rollbacks-traffic-migration)
+- [gcloud auth print-access-token](https://cloud.google.com/sdk/gcloud/reference/auth/print-access-token)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://run.googleapis.com/v2` |
+| `base_url_env` | `CLOUD_RUN_API_URL` |
+| Credential | the token `gcloud auth print-access-token` prints (bearer) |
+
+Assumptions:
+
+- **CR1** (verified, [source](https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.services)): `GET https://run.googleapis.com/v2/projects/{project}/locations/{location}/services/{service}` answers the Service with its `traffic` list and an `etag`, 'a system-generated fingerprint for this version of the resource' that 'may be used to detect modification conflict during updates'.
+- **CR2** (verified, [source](https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.services/patch)): `PATCH https://run.googleapis.com/v2/{service.name}` takes a Service and an optional `updateMask` (fields to update), answers a long-running Operation, and needs the `cloud-platform` scope; the recipe sends `?updateMask=traffic` with `{ traffic, etag }` only, so the revision template is never written.
+- **CR3** (verified, [source](https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.services)): A TrafficTarget is `{ type, revision, percent, tag }`; `type: TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION` sends traffic to the named `revision`, `percent` defaults to zero, and `tag` is 'a string to be part of the URI to exclusively reference this target', which is the per-PR URL.
+- **CR4** (verified, [source](https://cloud.google.com/sdk/gcloud/reference/auth/print-access-token)): `gcloud auth print-access-token` prints an OAuth access token for the active account, sent as a bearer token.
+- **CR5** **(unverified)**: A patch whose `etag` no longer matches (a deploy changed the service after the read) is refused (409 ABORTED or 412) rather than applied: the line fails and the next apply reads again, so a concurrent `gcloud run deploy` is never overwritten. Sponson's own writers are serialised by the parent lock.
+- **CR6** **(unverified)**: The Service answered right after the patch's Operation is accepted already shows the new `traffic` (the desired state), so the re-read that confirms the write sees the tag; `percent` 0 is left out of the answer and `type` and `revision` are answered as sent.
+- **CR7** **(unverified)**: The revision a tag points to exists before the line applies: the PR's deploy creates it (`gcloud run deploy --no-traffic --revision-suffix <scope>` gives `<service>-<scope>`). Its environment variables are part of that revision, set by the deploy, not by this recipe; a deploy that tags (`--tag`) itself conflicts with this line's tag.
+
+### `cloud_run.traffic_tag`
+
+**Traffic tag of a revision** (`http.list_item`). A tag (`pr-42`) in a service's `traffic` list pointing at the PR's revision with no traffic share, which gives the revision its own URL (`https://pr-42---<service>-<hash>.a.run.app`). Read-modify-write of `traffic` only (`updateMask=traffic`), sent with the service's `etag` so a concurrent deploy makes the write fail instead of being overwritten (CR5); other tags and the traffic split are left alone, and destroy removes only this tag. The revision itself, and its environment variables, are the deploy's (CR7).
+
+Covers: — in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: none. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `project` | string | yes | — | The Google Cloud project id. |
+| `region` | string | yes | — | The service's region. |
+| `service` | string | yes | — | The Cloud Run service's name. |
+| `tag` | string | yes | — | The tag, the prefix of the revision's own URL. Matches `^[a-z][a-z0-9-]*$`. |
+| `revision` | string | yes | — | The revision the tag points to (made by the PR's deploy). |
+
+```yaml
+# under changes: (no provider block needed)
+- id: traffic_tag
+  adapter: http
+  op: list_item
+  recipe: cloud_run.traffic_tag
+  project: demo-project
+  region: us-central1
+  service: web
+  tag: ${ctx.scope}
+  revision: web-${ctx.scope}
+```
+
+What the line expands into: the [`http.list_item`](/reference/plan-format#http-list_item) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+parent:
+  path: /projects/{project}/locations/{region}/services/{service}?updateMask=traffic
+  read_path: /projects/{project}/locations/{region}/services/{service}
+  method: PATCH
+  send:
+    - etag
+list_path: /traffic
+key_field: tag
+item:
+  tag: { param: tag }
+  revision: { param: revision }
+  type: TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION
+```
 
 ## Cloudflare
 
@@ -240,6 +501,142 @@ item:
     intValue: null
     doubleValue: null
     predefinedVariationId: null
+```
+
+## Fly.io
+
+Recipe file: [`packages/adapters/recipes/fly.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/fly.yaml). Verified on 2026-10-11 against:
+
+- [Secrets and Fly Apps](https://docs.fly.io/apps/secrets)
+- [superfly/fly-go resource_secrets.go (the GraphQL operations flyctl sends)](https://github.com/superfly/fly-go/blob/main/resource_secrets.go)
+- [superfly/fly-go schema.graphql](https://github.com/superfly/fly-go/blob/main/schema.graphql)
+- [Working with the Machines API (tokens)](https://docs.fly.io/machines/api/working-with-machines-api/)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.fly.io/graphql` |
+| `base_url_env` | `FLY_API_URL` |
+| Credential | `FLY_API_TOKEN` (bearer) |
+
+Assumptions:
+
+- **FS1** (verified, [source](https://github.com/superfly/fly-go/blob/main/resource_secrets.go)): `query ($appName: String!) { app(name: $appName) { secrets { name digest createdAt } } }` lists an app's secrets; values are never returned (Fly does not allow reading plain-text secret values), so the recipe locates a secret by name and compares nothing else.
+- **FS2** (verified, [source](https://github.com/superfly/fly-go/blob/main/resource_secrets.go)): `mutation($input: SetSecretsInput!) { setSecrets(input: $input) { release { id version } } }` with `{ appId, secrets: [{ key, value }] }` sets secrets; `unsetSecrets(input: { appId, keys })` removes them.
+- **FS3** (verified, [source](https://docs.fly.io/apps/secrets)): Plain-text values cannot be read back (`fly secrets list` shows a name, a digest and a date), so a value changed in the console, or in the plan, is not detected: drift is the secret's presence only. To change a value, run `sponson apply --destroy` for the scope (or remove the line, apply, and add it back).
+- **FS4** (verified, [source](https://docs.fly.io/apps/secrets)): Machines read secrets as environment variables at boot: a secret set without updating the Machines (as `fly secrets set --stage` does) reaches only Machines started or updated afterwards. Order the line before the PR's `fly deploy`; after a later change run `fly secrets deploy`.
+- **FS5** **(unverified)**: A token from `fly tokens create` (`FlyV1 fm2_…`) or `fly auth token` is accepted as `Authorization: Bearer <token>` by the GraphQL API, as the Machines API documents for the same `FLY_API_TOKEN`. (fly-go itself sends a macaroon as `FlyV1 <token>`; a block that needs that sends it with `auth: { header: Authorization, value_env: FLY_API_TOKEN }`.)
+- **FS6** **(unverified)**: Unsetting a secret of an app that no longer exists answers an error saying the app could not be found, which the adapter reads as already gone; unsetting an absent key of an existing app is not an error. setSecrets through GraphQL updates no Machines (FS4). Current flyctl sets secrets through the Machines API instead; the GraphQL mutations are not marked deprecated.
+
+### `fly.secret`
+
+**App secret** (`http.resource`). One secret of a Fly app (typically the app made for the pull request, `fly_machines.app`), set with `setSecrets` and removed with `unsetSecrets`. Fly never returns secret values, so only its presence is compared: a secret unset in the console is recreated, a changed value is not noticed (FS3). Machines see it once started or updated after the write: order it before the PR's deploy (FS4).
+
+Covers: `fly-secrets` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `app` | string | yes | — | The app's name. |
+| `name` | string | yes | — | The secret's name (the environment variable the Machines see). Matches `^[A-Za-z_][A-Za-z0-9_]*$`. |
+| `value` | string | yes | — | The secret's value, normally a `{ secret }` reference. It is sent, never stored or compared. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: secret
+  adapter: http
+  op: resource
+  recipe: fly.secret
+  app: demo-${ctx.scope}
+  name: DATABASE_URL
+  value: postgres://app@db.internal:5432/${ctx.scope}
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  graphql:
+    query: "query ($appName: String!) { app(name: $appName) { secrets { name digest createdAt } } }"
+    variables:
+      appName: { param: app }
+    data_path: /app/secrets
+  match:
+    name: { param: name }
+create:
+  graphql:
+    query: "mutation($input: SetSecretsInput!) { setSecrets(input: $input) { release { id version } } }"
+    variables:
+      input:
+        appId: { param: app }
+        secrets:
+          - key: { param: name }
+            value: { param: value }
+    idempotent: true
+delete:
+  graphql:
+    query: "mutation($input: UnsetSecretsInput!) { unsetSecrets(input: $input) { release { id version } } }"
+    variables:
+      input:
+        appId: { param: app }
+        keys:
+          - { param: name }
+```
+
+## Fly.io Machines API
+
+Recipe file: [`packages/adapters/recipes/fly_machines.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/fly_machines.yaml). Verified on 2026-10-11 against:
+
+- [Working with the Machines API](https://docs.fly.io/machines/api/working-with-machines-api/)
+- [Apps resource](https://docs.fly.io/machines/api/apps-resource/)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.machines.dev/v1` |
+| `base_url_env` | `FLY_MACHINES_API_URL` |
+| Credential | `FLY_API_TOKEN` (bearer) |
+
+Assumptions:
+
+- **FM1** (verified, [source](https://docs.fly.io/machines/api/working-with-machines-api/)): The Machines API's public base URL is `https://api.machines.dev`, its paths start with `/v1`, and requests carry `Authorization: Bearer <fly_api_token>`.
+- **FM2** (verified, [source](https://docs.fly.io/machines/api/apps-resource/)): `POST /v1/apps` with `app_name` (unique) and `org_slug` (both required) and optional `network` creates an app and answers 201 with `id` and `created_at`.
+- **FM3** (verified, [source](https://docs.fly.io/machines/api/apps-resource/)): `GET /v1/apps/{app_name}` answers the app (`id`, `name`, `status`, `organization { name, slug }`), so the name the plan chooses locates it.
+- **FM4** (verified, [source](https://docs.fly.io/machines/api/apps-resource/)): `DELETE /v1/apps/{app_name}` answers 202; Machines should be stopped first, and `?force=true` stops them and deletes the app at once, which is what the recipe's destroy sends (a PR app has the PR's Machines running).
+- **FM5** **(unverified)**: Deleting the app deletes its secrets and its Machines with it; an app name another organization holds is refused with a conflict, which the adapter then fails to read (403/404) and reports.
+
+### `fly_machines.app`
+
+**App** (`http.resource`). A Fly app per pull request, such as `demo-${ctx.scope}`, in an organization: created with `POST /v1/apps`, located by its name, deleted with its Machines on destroy (`?force=true`). Its secrets are `fly.secret` lines; the Machines are what the PR's `fly deploy` creates. Nothing about the app is compared besides its existence.
+
+Covers: `fly-secrets` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `app_name` | string | yes | — | The app's name, unique across Fly.io. Matches `^[a-z0-9][a-z0-9-]*$`. |
+| `org_slug` | string | yes | — | The organization the app is created in. |
+| `network` | string | no | — | A private network (6PN) to put the app on. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: app
+  adapter: http
+  op: resource
+  recipe: fly_machines.app
+  app_name: demo-${ctx.scope}
+  org_slug: acme
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+read:
+  path: /apps/{app_name}
+create:
+  path: /apps
+  body:
+    app_name: { param: app_name }
+    org_slug: { param: org_slug }
+    network: { param: network }
+delete:
+  path: /apps/{app_name}?force=true
 ```
 
 ## GitHub
@@ -973,6 +1370,114 @@ fields:
   cron: { param: cron }
   destination: { param: destination }
   method: { param: method }
+```
+
+## Railway
+
+Recipe file: [`packages/adapters/recipes/railway.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/railway.yaml). Verified on 2026-10-11 against:
+
+- [Public API (endpoint, tokens, errors)](https://docs.railway.com/reference/public-api)
+- [Manage Variables with the Public API](https://docs.railway.com/guides/manage-variables)
+- [Environments (PR environments)](https://docs.railway.com/reference/environments)
+- [CLI (RAILWAY_TOKEN and RAILWAY_API_TOKEN)](https://docs.railway.com/guides/cli)
+- [railwayapp/cli GraphQL schema](https://github.com/railwayapp/cli/blob/master/src/gql/schema.json)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://backboard.railway.com/graphql/v2` |
+| `base_url_env` | `RAILWAY_API_URL` |
+| Credential | `RAILWAY_API_TOKEN` (bearer) |
+
+Assumptions:
+
+- **RY1** (verified, [source](https://docs.railway.com/reference/public-api)): The public API is one GraphQL endpoint, `https://backboard.railway.com/graphql/v2`; account, workspace and OAuth tokens are sent as `Authorization: Bearer <token>`, project tokens in `Project-Access-Token` instead (a project token therefore needs a hand-written block with `auth: { header: Project-Access-Token, value_env: RAILWAY_TOKEN }`).
+- **RY2** (verified, [source](https://docs.railway.com/guides/cli)): The Railway CLI reads an account or workspace token from `RAILWAY_API_TOKEN` and a project token from `RAILWAY_TOKEN`, so the bearer credential of this recipe is `RAILWAY_API_TOKEN`.
+- **RY3** (verified, [source](https://docs.railway.com/reference/public-api)): Failures may be HTTP 200 with an `errors` array (a denied query among them); 400 is a parse or validation failure, 429 a rate limit with `Retry-After`. Queries are safe to retry; a mutation only when no answer arrived.
+- **RY4** (verified, [source](https://docs.railway.com/guides/manage-variables)): `variables(projectId, environmentId, serviceId?, unrendered?)` answers the variables of a service in an environment (without `serviceId`, the environment's shared variables) as a map of name to value; `unrendered: true` answers references such as `${{Postgres.DATABASE_URL}}` as written instead of resolved, so a value is compared as it was set.
+- **RY5** (verified, [source](https://docs.railway.com/guides/manage-variables)): `variableUpsert(input: { projectId, environmentId, serviceId?, name, value, skipDeploys? })` creates or replaces one variable (without `serviceId`, a shared variable); by default it triggers a redeploy of the service (`skipDeploys` defaults to false).
+- **RY6** (verified, [source](https://docs.railway.com/guides/manage-variables)): `variableDelete(input: { projectId, environmentId, serviceId?, name })` deletes one variable.
+- **RY7** (verified, [source](https://docs.railway.com/reference/environments)): Railway creates a PR environment when a pull request is opened (with PR environments enabled) and deletes it, with its variables, when the pull request is merged or closed. The recipe takes the environment's id as a param: the plan copies it from the dashboard, `railway status`, or a line that outputs it; the recipe does not look environments up by name (their naming is not documented).
+- **RY8** **(unverified)**: Deleting a variable whose environment Railway already removed (the pull request closed) is an error saying the environment was not found, which the adapter reads as already gone; deleting a variable that does not exist answers `true`.
+- **RY9** **(unverified)**: Sponson does not wait for the redeploy a write triggers (RY5): a step that needs the running service to see the value waits on Railway's deployment status itself. A reference value written as `${{…}}` is not supported in a plan, where `${…}` is Sponson's own interpolation.
+
+### `railway.variable`
+
+**Variable of a service in an environment** (`http.resource`). One variable of a service (or, without `service_id`, a shared variable) in a Railway environment, typically the PR environment Railway created. Upserted with `variableUpsert`, read unrendered from `variables`, removed with `variableDelete`. A console edit of the value is drift. Railway redeploys the service after each write unless `skip_deploys` is set; Sponson does not wait for that deploy (RY9).
+
+Covers: `railway-variables` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `project_id` | string | yes | — | The project's id. |
+| `environment_id` | string | yes | — | The environment's id (for a PR environment, the one Railway created for the pull request; RY7). |
+| `service_id` | string | no | — | The service's id; without it, the variable is shared by the environment's services. |
+| `name` | string | yes | — | The variable's name. Matches `^[A-Za-z_][A-Za-z0-9_]*$`. |
+| `value` | string | yes | — | The variable's value (may be a `{ secret }` reference). |
+| `skip_deploys` | boolean | no | — | Do not redeploy the service after a write (Railway's default is to redeploy). |
+
+```yaml
+# under changes: (no provider block needed)
+- id: variable
+  adapter: http
+  op: resource
+  recipe: railway.variable
+  project_id: prj-railway-demo
+  environment_id: env-pr-42
+  service_id: svc-web
+  name: API_URL
+  value: https://api-${ctx.scope}.example.app
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value, `{ join: [...] }` for its parts joined into one string, and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+read:
+  graphql:
+    query: "query variables($projectId: String!, $environmentId: String!, $serviceId: String, $unrendered: Boolean) { variables(projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId, unrendered: $unrendered) }"
+    variables:
+      projectId: { param: project_id }
+      environmentId: { param: environment_id }
+      serviceId: { param: service_id }
+      unrendered: true
+    data_path:
+      join:
+        - /variables/
+        - { param: name }
+create:
+  graphql:
+    query: "mutation variableUpsert($input: VariableUpsertInput!) { variableUpsert(input: $input) }"
+    variables:
+      input:
+        projectId: { param: project_id }
+        environmentId: { param: environment_id }
+        serviceId: { param: service_id }
+        name: { param: name }
+        value: { param: value }
+        skipDeploys: { param: skip_deploys }
+    idempotent: true
+update:
+  graphql:
+    query: "mutation variableUpsert($input: VariableUpsertInput!) { variableUpsert(input: $input) }"
+    variables:
+      input:
+        projectId: { param: project_id }
+        environmentId: { param: environment_id }
+        serviceId: { param: service_id }
+        name: { param: name }
+        value: { param: value }
+        skipDeploys: { param: skip_deploys }
+    idempotent: true
+delete:
+  graphql:
+    query: "mutation variableDelete($input: VariableDeleteInput!) { variableDelete(input: $input) }"
+    variables:
+      input:
+        projectId: { param: project_id }
+        environmentId: { param: environment_id }
+        serviceId: { param: service_id }
+        name: { param: name }
+fields:
+  value: { param: value }
 ```
 
 ## Render
