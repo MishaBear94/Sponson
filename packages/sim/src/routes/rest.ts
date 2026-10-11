@@ -52,6 +52,8 @@
  *       behind a scheme prefix such as `Authorization: Api-Key <key>`), HTTP Digest (RFC 7616, qop=auth; a
  *       request without valid credentials gets a 401 with a fresh challenge), and AWS SigV4 (the signature
  *       recomputed and compared; see ../auth.ts). Anything else is 401.
+ *   R8. A path the seed lists in `reads` is a read sent as a POST (an Azure Resource Manager list action such as
+ *       `…/listAppSettings`): it answers the object it names, as a GET of that object would, and is not a write.
  */
 import type { IncomingHttpHeaders } from "node:http";
 import { digestChallenge, digestProblem, issueToken, sigV4Problem, tokenValid, type DigestConfig, type IssuedToken, type SigV4Config } from "../auth.js";
@@ -107,6 +109,8 @@ export interface RestState {
   aliases: Record<string, string>;
   /** Further header names (lower-case) that carry a credential (assumption R1). */
   auth_headers: string[];
+  /** Paths read with a POST, by path: the object each answers (assumption R8). */
+  reads: Record<string, string>;
   /** Present when the seed configures real credentials (R7). */
   auth?: RestAuthState;
 }
@@ -151,6 +155,8 @@ export interface RestSeed {
   aliases?: Record<string, string>;
   /** Further header names that carry a credential, for an API whose header is not named `*-Key` or `*-Token`. */
   auth_headers?: string[];
+  /** Paths read with a POST (an ARM list action), by path: the object each answers (assumption R8). */
+  reads?: Record<string, string>;
   /** Real credentials (R7). */
   auth?: RestAuthSeed;
 }
@@ -168,8 +174,9 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
       collections: {},
       objects: byPath(structuredClone(seed?.objects ?? {})),
       styles: byPath(structuredClone(seed?.styles ?? {})),
-      aliases: Object.fromEntries(Object.entries(seed?.aliases ?? {}).map(([a, p]) => [normPath(a), normPath(p)])),
+      aliases: pathPairs(seed?.aliases),
       auth_headers: (seed?.auth_headers ?? []).map((h) => h.toLowerCase()),
+      reads: pathPairs(seed?.reads),
     };
     for (const [path, items] of Object.entries(byPath(seed?.collections ?? {}))) {
       const field = styleOf(state, path).id_field;
@@ -198,8 +205,8 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
     return false;
   },
 
-  isWrite(req) {
-    return !(req.method === "POST" && req.path === "/oauth/token");
+  isWrite(req, state) {
+    return !(req.method === "POST" && (req.path === "/oauth/token" || normPath(req.path) in state.reads));
   },
 
   authorized(headers, state, req) {
@@ -340,6 +347,11 @@ function normPath(path: string): string {
   return path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
 }
 
+/** A seed map of path to path, both normalised. */
+function pathPairs(m: Record<string, string> | undefined): Record<string, string> {
+  return Object.fromEntries(Object.entries(m ?? {}).map(([a, p]) => [normPath(a), normPath(p)]));
+}
+
 /** A seed map keyed by normalised paths. */
 function byPath<T>(m: Record<string, T>): Record<string, T> {
   return Object.fromEntries(Object.entries(m).map(([p, v]) => [normPath(p), v]));
@@ -384,6 +396,12 @@ function queriedItem(state: RestState, path: string, query: URLSearchParams | un
 }
 
 const notFound = (): Reply => error(404, "not found");
+
+/** R8: the object a read sent as a POST names, answered as a GET of it would be. */
+function readObject(state: RestState, path: string): Reply {
+  const object = state.objects[path];
+  return object ? new Reply(200, envelope(state.styles[path]?.item_path ?? "", object)) : notFound();
+}
 
 /** The fields the request's headers set, by the collection's `header_fields`. */
 function headerFields(state: RestState, collection: string, headers: Record<string, string>): Record<string, unknown> {
@@ -496,6 +514,8 @@ const routes = router<RestState>(
     }),
 
     route("POST", "/*path", ({ core, state, params, body, headers }) => {
+      const read = state.reads[normPath(`/${params.path}`)];
+      if (read !== undefined) return readObject(state, read);
       const suffix = suffixTarget(state, normPath(`/${params.path}`));
       if (suffix) return upsertAt(core, state, suffix, body, headers);
       const t = resolve(state, `/${params.path}`);

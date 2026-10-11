@@ -99,9 +99,12 @@ existing file in `packages/adapters/recipes/` and:
    and `<PROVIDER>_API_URL`; per op its `kind`, typed `params` with an `example` for each required one, and `http`
    using `{ param: <name> }` and `{<name>}` path placeholders. Add `sim` hints when the sim needs them (a parent
    object to seed for a list item, the body field a client-chosen id comes from, the `collection` when the create
-   posts to another path than the list). A per-account API leaves `base_url` out and gives a `base_url_example`; if it
-   takes an OAuth2 client-credentials token, write its `token_url` and `audience` as paths on the account's host
-   (`/oauth/token`), with a `<PROVIDER>_TOKEN_URL` override, and the tests check the token flow against the sim. A
+   posts to another path than the list). An API the REST sim cannot stand in for (GraphQL, a map a POST replaces whole)
+   names a first-class sim instead: `sim: { provider, seed, present, drift }` (`base_path` when its base URL is a
+   sub-path of the sim). `auth` may also be a `command` (the provider CLI's token), `aws_sigv4`,
+   `oauth2_client_credentials` or a header with a `prefix`; the tests check each for real. A per-account API leaves
+   `base_url` out and gives a `base_url_example`; if it takes an OAuth2 client-credentials token, write its
+   `token_url` and `audience` as paths on the account's host (`/oauth/token`), with a `<PROVIDER>_TOKEN_URL` override. A
    value the provider shows only in the create answer (an API key's token) is an output
    `{ path, sensitive: true, once: true }`; a value it shows on every read is not `once`. When destroying a scope must
    not delete what the op made, say so on the op: `destroy: keep` (shared history; a line may still opt into

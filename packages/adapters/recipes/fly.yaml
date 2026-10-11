@@ -1,0 +1,90 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Fly.io GraphQL API recipes (app secrets). Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+# The per-PR app itself is in fly_machines.yaml (the Machines API has another base URL).
+provider: fly
+title: Fly.io
+category: deploy
+verified_on: "2026-10-11"
+docs:
+  - title: Secrets and Fly Apps
+    url: https://docs.fly.io/apps/secrets
+  - title: superfly/fly-go resource_secrets.go (the GraphQL operations flyctl sends)
+    url: https://github.com/superfly/fly-go/blob/main/resource_secrets.go
+  - title: superfly/fly-go schema.graphql
+    url: https://github.com/superfly/fly-go/blob/main/schema.graphql
+  - title: Working with the Machines API (tokens)
+    url: https://docs.fly.io/machines/api/working-with-machines-api/
+api:
+  base_url: https://api.fly.io/graphql
+  base_url_env: FLY_API_URL
+  auth: { bearer_env: FLY_API_TOKEN }
+assumptions:
+  - id: FS1
+    verified: true
+    text: "`query ($appName: String!) { app(name: $appName) { secrets { name digest createdAt } } }` lists an app's secrets; values are never returned (Fly does not allow reading plain-text secret values), so the recipe locates a secret by name and compares nothing else."
+    source: https://github.com/superfly/fly-go/blob/main/resource_secrets.go
+  - id: FS2
+    verified: true
+    text: "`mutation($input: SetSecretsInput!) { setSecrets(input: $input) { release { id version } } }` with `{ appId, secrets: [{ key, value }] }` sets secrets; `unsetSecrets(input: { appId, keys })` removes them."
+    source: https://github.com/superfly/fly-go/blob/main/resource_secrets.go
+  - id: FS3
+    verified: true
+    text: "Plain-text values cannot be read back (`fly secrets list` shows a name, a digest and a date), so a value changed in the console, or in the plan, is not detected: drift is the secret's presence only. To change a value, run `sponson apply --destroy` for the scope (or remove the line, apply, and add it back)."
+    source: https://docs.fly.io/apps/secrets
+  - id: FS4
+    verified: true
+    text: "Machines read secrets as environment variables at boot: a secret set without updating the Machines (as `fly secrets set --stage` does) reaches only Machines started or updated afterwards. Order the line before the PR's `fly deploy`; after a later change run `fly secrets deploy`."
+    source: https://docs.fly.io/apps/secrets
+  - id: FS5
+    verified: false
+    text: "A token from `fly tokens create` (`FlyV1 fm2_…`) or `fly auth token` is accepted as `Authorization: Bearer <token>` by the GraphQL API, as the Machines API documents for the same `FLY_API_TOKEN`. (fly-go itself sends a macaroon as `FlyV1 <token>`; a block that needs that sends it with `auth: { header: Authorization, value_env: FLY_API_TOKEN }`.)"
+  - id: FS6
+    verified: false
+    text: "Unsetting a secret of an app that no longer exists answers an error saying the app could not be found, which the adapter reads as already gone; unsetting an absent key of an existing app is not an error. setSecrets through GraphQL updates no Machines (FS4). Current flyctl sets secrets through the Machines API instead; the GraphQL mutations are not marked deprecated."
+ops:
+  secret:
+    kind: resource
+    title: App secret
+    summary: "One secret of a Fly app (typically the app made for the pull request, `fly_machines.app`), set with `setSecrets` and removed with `unsetSecrets`. Fly never returns secret values, so only its presence is compared: a secret unset in the console is recreated, a changed value is not noticed (FS3). Machines see it once started or updated after the write: order it before the PR's deploy (FS4)."
+    covers: [fly-secrets]
+    params:
+      app:
+        type: string
+        required: true
+        description: The app's name.
+        example: "demo-${ctx.scope}"
+      name:
+        type: string
+        required: true
+        pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+        description: The secret's name (the environment variable the Machines see).
+        example: DATABASE_URL
+      value:
+        type: string
+        required: true
+        description: The secret's value, normally a `{ secret }` reference. It is sent, never stored or compared.
+        example: "postgres://app@db.internal:5432/${ctx.scope}"
+    http:
+      find:
+        graphql:
+          query: "query ($appName: String!) { app(name: $appName) { secrets { name digest createdAt } } }"
+          variables: { appName: { param: app } }
+          data_path: /app/secrets
+        match: { name: { param: name } }
+      create:
+        graphql:
+          query: "mutation($input: SetSecretsInput!) { setSecrets(input: $input) { release { id version } } }"
+          variables: { input: { appId: { param: app }, secrets: [{ key: { param: name }, value: { param: value } }] } }
+          idempotent: true
+      delete:
+        graphql:
+          query: "mutation($input: UnsetSecretsInput!) { unsetSecrets(input: $input) { release { id version } } }"
+          variables: { input: { appId: { param: app }, keys: [{ param: name }] } }
+    sim:
+      provider: fly
+      seed: { apps: { demo-pr-42: {} } }
+      present: /apps/demo-pr-42/secrets/DATABASE_URL
+      drift:
+        missing: { secrets.demo-pr-42.DATABASE_URL: delete }
+    live:
+      params: { app: SPONSON_LIVE_FLY_APP }

@@ -735,6 +735,27 @@ describe("http.list_item", () => {
     expect(() => listItem.diff(null, { ...url, parent: { path: at, write_list_path: "urls" } })).toThrow(/parent.write_list_path/);
   });
 
+  it("parent.read_method: POST reads the parent with a POST that is not a write (an ARM list action), and joins the record id only when set", async () => {
+    await h.close();
+    // As Azure reads a static site build's app settings with `POST …/listAppSettings` and replaces them with a PUT.
+    const settings = "/sites/s/builds/42/config/appsettings";
+    h = await harness({ rest: { objects: { [settings]: { properties: { SHARED: "1" } }, "/apps/demo": { allowed_origins: [] } }, reads: { "/sites/s/builds/42/listAppSettings": settings } } });
+    const actx = h.actx("http", API);
+    const entry = { api: "demo", parent: { path: `${settings}?api-version=1`, read_path: "/sites/s/builds/42/listAppSettings?api-version=1", read_method: "POST", method: "PUT", send: "collection" }, list_path: "/properties", shape: "map", item: "API_URL", value: "https://api-pr-42.example.app" };
+    expect(await listItem.read(actx, entry)).toBeNull();
+    expect(h.sim.state.writes).toEqual([]);
+    const r = await listItem.apply(actx, entry, null);
+    expect(JSON.parse(r.resources[0]!.id)).toMatchObject({ read: "/sites/s/builds/42/listAppSettings?api-version=1", read_method: "POST" });
+    expect(h.sim.state.rest.objects[settings]).toEqual({ properties: { SHARED: "1", API_URL: "https://api-pr-42.example.app" } });
+    expect(h.sim.state.writes.map((w) => `${w.method} ${w.path}`)).toEqual([`PUT /rest${settings}`]);
+    expect((await readApply(h, listItem, entry)).diffs[0]!.kind).toBe("unchanged");
+    await listItem.destroy(actx, r.resources);
+    expect(h.sim.state.rest.objects[settings]).toEqual({ properties: { SHARED: "1" } });
+    // A GET read keeps its record id as it was.
+    expect(JSON.parse((await listItem.apply(actx, ORIGIN, null)).resources[0]!.id)).not.toHaveProperty("read_method");
+    expect(() => listItem.diff(null, { ...entry, parent: { ...entry.parent, read_method: "PUT" } })).toThrow(/parent.read_method` must be one of GET, POST/);
+  });
+
   it("map items may be identified by a pointer into the item (a condition's value)", async () => {
     const group = { api: "demo", parent: { path: "/apps/demo" }, list_path: "/rules", key_field: "/properties/0/value/0", item: { properties: [{ key: "host", value: ["pr-42.example.app"] }], rollout_percentage: 100 } };
     const actx = h.actx("http", API);

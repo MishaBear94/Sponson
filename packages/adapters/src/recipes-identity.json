@@ -1,4 +1,36 @@
 {
+  "amplify.branch": {
+    "provider": {
+      "base_url": "https://amplify.us-east-1.amazonaws.com",
+      "base_url_env": "AMPLIFY_API_URL",
+      "auth": {
+        "aws_sigv4": {
+          "region": "us-east-1",
+          "service": "amplify",
+          "access_key_id_env": "AWS_ACCESS_KEY_ID",
+          "secret_access_key_env": "AWS_SECRET_ACCESS_KEY"
+        }
+      }
+    },
+    "key": "/apps/d1demo/branches/pr-42",
+    "id": "DELETE /apps/d1demo/branches/pr-42"
+  },
+  "amplify.branch_variable": {
+    "provider": {
+      "base_url": "https://amplify.us-east-1.amazonaws.com",
+      "base_url_env": "AMPLIFY_API_URL",
+      "auth": {
+        "aws_sigv4": {
+          "region": "us-east-1",
+          "service": "amplify",
+          "access_key_id_env": "AWS_ACCESS_KEY_ID",
+          "secret_access_key_env": "AWS_SECRET_ACCESS_KEY"
+        }
+      }
+    },
+    "key": "/apps/d1demo/branches/pr-42#/environmentVariables=API_URL",
+    "id": "{\"item\":\"API_URL\",\"item_path\":\"/branch\",\"list\":\"/environmentVariables\",\"missing_empty\":true,\"read\":\"/apps/d1demo/branches/pr-42\",\"send\":\"collection\",\"shape\":\"map\",\"write\":\"POST /apps/d1demo/branches/pr-42\"}"
+  },
   "auth0.callback_url": {
     "provider": {
       "base_url_env": "AUTH0_API_URL",
@@ -67,6 +99,40 @@
     "key": "/clients/AbC123dEf456GhI789jKl012MnO345pQ#/allowed_origins=https://pr-42.preview.example.app",
     "id": "{\"item\":\"https://pr-42.preview.example.app\",\"list\":\"/allowed_origins\",\"read\":\"/clients/AbC123dEf456GhI789jKl012MnO345pQ?fields=callbacks,allowed_logout_urls,web_origins,allowed_origins&include_fields=true\",\"send\":\"field\",\"shape\":\"array\",\"write\":\"PATCH /clients/AbC123dEf456GhI789jKl012MnO345pQ\"}"
   },
+  "azure_swa.build_app_setting": {
+    "provider": {
+      "base_url": "https://management.azure.com",
+      "base_url_env": "AZURE_SWA_API_URL",
+      "auth": {
+        "command": [
+          "az",
+          "account",
+          "get-access-token",
+          "--query",
+          "accessToken",
+          "-o",
+          "tsv"
+        ]
+      }
+    },
+    "key": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-web/providers/Microsoft.Web/staticSites/web/builds/42/config/appsettings?api-version=2024-04-01#/properties=API_URL",
+    "id": "{\"item\":\"API_URL\",\"list\":\"/properties\",\"missing_empty\":true,\"read\":\"/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-web/providers/Microsoft.Web/staticSites/web/builds/42/listAppSettings?api-version=2024-04-01\",\"read_method\":\"POST\",\"send\":\"collection\",\"shape\":\"map\",\"write\":\"PUT /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-web/providers/Microsoft.Web/staticSites/web/builds/42/config/appsettings?api-version=2024-04-01\"}"
+  },
+  "cloud_run.traffic_tag": {
+    "provider": {
+      "base_url": "https://run.googleapis.com/v2",
+      "base_url_env": "CLOUD_RUN_API_URL",
+      "auth": {
+        "command": [
+          "gcloud",
+          "auth",
+          "print-access-token"
+        ]
+      }
+    },
+    "key": "/projects/demo-project/locations/us-central1/services/web?updateMask=traffic#/traffic=pr-42",
+    "id": "{\"item\":\"pr-42\",\"key_field\":\"tag\",\"list\":\"/traffic\",\"read\":\"/projects/demo-project/locations/us-central1/services/web\",\"send\":[\"etag\"],\"shape\":\"array\",\"write\":\"PATCH /projects/demo-project/locations/us-central1/services/web?updateMask=traffic\"}"
+  },
   "cloudflare.dns_cname": {
     "provider": {
       "base_url": "https://api.cloudflare.com/client/v4",
@@ -106,6 +172,28 @@
     },
     "key": "/projects/demo-project/config?updateMask=authorizedDomains#/authorizedDomains=pr-42.preview.example.app",
     "id": "{\"item\":\"pr-42.preview.example.app\",\"list\":\"/authorizedDomains\",\"read\":\"/projects/demo-project/config\",\"send\":\"field\",\"shape\":\"array\",\"write\":\"PATCH /projects/demo-project/config?updateMask=authorizedDomains\"}"
+  },
+  "fly.secret": {
+    "provider": {
+      "base_url": "https://api.fly.io/graphql",
+      "base_url_env": "FLY_API_URL",
+      "auth": {
+        "bearer_env": "FLY_API_TOKEN"
+      }
+    },
+    "key": "graphql:app({\"appName\":\"demo-pr-42\"})/app/secrets[name=DATABASE_URL]",
+    "id": "GRAPHQL {\"query\":\"mutation($input: UnsetSecretsInput!) { unsetSecrets(input: $input) { release { id version } } }\",\"variables\":{\"input\":{\"appId\":\"demo-pr-42\",\"keys\":[\"DATABASE_URL\"]}}}"
+  },
+  "fly_machines.app": {
+    "provider": {
+      "base_url": "https://api.machines.dev/v1",
+      "base_url_env": "FLY_MACHINES_API_URL",
+      "auth": {
+        "bearer_env": "FLY_API_TOKEN"
+      }
+    },
+    "key": "/apps/demo-pr-42",
+    "id": "DELETE /apps/demo-pr-42?force=true"
   },
   "github.repo_webhook": {
     "provider": {
@@ -297,6 +385,17 @@
     },
     "key": "/v2/schedules/cron-pr-42",
     "id": "DELETE /v2/schedules/cron-pr-42"
+  },
+  "railway.variable": {
+    "provider": {
+      "base_url": "https://backboard.railway.com/graphql/v2",
+      "base_url_env": "RAILWAY_API_URL",
+      "auth": {
+        "bearer_env": "RAILWAY_API_TOKEN"
+      }
+    },
+    "key": "graphql:variables({\"environmentId\":\"env-pr-42\",\"projectId\":\"prj-railway-demo\",\"serviceId\":\"svc-web\",\"unrendered\":true})/variables/API_URL",
+    "id": "GRAPHQL {\"query\":\"mutation variableDelete($input: VariableDeleteInput!) { variableDelete(input: $input) }\",\"variables\":{\"input\":{\"environmentId\":\"env-pr-42\",\"name\":\"API_URL\",\"projectId\":\"prj-railway-demo\",\"serviceId\":\"svc-web\"}}}"
   },
   "render.env_var": {
     "provider": {
