@@ -1,0 +1,56 @@
+name: "http GraphQL (Fly.io): an app secret set with setSecrets, found in the app's secrets list, removed with unsetSecrets; a FlyV1 token and the value never leak"
+plan: |
+  version: 1
+  providers:
+    http:
+      fly:
+        base_url: https://api.fly.io/graphql
+        base_url_env: FLY_API_URL
+        # Tokens from `fly tokens create` carry their own scheme ("FlyV1 fm2_…"): sent as they are.
+        auth: { header: Authorization, value_env: FLY_API_TOKEN }
+  changes:
+    - id: database_url
+      adapter: http
+      op: resource
+      api: fly
+      find:
+        graphql:
+          query: "query ($appName: String!) { app(name: $appName) { secrets { name digest createdAt } } }"
+          variables: { appName: "demo-${ctx.scope}" }
+          data_path: /app/secrets
+        match: { name: DATABASE_URL }
+      create:
+        graphql:
+          query: "mutation($input: SetSecretsInput!) { setSecrets(input: $input) { release { id version } } }"
+          variables: { input: { appId: "demo-${ctx.scope}", secrets: [{ key: DATABASE_URL, value: { secret: "env://PREVIEW_DATABASE_URL" } }] } }
+      delete:
+        graphql:
+          query: "mutation($input: UnsetSecretsInput!) { unsetSecrets(input: $input) { release { id version } } }"
+          variables: { input: { appId: "demo-${ctx.scope}", keys: [DATABASE_URL] } }
+env:
+  FLY_API_TOKEN: "FlyV1 fm2_scenario_macaroon_0042"
+  PREVIEW_DATABASE_URL: "postgres://app:fly_db_password_0042@db.internal:5432/pr42"
+secrets: [fm2_scenario_macaroon_0042, fly_db_password_0042]
+steps:
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { database_url: create } }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { database_url: applied } }
+  - sim:
+      state:
+        fly.apps.demo-pr-42.secrets.DATABASE_URL.value: "postgres://app:fly_db_password_0042@db.internal:5432/pr42"
+        fly.apps.demo-pr-42.releases: 1
+  - run: apply --json
+    expect: { exit: 0, writes: 0, lines: { database_url: unchanged } }
+  # Unset by hand: missing, set again by the next apply.
+  - chaos: { drift: { "fly.secrets.demo-pr-42.DATABASE_URL": "delete" } }
+  - run: plan --json
+    expect: { exit: 0, drift: [{ kind: missing, line: database_url }], plan_lines: { database_url: create } }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { database_url: applied } }
+  - run: apply --destroy --json
+    expect: { exit: 0, status: complete, lines: { database_url: destroyed } }
+  - sim:
+      state:
+        fly.apps.demo-pr-42.secrets: {}
+        fly.apps.demo-pr-42.releases: 3

@@ -3,10 +3,12 @@
  * plan. See ADR 0017 and docs/plan-format.md#httpresource.
  *
  * - Key: where the object lives and what identifies it there: `<find.path>[<field>=<value>,…]` when it is located
- *   by `find`, else its `read.path` (a URL that names it). The provider block (base URL, credential) is part of
- *   the ledger identity already.
+ *   by `find`, else its `read.path` (a URL that names it). A GraphQL `find` or `read` stands in for the path as
+ *   `graphql:<root field>(<variables>)<data path>`. The provider block (base URL, credential) is part of the ledger
+ *   identity already.
  * - Id: the request that removes it, `DELETE /things/<id>` (`KEEP /things/<id>` with `destroy: keep`), plus any
- *   `gone_status`, so `destroy` needs nothing but the ledger. A new provider id makes a new record id: replaced
+ *   `gone_status`, or `GRAPHQL {"query":…,"variables":…}` for a GraphQL delete, so `destroy` needs nothing but the
+ *   ledger. A new provider id makes a new record id: replaced
  *   outside Sponson.
  * - Hash: `sha256(canonicalJson({ <field>: <value> }))` over the declared `fields` only; `diff` compares the same
  *   form, so a console edit of a declared field is `changed` drift and anything else the provider stores is not.
@@ -16,6 +18,7 @@ import { ABSENT, SENSITIVE, assertNoPending, desiredSide, paramError } from "./c
 import { isObject, isProviderError, listAll, type ApiClient } from "./http.js";
 import { failedWith, httpClient, idOf, itemOf, literalOf, write } from "./http-adapter-client.js";
 import { ADAPTER, apiBlock, apiEnvironment, at, bodyOf, deepMerge, fieldTokens, fillPath, firstMarker, isKeep, parseResource, pointerTokens, projection, requestHeaders, resourceOutputs, stateHash, type FindSpec, type ResourceSpec } from "./http-adapter-spec.js";
+import { fillVariables, graphqlRequest, requestName, usesId, variablesPending, type GraphqlSpec } from "./http-adapter-graphql.js";
 
 /** An object as found: its provider id and its body. */
 interface Located {
@@ -28,11 +31,26 @@ const found = new WeakMap<LiveState, Located>();
 
 /** The resource key, or undefined while a value it depends on is pending. */
 export function resourceKey(spec: ResourceSpec): string | undefined {
-  if (!spec.find) return fillPath(spec.read!.path, spec.vars);
-  const path = fillPath(spec.find.path, spec.vars);
+  if (!spec.find) return spec.read!.graphql ? graphqlKey(spec.read!.graphql, spec.itemPath) : fillPath(spec.read!.path, spec.vars);
+  const path = spec.find.graphql ? graphqlKey(spec.find.graphql, spec.find.listPath) : fillPath(spec.find.path, spec.vars);
   const match = Object.entries(spec.find.match).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   if (path === undefined || match.some(([, v]) => firstMarker(v) !== undefined || isKeep(v))) return undefined;
   return `${path}[${match.map(([f, v]) => `${f}=${typeof v === "string" ? v : canonicalJson(v)}`).join(",")}]`;
+}
+
+/** A GraphQL locating request as a key: its root field, its variables and where the result is; undefined while pending. */
+function graphqlKey(g: GraphqlSpec, fallbackPath: string): string | undefined {
+  return variablesPending(g.variables) ? undefined : `${requestName(g)}${g.dataPath ?? fallbackPath}`;
+}
+
+/** True when any request of the line is GraphQL: its client then speaks JSON, whatever the API's encoding. */
+function isGraphql(spec: ResourceSpec): boolean {
+  return [spec.find, spec.read, spec.create, spec.update, spec.delete].some((r) => r?.graphql !== undefined);
+}
+
+/** The client for a line's requests. */
+function clientOf(actx: AdapterContext, spec: ResourceSpec): ApiClient {
+  return httpClient(actx, isGraphql(spec) ? { encoding: "json" } : {});
 }
 
 function label(spec: ResourceSpec, key: string): string {
@@ -44,6 +62,11 @@ function label(spec: ResourceSpec, key: string): string {
  * of an archiving `POST` (canonical JSON, last).
  */
 function locator(spec: ResourceSpec, id: string): string {
+  if (spec.delete.graphql) {
+    const g = spec.delete.graphql;
+    const request = canonicalJson({ query: g.query, variables: fillVariables(g.variables, id) });
+    return `${spec.destroy === "keep" ? "KEEP " : ""}GRAPHQL ${request}`;
+  }
   const method = spec.destroy === "keep" ? "KEEP" : spec.delete.method;
   const gone = spec.goneStatus.length ? ` gone=${spec.goneStatus.join(",")}` : "";
   const body = spec.delete.body ? ` body=${canonicalJson(spec.delete.body)}` : "";
@@ -59,7 +82,17 @@ export function resourceIdentity(spec: ResourceSpec, id: string): { key: string 
 }
 
 /** The request a record id names. */
-function parseLocator(id: string): { method: string; path: string; gone: number[]; body: Record<string, unknown> } | null {
+function parseLocator(id: string): { method: string; path: string; gone: number[]; body: Record<string, unknown>; graphql?: GraphqlSpec } | null {
+  const g = /^(KEEP )?GRAPHQL (\{.*\})$/s.exec(id);
+  if (g) {
+    try {
+      const r = JSON.parse(g[2]!) as { query?: unknown; variables?: unknown };
+      if (typeof r.query === "string" && isObject(r.variables)) return { method: g[1] ? "KEEP" : "GRAPHQL", path: "", gone: [], body: {}, graphql: { query: r.query, variables: r.variables, idempotent: true } };
+    } catch {
+      // reported by the caller
+    }
+    return null;
+  }
   const m = /^(DELETE|POST|KEEP) (\/\S*)(?: gone=([\d,]+))?(?: body=(\{.*\}))?$/.exec(id);
   if (!m) return null;
   let body: unknown = {};
@@ -102,6 +135,22 @@ function matches(item: Record<string, unknown>, match: Record<string, unknown>):
   return Object.entries(match).every(([f, v]) => canonicalJson(at(item, fieldTokens(f)) ?? null) === canonicalJson(v));
 }
 
+/**
+ * The object's id at `id_path`. An object located by GraphQL may have none (a variable is named by the request
+ * itself); unless a request needs `{id}`, the resource key then stands in for it.
+ */
+function idFor(spec: ResourceSpec, item: unknown, key: string | undefined): string | undefined {
+  const id = idOf(item, spec.idPath);
+  if (id !== undefined || key === undefined || !isGraphql(spec)) return id;
+  const needsId = [spec.read, spec.update, spec.delete].some((r) => r?.graphql && usesId(r.graphql.variables)) || placeholders(spec);
+  return needsId ? undefined : key;
+}
+
+/** True when a REST path of the line uses `{id}`. */
+function placeholders(spec: ResourceSpec): boolean {
+  return [spec.read, spec.update, spec.delete].some((r) => r !== undefined && !r.graphql && r.path.includes("{id}"));
+}
+
 function noId(spec: ResourceSpec, where: string): SponsonError {
   return new SponsonError("PROVIDER_RESPONSE", `${ADAPTER}: ${where} has no id at \`id_path\` ${spec.idPath || '""'}`, { adapter: ADAPTER, param: "id_path" });
 }
@@ -131,26 +180,63 @@ async function getObject(api: ApiClient, spec: ResourceSpec, path: string): Prom
   return item;
 }
 
-async function locateByFind(api: ApiClient, spec: ResourceSpec, find: FindSpec): Promise<Located | null> {
-  const path = fillPath(find.path, spec.vars)!;
-  const hits = (await listObjects(api, find, path)).filter((i) => matches(i, find.match));
+/** The value at a GraphQL request's result path: null when absent, a scalar as `{ value }`. */
+function graphqlItem(data: unknown, path: string, name: string): Record<string, unknown> | null {
+  const v = at(data, pointerTokens(path));
+  if (v === undefined || v === null) return null;
+  if (isObject(v)) return v;
+  if (Array.isArray(v)) throw new SponsonError("PROVIDER_RESPONSE", `${ADAPTER}: GraphQL ${name}: a list where the object should be (check \`data_path\`)`, { adapter: ADAPTER, param: "data_path" });
+  return { value: v };
+}
+
+/** Run a locating GraphQL query and take the object it answers; null when absent or "not found". */
+async function getGraphqlObject(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, g: GraphqlSpec, id: string | undefined): Promise<Record<string, unknown> | null> {
+  try {
+    return graphqlItem(await graphqlRequest(api, g, id, actx.redact, false), g.dataPath ?? spec.itemPath, requestName(g));
+  } catch (e) {
+    if (failedWith(e, "PROVIDER_NOT_FOUND", [])) return null;
+    throw e;
+  }
+}
+
+/** The objects a GraphQL `find` lists. */
+async function graphqlObjects(actx: AdapterContext, api: ApiClient, find: FindSpec, g: GraphqlSpec): Promise<Array<Record<string, unknown>>> {
+  const data = await graphqlRequest(api, g, undefined, actx.redact, false);
+  const list = at(data, pointerTokens(g.dataPath ?? find.listPath));
+  if (list === null || list === undefined) return [];
+  if (!Array.isArray(list)) throw new SponsonError("PROVIDER_RESPONSE", `${ADAPTER}: GraphQL ${requestName(g)}: no list at ${g.dataPath ?? find.listPath}`, { adapter: ADAPTER, param: "find.list_path" });
+  return list.filter(isObject);
+}
+
+/** The detail of a found object: by its `read` request, REST or GraphQL. */
+async function readDetail(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, id: string): Promise<Record<string, unknown> | null> {
+  const read = spec.read!;
+  if (read.graphql) return getGraphqlObject(actx, api, spec, read.graphql, id);
+  return getObject(api, spec, fillPath(read.path, spec.vars, id)!);
+}
+
+async function locateByFind(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, find: FindSpec, key: string | undefined): Promise<Located | null> {
+  const path = find.graphql ? requestName(find.graphql) : fillPath(find.path, spec.vars)!;
+  const listed = find.graphql ? await graphqlObjects(actx, api, find, find.graphql) : await listObjects(api, find, path);
+  const hits = listed.filter((i) => matches(i, find.match));
   if (hits.length === 0) return null;
   if (hits.length > 1) throw paramError(ADAPTER, `\`find.match\` matches ${hits.length} objects at ${path}; add fields until it identifies one`, "find.match");
-  const id = idOf(hits[0], spec.idPath);
-  if (id === undefined) throw noId(spec, `an object listed by GET ${path}`);
+  const id = idFor(spec, hits[0], key);
+  if (id === undefined) throw noId(spec, `an object listed by ${find.graphql ? path : `GET ${path}`}`);
   if (!spec.read) return { id, item: hits[0]! };
-  const item = await getObject(api, spec, fillPath(spec.read.path, spec.vars, id)!);
+  const item = await readDetail(actx, api, spec, id);
   return item ? { id, item } : null;
 }
 
 /** Find the object the line declares; null when it does not exist. */
-async function locate(api: ApiClient, spec: ResourceSpec): Promise<Located | null> {
-  if (spec.find) return locateByFind(api, spec, spec.find);
-  const path = fillPath(spec.read!.path, spec.vars)!;
-  const item = await getObject(api, spec, path);
+async function locate(actx: AdapterContext, api: ApiClient, spec: ResourceSpec): Promise<Located | null> {
+  const key = resourceKey(spec);
+  if (spec.find) return locateByFind(actx, api, spec, spec.find, key);
+  const read = spec.read!;
+  const item = read.graphql ? await getGraphqlObject(actx, api, spec, read.graphql, undefined) : await getObject(api, spec, fillPath(read.path, spec.vars)!);
   if (!item) return null;
-  const id = idOf(item, spec.idPath);
-  if (id === undefined) throw noId(spec, `GET ${path}`);
+  const id = idFor(spec, item, key);
+  if (id === undefined) throw noId(spec, read.graphql ? requestName(read.graphql) : `GET ${fillPath(read.path, spec.vars)}`);
   return { id, item };
 }
 
@@ -189,7 +275,8 @@ function idempotencyKey(actx: AdapterContext, key: string, body: unknown): strin
 
 /** Send the create; null when the provider says it exists already (a conflict, or a declared `exists_status`). */
 async function sendCreate(actx: AdapterContext, spec: ResourceSpec, key: string, path: string, body: Record<string, unknown>): Promise<{ response: unknown } | null> {
-  const { method, idempotencyKey: withKey, contentType } = spec.create;
+  const { method, idempotencyKey: withKey, contentType, graphql } = spec.create;
+  if (graphql) return sendGraphqlCreate(actx, spec, graphql);
   const headers = { ...requestHeaders(spec.create, "create"), ...(withKey ? { "Idempotency-Key": idempotencyKey(actx, key, body) } : {}) };
   const api = httpClient(actx, { ...(contentType ? { contentType } : {}), headers });
   try {
@@ -199,6 +286,26 @@ async function sendCreate(actx: AdapterContext, spec: ResourceSpec, key: string,
     if (failedWith(e, "PROVIDER_CONFLICT", spec.existsStatus)) return null;
     throw e;
   }
+}
+
+/** A GraphQL create: the mutation; its answer at the result path (when an object) stands for the created object. */
+async function sendGraphqlCreate(actx: AdapterContext, spec: ResourceSpec, g: GraphqlSpec): Promise<{ response: unknown } | null> {
+  try {
+    const data = await graphqlRequest(clientOf(actx, spec), g, undefined, actx.redact, true);
+    const v = at(data, pointerTokens(g.dataPath ?? spec.itemPath));
+    return { response: isObject(v) ? { [CREATED]: v } : {} };
+  } catch (e) {
+    if (failedWith(e, "PROVIDER_CONFLICT", [])) return null;
+    throw e;
+  }
+}
+
+/** Where `sendGraphqlCreate` puts the created object, so `create` reads it with item_path `/<CREATED>`. */
+const CREATED = "created";
+
+/** The created object in a create's answer. */
+function createdItem(spec: ResourceSpec, response: unknown): Record<string, unknown> | undefined {
+  return spec.create.graphql ? itemOf(response, `/${CREATED}`) : itemOf(response, spec.itemPath);
 }
 
 async function create(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, key: string): Promise<ApplyResult> {
@@ -212,42 +319,54 @@ async function create(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, 
   if (!sent) {
     // It exists already: someone else's, or ours from an attempt whose answer was lost. Not created by this call;
     // the engine claims it when an earlier intent of ours named it.
-    const existing = await locate(api, spec);
+    const existing = await locate(actx, api, spec);
     if (!existing) throw new SponsonError("PROVIDER_CONFLICT", `${ADAPTER}: ${label(spec, key)}: the provider says it exists, but it cannot be found with the line's \`find\`/\`read\``, { adapter: ADAPTER, key });
     return { resources: [record(spec, key, existing)], outputs: outputsOf(spec, existing.item, existing.id), created: [] };
   }
   // `create.locate`: the answer is not the object (the parent it was added to, an acknowledgement).
-  let item = spec.create.locate ? undefined : itemOf(sent.response, spec.itemPath);
+  let item = spec.create.locate ? undefined : createdItem(spec, sent.response);
   let id = idOf(item, spec.idPath);
   const revealed = id !== undefined;
   if (id === undefined) {
-    // Some APIs answer a create with no body (201, 204), or with something else: find what was created. Found so,
-    // it reveals no once-only value.
-    const l = await locate(api, spec);
-    if (!l) throw noId(spec, `the answer to ${spec.create.method} ${path}`);
+    // Some APIs answer a create with no body (201, 204), with something else, or (GraphQL) with a boolean: find
+    // what was created. Found so, it reveals no once-only value.
+    const l = await locate(actx, api, spec);
+    if (!l) throw noId(spec, spec.create.graphql ? `the answer to ${requestName(spec.create.graphql)}` : `the answer to ${spec.create.method} ${path}`);
     ({ id, item } = l);
   }
   const resource = { key, id: locator(spec, id), hash: stateHash(desiredState(spec, undefined)), label: label(spec, key) };
   return { resources: [resource], outputs: outputsOf(spec, item, id, revealed), created: [key] };
 }
 
+/** Send the update (REST, or the GraphQL mutation); the updated object when the answer holds one. */
+async function sendUpdate(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, upd: NonNullable<ResourceSpec["update"]>, desired: Record<string, unknown>, id: string): Promise<Record<string, unknown> | undefined> {
+  if (upd.graphql) {
+    // An update sets state: sending it twice is harmless, so a dropped connection is retried.
+    const data = await graphqlRequest(api, { ...upd.graphql, idempotent: true }, id, actx.redact, true);
+    const v = at(data, pointerTokens(upd.graphql.dataPath ?? spec.itemPath));
+    return isObject(v) ? v : undefined;
+  }
+  const { method, contentType, sendFields } = upd;
+  // PUT replaces the object, so the identifying fields and kept fields are sent back as they are; PATCH and POST
+  // send only what the plan sets; `send_fields: false` sends none (the request carries them in headers).
+  const fields = !sendFields ? {} : method === "PUT" ? deepMerge(bodyOf(spec.find?.match ?? {}), bodyOf(desired)) : bodyOf(spec.fields, isKeep);
+  const path = fillPath(upd.path, spec.vars, id)!;
+  const headers = requestHeaders(upd, "update");
+  const client = contentType || Object.keys(headers).length ? httpClient(actx, { ...(contentType ? { contentType } : {}), headers }) : api;
+  const response = await write(client, method, path, deepMerge(fields, upd.body), true);
+  return itemOf(response, spec.itemPath);
+}
+
 async function update(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, key: string, current: ResourceRecord, live: LiveState): Promise<ApplyResult> {
-  const l = found.get(live) ?? (await locate(api, spec));
+  const l = found.get(live) ?? (await locate(actx, api, spec));
   if (!l) return create(actx, api, spec, key);
   const desired = desiredState(spec, l.item);
   if (stateHash(desired) === current.hash) return { resources: [current], outputs: live.outputs, created: [] };
   if (!spec.update) throw noUpdate(spec, key);
-  const { method, contentType, sendFields } = spec.update;
-  // PUT replaces the object, so the identifying fields and kept fields are sent back as they are; PATCH and POST
-  // send only what the plan sets.
-  const fields = !sendFields ? {} : method === "PUT" ? deepMerge(bodyOf(spec.find?.match ?? {}), bodyOf(desired)) : bodyOf(spec.fields, isKeep);
-  const path = fillPath(spec.update.path, spec.vars, l.id)!;
-  const headers = requestHeaders(spec.update, "update");
   actx.log(`update ${label(spec, key)}`);
-  const client = contentType || Object.keys(headers).length ? httpClient(actx, { ...(contentType ? { contentType } : {}), headers }) : api;
-  const response = await write(client, method, path, deepMerge(fields, spec.update.body), true);
+  const item = await sendUpdate(actx, api, spec, spec.update, desired, l.id);
   const resource = { key, id: locator(spec, l.id), hash: stateHash(desired), label: label(spec, key) };
-  return { resources: [resource], outputs: { ...live.outputs, ...outputsOf(spec, itemOf(response, spec.itemPath), l.id) }, created: [] };
+  return { resources: [resource], outputs: { ...live.outputs, ...outputsOf(spec, item, l.id) }, created: [] };
 }
 
 const PENDING_KEY = "(pending)";
@@ -273,7 +392,7 @@ export const resource: OpSpec = {
     const spec = parseResource(params);
     const key = resourceKey(spec);
     if (key === undefined) return null;
-    const l = await locate(httpClient(actx), spec);
+    const l = await locate(actx, clientOf(actx, spec), spec);
     if (!l) return null;
     const state: LiveState = { resources: [record(spec, key, l)], outputs: outputsOf(spec, l.item, l.id) };
     found.set(state, l);
@@ -294,20 +413,20 @@ export const resource: OpSpec = {
     assertNoPending(params, ADAPTER);
     const spec = parseResource(params);
     const key = resourceKey(spec)!;
-    const api = httpClient(actx);
+    const api = clientOf(actx, spec);
     const current = live?.resources.find((r) => r.key === key);
     return current && live ? update(actx, api, spec, key, current, live) : create(actx, api, spec, key);
   },
 
   async destroy(actx, resources) {
-    const api = httpClient(actx);
     for (const r of resources) {
       if (r.id === "") continue; // an intent never located: nothing was created under it
       const req = parseLocator(r.id);
-      if (!req) throw new SponsonError("INTERNAL", `${ADAPTER}: ${r.key}: record id \`${r.id}\` is not a delete request`, { adapter: ADAPTER, key: r.key });
+      if (!req) throw new SponsonError("INTERNAL", `${ADAPTER}: ${r.key}: record id is not a delete request`, { adapter: ADAPTER, key: r.key });
       if (req.method === "KEEP") continue; // `destroy: keep`: left in place on purpose
       try {
-        await write(api, req.method, req.path, req.method === "POST" ? req.body : undefined, true);
+        if (req.graphql) await graphqlRequest(httpClient(actx, { encoding: "json" }), req.graphql, undefined, actx.redact, true);
+        else await write(httpClient(actx), req.method, req.path, req.method === "POST" ? req.body : undefined, true);
       } catch (e) {
         if (!failedWith(e, "PROVIDER_NOT_FOUND", req.gone) && !acceptedWithoutJson(e)) throw e;
       }

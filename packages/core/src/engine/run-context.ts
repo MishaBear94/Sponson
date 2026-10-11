@@ -126,6 +126,7 @@ export class RunContext {
       log: (m) => log(this.redactor.redact(`[${adapter}] ${m}`)),
       intend,
       redact: (t) => this.redactor.redact(t),
+      secret: (v) => this.redactor.register(v),
     };
   }
 

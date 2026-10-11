@@ -501,8 +501,8 @@ For the long tail of APIs that have no adapter of their own (feature flags, webh
 per-environment config): the plan describes the requests, and Sponson keeps every rule it keeps for the built-in
 adapters (intents before creates, idempotent apply, drift by hash, destroy only what it created, secrets as
 references). Why it exists and what it deliberately does not do: [ADR 0017](/contributing/adr/0017-generic-http-adapter).
-It speaks JSON (or form-encoded) REST; an API whose lifecycle is more than create, read, update and delete wants a
-first-class adapter.
+It speaks JSON (or form-encoded, or XML) REST and GraphQL; an API whose lifecycle is more than create, read, update
+and delete wants a first-class adapter.
 
 Each API is a block under `providers.http`, and each line names one with `api:`. A block is part of the identity of
 the resources made through it: editing it (a new base URL, another credential variable, a header) re-identifies
@@ -524,9 +524,10 @@ providers:
 |---|---|---|
 | `base_url` | http(s) URL | Request paths are relative to it. |
 | `base_url_env` | variable name | Optional. When this variable is set, it replaces `base_url` (a staging API; the test suites point it at the local fake cloud). |
-| `auth` | map | `{ bearer_env: NAME }` (`Authorization: Bearer`), `{ header: X-Api-Key, value_env: NAME }` (the value in that header), or `{ basic: { user_env: NAME, password_env: NAME } }`. Always variable NAMES, never values; the credential's name must end in `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `_KEY` or `APIKEY` so that its value is masked in every output. Unset: `PROVIDER_AUTH`. |
-| `headers` | map: header → string | Optional static headers (an API version pin). `Authorization` and `Content-Type` are Sponson's; `Accept` (default `application/json`) may name a vendor JSON media type that pins the API version, such as `application/vnd.heroku+json; version=3`. |
-| `encoding` | `json` \| `form` | Request bodies as JSON (default) or `application/x-www-form-urlencoded`, nested as `a[b]=c` and `a[0]=c`. Answers are read as JSON either way. |
+| `auth` | map | How requests are authenticated: one of the forms under [Authentication](/reference/plan-format#authentication). Always variable NAMES, never values; a credential's name must end in `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `_KEY` or `APIKEY` so that its value is masked in every output. Unset: `PROVIDER_AUTH`. |
+| `headers` | map: header → string | Optional static headers (an API version pin, Google's `x-goog-user-project`). `Authorization`, `Accept` and `Content-Type` are Sponson's. |
+| `encoding` | `json` \| `form` \| `xml` | Request bodies as JSON (default), `application/x-www-form-urlencoded` (nested as `a[b]=c` and `a[0]=c`), or XML. Answers are read as JSON, except with `xml`; see [XML APIs](/reference/plan-format#xml-apis). |
+| `media_type` | media type | Optional, JSON only: a versioned media type sent as `Accept` and as the `Content-Type` of bodies (MongoDB Atlas: `application/vnd.atlas.2023-01-01+json`). |
 | `production` | boolean | Optional. `true` for a production system (a live Stripe account, a production tenant): every line through this API needs [approval](/reference/plan-format#environments), whatever the run's environment. |
 | `refuse_credential` | `{ prefixes, unless_env }` | Optional. A credential whose value starts with one of `prefixes` (Stripe's `sk_live_`, `rk_live_`) is refused with `PROVIDER_AUTH` before any request (plan, apply and destroy alike), unless the variable `unless_env` is `1` or `true`. A recipe's refusal cannot be overridden by the block. |
 
@@ -536,6 +537,104 @@ a malformed line is `PARAM_INVALID` naming the field. Paths take `{id}` (the obj
 written as they are with `{+name}`, for an API that takes a URL in the path). Fields are a top-level
 name (`url`) or a JSON pointer (`/config/url`); write a key that is literally `from`, `secret` or `keep` as a pointer
 (`/from`), since a map holding one of those keys is a [reference](/reference/plan-format#values).
+
+#### Authentication
+
+| Form | Sends | For |
+|---|---|---|
+| `{ bearer_env: NAME }` | `Authorization: Bearer <value>` | most APIs |
+| `{ header: X-Api-Key, value_env: NAME, prefix? }` | the value in that header, after `prefix` when given (literal text: `"Api-Key "`, `"Token "`) | API-key headers; `Authorization: Api-Key <key>` (Flagsmith); `Authorization` with a token that carries its own scheme (Fly.io's `FlyV1 …`) |
+| `{ headers: [{ header, value_env, prefix? }, …] }` | each of those headers | APIs that want two keys at once (Datadog's `DD-API-KEY` and `DD-APPLICATION-KEY`) |
+| `{ basic: { user_env, password_env } }` | HTTP Basic | |
+| `{ oauth2_client_credentials: { token_url, client_id_env, client_secret_env, audience?, scope?, extra?, auth_method?, token_url_env? } }` | `Authorization: Bearer <access token>` from the token endpoint | Auth0 Management API, Kinde, Okta custom authorization servers, MongoDB Atlas service accounts |
+| `{ command: [argv…] }` | `Authorization: Bearer <what the command prints>` | Google Cloud (`gcloud auth print-access-token`), Azure (`az account get-access-token --query accessToken -o tsv`) |
+| `{ aws_sigv4: { region, service, access_key_id_env, secret_access_key_env, session_token_env? } }` | every request signed with AWS Signature Version 4 | S3, Amplify, any AWS REST API |
+| `{ digest: { user_env, password_env } }` | HTTP Digest (RFC 7616: MD5 or SHA-256, `qop=auth`), answering the server's challenge | MongoDB Atlas Admin API keys |
+
+- **OAuth2 client credentials** (RFC 6749 §4.4): the token endpoint gets a form with `grant_type=client_credentials`,
+  `audience` and `scope` when set, the `extra` parameters, and the client's credentials in the form
+  (`auth_method: client_secret_post`, the default) or as HTTP Basic (`client_secret_basic`). `private_key_jwt` is not
+  supported (Okta's own management API requires it). `token_url_env` overrides `token_url` when set, as
+  `base_url_env` does.
+- **Command**: a list of literal arguments, run without a shell with the run's environment; the first word is a
+  program on `PATH`. An argument cannot be a reference, a `${…}` or a `$VAR`: nothing in it is expanded, so it is
+  refused rather than passed on as text. Its standard output, trimmed, is the token; nothing printed, more than one
+  word, a non-zero exit or a missing program is `PROVIDER_AUTH`.
+- **SigV4**: the signature covers the method, path, query, every header Sponson sends and the body's SHA-256
+  (`X-Amz-Content-Sha256`); S3 requests with a body also get `Content-MD5`, which its configuration writes require.
+  No AWS SDK, no profile or instance-role lookup: the keys come from the variables named.
+- **Digest**: the first request of a run goes without credentials; the server's 401 brings the challenge, which
+  every later request of the run answers up front.
+- Tokens obtained at run time (an access token, a printed token) are fetched once per run and API block, kept in
+  memory only, registered with the redactor before first use (so no output, receipt or error can contain them), and
+  fetched again, once, when the API answers 401. None of these forms puts anything secret in the block, which is the
+  ledger identity of the API's resources.
+
+```yaml
+providers:
+  http:
+    auth0:                       # Management API: callbacks, logout URLs, web origins (http.list_item)
+      base_url: https://acme.eu.auth0.com/api/v2
+      auth:
+        oauth2_client_credentials:
+          token_url: https://acme.eu.auth0.com/oauth/token
+          client_id_env: AUTH0_CLIENT_ID
+          client_secret_env: AUTH0_CLIENT_SECRET
+          audience: https://acme.eu.auth0.com/api/v2/
+    kinde:
+      base_url: https://acme.kinde.com/api/v1
+      auth:
+        oauth2_client_credentials:
+          token_url: https://acme.kinde.com/oauth2/token
+          client_id_env: KINDE_M2M_CLIENT_ID
+          client_secret_env: KINDE_M2M_CLIENT_SECRET
+          audience: https://acme.kinde.com/api
+    firebase:                    # Identity Toolkit: authorized domains
+      base_url: https://identitytoolkit.googleapis.com/admin/v2
+      auth: { command: [gcloud, auth, print-access-token] }
+      headers: { x-goog-user-project: my-project }   # needed with user credentials, not with a service account
+    azure:
+      base_url: https://management.azure.com
+      auth: { command: [az, account, get-access-token, --query, accessToken, -o, tsv] }
+    atlas:
+      base_url: https://cloud.mongodb.com/api/atlas/v2
+      media_type: application/vnd.atlas.2023-01-01+json
+      auth: { digest: { user_env: ATLAS_PUBLIC_KEY, password_env: ATLAS_PRIVATE_KEY } }
+    amplify:
+      base_url: https://amplify.us-east-1.amazonaws.com
+      auth:
+        aws_sigv4: { region: us-east-1, service: amplify, access_key_id_env: AWS_ACCESS_KEY_ID, secret_access_key_env: AWS_SECRET_ACCESS_KEY }
+```
+
+#### XML APIs
+
+With `encoding: xml`, bodies are written and answers read as XML mapped to the shapes the rest of this section uses:
+an element with children is a map, a repeated child is a list, text is a string (XML has no numbers or booleans:
+write `MaxAgeSeconds: "3000"`), an attribute is an `@name` key and an element's own text next to attributes is
+`#text`. A body is a map with one key, the root element. A child that appears once reads back as a value, not a
+list of one; declare a single value as a value (`AllowedMethod: GET`), and `http.list_item` treats a lone element
+where it expects a list as a list of one. DTDs and entity declarations are refused. The S3 bucket CORS rule of a
+preview, kept with `http.list_item`:
+
+```yaml
+providers:
+  http:
+    s3:
+      base_url: https://assets.s3.us-east-1.amazonaws.com
+      encoding: xml
+      auth:
+        aws_sigv4: { region: us-east-1, service: s3, access_key_id_env: AWS_ACCESS_KEY_ID, secret_access_key_env: AWS_SECRET_ACCESS_KEY }
+changes:
+  - id: cors
+    adapter: http
+    op: list_item
+    api: s3
+    # GET answers 404 until a bucket has a configuration; S3 refuses an empty one, so the last rule is removed with DELETE.
+    parent: { path: "/?cors", method: PUT, if_missing: empty, when_empty: delete }
+    list_path: /CORSConfiguration/CORSRule
+    key_field: ID
+    item: { ID: "sponson-${ctx.scope}", AllowedOrigin: "https://${ctx.scope}.preview.example.app", AllowedMethod: [GET, HEAD], MaxAgeSeconds: "3000" }
+```
 
 ### `http.resource`
 
@@ -558,14 +657,101 @@ One object per item: a feature flag, a webhook endpoint, a DNS record.
 | `exists_status` | list of statuses | `[]` | Besides 409, the statuses a create answers when the object exists already: it is then found and taken over, not created. |
 | `gone_status` | list of statuses | `[]` | Besides 404, the statuses that mean "gone" on read and delete. |
 
-Key: `<find.path>[<field>=<value>,…]` when located by `find`, else `read.path`. The record id is the request that
-removes the object (`DELETE /flags/<id>`), so destroy needs only the ledger; a new id means it was deleted and
-re-created outside Sponson. **Drift** covers the declared `fields` only, hashed as canonical JSON: a console edit of
+Key: `<find.path>[<field>=<value>,…]` when located by `find`, else `read.path` (for GraphQL, see below). The record
+id is the request that removes the object (`DELETE /flags/<id>`), so destroy needs only the ledger; a new id means it
+was deleted and re-created outside Sponson. **Drift** covers the declared `fields` only, hashed as canonical JSON: a console edit of
 a declared field is `changed`, an edit of anything else is not Sponson's business, a deleted object is `missing`.
 Write values with the type the API returns (`true`, not `"true"`), or every plan shows an update. A value the API
 never returns (a write-only secret) belongs in `create.body`, which is sent but not compared. An object that exists
 before the first apply is taken over as adopted, never deleted. Not listed for drift or adoption: a collection holds
 much that is not this release's.
+
+#### GraphQL requests
+
+Any of `find`, `read`, `create`, `update` and `delete` may be `{ graphql: { query, variables?, data_path?,
+idempotent? } }` instead of a method and a path (nothing else next to it). The request is a `POST` of
+`{ query, variables }` as JSON to the API's `base_url` (the GraphQL endpoint), whatever the block's `encoding`.
+What it answers is `data`; a non-empty `errors` array fails the request with a provider error classified from the
+message and `extensions.code` (not found, conflict, not authorised — Railway answers a refused token with
+`INTERNAL_SERVER_ERROR` "Not Authorized" — rate limited, otherwise rejected).
+
+| Key | Meaning |
+|---|---|
+| `query` | The document: one operation, its inputs passed as `$variables` (never written inline). |
+| `variables` | The operation's variables: literals, `${ctx.*}`, `{ from }`, `{ secret }`. A string that is exactly `"{id}"` is the object's id (in `read` after `find`, `update` and `delete`). |
+| `data_path` | JSON pointer into `data`: the object (`read`, `create`, `update`; default `item_path`) or the list (`find`; default `find.list_path`). A scalar there is read as `{ value: <scalar> }`, so `fields: { value: … }` compares it; nothing there means the object does not exist. |
+| `idempotent` | `true` when the mutation sets state (an upsert): a dropped connection is then retried. Updates and deletes always are. |
+
+The key of a GraphQL-located object is `graphql:<root field>(<variables as canonical JSON>)<data path>`, followed by
+`[<field>=<value>,…]` for a `find`: rewording a query does not re-identify it, changing its variables does. The
+record id is the delete request itself, `GRAPHQL {"query":…,"variables":…}`. A `{ secret }` in the variables of
+`find`, `read` or `delete` is refused: they become the key or the record id, which receipts keep. An object with no
+id at `id_path` (a variable is named by the request) uses its key as its `id`, unless a request needs `{id}`. A
+`find` by GraphQL reads one answer: there are no pages. Fields of the mutation's variables are not filled from
+`fields`: write each value in both places (the plan stays plain YAML).
+
+Railway (variables of the PR environment Railway created; queries from Railway's public API and CLI):
+
+```yaml
+providers:
+  http:
+    railway:
+      base_url: https://backboard.railway.com/graphql/v2
+      auth: { bearer_env: RAILWAY_TOKEN }
+changes:
+  - id: api_url
+    adapter: http
+    op: resource
+    api: railway
+    read:
+      graphql:
+        query: "query variables($projectId: String!, $environmentId: String!, $serviceId: String) { variables(projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId) }"
+        variables: { projectId: prj_123, environmentId: env_pr42, serviceId: svc_web }
+        data_path: /variables/API_URL
+    create:
+      graphql:
+        query: "mutation variableUpsert($input: VariableUpsertInput!) { variableUpsert(input: $input) }"
+        variables: { input: { projectId: prj_123, environmentId: env_pr42, serviceId: svc_web, name: API_URL, value: "https://api-${ctx.scope}.example.app" } }
+    update:
+      graphql:
+        query: "mutation variableUpsert($input: VariableUpsertInput!) { variableUpsert(input: $input) }"
+        variables: { input: { projectId: prj_123, environmentId: env_pr42, serviceId: svc_web, name: API_URL, value: "https://api-${ctx.scope}.example.app" } }
+    delete:
+      graphql:
+        query: "mutation variableDelete($input: VariableDeleteInput!) { variableDelete(input: $input) }"
+        variables: { input: { projectId: prj_123, environmentId: env_pr42, serviceId: svc_web, name: API_URL } }
+    fields: { value: "https://api-${ctx.scope}.example.app" }
+```
+
+Fly.io (an app secret; operations from Fly's Go client). Fly never returns a secret's value, so `fields` is empty
+and a changed value is not detected: rotate it by destroying and applying the line.
+
+```yaml
+providers:
+  http:
+    fly:
+      base_url: https://api.fly.io/graphql
+      auth: { header: Authorization, value_env: FLY_API_TOKEN }   # "FlyV1 fm2_…" as `fly tokens create` prints it
+changes:
+  - id: database_url
+    adapter: http
+    op: resource
+    api: fly
+    find:
+      graphql:
+        query: "query ($appName: String!) { app(name: $appName) { secrets { name digest createdAt } } }"
+        variables: { appName: "web-${ctx.scope}" }
+        data_path: /app/secrets
+      match: { name: DATABASE_URL }
+    create:
+      graphql:
+        query: "mutation($input: SetSecretsInput!) { setSecrets(input: $input) { release { id version } } }"
+        variables: { input: { appId: "web-${ctx.scope}", secrets: [{ key: DATABASE_URL, value: { from: db.connection_string } }] } }
+    delete:
+      graphql:
+        query: "mutation($input: UnsetSecretsInput!) { unsetSecrets(input: $input) { release { id version } } }"
+        variables: { input: { appId: "web-${ctx.scope}", keys: [DATABASE_URL] } }
+```
 
 ### `http.list_item`
 
@@ -577,7 +763,7 @@ once the item is there as planned (written again, up to three times, if another 
 |---|---|---|---|
 | `api` | string | (required) | The API block under `providers.http`. |
 | `vars` | map | `{}` | Values for `{name}` placeholders in paths. |
-| `parent` | `{ path, read_path?, method?, send?, item_path?, content_type? }` | (required) | GET `read_path` (default `path`), write with `method` (`PATCH` by default, `PUT`, `POST`) to `path`. `item_path` is where the parent is in the read answer (`/feature` for `{ feature: {...} }`; default the whole body); `list_path` and `send` are relative to it. `send: field` (default) sends only the collection at `list_path`; `send: parent` sends the whole object read just before, with the collection replaced; a list of fields (names or pointers) sends those fields of it as read, with the collection: for a `PUT` that resets what it is not sent but refuses or ignores read-only fields. |
+| `parent` | `{ path, read_path?, method?, send?, item_path?, content_type?, if_missing?, when_empty? }` | (required) | GET `read_path` (default `path`), write with `method` (`PATCH` by default, `PUT`, `POST`) to `path`. `item_path` is where the parent is in the read answer (`/feature` for `{ feature: {...} }`, Amplify's `/branch`; default the whole body); `list_path` and `send` are relative to it. `send: field` (default) sends only the collection at `list_path` (a `map` entry alone, as a merge patch); `send: collection` sends only the collection, a `map` whole (an API that replaces the map it is sent, as Amplify's `UpdateBranch` does); `send: parent` sends the whole object read just before, with the collection replaced; a list of fields (names or pointers) sends those fields of it as read, with the collection: for a `PUT` that resets what it is not sent but refuses or ignores read-only fields. `if_missing: empty` reads a parent answering 404 as an empty collection, and `when_empty: delete` removes the collection with `DELETE path` instead of writing it empty (S3 CORS, which has no configuration until the first rule and refuses an empty one). |
 | `list_path` | JSON pointer | (required except for `map`) | Where the collection is in the parent. `""` is the whole parent (a map of config vars). |
 | `shape` | `array` \| `delimited` \| `map` | `array` | A JSON array; one string of values joined by `separator` (a comma-separated allow-list); or a map of name → value, where an entry is written as a merge patch and `null` deletes it (config vars). |
 | `separator` | string | `,` | For `delimited`. |

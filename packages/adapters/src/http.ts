@@ -8,6 +8,7 @@
  */
 import { setTimeout as sleep } from "node:timers/promises";
 import { SponsonError, isSponsonError, type ErrorCode } from "@sponson/core";
+import { XmlError, xmlDecode, xmlEncode } from "./xml.js";
 
 /** Longest response excerpt an error carries. Error pages can be megabytes; receipts and PR comments must not. */
 export const HTTP_ERROR_BODY_LIMIT = 500;
@@ -63,18 +64,25 @@ export interface ApiClientOptions {
    */
   authHeader?: "bearer" | "none" | `header:${string}`;
   /**
-   * Extra headers sent with every request (an API version pin). They never replace `content-type` or the
-   * credential's header; an `accept` here replaces `application/json` (a vendor JSON media type that pins a version,
-   * as Heroku's `application/vnd.heroku+json; version=3`). Answers are read as JSON either way.
+   * Authenticates each request instead of `token` (which is then not sent): a request signature (SigV4), a token
+   * obtained at run time and refreshed after a 401, a Digest challenge answered.
+   */
+  signer?: RequestSigner;
+  /**
+   * Extra headers sent with every request (an API version pin). They never replace `accept`, `content-type` or the
+   * credential's header.
    */
   headers?: Record<string, string>;
   /**
-   * How request bodies are sent: `json` (the default) or `form` (`application/x-www-form-urlencoded`, nested
-   * fields as `a[b]=c` and list items as `a[0]=c`, as Stripe expects). Responses are JSON either way.
+   * How request bodies are sent: `json` (the default), `form` (`application/x-www-form-urlencoded`, nested
+   * fields as `a[b]=c` and list items as `a[0]=c`, as Stripe expects) or `xml` (see xml.ts; S3-style documents).
+   * Responses are JSON, except with `xml`, where they are XML too.
    */
-  encoding?: "json" | "form";
+  encoding?: "json" | "form" | "xml";
   /** The request `Content-Type`, when it is not the encoding's own (a vendor media type for a patch). */
   contentType?: string;
+  /** The `Accept` header, when it is not the encoding's own (a versioned media type). */
+  accept?: string;
   /** Masks known secrets; applied to provider text before it is truncated into an error message. */
   redact: (text: string) => string;
   /** Source of SPONSON_HTTP_TIMEOUT_MS / SPONSON_HTTP_RETRIES / SPONSON_HTTP_RETRY_BASE_MS. */
@@ -111,6 +119,33 @@ export interface ApiClient {
   put<T = unknown>(path: string, body?: unknown, shape?: Shape<T>): Promise<T>;
   patch<T = unknown>(path: string, body?: unknown, shape?: Shape<T>, opts?: WriteOptions): Promise<T>;
   delete<T = unknown>(path: string, shape?: Shape<T>): Promise<T>;
+}
+
+/** One request as a `RequestSigner` sees it, right before it is sent. Stable authoring API. */
+export interface SignableRequest {
+  method: string;
+  /** The absolute URL, query included. */
+  url: string;
+  /** The headers about to be sent, lower-case names. */
+  headers: Record<string, string>;
+  /** The body exactly as it will be sent; undefined when there is none. */
+  body: string | undefined;
+}
+
+/**
+ * Authenticates the requests of an `ApiClient` whose credential is not one static header: it is asked for the
+ * headers of every request (each attempt, so a signature or a token is always fresh), and told about a 401 so it
+ * can refresh a token or answer a challenge; the request is then sent once more. Errors it throws (a token
+ * endpoint refusing) reach the caller as they are. Stable authoring API.
+ */
+export interface RequestSigner {
+  /** The headers that authenticate `req`; they override the client's own. */
+  sign(req: SignableRequest): Promise<Record<string, string>>;
+  /**
+   * The request was answered 401 (`challenge`: its `WWW-Authenticate`). True to send it once more (a refreshed
+   * token, an answered challenge); false to fail with PROVIDER_AUTH.
+   */
+  unauthorized?(req: SignableRequest, challenge: string | null): Promise<boolean>;
 }
 
 /** Options for a POST or PATCH. Stable authoring API. */
@@ -210,6 +245,7 @@ class Attempt {
     readonly message: string,
     readonly status?: number,
     readonly waitMs?: number,
+    readonly challenge: string | null = null,
   ) {}
 }
 
@@ -217,13 +253,14 @@ class Attempt {
  * A 2xx response body as `shape` wants it (parsed JSON when there is no shape; undefined for an empty body with no
  * shape), or what is wrong with it.
  */
-function decode<T>(text: string, shape: Shape<T> | undefined, redact: (s: string) => string): { value: T } | { problem: string } {
+function decode<T>(text: string, shape: Shape<T> | undefined, redact: (s: string) => string, xml: boolean): { value: T } | { problem: string } {
   if (!text) return shape ? { problem: "empty response body" } : { value: undefined as T };
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text);
-  } catch {
-    return { problem: `response is not JSON: ${excerptOf(text, redact)}` };
+    parsed = xml ? xmlDecode(text) : JSON.parse(text);
+  } catch (e) {
+    const why = e instanceof XmlError ? ` (${e.message})` : "";
+    return { problem: `response is not ${xml ? "XML" : "JSON"}${why}: ${excerptOf(text, redact)}` };
   }
   if (!shape) return { value: parsed as T };
   try {
@@ -243,11 +280,13 @@ export function apiClient(opts: ApiClientOptions): ApiClient {
   while (base.endsWith("/")) base = base.slice(0, -1);
   const auth = opts.authHeader ?? "bearer";
   const policy = policyFrom(opts.env);
-  const headers: Record<string, string> = { accept: "application/json", ...extraHeaders(opts.headers ?? {}) };
-  if (auth === "bearer") headers.authorization = `Bearer ${opts.token}`;
-  else if (auth !== "none") headers[auth.slice("header:".length).toLowerCase()] = opts.token;
-  const form = opts.encoding === "form";
-  const defaultContentType = opts.contentType ?? (form ? "application/x-www-form-urlencoded" : "application/json");
+  const xml = opts.encoding === "xml";
+  const headers: Record<string, string> = { ...extraHeaders(opts.headers ?? {}), accept: opts.accept ?? (xml ? "application/xml" : "application/json") };
+  // With a signer, the signer authenticates each request itself and the static token is not sent.
+  if (!opts.signer && auth === "bearer") headers.authorization = `Bearer ${opts.token}`;
+  else if (!opts.signer && auth !== "bearer" && auth !== "none") headers[auth.slice("header:".length).toLowerCase()] = opts.token;
+  const defaultContentType = opts.contentType ?? CONTENT_TYPES[opts.encoding ?? "json"];
+  const encodeBody = (body: unknown): string => (opts.encoding === "form" ? formEncode(body) : xml ? xmlEncode(body) : JSON.stringify(body));
 
   const fail = (code: ProviderErrorCode, method: string, path: string, detail: string, status?: number, extra: Record<string, unknown> = {}): SponsonError =>
     new SponsonError(code, `${opts.adapter}: ${method} ${path} → ${status ?? DESCRIBE[code]}${detail ? `: ${detail}` : ""}`, {
@@ -258,35 +297,61 @@ export function apiClient(opts: ApiClientOptions): ApiClient {
       ...extra,
     });
 
-  async function once(method: string, path: string, body: unknown, idempotent: boolean, contentType: string): Promise<{ status: number; text: string } | Attempt> {
+  /** The request as it will be sent, signed when the client has a signer. */
+  async function prepare(method: string, path: string, body: unknown, contentType: string): Promise<SignableRequest> {
+    let text: string | undefined;
+    try {
+      text = body === undefined ? undefined : encodeBody(body);
+    } catch (e) {
+      if (e instanceof XmlError) throw fail("PROVIDER_INVALID", method, path, `the request body cannot be sent as XML: ${e.message}`);
+      throw e;
+    }
+    const req: SignableRequest = { method, url: base + path, headers: text === undefined ? { ...headers } : { ...headers, "content-type": contentType }, body: text };
+    if (opts.signer) Object.assign(req.headers, await opts.signer.sign(req));
+    return req;
+  }
+
+  async function once(req: SignableRequest, idempotent: boolean): Promise<{ status: number; text: string } | Attempt> {
+    const { method, url } = req;
     const controller = new AbortController();
-    const init: RequestInit =
-      body === undefined
-        ? { method, headers: { ...headers }, signal: controller.signal }
-        : { method, headers: { ...headers, "content-type": contentType }, body: form ? formEncode(body) : JSON.stringify(body), signal: controller.signal };
+    const init: RequestInit = { method, headers: req.headers, signal: controller.signal, ...(req.body === undefined ? {} : { body: req.body }) };
     const timer = setTimeout(() => controller.abort(), policy.timeoutMs);
     try {
-      const res = await fetch(base + path, init);
+      const res = await fetch(url, init);
       const text = await res.text(); // the timer also bounds a body that never finishes
       if (res.ok) return { status: res.status, text };
       const code = classifyStatus(res.status, text);
       const retryable = REFUSED_STATUSES.has(res.status) || (idempotent && UNAVAILABLE_STATUSES.has(res.status));
-      return new Attempt(code, retryable, excerptOf(text, opts.redact), res.status, retryAfterMs(res.headers.get("retry-after")));
+      return new Attempt(code, retryable, excerptOf(text, opts.redact), res.status, retryAfterMs(res.headers.get("retry-after")), res.headers.get("www-authenticate"));
     } catch (e) {
       if (controller.signal.aborted) return new Attempt("PROVIDER_TIMEOUT", false, `no response within ${policy.timeoutMs}ms (SPONSON_HTTP_TIMEOUT_MS)`);
       // `fetch failed` alone says nothing; the cause (ECONNREFUSED, ECONNRESET, ENOTFOUND) does.
       const cause = (e as Error & { cause?: Error }).cause?.message ?? (e as Error).message;
       // A write whose connection dropped may have happened; only idempotent requests are repeated.
-      return new Attempt("PROVIDER_TRANSIENT", idempotent, `${base}${path}: ${opts.redact(cause)}`);
+      return new Attempt("PROVIDER_TRANSIENT", idempotent, `${url}: ${opts.redact(cause)}`);
     } finally {
       clearTimeout(timer);
     }
   }
 
+  /** A 401 the signer can answer (a refreshed token, a Digest challenge): true when the request should go again. */
+  async function reauthorized(r: Attempt, req: SignableRequest, used: boolean): Promise<boolean> {
+    if (used || r.status !== 401 || !opts.signer?.unauthorized) return false;
+    return opts.signer.unauthorized(req, r.challenge);
+  }
+
   async function call<T>(method: string, path: string, body: unknown, shape?: Shape<T>, write?: WriteOptions): Promise<T> {
     const idempotent = write?.idempotent ?? IDEMPOTENT.has(method);
+    let reauthed = false;
     for (let attempt = 1; ; attempt++) {
-      const r = await once(method, path, body, idempotent, write?.contentType ?? defaultContentType);
+      const req = await prepare(method, path, body, write?.contentType ?? defaultContentType);
+      const r = await once(req, idempotent);
+      if (r instanceof Attempt && (await reauthorized(r, req, reauthed))) {
+        // A 401 means the request was refused before anything happened, so sending it again is safe for any method.
+        reauthed = true;
+        attempt--;
+        continue;
+      }
       if (r instanceof Attempt) {
         if (r.retryable && attempt <= policy.retries) {
           await sleep(Math.min(MAX_RETRY_WAIT_MS, r.waitMs ?? backoffMs(attempt, policy.baseMs)));
@@ -295,7 +360,7 @@ export function apiClient(opts: ApiClientOptions): ApiClient {
         const note = r.retryable ? ` (after ${attempt} attempts)` : "";
         throw fail(r.code, method, path, r.message + note, r.status, r.retryable ? { attempts: attempt } : {});
       }
-      const d = decode(r.text, shape, opts.redact);
+      const d = decode(r.text, shape, opts.redact, xml);
       if ("problem" in d) throw fail("PROVIDER_RESPONSE", method, path, d.problem, r.status);
       return d.value;
     }
@@ -310,6 +375,9 @@ export function apiClient(opts: ApiClientOptions): ApiClient {
     delete: (path, shape) => call("DELETE", path, undefined, shape),
   };
 }
+
+/** The `Content-Type` of each encoding. */
+const CONTENT_TYPES = { json: "application/json", form: "application/x-www-form-urlencoded", xml: "application/xml" } as const;
 
 /**
  * A body as `application/x-www-form-urlencoded`, bracket-nested: `{ a: { b: 1 }, c: [x, y] }` is

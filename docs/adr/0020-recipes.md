@@ -237,8 +237,8 @@ the catalog ops `stripe.product`, `stripe.price` and `stripe.coupon`.
 
 The deploy, database and queue recipes (Render, Heroku, Vercel domains, Upstash, Prisma Postgres, QStash) needed:
 
-- **A vendor `Accept`.** Heroku refuses requests that do not pin its version in `Accept`. An API block's `headers`
-  may now set `Accept` to a JSON media type; `Authorization` and `Content-Type` stay Sponson's.
+- **A vendor `Accept`.** Heroku refuses requests that do not pin its version in `Accept`; its recipe uses the API
+  block's `media_type` (added by another amendment) rather than a header of its own.
 - **Per-request headers and fields carried in them.** QStash takes a schedule's cron and id in headers and its message
   as the body. `create` and `update` take `headers` (values from params) and `send_fields: false` (the declared
   `fields` are compared but not put in the body); a path placeholder `{+name}` writes a URL as it is (RFC 6570

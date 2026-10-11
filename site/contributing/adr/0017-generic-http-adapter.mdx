@@ -59,9 +59,6 @@ providers:
   `_KEY`, …), so its value is masked in every output whatever the adapter does; the adapter masks it (and a Basic
   credential's encoded form) in its own error text too.
 - Optional `base_url_env` (an override, as every built-in adapter has), static `headers`, `encoding: json | form`.
-  *Amended: `headers` may set `Accept` to a JSON media type (Heroku pins its API version with
-  `application/vnd.heroku+json; version=3` and refuses requests without it); `Authorization` and `Content-Type`
-  stay Sponson's.*
 
 ### Two engine hooks, both optional on `OpSpec`
 
@@ -154,11 +151,11 @@ Adapters that do not define them behave exactly as before.
   reach dependent lines in that run, but a later run cannot read them again. There is no declaration that makes the
   engine refuse such a later run. *Amended (ADR 0020, Amendment 2):
   `outputs.<name>: { path, sensitive: true, once: true }` declares one.*
-- **No OAuth2 client-credentials exchange, no command-produced tokens** (`gcloud auth print-access-token`), no
-  request signing (SigV4). Not yet: each needs its own credential flow.
-- **No expressions or scripts**, no JSON Patch generation, no GraphQL, no pagination by page number or `Link`
-  header (only a cursor read from the body), no `listScope` for `resource` (a collection holds much that is not this
-  release's) and no `adopt`.
+- ~~No OAuth2 client-credentials exchange, no command-produced tokens, no request signing (SigV4).~~ Added by the
+  [amendment](/contributing/adr/0017-generic-http-adapter#amendment-run-time-credentials-xml-and-graphql) below, with HTTP Digest.
+- **No expressions or scripts**, no JSON Patch generation, no pagination by page number or `Link` header (only a
+  cursor read from the body), no `listScope` for `resource` (a collection holds much that is not this release's)
+  and no `adopt`. (GraphQL requests were added by the amendment.)
 
 ## Alternatives considered
 
@@ -207,3 +204,97 @@ existing line's identity:
   Stripe's `sk_live_`/`rk_live_` keys must never create objects for a preview. It is part of the block, hence of
   ledger identity, like `headers`; a recipe's refusal cannot be overridden by the plan (the variable is the opt-out),
   so it changes only if the recipe does, behind the identity lock.
+
+## Amendment: run-time credentials, XML and GraphQL
+
+Date: 2026-10-11
+
+### Context
+
+The [coverage survey](/reference/coverage) left about twenty rows the generic adapter could express as requests but not
+authenticate or encode: Auth0, Kinde and Okta take an OAuth2 client-credentials token; Google Cloud (Firebase
+authorized domains, GCS CORS) and Azure take a token their CLI prints; AWS (S3 bucket CORS, Amplify branch
+variables) signs every request with SigV4, and S3 speaks XML; MongoDB Atlas API keys use HTTP Digest; Railway and
+Fly.io manage variables and secrets through GraphQL. Each would otherwise need a first-class adapter for one
+credential flow, or a plugin.
+
+### Decision
+
+**Four more `auth` forms**, each still a set of environment variable NAMES (or a literal command), so the API block
+(the ledger identity) holds nothing secret:
+
+| Form | At run time |
+|---|---|
+| `oauth2_client_credentials: { token_url, client_id_env, client_secret_env, audience?, scope?, extra?, auth_method?, token_url_env? }` | RFC 6749 §4.4 against the token endpoint (`client_secret_post` or `client_secret_basic`); the access token sent as a bearer token. |
+| `command: [argv…]` | The CLI run without a shell through the same injectable `Exec` as the CLI-backed secret sources; its trimmed stdout is the bearer token. An argument that is (or holds) a reference is refused: nothing is expanded. |
+| `aws_sigv4: { region, service, access_key_id_env, secret_access_key_env, session_token_env? }` | Every request signed (header form, payload hash signed); S3 bodies also get `Content-MD5`. No AWS SDK: a signer of ~150 lines checked against AWS's published test vectors. |
+| `digest: { user_env, password_env }` | RFC 7616, MD5 or SHA-256 (and `-sess`), `qop=auth`; the 401's challenge is answered, then reused with the next nonce count. |
+
+Two static forms grew too: `{ header, value_env, prefix }` sends literal text before the value (`Authorization:
+Api-Key <key>`, `Token <key>`), and `{ headers: [{ header, value_env, prefix? }, …] }` sends several credential
+headers together (Datadog's API and application keys). The prefix and the header names are part of the block, so of
+the identity; the values never are.
+
+The HTTP client (`apiClient`, stable authoring API) gained an optional `RequestSigner`: asked for each request's
+headers (every attempt, so a signature or token is fresh), and told about a 401, after which the request is sent
+once more. A 401 means nothing happened, so resending is safe for any method.
+
+**Tokens are secrets from the moment they exist.** `AdapterContext` gained an optional `secret(value)`, which the
+engine implements by registering the value with the run's `Redactor`; the adapter calls it before the token is first
+sent, and masks every token it obtained in its own error text as well (for engines without the hook). Tokens live in
+memory only, one per run and API block (a cache keyed by the run's `ctx`, the block and a hash of the credential's
+inputs), are refreshed shortly before they expire (OAuth2 `expires_in`; five minutes for a command) and once after
+a 401.
+
+**`encoding: xml`**, with a minimal codec (xml.ts): elements to maps, repeated elements to lists, text to strings,
+attributes as `@name`. No DTDs or entities beyond the predefined ones (no XXE, no expansion). Where `list_item`
+expects a list in an XML document, a lone element is a list of one. Two `list_item` parent options make S3 CORS
+expressible, and are not S3-specific: `if_missing: empty` (a 404 parent is an empty collection) and
+`when_empty: delete` (an API that refuses an empty collection has it removed instead). `send: collection`, with
+`parent.item_path` (from main), covers APIs that replace a map they are sent, read nested and written flat (Amplify
+`UpdateBranch`). A versioned JSON media type (`media_type`) covers Atlas.
+
+**GraphQL as a request kind of `http.resource`**: any of `find`, `read`, `create`, `update`, `delete` may be
+`{ graphql: { query, variables, data_path, idempotent } }`, a POST to the API's `base_url`; `errors[]` are classified
+into the same `PROVIDER_*` codes as HTTP statuses. The key of a GraphQL-located object is its root field, its
+variables and its data path (not the query text); the record id is the delete mutation with its variables, so
+destroy still needs only the ledger. `{ secret }` is refused in the variables of the requests that become the key or
+the record id. A scalar answer is read as `{ value }`, so Railway's variable map can be compared field by field.
+
+### Invariants
+
+| Invariant | How it is kept |
+|---|---|
+| Credentials only from environment variable NAMES | The forms take names (`*_env`, ending like the names the engine masks); a command takes literal arguments only. |
+| No credential or token in output, receipts or errors (I1) | Engine-masked variables; obtained tokens registered through `actx.secret` before first use and masked locally too; GraphQL error names never include mutation variables; scenarios assert I1 with every issued token listed. |
+| Identity holds no secret | The block is names and URLs; token caches are keyed by a hash, in memory. |
+| `plan` writes nothing (I4) | Token requests and GraphQL queries are POSTs that change nothing: the sims leave them out of the write log (`ProviderSim.isWrite`), and a scenario per form checks it. |
+| Idempotent apply, drift by hash, destroy only what Sponson created | Unchanged: the new forms change how a request is authenticated or encoded, not what is sent or compared. |
+
+### Testing
+
+The sims check each scheme for real, server side, with code written from the specifications independently of the
+client (the sim depends on nothing in the repo): the REST sim's `auth` seed adds an OAuth2 token endpoint (expiry,
+revocation), fixed bearer tokens (a command's), Digest challenges and SigV4 verification; an `aws` sim verifies SigV4
+for S3 CORS (XML, `Content-MD5`, `NoSuchCORSConfiguration`, `MalformedXML`) and Amplify branches; `railway` and `fly`
+sims answer the operations those providers' official clients send. Both the client signer and the sim's verifier are
+pinned to AWS's published vectors, and the Digest code to RFC 7616's worked example, so a wrong signer fails against
+the sim instead of being mirrored by it.
+
+### Not done
+
+- `private_key_jwt` client authentication (Okta's own management API requires it), the OAuth2 device or
+  authorization-code flows, AWS profiles, instance roles and SSO (only keys from variables), SigV4a, presigned URLs,
+  chunked uploads, Digest `auth-int`.
+- GraphQL subscriptions, pagination of a GraphQL `find`, and filling mutation variables from `fields` (values are
+  written in both places).
+- A secret whose value the API never returns (Fly.io) is not compared, so a changed value is not detected.
+- The examples for Auth0, Kinde, Okta, Google, Azure, AWS, Atlas, Railway and Fly.io are checked against sims built
+  from those providers' documentation and official clients, not against the live APIs (docs/api-verification.md).
+
+### Consequences
+
+- `ApiClientOptions.signer` / `accept` and `encoding: "xml"`, the `RequestSigner` and `SignableRequest` types, and
+  `AdapterContext.secret` are new optional parts of the authoring API; nothing existing changes meaning.
+- `ProviderSim.authorized` receives the request (for signatures) and the provider's state, and may answer with a
+  `Reply` (a challenge); `ProviderSim.isWrite` lets a sim keep non-mutating POSTs out of the write log.

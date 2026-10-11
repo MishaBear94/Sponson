@@ -36,6 +36,18 @@ export interface RouteRequest {
   headers?: Record<string, string>;
 }
 
+/**
+ * A request as a provider's credential check sees it: what a signature (SigV4) or a Digest answer covers. `raw` is
+ * the body exactly as received.
+ */
+export interface AuthRequest {
+  method: string;
+  url: URL;
+  /** The request target as received (path and query, still percent-encoded). */
+  target: string;
+  raw: string;
+}
+
 /** One `<provider>.<rest>` drift key, as `ProviderSim.drift` receives it: a change "a human made in the console". */
 export interface DriftRequest {
   /** The whole drift key, for error messages. */
@@ -67,11 +79,18 @@ export interface ProviderSim<S, Seed> {
   /** Apply one drift key to the state; false when the key is not one this provider knows. */
   drift(core: SimCore, state: S, d: DriftRequest): boolean;
   /**
-   * Whether a request's headers carry a credential this provider accepts. Absent: any non-empty bearer token. Like
-   * the default, accept any non-empty value: the point is that a missing credential surfaces as 401. `state` is the
-   * provider's current state, for a provider whose seed declares how credentials arrive.
+   * Whether a request carries a credential this provider accepts. Absent: any non-empty bearer token. Like the
+   * default, accept any non-empty value unless the provider's seed configures real credentials: the point is that a
+   * missing credential surfaces as 401. `state` is the provider's current state, for a provider whose seed declares
+   * how credentials arrive; `req` what a signature (SigV4) or a Digest answer covers. A `Reply` answers the request
+   * instead (a 401 with a Digest challenge).
    */
-  authorized?(headers: IncomingHttpHeaders, state: S): boolean;
+  authorized?(headers: IncomingHttpHeaders, state: S, req: AuthRequest, core: SimCore): boolean | Reply;
+  /**
+   * Whether a POST, PUT, PATCH or DELETE changes state, for the write log (I4: `plan` writes nothing). Absent: every
+   * one does. A token endpoint or a GraphQL query is a POST that does not.
+   */
+  isWrite?(req: { method: string; path: string; body: unknown }): boolean;
   /** Answer one authenticated, chaos-checked request under `/<name>/`. */
   routes(core: SimCore, state: S, req: RouteRequest): Reply;
 }

@@ -17,7 +17,7 @@ api:
   base_url: https://api.heroku.com
   base_url_env: HEROKU_API_URL
   auth: { bearer_env: HEROKU_API_KEY }
-  headers: { Accept: "application/vnd.heroku+json; version=3" }
+  media_type: "application/vnd.heroku+json; version=3"
 assumptions:
   - id: HK1
     verified: true
@@ -46,6 +46,10 @@ assumptions:
   - id: HK7
     verified: true
     text: "Review apps are created asynchronously (`POST /review-apps` answers `pending` with a nullable `app`), by Heroku itself when the pipeline has automatic review apps; this recipe does not create them, it writes vars on an app that exists (the review app's name or id)."
+    source: https://devcenter.heroku.com/articles/platform-api-reference
+  - id: HK9
+    verified: false
+    text: "A PATCH whose `Content-Type` is the same vendor media type (`media_type` sends it as both `Accept` and `Content-Type`) is accepted like `application/json`; the reference's examples send `application/json`."
     source: https://devcenter.heroku.com/articles/platform-api-reference
   - id: HK8
     verified: false

@@ -1,0 +1,51 @@
+name: "http auth digest (MongoDB Atlas Admin API keys): the challenge is answered, the private key never leaks"
+plan: |
+  version: 1
+  providers:
+    http:
+      atlas:
+        base_url: https://cloud.mongodb.com/api/atlas/v2
+        base_url_env: REST_API_URL
+        media_type: application/vnd.atlas.2023-01-01+json
+        auth: { digest: { user_env: ATLAS_PUBLIC_KEY, password_env: ATLAS_PRIVATE_KEY } }
+  changes:
+    - id: db_user
+      adapter: http
+      op: resource
+      api: atlas
+      find: { path: /groups/g1/databaseUsers, list_path: /data, match: { username: "app-${ctx.scope}" } }
+      create:
+        path: /groups/g1/databaseUsers
+        body: { password: { secret: "env://PREVIEW_DB_PASSWORD" } }
+      delete: { path: "/groups/g1/databaseUsers/{id}" }
+      item_path: /data
+      fields: { databaseName: admin, roles: [{ databaseName: "app_${ctx.scope}", roleName: readWrite }] }
+seed:
+  rest:
+    collections: { /groups/g1/databaseUsers: [] }
+    auth:
+      digest: { users: { atlas-public-0042: atlas_private_api_key_0042 }, algorithm: MD5, realm: MMS Public API }
+env:
+  ATLAS_PUBLIC_KEY: atlas-public-0042
+  ATLAS_PRIVATE_KEY: atlas_private_api_key_0042
+  PREVIEW_DB_PASSWORD: preview_db_password_0042
+secrets: [atlas_private_api_key_0042, preview_db_password_0042]
+steps:
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { db_user: create } }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { db_user: applied } }
+  - sim:
+      state:
+        rest.collections./groups/g1/databaseUsers: { includes: { username: app-pr-42, databaseName: admin } }
+  - run: apply --json
+    expect: { exit: 0, writes: 0, lines: { db_user: unchanged } }
+  - env: { ATLAS_PRIVATE_KEY: wrong_private_api_key_9999 }
+  - run: plan --json
+    expect: { exit: 1, plan_lines: { db_user: error }, errors: { db_user: "401" } }
+  - env: { ATLAS_PRIVATE_KEY: atlas_private_api_key_0042 }
+  - run: apply --destroy --json
+    expect: { exit: 0, status: complete, lines: { db_user: destroyed } }
+  - sim:
+      state:
+        rest.collections./groups/g1/databaseUsers: { length: 0 }

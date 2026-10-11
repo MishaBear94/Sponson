@@ -60,7 +60,7 @@ export function optionalProvider(actx: AdapterContext, key: string): string | un
  * const site = await api.get(`/sites/${stringParam(params, "name", "acme")}`);
  * ```
  */
-export function clientFor(actx: AdapterContext, adapter: string, opts: Pick<ApiClientOptions, "baseUrl" | "token" | "authHeader" | "headers" | "encoding" | "contentType">): ApiClient {
+export function clientFor(actx: AdapterContext, adapter: string, opts: Pick<ApiClientOptions, "baseUrl" | "token" | "authHeader" | "headers" | "encoding" | "contentType" | "accept" | "signer">): ApiClient {
   return apiClient({ adapter, ...opts, redact: actx.redact, env: actx.env });
 }
 

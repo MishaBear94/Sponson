@@ -56,14 +56,14 @@ categories:
         provider: Railway
         side_effect: Variables in a PR environment (Railway creates PR environments natively)
         api_shape: GraphQL `variableUpsert(projectId, environmentId, serviceId, name, value)`, bearer; object per name; deployment status for a barrier
-        generic: P (GraphQL, env id lookup, barrier)
+        generic: Y (GraphQL requests, tested example in scenarios/adapters/http-graphql-railway.yaml; a deploy barrier is not expressible)
         priority: P1
         covered_by: null
       - id: fly-secrets
         provider: Fly.io
         side_effect: Per-PR app (the usual pattern is one app per PR) plus its secrets
         api_shape: Machines API `api.machines.dev/v1/apps/{app}/secrets` (secret writes return a version, changed 2025) and GraphQL `setSecrets`; bearer; object; machines must be updated to see new secrets
-        generic: P (app lifecycle, restart)
+        generic: "P (secrets: Y with GraphQL requests, tested example in scenarios/adapters/http-graphql-fly.yaml; app lifecycle, restart: no)"
         priority: P1
         covered_by: null
       - id: heroku-config-vars
@@ -78,7 +78,7 @@ categories:
         provider: AWS Amplify
         side_effect: Branch (per-PR previews built in); env vars per branch
         api_shape: "`UpdateBranch` `environmentVariables`, SigV4; **map** full replace"
-        generic: N (SigV4; CLI fallback)
+        generic: Y (`aws_sigv4`, the map sent whole; tested example in scenarios/adapters/http-sigv4-aws.yaml)
         priority: P2
         covered_by: null
       - id: cloud-run-tag
@@ -149,7 +149,7 @@ categories:
         provider: MongoDB Atlas
         side_effect: No branching; per-PR database user and database name on a shared cluster (cluster per PR is slow and costly)
         api_shape: Admin API v2 `POST /api/atlas/v2/groups/{g}/databaseUsers`, digest or service-account OAuth; object
-        generic: P (digest auth)
+        generic: Y (`digest` auth and `media_type`; tested against a Digest sim in scenarios/adapters/http-digest.yaml)
         priority: P2
         covered_by: null
       - id: cockroachdb-database
@@ -428,7 +428,7 @@ categories:
         provider: S3 / R2
         side_effect: Preview origin in the bucket CORS rules
         api_shape: S3 `PutBucketCors` (SigV4, full replace); R2 `PUT /accounts/{a}/r2/buckets/{b}/cors` (bearer, full replace); **list**
-        generic: P (R2 yes; S3 needs SigV4)
+        generic: "Y (R2 bearer; S3 with `aws_sigv4` and `encoding: xml`, tested example in scenarios/adapters/http-sigv4-aws.yaml)"
         priority: P2
         covered_by: null
   - id: queues

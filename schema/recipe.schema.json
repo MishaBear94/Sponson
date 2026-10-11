@@ -47,6 +47,7 @@
         },
         "headers": { "type": "object", "additionalProperties": { "type": "string" } },
         "encoding": { "enum": ["json", "form"] },
+        "media_type": { "type": "string", "pattern": "^[\\w.+-]+/[\\w.+-]+(\\s*;.*)?$", "description": "A versioned JSON media type sent as `Accept` and as the `Content-Type` of bodies (Heroku: `application/vnd.heroku+json; version=3`)." },
         "refuse_credential": {
           "type": "object",
           "description": "Credentials the API refuses before any request (Stripe's live-mode keys): values starting with one of `prefixes`, unless the variable `unless_env` is 1 or true. A plan cannot override it.",

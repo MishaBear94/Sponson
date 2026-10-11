@@ -3,61 +3,106 @@
  * block (`actx.provider` is `providers.http.<api>`, narrowed by `OpSpec.providerFor`), its credential from the
  * environment variable(s) the block names, and writes with the idempotency each method has.
  */
-import { SponsonError, canonicalJson, type AdapterContext, type Literal } from "@sponson/core";
-import { clientFor, optionalEnv, requireEnv } from "./common.js";
+import { SponsonError, canonicalJson, type AdapterContext, type Literal, type OpSpec } from "@sponson/core";
+import { clientFor, optionalEnv } from "./common.js";
 import { isObject, isProviderError, type ApiClient } from "./http.js";
+import { DEFAULT_AUTH_DEPS, credentialFor, type Auth, type AuthDeps } from "./http-adapter-auth.js";
 import { ADAPTER, at, pointerTokens, parseApi, type ApiConfig } from "./http-adapter-spec.js";
 
 /** Per-request settings on top of the API's: a vendor media type, an `Idempotency-Key`. */
 export interface RequestOptions {
   contentType?: string;
   headers?: Record<string, string>;
+  /** Overrides the API's encoding (GraphQL requests are always JSON). */
+  encoding?: "json";
 }
 
-/** The header value to send and how to send it. Basic credentials are joined and encoded here, never stored. */
-function credential(cfg: ApiConfig, env: NodeJS.ProcessEnv): { token: string; authHeader: "bearer" | "none" | `header:${string}`; masks: string[] } {
-  const auth = cfg.auth;
-  const read = (name: string) => refuseCredential(cfg, env, name, requireEnv(env, name, ADAPTER));
-  if (auth.kind === "none") return { token: "", authHeader: "none", masks: [] };
-  if (auth.kind === "bearer") return { token: read(auth.env), authHeader: "bearer", masks: [] };
-  if (auth.kind === "header") return { token: read(auth.env), authHeader: `header:${auth.header}`, masks: [] };
-  const encoded = Buffer.from(`${requireEnv(env, auth.userEnv, ADAPTER)}:${read(auth.passwordEnv)}`).toString("base64");
-  return { token: `Basic ${encoded}`, authHeader: "header:authorization", masks: [encoded] };
-}
+/** The dependencies an op was built with, by the adapter context each of its calls received (see `withDeps`). */
+const DEPS = new WeakMap<AdapterContext, AuthDeps>();
 
 /**
- * `value` (of variable `name`), unless the API refuses it (`refuse_credential`): PROVIDER_AUTH naming the variable
- * and the prefix, never the value, before any request is sent.
+ * `op` with every call's adapter context carrying `deps` (how `auth.command` runs a CLI, the clock), so the
+ * clients built inside see them. The built-in adapter uses the real ones; tests inject fakes.
  */
-function refuseCredential(cfg: ApiConfig, env: NodeJS.ProcessEnv, name: string, value: string): string {
-  const prefix = cfg.refuse?.prefixes.find((p) => value.startsWith(p));
-  if (!prefix || /^(1|true)$/i.test(env[cfg.refuse!.unlessEnv] ?? "")) return value;
-  throw new SponsonError(
-    "PROVIDER_AUTH",
-    `${ADAPTER}: ${name} holds a \`${prefix}…\` credential, which this API refuses (refuse_credential): a preview environment must not write with it. ` +
-      `Use a test-mode credential, or set ${cfg.refuse!.unlessEnv}=1 if this run really is meant to use it.`,
-    { adapter: ADAPTER, env: name },
-  );
+export function withDeps(op: OpSpec, deps: AuthDeps): OpSpec {
+  const bind = (actx: AdapterContext): AdapterContext => {
+    const bound = { ...actx };
+    DEPS.set(bound, deps);
+    return bound;
+  };
+  return {
+    ...op,
+    read: (actx, params) => op.read(bind(actx), params),
+    apply: (actx, params, live) => op.apply(bind(actx), params, live),
+    destroy: (actx, resources) => op.destroy(bind(actx), resources),
+    ...(op.listScope ? { listScope: (actx: AdapterContext, params: Record<string, unknown>) => op.listScope!(bind(actx), params) } : {}),
+  };
+}
+
+/** The variables holding a credential's secret part, for `refuse_credential`. */
+function secretEnvs(auth: Auth): string[] {
+  switch (auth.kind) {
+    case "bearer":
+    case "header":
+      return [auth.env];
+    case "headers":
+      return auth.headers.map((h) => h.env);
+    case "basic":
+    case "digest":
+      return [auth.passwordEnv];
+    case "oauth2":
+      return [auth.clientSecretEnv];
+    case "sigv4":
+      return [auth.secretAccessKeyEnv];
+    case "command":
+    case "none":
+      return [];
+  }
 }
 
 /**
- * The client for the line's API. The credential (and, for Basic, its encoded form) is masked in this client's
- * error text too, whatever the engine already masks. `opts`: where the block is, for messages; whether a block
- * without `auth` sends no credential (a manual step's verify request); the adapter named in errors.
+ * Refuse a credential the API refuses (`refuse_credential`): PROVIDER_AUTH naming the variable and the prefix,
+ * never the value, before any request is sent.
+ */
+function refuseCredentials(cfg: ApiConfig, env: NodeJS.ProcessEnv): void {
+  if (!cfg.refuse || /^(1|true)$/i.test(env[cfg.refuse.unlessEnv] ?? "")) return;
+  for (const name of secretEnvs(cfg.auth)) {
+    const value = env[name] ?? "";
+    const prefix = cfg.refuse.prefixes.find((p) => value.startsWith(p));
+    if (!prefix) continue;
+    throw new SponsonError(
+      "PROVIDER_AUTH",
+      `${ADAPTER}: ${name} holds a \`${prefix}…\` credential, which this API refuses (refuse_credential): a preview environment must not write with it. ` +
+        `Use a test-mode credential, or set ${cfg.refuse.unlessEnv}=1 if this run really is meant to use it.`,
+      { adapter: ADAPTER, env: name },
+    );
+  }
+}
+
+/**
+ * The client for the line's API. The credential (a static header, or a signer for the forms obtained or computed
+ * per request) comes from http-adapter-auth.ts; everything it holds or obtains is masked in this client's error text
+ * too, whatever the engine already masks. `opts`: where the block is, for messages; whether a block without `auth`
+ * sends no credential (a manual step's verify request); the adapter named in errors.
  */
 export function httpClient(actx: AdapterContext, req: RequestOptions = {}, opts: { where?: string; authOptional?: boolean; adapter?: string } = {}): ApiClient {
   const cfg = parseApi(actx.provider, opts.where ?? "providers.http.<api>", opts);
-  const { token, authHeader, masks } = credential(cfg, actx.env);
   const baseUrl = (cfg.baseUrlEnv ? optionalEnv(actx.env, cfg.baseUrlEnv) : undefined) ?? cfg.baseUrl;
-  const hidden = [token, ...masks].filter((s) => s.length >= 4);
-  const redact = (t: string) => hidden.reduce((s, h) => s.split(h).join("****"), actx.redact(t));
+  let hidden: () => string[] = () => [];
+  const redact = (t: string) => hidden().reduce((s, h) => (h.length >= 4 ? s.split(h).join("****") : s), actx.redact(t));
+  refuseCredentials(cfg, actx.env);
+  const cred = credentialFor(actx, cfg.auth, DEPS.get(actx) ?? DEFAULT_AUTH_DEPS, redact);
+  hidden = () => [cred.token, ...cred.masks()];
+  const contentType = req.contentType ?? cfg.mediaType;
   return clientFor({ ...actx, redact }, opts.adapter ?? ADAPTER, {
     baseUrl,
-    token,
-    authHeader,
+    token: cred.token,
+    authHeader: cred.authHeader,
+    ...(cred.signer ? { signer: cred.signer } : {}),
     headers: { ...cfg.headers, ...(req.headers ?? {}) },
-    encoding: cfg.encoding,
-    ...(req.contentType ? { contentType: req.contentType } : {}),
+    encoding: req.encoding ?? cfg.encoding,
+    ...(contentType ? { contentType } : {}),
+    ...(cfg.mediaType ? { accept: cfg.mediaType } : {}),
   });
 }
 

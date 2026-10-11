@@ -4,10 +4,14 @@
  * a PARAM_INVALID (or PLAN_INVALID for the provider block) naming the field at fault. See ADR 0017 and
  * docs/plan-format.md (`http.resource`, `http.list_item`).
  */
-import { SponsonError, canonicalJson, markerKind, sha256, type OutputSpec } from "@sponson/core";
+import { canonicalJson, markerKind, sha256, type OutputSpec, type SponsonError } from "@sponson/core";
 import { paramError } from "./common.js";
 import { isObject } from "./http.js";
+import { HEADER_NAME, envName, parseAuth, planError, type Auth } from "./http-adapter-auth.js";
+import { parseGraphql, usesId, type GraphqlSpec } from "./http-adapter-graphql.js";
 import { expandRecipe, lineApi, resolveRecipeApi } from "./recipes.js";
+
+export type { Auth } from "./http-adapter-auth.js";
 
 export const ADAPTER = "http";
 
@@ -166,16 +170,15 @@ export function fillPath(path: string, vars: Record<string, unknown>, id?: strin
 // The provider block: one per API
 // ---------------------------------------------------------------------------
 
-/** How the credential is sent; `none` only for a public endpoint a manual step's verify request reads. */
-export type Auth = { kind: "bearer"; env: string } | { kind: "header"; header: string; env: string } | { kind: "basic"; userEnv: string; passwordEnv: string } | { kind: "none" };
-
 /** One API's configuration, from `providers.http.<api>`. */
 export interface ApiConfig {
   baseUrl: string;
   baseUrlEnv?: string;
   auth: Auth;
   headers: Record<string, string>;
-  encoding: "json" | "form";
+  encoding: "json" | "form" | "xml";
+  /** A versioned media type sent as `Accept` and as the `Content-Type` of JSON bodies (Atlas `application/vnd.atlas.2023-01-01+json`). */
+  mediaType?: string;
   /** The API is a production system: lines through it need Sponson's approval (`writesEnvironment`). */
   production: boolean;
   /**
@@ -185,42 +188,11 @@ export interface ApiConfig {
   refuse?: { prefixes: string[]; unlessEnv: string };
 }
 
-const API_KEYS = ["base_url", "base_url_env", "auth", "headers", "encoding", "production", "refuse_credential"];
+const API_KEYS = ["base_url", "base_url_env", "auth", "headers", "encoding", "media_type", "production", "refuse_credential"];
 
-/**
- * Variable names the engine masks everywhere (packages/core/src/engine/run-context.ts, CREDENTIAL_NAME). A
- * credential under another name would be masked only in this adapter's own error text, so it is refused.
- */
-const CREDENTIAL_NAME = /(TOKEN|SECRET|PASSWORD|PASSWD|_KEY|APIKEY)$/i;
-const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
-
-function planError(message: string, where: string): SponsonError {
-  return new SponsonError("PLAN_INVALID", `${ADAPTER}: ${where}: ${message}`, { adapter: ADAPTER, key: where });
-}
-
-function envName(v: unknown, where: string, credential: boolean): string {
-  if (typeof v !== "string" || !ENV_NAME.test(v)) throw planError("must be the NAME of an environment variable, never a value", where);
-  if (credential && !CREDENTIAL_NAME.test(v)) throw planError(`\`${v}\` must end in TOKEN, SECRET, PASSWORD, PASSWD, _KEY or APIKEY, so that Sponson masks its value in every output`, where);
-  return v;
-}
-
-const AUTH_FORMS = "`{ bearer_env: NAME }`, `{ header: X-Api-Key, value_env: NAME }` or `{ basic: { user_env: NAME, password_env: NAME } }`";
-
-function parseAuth(v: unknown, where: string): Auth {
-  if (!isObject(v)) throw planError(`is required: ${AUTH_FORMS}`, where);
-  if (v.bearer_env !== undefined) return { kind: "bearer", env: envName(v.bearer_env, `${where}.bearer_env`, true) };
-  if (v.basic !== undefined) {
-    if (!isObject(v.basic)) throw planError("must be `{ user_env: NAME, password_env: NAME }`", `${where}.basic`);
-    return { kind: "basic", userEnv: envName(v.basic.user_env, `${where}.basic.user_env`, false), passwordEnv: envName(v.basic.password_env, `${where}.basic.password_env`, true) };
-  }
-  if (typeof v.header !== "string" || !HEADER_NAME.test(v.header)) throw planError(`must be one of ${AUTH_FORMS}`, where);
-  return { kind: "header", header: v.header, env: envName(v.value_env, `${where}.value_env`, true) };
-}
-
-function parseEncoding(v: unknown, where: string): "json" | "form" {
-  if (v === undefined || v === "json" || v === "form") return v ?? "json";
-  throw planError("must be `json` (the default) or `form` (application/x-www-form-urlencoded)", where);
+function parseEncoding(v: unknown, where: string): "json" | "form" | "xml" {
+  if (v === undefined || v === "json" || v === "form" || v === "xml") return v ?? "json";
+  throw planError("must be `json` (the default), `form` (application/x-www-form-urlencoded) or `xml` (S3-style XML documents)", where);
 }
 
 function parseHeaders(v: unknown, where: string): Record<string, string> {
@@ -228,10 +200,16 @@ function parseHeaders(v: unknown, where: string): Record<string, string> {
   if (!isObject(v)) throw planError("must be a map of header name to string value", where);
   for (const [k, x] of Object.entries(v)) {
     if (!HEADER_NAME.test(k) || typeof x !== "string") throw planError(`\`${k}\` must be a header name with a string value`, where);
-    if (/^(authorization|content-type)$/i.test(k)) throw planError(`\`${k}\` is set by Sponson; configure the credential under \`auth\``, where);
-    if (/^accept$/i.test(k) && !/json/i.test(x)) throw planError(`\`${k}\` must name a JSON media type (answers are read as JSON), such as application/vnd.heroku+json; version=3`, where);
+    if (/^(authorization|accept|content-type)$/i.test(k)) throw planError(`\`${k}\` is set by Sponson; configure the credential under \`auth\` and a versioned media type under \`media_type\``, where);
   }
   return v as Record<string, string>;
+}
+
+function parseMediaType(v: unknown, where: string, encoding: string): string | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v !== "string" || !/^[\w.+-]+\/[\w.+-]+(\s*;.*)?$/.test(v)) throw planError("must be a media type such as application/vnd.atlas.2023-01-01+json", where);
+  if (encoding !== "json") throw planError("applies to `encoding: json` only", where);
+  return v;
 }
 
 function parseProduction(v: unknown, where: string): boolean {
@@ -258,11 +236,14 @@ export function parseApi(block: Record<string, unknown>, where: string, opts: { 
   if (typeof base !== "string" || !/^https?:\/\/[^\s]+$/.test(base)) throw planError("`base_url` must be an http(s) URL", where);
   const unknown = Object.keys(block).filter((k) => !API_KEYS.includes(k));
   if (unknown.length) throw planError(`unknown key \`${unknown[0]}\` (known: ${API_KEYS.join(", ")})`, where);
+  const encoding = parseEncoding(block.encoding, `${where}.encoding`);
+  const mediaType = parseMediaType(block.media_type, `${where}.media_type`, encoding);
   const cfg: ApiConfig = {
     baseUrl: base,
     auth: block.auth === undefined && opts.authOptional ? { kind: "none" } : parseAuth(block.auth, `${where}.auth`),
     headers: parseHeaders(block.headers, `${where}.headers`),
-    encoding: parseEncoding(block.encoding, `${where}.encoding`),
+    encoding,
+    ...(mediaType ? { mediaType } : {}),
     production: parseProduction(block.production, `${where}.production`),
   };
   if (block.base_url_env !== undefined) cfg.baseUrlEnv = envName(block.base_url_env, `${where}.base_url_env`, false);
@@ -350,7 +331,8 @@ function noUnknownParams(params: Record<string, unknown>, known: string[], op: s
 /**
  * One request of a spec: method and path (placeholders unfilled), the extra body it sends, its media type, the
  * headers it sends (values may be references until apply), and whether the declared `fields` go in its body
- * (`send_fields: false` when the request carries them elsewhere, such as in headers).
+ * (`send_fields: false` when the request carries them elsewhere, such as in headers); or a GraphQL request (`path`
+ * is then "", the endpoint being the API's base URL).
  */
 export interface RequestSpec {
   method: string;
@@ -359,11 +341,14 @@ export interface RequestSpec {
   contentType?: string;
   headers: Record<string, unknown>;
   sendFields: boolean;
+  graphql?: GraphqlSpec;
 }
 
 /** How a resource is located by natural key: a list, the array in it, and the fields that must match. */
 export interface FindSpec {
+  /** "" for a GraphQL find. */
   path: string;
+  graphql?: GraphqlSpec;
   listPath: string;
   match: Record<string, unknown>;
   /** Pointer to the next page's cursor in a list response, and the query parameter that sends it back. */
@@ -386,14 +371,15 @@ export interface ResourceSpec {
   vars: Record<string, unknown>;
   /** `locate`: the create's answer is not the object (the parent, an acknowledgement); find it afterwards. */
   create: RequestSpec & { idempotencyKey: boolean; locate: boolean };
-  read?: { path: string };
+  read?: { path: string; graphql?: GraphqlSpec };
   find?: FindSpec;
   update?: RequestSpec;
   /**
    * How the object is removed. A `POST` with a `body` archives instead of deleting (Stripe prices cannot be deleted,
-   * only set `active: false`); the body is part of the record id, so destroy needs nothing but the ledger.
+   * only set `active: false`); the body is part of the record id, so destroy needs nothing but the ledger. Or a
+   * GraphQL mutation.
    */
-  delete: { method: string; path: string; body?: Record<string, unknown> };
+  delete: { method: string; path: string; body?: Record<string, unknown>; graphql?: GraphqlSpec };
   destroy: DestroyMode;
   itemPath: string;
   idPath: string;
@@ -417,8 +403,18 @@ function requestHeadersParam(v: unknown, param: string): Record<string, unknown>
   return o;
 }
 
+/** `{ graphql }` in place of a REST request: nothing else may be next to it. */
+function asGraphql(o: Record<string, unknown>, param: string, idAllowed: boolean): RequestSpec | undefined {
+  if (o.graphql === undefined) return undefined;
+  const extra = Object.keys(o).find((k) => k !== "graphql");
+  if (extra) throw fail(`\`${param}.${extra}\` does not apply to a GraphQL request (the query and its variables say everything)`, `${param}.${extra}`);
+  return { method: "POST", path: "", body: {}, headers: {}, sendFields: true, graphql: parseGraphql(o.graphql, `${param}.graphql`, idAllowed) };
+}
+
 function parseRequest(v: unknown, param: string, methods: readonly string[], fallback: string, vars: Record<string, unknown>, idAllowed: boolean, defaultPath?: string): RequestSpec {
   const o = requiredObject(v, param);
+  const gql = asGraphql(o, param, idAllowed);
+  if (gql) return gql;
   const path = o.path === undefined && defaultPath !== undefined ? defaultPath : pathParam(o.path, `${param}.path`);
   checkPlaceholders(path, `${param}.path`, vars, idAllowed);
   const contentType = contentTypeParam(o.content_type, `${param}.content_type`);
@@ -445,6 +441,7 @@ export function requestHeaders(req: RequestSpec, param: string): Record<string, 
 
 function parseCreate(v: unknown, vars: Record<string, unknown>): ResourceSpec["create"] {
   const r = parseRequest(v, "create", ["POST", "PUT", "PATCH"], "POST", vars, false);
+  if (r.graphql) return { ...r, idempotencyKey: false, locate: false };
   const { idempotency_key: key, locate } = v as Record<string, unknown>;
   if (key !== undefined && typeof key !== "boolean") throw fail("`create.idempotency_key` must be true or false", "create.idempotency_key");
   if (locate !== undefined && typeof locate !== "boolean") throw fail("`create.locate` must be true or false", "create.locate");
@@ -454,6 +451,7 @@ function parseCreate(v: unknown, vars: Record<string, unknown>): ResourceSpec["c
 function parseFind(v: unknown, vars: Record<string, unknown>): FindSpec | undefined {
   const o = optionalObject(v, "find");
   if (!o) return undefined;
+  if (o.graphql !== undefined) return parseGraphqlFind(o);
   const path = pathParam(o.path, "find.path");
   checkPlaceholders(path, "find.path", vars, false);
   const match = requiredObject(o.match, "find.match");
@@ -467,11 +465,25 @@ function parseFind(v: unknown, vars: Record<string, unknown>): FindSpec | undefi
   return spec;
 }
 
-function parseRead(v: unknown, vars: Record<string, unknown>, find: FindSpec | undefined): { path: string } | undefined {
+/** A find whose list comes from a GraphQL query: no path, no cursor pages. */
+function parseGraphqlFind(o: Record<string, unknown>): FindSpec {
+  const extra = Object.keys(o).find((k) => !["graphql", "list_path", "match"].includes(k));
+  if (extra) throw fail(`\`find.${extra}\` does not apply to a GraphQL find (known: graphql, list_path, match)`, `find.${extra}`);
+  const match = requiredObject(o.match, "find.match");
+  if (Object.keys(match).length === 0) throw fail("`find.match` must name at least one field", "find.match");
+  return { path: "", graphql: parseGraphql(o.graphql, "find.graphql", false), listPath: pointerParam(o.list_path, "find.list_path", ""), match };
+}
+
+function parseRead(v: unknown, vars: Record<string, unknown>, find: FindSpec | undefined): { path: string; graphql?: GraphqlSpec } | undefined {
   const o = optionalObject(v, "read");
   if (!o) {
-    if (!find) throw fail("needs `read` (a path that names the object) or `find` (a list and the fields that identify it)", "read");
+    if (!find) throw fail("needs `read` (a path or a GraphQL query that names the object) or `find` (a list and the fields that identify it)", "read");
     return undefined;
+  }
+  if (o.graphql !== undefined) {
+    const gql = asGraphql(o, "read", true)!.graphql!;
+    if (usesId(gql.variables) && !find) throw fail('`read.graphql.variables` uses "{id}", so the object can only be located with `find` (the id is not in the plan)', "read.graphql.variables");
+    return { path: "", graphql: gql };
   }
   const path = pathParam(o.path, "read.path");
   if (placeholders(path).includes("id") && !find) throw fail("`read.path` uses `{id}`, so the object can only be located with `find` (the id is not in the plan)", "read.path");
@@ -480,9 +492,10 @@ function parseRead(v: unknown, vars: Record<string, unknown>, find: FindSpec | u
 }
 
 /** Update and delete go to the read path by default: the object's own URL. */
-function parseDelete(v: unknown, vars: Record<string, unknown>, read: { path: string } | undefined): ResourceSpec["delete"] {
-  if (v === undefined && read === undefined) throw fail("`delete` is required: `{ path: /things/{id} }` (no `read.path` to default to)", "delete");
-  const r = parseRequest(v ?? {}, "delete", ["DELETE", "POST"], "DELETE", vars, true, read?.path);
+function parseDelete(v: unknown, vars: Record<string, unknown>, read: { path: string; graphql?: GraphqlSpec } | undefined): ResourceSpec["delete"] {
+  if (v === undefined && (read === undefined || read.graphql)) throw fail("`delete` is required: `{ path: /things/{id} }` or `{ graphql: { query: … } }` (no `read.path` to default to)", "delete");
+  const r = parseRequest(v ?? {}, "delete", ["DELETE", "POST"], "DELETE", vars, true, read?.graphql ? undefined : read?.path);
+  if (r.graphql) return { method: r.method, path: r.path, graphql: r.graphql };
   if (Object.keys(r.body).length === 0) return { method: r.method, path: r.path };
   if (r.method !== "POST") throw fail("`delete.body` needs `method: POST` (an archive request such as `{ active: false }`)", "delete.body");
   // The body travels in the record id, which the ledger keeps: plain values only, never a reference or a secret.
@@ -542,8 +555,25 @@ export function parseResource(line: Record<string, unknown>): ResourceSpec {
     existsStatus: statusList(params.exists_status, "exists_status"),
     goneStatus: statusList(params.gone_status, "gone_status"),
   };
-  if (params.update !== undefined) spec.update = parseRequest(params.update, "update", ["PATCH", "PUT", "POST"], "PATCH", vars, true, read?.path);
+  if (params.update !== undefined) spec.update = parseRequest(params.update, "update", ["PATCH", "PUT", "POST"], "PATCH", vars, true, read?.graphql ? undefined : read?.path);
+  noSecretIn(find?.graphql?.variables, "find.graphql.variables");
+  noSecretIn(read?.graphql?.variables, "read.graphql.variables");
+  noSecretIn(spec.delete.graphql?.variables, "delete.graphql.variables");
   return spec;
+}
+
+/**
+ * The variables of a locating or deleting GraphQL request become part of the resource key or the record id, which
+ * receipts keep: a `{ secret }` there is refused (it would be masked, and the key or the delete broken).
+ */
+function noSecretIn(v: unknown, param: string): void {
+  if (v !== undefined && firstSecret(v)) throw fail(`\`${param}\` may not hold a \`{ secret }\`: it becomes part of the resource key or the delete request kept in receipts`, param);
+}
+
+function firstSecret(v: unknown): boolean {
+  if (markerKind(v) === "secret") return true;
+  if (Array.isArray(v)) return v.some(firstSecret);
+  return isObject(v) && Object.values(v).some(firstSecret);
 }
 
 /** The outputs one `http.resource` line declares: always `id`, plus its `outputs` (`once` ones as in ADR 0018). */
@@ -566,17 +596,23 @@ export function resourceOutputs(line: Record<string, unknown>): Record<string, O
 export type ListShape = "array" | "delimited" | "map";
 
 /**
- * What a write of the parent sends besides the collection: nothing (`field`), the whole object read just before
- * (`parent`), or the listed fields of it (names or pointers), for a replace that resets what it is not sent.
+ * What a write of the parent sends besides the collection: nothing (`field`; a keyed map's one entry, as a merge
+ * patch), nothing but the whole collection (`collection`; a keyed map too, for an API that replaces the map it is
+ * sent), the whole object read just before (`parent`), or the listed fields of it (names or pointers), for a
+ * replace that resets what it is not sent.
  */
-export type ParentSend = "field" | "parent" | string[];
+export type ParentSend = "field" | "parent" | "collection" | string[];
 
 /** `http.list_item` params, checked. */
 export interface ListItemSpec {
   api: string;
   vars: Record<string, unknown>;
-  /** `itemPath`: where the parent object is in the read answer (`/feature` for `{ feature: {...} }`); default the whole body. */
-  parent: { path: string; readPath: string; method: string; send: ParentSend; itemPath: string; contentType?: string };
+  /**
+   * `itemPath`: where the parent object is in the read answer (`/feature` for `{ feature: {...} }`); default the whole
+   * body. `ifMissing: empty`: a 404 parent reads as an empty collection; `whenEmpty: delete`: an empty collection is
+   * removed with DELETE instead of written.
+   */
+  parent: { path: string; readPath: string; method: string; send: ParentSend; itemPath: string; contentType?: string; ifMissing: "error" | "empty"; whenEmpty: "write" | "delete" };
   listPath: string;
   shape: ListShape;
   separator: string;
@@ -597,6 +633,8 @@ function parseParent(v: unknown, vars: Record<string, unknown>): ListItemSpec["p
   checkPlaceholders(path, "parent.path", vars, false);
   const readPath = o.read_path === undefined ? path : pathParam(o.read_path, "parent.read_path");
   checkPlaceholders(readPath, "parent.read_path", vars, false);
+  const ifMissing = oneOf(o.if_missing, ["error", "empty"] as const, "parent.if_missing", "`error` (the default: a parent that is not there is an error) or `empty` (a 404 reads as an empty collection, S3 CORS)");
+  const whenEmpty = oneOf(o.when_empty, ["write", "delete"] as const, "parent.when_empty", "`write` (the default: write the empty collection) or `delete` (DELETE `parent.path` instead, S3 CORS)");
   const contentType = contentTypeParam(o.content_type, "parent.content_type");
   return {
     path,
@@ -604,14 +642,23 @@ function parseParent(v: unknown, vars: Record<string, unknown>): ListItemSpec["p
     method: methodParam(o.method, "parent.method", ["PATCH", "PUT", "POST"], "PATCH"),
     send: parseSend(o.send),
     itemPath: pointerParam(o.item_path, "parent.item_path", ""),
+    ifMissing,
+    whenEmpty,
     ...(contentType ? { contentType } : {}),
   };
 }
 
+/** One of `allowed` (the first when absent); PARAM_INVALID saying what each means otherwise. */
+function oneOf<T extends string>(v: unknown, allowed: readonly T[], param: string, meaning: string): T {
+  if (v === undefined) return allowed[0]!;
+  if (typeof v === "string" && (allowed as readonly string[]).includes(v)) return v as T;
+  throw fail(`\`${param}\` must be ${meaning}`, param);
+}
+
 function parseSend(v: unknown): ParentSend {
-  if (v === undefined || v === "field" || v === "parent") return v ?? "field";
+  if (v === undefined || v === "field" || v === "parent" || v === "collection") return v ?? "field";
   if (Array.isArray(v) && v.length > 0 && v.every((f) => typeof f === "string" && f !== "")) return v as string[];
-  throw fail("`parent.send` must be `field` (send only the list), `parent` (send the whole object back) or a list of the object's fields to send back with it", "parent.send");
+  throw fail("`parent.send` must be `field` (send only the list; a map entry as a merge patch), `collection` (send only the list, a map whole), `parent` (send the whole object back) or a list of the object's fields to send back with it", "parent.send");
 }
 
 function scalarItem(v: unknown, what: string): unknown {

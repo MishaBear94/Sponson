@@ -414,7 +414,6 @@ Recipe file: [`packages/adapters/recipes/heroku.yaml`](https://github.com/MishaB
 | `base_url` | `https://api.heroku.com` |
 | `base_url_env` | `HEROKU_API_URL` |
 | Credential | `HEROKU_API_KEY` (bearer) |
-| `headers` | &#123;"Accept":"application/vnd.heroku+json; version=3"&#125; |
 
 Assumptions:
 
@@ -425,6 +424,7 @@ Assumptions:
 - **HK5** (verified, [source](https://api.heroku.com/schema)): Config var names match `^\w+$` and values are strings (`null` only as a delete in a PATCH).
 - **HK6** (verified, [source](https://devcenter.heroku.com/articles/config-vars)): Every change to config vars creates a new release and restarts the app, so a write takes effect without a separate deploy.
 - **HK7** (verified, [source](https://devcenter.heroku.com/articles/platform-api-reference)): Review apps are created asynchronously (`POST /review-apps` answers `pending` with a nullable `app`), by Heroku itself when the pipeline has automatic review apps; this recipe does not create them, it writes vars on an app that exists (the review app's name or id).
+- **HK9** **(unverified)**: A PATCH whose `Content-Type` is the same vendor media type (`media_type` sends it as both `Accept` and `Content-Type`) is accepted like `application/json`; the reference's examples send `application/json`.
 - **HK8** **(unverified)**: A missing app answers 404 `not_found` on GET and PATCH, which destroy treats as the var being gone.
 
 ### `heroku.config_var`

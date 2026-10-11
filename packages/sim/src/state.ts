@@ -12,6 +12,9 @@ import { netlifySim } from "./routes/netlify.js";
 import { planetscaleSim } from "./routes/planetscale.js";
 import { launchdarklySim } from "./routes/launchdarkly.js";
 import { supabaseSim } from "./routes/supabase.js";
+import { awsSim } from "./routes/aws.js";
+import { railwaySim } from "./routes/railway.js";
+import { flySim } from "./routes/fly.js";
 import { cloudflareSim } from "./routes/cloudflare.js";
 import { algoliaSim } from "./routes/algolia.js";
 import { xataSim } from "./routes/xata.js";
@@ -21,7 +24,7 @@ import { digitaloceanSim } from "./routes/digitalocean.js";
  * Every simulated provider, by URL prefix (`/<name>/…`), drift prefix (`<name>.…`), seed key and state key.
  * Order matters only for determinism: resets seed providers (and so allocate ids) in this order.
  */
-export const PROVIDERS = { vercel: vercelSim, neon: neonSim, clerk: clerkSim, planetscale: planetscaleSim, launchdarkly: launchdarklySim, rest: restSim, supabase: supabaseSim, netlify: netlifySim, cloudflare: cloudflareSim, algolia: algoliaSim, xata: xataSim, digitalocean: digitaloceanSim };
+export const PROVIDERS = { vercel: vercelSim, neon: neonSim, clerk: clerkSim, planetscale: planetscaleSim, launchdarkly: launchdarklySim, rest: restSim, supabase: supabaseSim, netlify: netlifySim, cloudflare: cloudflareSim, aws: awsSim, railway: railwaySim, fly: flySim, algolia: algoliaSim, xata: xataSim, digitalocean: digitaloceanSim };
 
 type Providers = typeof PROVIDERS;
 /** A simulated provider's name: its URL prefix, seed key and state key. */

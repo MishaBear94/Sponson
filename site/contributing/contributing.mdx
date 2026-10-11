@@ -125,8 +125,17 @@ re-identifies every resource made with it: only with a **Breaking:** changeset t
 
 First check whether the provider needs one: the generic `http` adapter
 ([docs/plan-format.md](/reference/plan-format#the-generic-http-adapter)) already manages plain CRUD objects and list
-entries of any JSON REST API from the plan, and a [recipe](/contributing/contributing#adding-a-recipe) makes one such operation a one-line building block. Write a first-class adapter when the lifecycle needs more than a
-request template can say ([ADR 0017](/contributing/adr/0017-generic-http-adapter)).
+entries of any JSON, form or XML REST API, or GraphQL API, from the plan, authenticated by a bearer token, a header,
+Basic, an OAuth2 client-credentials token, a token a CLI prints, AWS SigV4 or HTTP Digest, and a
+[recipe](/contributing/contributing#adding-a-recipe) makes one such operation a one-line building block. Write a first-class adapter when the
+lifecycle needs more than a request template can say ([ADR 0017](/contributing/adr/0017-generic-http-adapter)).
+
+A new credential form for it belongs in `packages/adapters/src/http-adapter-auth.ts` (parsing and run time
+together): environment variable NAMES only, every value obtained at run time passed to `actx.secret` before it is
+first sent, and a server-side check of it in the sim written from the specification rather than shared with the
+client (`packages/sim/src/auth.ts`), pinned to a published test vector when one exists. Add a scenario under
+`scenarios/adapters/` whose `secrets:` lists every credential and every token the sim can issue, so I1 is checked
+for each of them.
 
 An adapter is an object implementing `ResourceAdapter` from `@sponson/core`: a name and a map of ops. Read `packages/core/src/types.ts` (the contract, with the marker rules next to `OpSpec.diff`) and the fake adapter in `packages/core/src/testing/fake.ts` (`@sponson/core/testing`), the smallest complete example.
 

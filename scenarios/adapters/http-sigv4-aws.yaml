@@ -1,0 +1,78 @@
+name: "http auth aws_sigv4: an S3 bucket CORS rule (XML) and an Amplify branch variable (JSON), every request signed; the secret access key never leaks"
+plan: |
+  version: 1
+  providers:
+    http:
+      s3:
+        base_url: https://assets.s3.us-east-1.amazonaws.com
+        base_url_env: AWS_S3_URL
+        encoding: xml
+        auth:
+          aws_sigv4: { region: us-east-1, service: s3, access_key_id_env: AWS_SIM_ACCESS_KEY_ID, secret_access_key_env: AWS_SIM_SECRET_ACCESS_KEY }
+      amplify:
+        base_url: https://amplify.us-east-1.amazonaws.com
+        base_url_env: AWS_AMPLIFY_URL
+        auth:
+          aws_sigv4: { region: us-east-1, service: amplify, access_key_id_env: AWS_SIM_ACCESS_KEY_ID, secret_access_key_env: AWS_SIM_SECRET_ACCESS_KEY }
+  changes:
+    - id: cors
+      adapter: http
+      op: list_item
+      api: s3
+      parent: { path: "/?cors", method: PUT, if_missing: empty, when_empty: delete }
+      list_path: /CORSConfiguration/CORSRule
+      key_field: ID
+      item:
+        ID: "sponson-${ctx.scope}"
+        AllowedOrigin: "https://${ctx.scope}.preview.example.app"
+        AllowedMethod: [GET, HEAD]
+        MaxAgeSeconds: "3000"
+    - id: branch_env
+      adapter: http
+      op: list_item
+      api: amplify
+      parent: { path: "/apps/d1demo/branches/${ctx.scope}", method: POST, send: collection, item_path: /branch }
+      list_path: /environmentVariables
+      shape: map
+      item: API_URL
+      value: "https://api-${ctx.scope}.example.app"
+seed:
+  aws:
+    buckets: { assets: { cors: [{ ID: production, AllowedOrigin: [https://app.example.com], AllowedMethod: [GET], AllowedHeader: [], ExposeHeader: [] }] } }
+    amplify: { d1demo: { branches: { pr-42: { environmentVariables: { NODE_ENV: production } } } } }
+env:
+  AWS_S3_URL: "${SIM_URL}/aws/s3/assets"
+  AWS_AMPLIFY_URL: "${SIM_URL}/aws/amplify"
+secrets: [sim/aws-secret-access-key-0042]
+steps:
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { cors: create, branch_env: create } }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { cors: applied, branch_env: applied } }
+  - sim:
+      state:
+        aws.buckets.assets.cors: { length: 2 }
+        aws.amplify.d1demo.branches.pr-42.environmentVariables: { NODE_ENV: production, API_URL: "https://api-pr-42.example.app" }
+      write_order: ["PUT /aws/s3/assets/", "POST /aws/amplify/apps/d1demo/branches/pr-42"]
+  - run: apply --json
+    expect: { exit: 0, writes: 0, lines: { cors: unchanged, branch_env: unchanged } }
+  # The rule removed in the console: missing, put back by the next apply; the production rule is left alone.
+  - chaos: { drift: { "aws.s3.assets.cors": "remove:sponson-pr-42" } }
+  - run: plan --json
+    expect: { exit: 0, drift: [{ kind: missing, line: cors }], plan_lines: { cors: create } }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { cors: applied } }
+  - sim:
+      state:
+        aws.buckets.assets.cors: { length: 2 }
+  # A wrong key is refused by the signature check before anything is read.
+  - env: { AWS_SIM_SECRET_ACCESS_KEY: not-the-secret-key-9999 }
+  - run: plan --json
+    expect: { exit: 1, plan_lines: { cors: error, branch_env: error }, errors: { cors: "SignatureDoesNotMatch" } }
+  - env: { AWS_SIM_SECRET_ACCESS_KEY: sim/aws-secret-access-key-0042 }
+  - run: apply --destroy --json
+    expect: { exit: 0, status: complete, lines: { cors: destroyed, branch_env: destroyed } }
+  - sim:
+      state:
+        aws.buckets.assets.cors: [{ ID: production, AllowedOrigin: [https://app.example.com], AllowedMethod: [GET], AllowedHeader: [], ExposeHeader: [] }]
+        aws.amplify.d1demo.branches.pr-42.environmentVariables: { NODE_ENV: production }

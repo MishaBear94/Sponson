@@ -439,10 +439,16 @@
         "base_url": { "type": "string", "pattern": "^https?://\\S+$", "description": "The API's base URL; request paths are relative to it." },
         "base_url_env": { "$ref": "#/$defs/envName", "description": "Optional: a variable that overrides base_url when set (a staging API, the local fake cloud)." },
         "auth": {
-          "description": "`{ bearer_env: NAME }`, `{ header: X-Api-Key, value_env: NAME }` or `{ basic: { user_env: NAME, password_env: NAME } }`.",
+          "description": "`{ bearer_env: NAME }`, `{ header: X-Api-Key, value_env: NAME, prefix?: \"Api-Key \" }`, `{ headers: [{ header, value_env }, …] }`, `{ basic: { user_env, password_env } }`, `{ oauth2_client_credentials: { token_url, client_id_env, client_secret_env, … } }`, `{ command: [argv…] }`, `{ aws_sigv4: { region, service, access_key_id_env, secret_access_key_env } }` or `{ digest: { user_env, password_env } }`. Always variable NAMES, never values.",
           "oneOf": [
             { "type": "object", "required": ["bearer_env"], "additionalProperties": false, "properties": { "bearer_env": { "$ref": "#/$defs/credentialEnvName" } } },
-            { "type": "object", "required": ["header", "value_env"], "additionalProperties": false, "properties": { "header": { "type": "string", "minLength": 1 }, "value_env": { "$ref": "#/$defs/credentialEnvName" } } },
+            { "$ref": "#/$defs/httpHeaderCredential" },
+            {
+              "type": "object",
+              "required": ["headers"],
+              "additionalProperties": false,
+              "properties": { "headers": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/httpHeaderCredential" }, "description": "Several credential headers sent together (Datadog's DD-API-KEY and DD-APPLICATION-KEY)." } }
+            },
             {
               "type": "object",
               "required": ["basic"],
@@ -450,12 +456,77 @@
               "properties": {
                 "basic": { "type": "object", "required": ["user_env", "password_env"], "additionalProperties": false, "properties": { "user_env": { "$ref": "#/$defs/envName" }, "password_env": { "$ref": "#/$defs/credentialEnvName" } } }
               }
+            },
+            {
+              "type": "object",
+              "required": ["oauth2_client_credentials"],
+              "additionalProperties": false,
+              "properties": {
+                "oauth2_client_credentials": {
+                  "type": "object",
+                  "description": "A bearer token from an OAuth2 token endpoint (client credentials grant), fetched once per run and again after a 401.",
+                  "required": ["token_url", "client_id_env", "client_secret_env"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "token_url": { "type": "string", "pattern": "^https?://\\S+$", "description": "The token endpoint, e.g. https://<tenant>.auth0.com/oauth/token." },
+                    "token_url_env": { "$ref": "#/$defs/envName", "description": "Optional: a variable that overrides token_url when set." },
+                    "client_id_env": { "$ref": "#/$defs/envName" },
+                    "client_secret_env": { "$ref": "#/$defs/credentialEnvName" },
+                    "audience": { "type": "string", "minLength": 1, "description": "Sent as `audience` (Auth0: https://<tenant>/api/v2/; Kinde: https://<sub>.kinde.com/api)." },
+                    "scope": { "type": "string", "minLength": 1, "description": "Sent as `scope`, space-separated." },
+                    "extra": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Further form parameters (never a credential)." },
+                    "auth_method": { "enum": ["client_secret_post", "client_secret_basic"], "description": "How the client authenticates: in the form (default) or with HTTP Basic." }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["command"],
+              "additionalProperties": false,
+              "properties": {
+                "command": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "type": "string", "minLength": 1, "not": { "pattern": "^\\$|\\$\\{" } },
+                  "description": "A CLI that prints a bearer token, as a list of literal arguments run without a shell: [gcloud, auth, print-access-token]."
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["aws_sigv4"],
+              "additionalProperties": false,
+              "properties": {
+                "aws_sigv4": {
+                  "type": "object",
+                  "description": "Every request signed with AWS Signature Version 4.",
+                  "required": ["region", "service", "access_key_id_env", "secret_access_key_env"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "region": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+                    "service": { "type": "string", "pattern": "^[a-z0-9-]+$", "description": "The signing name: s3, amplify, …" },
+                    "access_key_id_env": { "$ref": "#/$defs/envName" },
+                    "secret_access_key_env": { "$ref": "#/$defs/credentialEnvName" },
+                    "session_token_env": { "$ref": "#/$defs/credentialEnvName", "description": "For temporary credentials (STS)." }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["digest"],
+              "additionalProperties": false,
+              "properties": {
+                "digest": { "type": "object", "description": "HTTP Digest (RFC 7616, MD5 or SHA-256, qop=auth).", "required": ["user_env", "password_env"], "additionalProperties": false, "properties": { "user_env": { "$ref": "#/$defs/envName" }, "password_env": { "$ref": "#/$defs/credentialEnvName" } } }
+              }
             }
           ]
         },
         "headers": { "type": "object", "description": "Static headers sent with every request (an API version pin).", "additionalProperties": { "type": "string" } },
-        "encoding": { "enum": ["json", "form"], "description": "Request bodies as JSON (default) or application/x-www-form-urlencoded (`a[b]=c`)." },
+        "encoding": { "enum": ["json", "form", "xml"], "description": "Request bodies as JSON (default), application/x-www-form-urlencoded (`a[b]=c`) or XML (S3-style documents; answers are XML too)." },
         "production": { "type": "boolean", "description": "true when the API is a production system (a live Stripe account, a production tenant): every line through it needs approval (--approved-by), whatever the run's environment." },
+        "media_type": { "type": "string", "pattern": "^[\\w.+-]+/[\\w.+-]+", "description": "A versioned JSON media type sent as Accept and Content-Type (application/vnd.atlas.2023-01-01+json)." },
         "refuse_credential": {
           "type": "object",
           "description": "Credentials this API refuses before any request (PROVIDER_AUTH): values starting with one of `prefixes` (Stripe's sk_live_), unless the variable `unless_env` is 1 or true. A recipe's cannot be overridden.",
@@ -463,6 +534,29 @@
           "additionalProperties": false,
           "properties": { "prefixes": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 3 } }, "unless_env": { "$ref": "#/$defs/envName" } }
         }
+      }
+    },
+    "httpHeaderCredential": {
+      "type": "object",
+      "description": "A credential sent in a header: the variable's value, after an optional literal prefix (`Api-Key `, `Token `).",
+      "required": ["header", "value_env"],
+      "additionalProperties": false,
+      "properties": {
+        "header": { "type": "string", "minLength": 1 },
+        "value_env": { "$ref": "#/$defs/credentialEnvName" },
+        "prefix": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[ -~]+$", "not": { "pattern": "^\\$|\\$\\{" }, "description": "Literal text sent before the value, never a reference." }
+      }
+    },
+    "httpGraphql": {
+      "type": "object",
+      "description": "A GraphQL request instead of a method and a path: POST { query, variables } to the API's base_url; `errors` fail the request.",
+      "required": ["query"],
+      "additionalProperties": false,
+      "properties": {
+        "query": { "type": "string", "pattern": "\\{", "description": "The GraphQL document: one operation, its inputs as $variables." },
+        "variables": { "type": "object", "description": "The operation's variables: literals or references; a string that is exactly {id} is the object's id." },
+        "data_path": { "$ref": "#/$defs/jsonPointer", "description": "Where the result is in `data`: the object (read, create, update) or the list (find)." },
+        "idempotent": { "type": "boolean", "description": "The mutation sets state, so a dropped connection may be retried." }
       }
     },
     "httpPath": { "type": "string", "pattern": "^/", "description": "A path relative to the API's base_url. `{id}` is the object's id; `{name}` is `vars.name`, URI-encoded as one segment; `{+name}` writes it as it is (a URL), escaping only ? and #." },
@@ -475,6 +569,7 @@
       "properties": {
         "method": { "type": "string" },
         "path": { "$ref": "#/$defs/httpPath" },
+        "graphql": { "$ref": "#/$defs/httpGraphql" },
         "body": { "type": "object", "description": "Extra body fields sent with this request only (not compared)." },
         "content_type": { "type": "string", "description": "A media type other than the API's encoding, e.g. application/merge-patch+json." },
         "idempotency_key": { "type": "boolean", "description": "Create only: send an Idempotency-Key so a create whose answer was lost can be retried." },
@@ -483,7 +578,7 @@
       }
     },
     "op_http_resource": {
-      "description": "http.resource: one object per item in a JSON REST API (a flag, a webhook endpoint). Outputs: id, plus those under `outputs`.",
+      "description": "http.resource: one object per item in a REST or GraphQL API (a flag, a webhook endpoint, a variable). Outputs: id, plus those under `outputs`.",
       "required": ["api", "create"],
       "properties": {
         "id": true,
@@ -495,19 +590,27 @@
         "vars": { "type": "object", "description": "Values for `{name}` placeholders in paths: literals or references." },
         "find": {
           "type": "object",
-          "required": ["path", "match"],
+          "required": ["match"],
+          "anyOf": [{ "required": ["path"], "properties": { "path": true } }, { "required": ["graphql"], "properties": { "graphql": true } }],
           "additionalProperties": false,
-          "description": "Locate the object by natural key: a list, the array in it, and the fields that must match.",
+          "description": "Locate the object by natural key: a list (a path, or a GraphQL query), the array in it, and the fields that must match.",
           "properties": {
             "path": { "$ref": "#/$defs/httpPath" },
+            "graphql": { "$ref": "#/$defs/httpGraphql" },
             "list_path": { "$ref": "#/$defs/jsonPointer" },
             "match": { "type": "object", "minProperties": 1 },
             "next": { "$ref": "#/$defs/jsonPointer", "description": "Pointer to the next page's cursor in a list response." },
             "cursor_param": { "type": "string", "description": "Query parameter that sends the cursor back. Default: cursor." }
           }
         },
-        "read": { "type": "object", "required": ["path"], "additionalProperties": false, "properties": { "path": { "$ref": "#/$defs/httpPath" } }, "description": "GET the object: by `{id}` after find, or a path that names it." },
-        "create": { "allOf": [{ "$ref": "#/$defs/httpRequest" }, { "required": ["path"], "properties": { "path": true, "method": { "enum": ["POST", "PUT", "PATCH"] } } }] },
+        "read": {
+          "type": "object",
+          "anyOf": [{ "required": ["path"], "properties": { "path": true } }, { "required": ["graphql"], "properties": { "graphql": true } }],
+          "additionalProperties": false,
+          "properties": { "path": { "$ref": "#/$defs/httpPath" }, "graphql": { "$ref": "#/$defs/httpGraphql" } },
+          "description": "GET the object (by `{id}` after find, or a path that names it), or a GraphQL query that answers it."
+        },
+        "create": { "allOf": [{ "$ref": "#/$defs/httpRequest" }, { "anyOf": [{ "required": ["path"], "properties": { "path": true } }, { "required": ["graphql"], "properties": { "graphql": true } }], "properties": { "method": { "enum": ["POST", "PUT", "PATCH"] } } }] },
         "update": { "allOf": [{ "$ref": "#/$defs/httpRequest" }, { "properties": { "method": { "enum": ["PATCH", "PUT", "POST"] } } }] },
         "delete": { "allOf": [{ "$ref": "#/$defs/httpRequest" }, { "properties": { "method": { "enum": ["DELETE", "POST"] } } }] },
         "destroy": { "$ref": "#/$defs/httpDestroy" },
@@ -555,8 +658,14 @@
             "path": { "$ref": "#/$defs/httpPath", "description": "The parent object: read with GET, written with `method`." },
             "read_path": { "$ref": "#/$defs/httpPath", "description": "GET this instead when reading differs from writing." },
             "method": { "enum": ["PATCH", "PUT", "POST"], "description": "Default: PATCH." },
-            "send": { "enum": ["field", "parent"], "description": "field (default): send only the collection; parent: send the whole object back." },
-            "content_type": { "type": "string" }
+            "send": {
+              "anyOf": [{ "enum": ["field", "parent", "collection"] }, { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }],
+              "description": "field (default): send only the collection (a map entry as a merge patch); collection: only the collection, a map whole; parent: the whole object back; a list: those fields of the object with the collection."
+            },
+            "item_path": { "$ref": "#/$defs/jsonPointer", "description": "Where the parent object is in the read answer (`/branch` for `{ branch: {…} }`). Default: the whole body." },
+            "content_type": { "type": "string" },
+            "if_missing": { "enum": ["error", "empty"], "description": "error (default); empty: a 404 on the parent reads as an empty collection (S3 CORS)." },
+            "when_empty": { "enum": ["write", "delete"], "description": "write (default); delete: an empty collection is removed with DELETE path instead (S3 CORS)." }
           }
         },
         "list_path": { "$ref": "#/$defs/jsonPointer", "description": "Where the collection is in the parent." },

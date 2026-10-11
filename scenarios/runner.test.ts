@@ -10,7 +10,8 @@
  *   seed: { <provider>: ... }   SimSeed: one entry per simulated provider; its default seed when absent
  *   chaos: { ... }               initial POST /_chaos body
  *   ctx: { env, pr, branch, sha } defaults: preview / 42 / feat/x / <fixed sha>
- *   env: { NAME: value }         extra process env (secrets, tokens)
+ *   env: { NAME: value }         extra process env (secrets, tokens); `${SIM_URL}` in a value is the sim's base URL
+ *                                (an OAuth2 token endpoint, a base URL the provider block does not default to)
  *   bins: { NAME: |              fake executables: each body becomes `#!/bin/sh` + body in a scenario-private
  *     <shell script> }           directory prepended to the scenario's PATH (after `env:`), so a scenario can
  *                                stand in for a CLI such as `aws`, `doppler` or `op`. "$@" are the arguments.
@@ -156,7 +157,8 @@ class Harness {
   static async create(s: Scenario): Promise<Harness> {
     const sim = await startSim({ seed: s.seed });
     const ws = await workspace("scn", { plan: s.plan });
-    const env = cliEnv(sim, { SPONSON_RECEIPTS_DIR: join(ws.dir, ".sponson/receipts"), ...(s.env ?? {}) });
+    const extra = Object.fromEntries(Object.entries(s.env ?? {}).map(([k, v]) => [k, String(v).replaceAll("${SIM_URL}", sim.url)]));
+    const env = cliEnv(sim, { SPONSON_RECEIPTS_DIR: join(ws.dir, ".sponson/receipts"), ...extra });
     if (s.bins) env.PATH = [await plantBins(join(ws.dir, ".scenario-bin"), s.bins), env.PATH].filter(Boolean).join(delimiter);
     const ctx = { ...DEFAULT_CTX, ...(s.ctx ?? {}) };
     if (s.chaos) await sim.state.applyChaos(s.chaos as never);
