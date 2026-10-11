@@ -84,8 +84,22 @@ jobs:
         if: ${{ !inputs.dry-run }}
         run: |
           pnpm changeset publish
-          # changesets creates lightweight tags, which `--follow-tags` skips; push them by name.
+          # Tag what was published explicitly (`changeset publish` reported tags it never left in this clone), then
+          # push them by name: they are lightweight, which `--follow-tags` skips.
+          pnpm changeset git-tag
           git push origin --tags
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # pnpm reads the lower-case form; npm the upper-case one. 0.4.0 and 0.5.0 shipped without provenance.
+          npm_config_provenance: "true"
           NPM_CONFIG_PROVENANCE: "true"
+      - name: Check what was published
+        if: ${{ !inputs.dry-run }}
+        run: |
+          # Fail loudly instead of shipping silently without tags or provenance again.
+          sleep 30
+          for dir in packages/*/; do
+            name=$(node -p "require('./${dir}package.json').name"); version=$(node -p "require('./${dir}package.json').version")
+            git ls-remote --exit-code --tags origin "refs/tags/${name}@${version}" > /dev/null || { echo "::error::tag ${name}@${version} is not on origin"; exit 1; }
+            npm view "${name}@${version}" dist.attestations.provenance.predicateType | grep -q slsa || { echo "::error::${name}@${version} has no provenance attestation"; exit 1; }
+          done
