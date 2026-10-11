@@ -34,8 +34,16 @@ template change alone moves the share of traffic on LATEST to the new revision (
   service's current template with that image and those variables, named `<service>-<tag>-<hash of the contents>`,
   and puts the tag (default: the scope, `pr-42`) on it with no traffic share. Two patches, each with an `updateMask`
   and the service's `etag` and each waited for: the template (with every LATEST target bound to the revision it
-  serves, as gcloud's `--no-traffic` does), then `traffic` with the tag moved onto the revision. Its outputs are the
-  revision's name and the tag's URL exactly as `trafficStatuses[].uri` answers it; the URL is never built (CR6).
+  serves, as gcloud's `--no-traffic` does, when the line allows it), then `traffic` with the tag moved onto the
+  revision. Its outputs are the revision's name and the tag's URL exactly as `trafficStatuses[].uri` answers it; the
+  URL is never built (CR6).
+- **Pinning LATEST is opt-in.** Binding a share on LATEST to a named revision changes how the service's later
+  production deploys get traffic: they no longer get it by themselves. A preview tool must not do that silently. So
+  when a share follows LATEST (or `traffic` is empty), `plan` and `apply` refuse the line before any write with
+  `PARAM_INVALID` on `pin_latest`, the message saying what pinning does, how to undo it (`update-traffic --to-latest`)
+  and the two ways forward: `pin_latest: true` on the line, or pinning the traffic yourself first. Traffic already on
+  named revisions needs no opt-in. `pin_latest` is a permission, not state: it is not hashed, and a line with nothing
+  to write is not refused when traffic is put back on LATEST later.
 - **No traffic is moved, so a line writes no environment** (`writesEnvironment` null) unless its provider block says
   `production: true`, the way an `http` API block does: then every run with the line needs approval.
 - **Destroy removes the tag only.** The revision is left: Cloud Run deletes non-addressable revisions past its
@@ -54,10 +62,10 @@ template change alone moves the share of traffic on LATEST to the new revision (
 ## Consequences
 
 - The `cloud-run-tag` row is covered, and with it every row of the coverage matrix that is not manual.
-- A service whose traffic was on LATEST has it pinned to the revision that served it, as after any
-  `gcloud run deploy --no-traffic`: later production deploys do not receive traffic until it is sent to them
-  (`gcloud run services update-traffic --to-latest`, or `gcloud run deploy` followed by it). docs/plan-format.md says
-  so.
+- A service whose traffic follows LATEST needs a decision before its first preview revision: `pin_latest: true` (then
+  its traffic is pinned to the revision that served it, as after any `gcloud run deploy --no-traffic`, and later
+  production deploys do not receive traffic until it is sent to them with `update-traffic --to-latest`), or pinning
+  it by hand. Until then the line is refused, with nothing written. docs/plan-format.md says so.
 - The service's template is left as the preview revision's, as after any `gcloud run deploy --tag`: a production
   deploy that sets only some variables (`--update-env-vars`) inherits the preview's others. Production deploys should
   set every variable (`--set-env-vars`, or `gcloud run services replace`).

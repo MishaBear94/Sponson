@@ -215,7 +215,7 @@ Branch (per-PR previews built in); env vars per branch (variables before the bra
 
 ### Google Cloud Run
 
-Tagged revision per PR (`--tag pr-42`), env vars on it (a revision of an existing service per scope from its template, with the plan's image and variables, tagged and given no traffic (LATEST is pinned to the revision serving it); destroy removes the tag and Cloud Run deletes the revision later).
+Tagged revision per PR (`--tag pr-42`), env vars on it (a revision of an existing service per scope from its template, with the plan's image and variables, tagged and given no traffic (traffic on LATEST is pinned only with the line's `pin_latest: true`, refused otherwise); destroy removes the tag and Cloud Run deletes the revision later).
 
 - **Ops**: [`cloud_run.revision`](/reference/plan-format#cloud_run-revision)
 - **Credential**: the token `gcloud auth print-access-token` prints (bearer)
