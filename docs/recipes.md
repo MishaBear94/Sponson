@@ -1244,7 +1244,7 @@ Assumptions:
 - **GH5** (verified, [source](https://docs.github.com/en/rest/repos/webhooks)): Each hook should have a unique config, and hooks may share one only when their events do not overlap. The recipe takes the URL as the hook's identity; two hooks with the same URL make `find` refuse (PARAM_INVALID) instead of guessing.
 - **GH6** **(unverified)**: The secret is write-only: answers carry it masked or not at all, so it is sent on create and update but never compared, and a secret changed in the plan reaches GitHub only with the next change of a compared field. Keep it in a secret manager and reference it with `{ secret: … }`.
 - **GH7** **(unverified)**: A repository has at most 100 hooks for this purpose (GitHub limits hooks per event), so the first page of `?per_page=100` holds the one `find` looks for.
-- **GH8** **(unverified)**: `config.content_type` and `config.insecure_ssl` are answered as sent (`json`/`form`, the strings `"0"`/`"1"`), and `Accept: application/json` is served like `application/vnd.github+json`.
+- **GH8** (verified, [source](https://docs.github.com/en/rest/repos/webhooks)): `config.content_type` and `config.insecure_ssl` are answered as sent (`json`/`form`, the strings `"0"`/`"1"`), and `Accept: application/json` is served like `application/vnd.github+json`. Verified live 2026-10-11: create, then a re-apply that wrote nothing, then destroy, against api.github.com.
 - **GH9** **(unverified)**: The token needs the repository permission Webhooks (write) or the classic `admin:repo_hook` scope; the `GITHUB_TOKEN` of GitHub Actions does not have it, so use a GitHub App token or a fine-grained token. `GITHUB_API_URL` (set by Actions) points at GitHub Enterprise Server where that is the host.
 
 ### `github.repo_webhook`
