@@ -70,6 +70,19 @@ async function verify(name: string, actx: AdapterContext): Promise<CredentialChe
   return createRegistry().adapter(name).verifyCredential!(actx);
 }
 
+/** The adapters whose API answers 403, never 404, for what a credential cannot reach (`notFoundMeansMissing`). */
+const MISSING_ON_404 = ["cloudflare", "launchdarkly"];
+
+/** The classified failure of a check expected to fail, as setup classifies it for `release.plan.yaml`. */
+async function notFound(name: string, actx: AdapterContext): Promise<ReturnType<typeof classify>> {
+  const missing = createRegistry().adapter(name).about?.notFoundMeansMissing === true;
+  expect(missing, name).toBe(MISSING_ON_404.includes(name));
+  return verify(name, actx).then(
+    () => expect.fail(`${name}: the check passed`),
+    (e: unknown) => classify(e, { plan: "release.plan.yaml", notFoundMeansMissing: missing }),
+  );
+}
+
 async function outcome(name: string, actx: AdapterContext): Promise<string> {
   try {
     await verify(name, actx);
@@ -110,9 +123,14 @@ describe("each first-class provider's credential check, against the sim", () => 
     });
 
     if (c.other) {
-      it(`${name}: a project the token does not reach is wrong scope; without one, the account is checked`, async () => {
+      it(`${name}: a project the sim does not have is not found, said as the API can tell it; without one, the account is checked`, async () => {
         const s = await sim();
-        expect(await outcome(name, actxFor(s, c.other!))).toBe("wrong_scope");
+        expect(await outcome(name, actxFor(s, c.other!))).toBe("not_found");
+        const failed = await notFound(name, actxFor(s, c.other!));
+        expect(failed.message).toContain("check the id in release.plan.yaml");
+        // Only an API that answers 403 for what a credential cannot reach says the id is wrong, and nothing else.
+        if (MISSING_ON_404.includes(name)) expect(failed.message).not.toContain("cannot see it");
+        else expect(failed.message).toContain("or the credential cannot see it: another account or team");
         const r = await verify(name, actxFor(s, {}));
         expect(r.reaches).toBe("account");
       });
@@ -128,6 +146,13 @@ describe("each first-class provider's credential check, against the sim", () => 
   it("classify: what is neither a 401, a 403 nor a 404 is an error with its message", () => {
     expect(classify(new SponsonError("PROVIDER_TRANSIENT", "vercel: 503", { method: "GET", path: "/v2/user?x=1", status: 503 }))).toEqual({ status: "error", checked: "GET /v2/user", reaches: null, message: "vercel: 503" });
     expect(classify(new Error("boom")).status).toBe("error");
+  });
+
+  it("classify: a 404 is not found, never wrong scope; a 403 is wrong scope", () => {
+    const at = { method: "GET", path: "/accounts/a/pages/projects/p", status: 404 };
+    expect(classify(new SponsonError("PROVIDER_NOT_FOUND", "cloudflare: not found", at), { plan: "release.plan.yaml", notFoundMeansMissing: true })).toEqual({ status: "not_found", checked: "GET /accounts/a/pages/projects/p", reaches: null, message: "cloudflare: not found (check the id in release.plan.yaml)" });
+    expect(classify(new SponsonError("PROVIDER_NOT_FOUND", "vercel: not found", at), { plan: "release.plan.yaml" }).message).toBe("vercel: not found (check the id in release.plan.yaml; or the credential cannot see it: another account or team)");
+    expect(classify(new SponsonError("PROVIDER_AUTH", "cloudflare: forbidden", { ...at, status: 403 })).status).toBe("wrong_scope");
   });
 });
 
@@ -406,6 +431,32 @@ describe("init --setup, end to end on a fixture repository", () => {
     expect((await gh.calls()).map((c) => c.argv[2])).toEqual(["NEON_API_KEY", "STRIPE_SECRET_KEY"]);
     expect(await readFile(join(cwd, ".github/workflows/sponson.yml"), "utf8")).toBe("# mine\n");
     expect(r.stdout).toContain(".github/workflows/sponson.yml exists; left as it is.");
+    await expectNoLeak(r, cwd);
+  });
+
+  it("each credential says Sponson calls the provider with it, apart from the app's own variables; `next.why` points nowhere positional", async () => {
+    const s = await sim();
+    s.state.reset({ rest: { collections: { "/webhook_endpoints": [] } } });
+    const cwd = await appRepo();
+    // The app names its Stripe key STRIPE_KEY; Sponson's credential is STRIPE_SECRET_KEY. Only names are read.
+    await writeFile(join(cwd, ".env.example"), "DATABASE_URL=\nCLERK_SECRET_KEY=\nSTRIPE_KEY=sk_test_value-never-read\nSTRIPE_WEBHOOK_SECRET=\n");
+    s.state.applyChaos({ fail_next: 1, status: 401, fail_on: "GET /vercel/*" });
+    const env = { ...simEnv(s, { tokens: false }), ...TOKENS, STRIPE_API_URL: `${s.url}/rest` };
+
+    const r = await setup(cwd, env, undefined, "--json");
+
+    const report = JSON.parse(r.stdout) as { setup: { next: { command: string | null; why: string }; credentials: Array<{ provider: string; purpose: string | null }> } };
+    const purpose = (p: string) => report.setup.credentials.find((c) => c.provider === p)!.purpose;
+    expect(purpose("stripe")).toBe("Sponson calls Stripe with this key; it is not your app's STRIPE_KEY or STRIPE_WEBHOOK_SECRET.");
+    expect(purpose("vercel")).toBe("Sponson calls Vercel with this token; it is Sponson's credential, not one of your app's variables.");
+    expect(purpose("clerk")).toBe("Sponson calls Clerk with this key; your app's own CLERK_SECRET_KEY has the same name but is set separately, where your app runs.");
+    // Said once per credential in the progress too, under where to create it.
+    expect(r.stderr).toContain("  pick:      A test-mode restricted key");
+    expect(r.stderr).toContain("  Sponson calls Stripe with this key; it is not your app's STRIPE_KEY or STRIPE_WEBHOOK_SECRET.");
+    expect(r.stdout + r.stderr).not.toContain("sk_test_value-never-read");
+    // The JSON has no "above": the reason names each credential and how it stands.
+    expect(report.setup.next.why).not.toMatch(/above|below/);
+    expect(report.setup.next).toEqual({ command: null, why: "Fix the credential that did not check ok (Vercel: unauthorized), then run `sponson init --setup` again and `sponson plan`." });
     await expectNoLeak(r, cwd);
   });
 

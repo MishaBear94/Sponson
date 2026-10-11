@@ -263,7 +263,7 @@ $ sponson apply
 ...
 ? callback  clerk.redirect_allow  waiting    waiting on deploy
 
-apply partial: waiting on deploy for lines callback
+apply partial: callback waits for the deploy
 ```
 
 In `--json`, `receipt.status` is `partial` and `receipt.lines.callback` has `status: "waiting"` and
@@ -330,7 +330,7 @@ manual steps (a person does these; agents never confirm them)
     ...
     Then confirm it: sponson apply --confirm google-redirect
 
-apply partial: waiting on confirmation for lines google-redirect, google-login
+apply partial: google-redirect, google-login wait for the confirmation
 ```
 
 After adding the URI, the person runs `sponson apply --confirm google-redirect` (as the git user, or with

@@ -40,7 +40,7 @@ exactly when the exit code is 0.
 | `PARAM_INVALID` | 2 | An adapter rejected a parameter. |  |
 | `USAGE` | 2 | The command line is wrong. |  |
 | `MANUAL_STEP_PENDING` | 2 | A manual step (`manual.step`) is not done yet, or its undo on destroy: a person must do it, by its instructions, and then confirm it; its line and the lines that depend on it wait. Nothing else is held back. | A person does the step as instructed, then runs apply again with --confirm <line> (with --approved-by <who>, or as the git user). Agents never confirm on their own. |
-| `DRIFT_CHANGED` | 1 | A resource was changed or replaced outside Sponson; the line is refused unless the run reconciles. | Keep that change by updating the plan to match, or re-run with --reconcile to overwrite it. If it was deleted and re-created, reconciling adopts the new one instead: Sponson keeps it and will not delete it. |
+| `DRIFT_CHANGED` | 1 | A resource was changed or replaced outside Sponson; the line is refused unless the run reconciles. | Keep that change by updating the plan to match, or re-run with --reconcile to overwrite it. |
 | `LOCK_HELD` | 3 | Another run holds the scope's lock. | Wait for it, or pass --wait. |
 | `LOCK_LOST` | 3 | The run lost the scope's lock to another run and stopped. |  |
 | `RECEIPT_CORRUPT` | 1 | The receipt cannot be parsed. |  |

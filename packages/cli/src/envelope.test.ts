@@ -409,6 +409,24 @@ describe("text renderer", () => {
     expect(text.match(/changed outside Sponson/g)).toHaveLength(1);
     expect(text.match(/--reconcile/g)).toHaveLength(1);
     expect(text).not.toContain("\ndrift\n");
+    // A plain edit is overwritten by reconciling: the replacement sentence is not said.
+    expect(text).not.toContain("re-created");
+  });
+
+  it("the replacement sentence of DRIFT_CHANGED's remedy is said only for a replacement (`replaced: true`)", () => {
+    const line = (error: string) => ({ id: "env", adapter: "vercel", op: "env", status: "blocked" as const, error, errorCode: "DRIFT_CHANGED" as const, inputs: {}, outputs: {}, diffs: [{ key: "k", kind: "update" as const, label: "A", before: { state: "sensitive" as const }, after: { state: "sensitive" as const } }] });
+    const replaced = renderPlan(
+      planResult({
+        lines: [line("A was deleted and re-created outside Sponson since the last apply.")],
+        drift: [{ kind: "changed", replaced: true, adapter: "vercel", line: "env", resource: { key: "k", label: "A" }, message: "A was deleted and re-created outside Sponson since the last apply." }],
+      }),
+      { color: false },
+    );
+    expect(replaced).toMatch(/^x env +vercel\.env +blocked +DRIFT_CHANGED: Keep that change .*--reconcile to overwrite it\. It was deleted and re-created, so reconciling adopts the new one instead/m);
+    // Not drifted on a diff row (no drift entry for the resource): the error is said whole, with the same remedy.
+    const unmarked = renderPlan(planResult({ lines: [{ ...line("A was changed outside Sponson since the last apply."), diffs: [] }], drift: [] }), { color: false });
+    expect(unmarked).toContain("DRIFT_CHANGED: A was changed outside Sponson since the last apply. Keep that change by updating the plan to match, or re-run with --reconcile to overwrite it.");
+    expect(unmarked).not.toContain("re-created, so");
   });
 
   it("a drift no line shows (another line's resource, an unmanaged one) still has the drift section", () => {

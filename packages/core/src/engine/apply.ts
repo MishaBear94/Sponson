@@ -5,7 +5,7 @@ import { SponsonError } from "../errors.js";
 import { sha256 } from "../hash.js";
 import { dependenciesOf } from "../plan.js";
 import type { LineOutputs } from "../resolve.js";
-import type { ApplyResult, Change, LedgerEntry, LiveState, Literal, OpSpec, Receipt, ReceiptLine, ResourceRecord, RunStatus } from "../types.js";
+import type { ApplyResult, Change, DiffSide, LedgerEntry, LiveState, Literal, OpSpec, Receipt, ReceiptLine, ResourceRecord, RunStatus } from "../types.js";
 import type { ActionState } from "./action.js";
 import { scopeDrift } from "./drift.js";
 import { staleness } from "./history.js";
@@ -121,7 +121,8 @@ class ApplyRun {
     }
     await this.lease.write(this.receipt);
     await this.handOver();
-    return { receipt: this.receipt, drift, warnings: this.rc.warnings, ...(this.todos.length ? { manual: this.todos } : {}) };
+    const inputs = inputsOf(inspected);
+    return { receipt: this.receipt, drift, warnings: this.rc.warnings, ...(this.todos.length ? { manual: this.todos } : {}), ...(Object.keys(inputs).length ? { inputs } : {}) };
   }
 
   /**
@@ -653,3 +654,13 @@ function isUnchanged(inspection: Inspection): boolean {
 
 /** Ledger fields a line's write carries besides identity and hash. */
 type LedgerExtras = Pick<LedgerEntry, "parent" | "onceFingerprints" | "onceInputs">;
+
+/** What each inspected line's values stand for, by line and resource key: the diffs' `after`, as plan describes it. */
+function inputsOf(inspected: Inspection[]): Record<string, Record<string, DiffSide>> {
+  const out: Record<string, Record<string, DiffSide>> = {};
+  for (const i of inspected) {
+    const sides = i.diffs.filter((d) => d.after && d.after.state !== "absent").map((d) => [d.key, d.after!] as const);
+    if (sides.length) out[i.change.id] = Object.fromEntries(sides);
+  }
+  return out;
+}

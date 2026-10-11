@@ -109,7 +109,9 @@ describe("the PR comment, from real --json output", () => {
     expect(done.md).toContain("### Sponson: the preview for pr-42 is ready");
     expect(done.md).toContain("This preview has its own database branch, 2 variables and 1 auth callback.");
     expect(done.md).toMatch(/\*\*Preview:\*\* \[https:\/\/prj\\_demo-[0-9a-f]+\.vercel\.app\]\(https:\/\/prj_demo-[0-9a-f]+\.vercel\.app\)/);
-    expect(done.md).toContain("values not shown");
+    // Each value says what it stands for, as the plan said it, though it did not change: a reference, never a value.
+    expect(done.md).toContain("`DATABASE_URL` ← `db.connection_string` (value hidden) and `STRIPE_KEY` ← `env://STRIPE_KEY` (secret) — unchanged");
+    expect(done.md).not.toContain("values not shown");
 
     const destroy = await snapshot("destroy", w, "apply --destroy --json", { command: "destroy" });
     expect(destroy.md).toContain("### Sponson cleaned up the preview for pr-42");
@@ -151,7 +153,9 @@ describe("the PR comment, from real --json output", () => {
     expect(plan.md).not.toContain("**Drift**");
     // A connection string from `{ from }` is a hidden value, never a "secret"; only a `{ secret }` is.
     expect(plan.md).toContain("`DATABASE_URL` ← `db.connection_string` (value hidden; changed outside Sponson)");
-    expect(plan.md).not.toMatch(/DATABASE_URL`[^,]*\(secret/);
+    expect(plan.md).not.toContain("`DATABASE_URL` ← `db.connection_string` (secret");
+    // The unchanged variable keeps its reference, as the plan before any drift showed it.
+    expect(plan.md).toContain("and `STRIPE_KEY` ← `env://STRIPE_KEY` (secret) — refused");
 
     await w.writePlan(PLAN.replace("STRIPE_KEY: { secret: \"env://STRIPE_KEY\" }", "STRIPE_KEY: { secret: \"env://STRIPE_KEY\" }\n      MODE: preview"));
     const drift = await snapshot("apply-drift", w, "apply --json");

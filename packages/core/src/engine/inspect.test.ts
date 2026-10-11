@@ -31,7 +31,15 @@ describe("describeInput", () => {
     expect(describeInput(hidden("values.NOPE"), inputs)).toEqual(hidden("values.NOPE"));
     const pending: ResourceDiff = { ...hidden("values.WAIT"), after: { state: "pending", ref: "db.host" } };
     expect(describeInput(pending, inputs)).toEqual(pending);
-    const unchanged: ResourceDiff = { key: "k", kind: "unchanged", label: "V", input: "values.MODE" };
-    expect(describeInput(unchanged, inputs)).toEqual(unchanged);
+    const kept: ResourceDiff = { key: "k", kind: "unchanged", label: "V", input: "values.KEPT" };
+    expect(describeInput(kept, { ...inputs, "values.KEPT": { state: "kept", value: null } })).toEqual(kept);
+  });
+
+  it("an unchanged value, which the adapter gives no sides, keeps its reference or literal", () => {
+    const unchanged = (input: string): ResourceDiff => ({ key: "k", kind: "unchanged", label: "V", input });
+    expect(describeInput(unchanged("values.SECRET"), inputs).after).toEqual({ state: "secret", ref: "env://STRIPE_KEY" });
+    expect(describeInput(unchanged("values.CONN"), inputs).after).toEqual({ state: "sensitive", ref: "db.connection_string" });
+    expect(describeInput(unchanged("values.MODE"), inputs).after).toEqual({ state: "literal", value: "preview" });
+    expect(describeInput(unchanged("values.MODE"), inputs).before).toBeUndefined();
   });
 });

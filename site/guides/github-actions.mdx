@@ -158,10 +158,11 @@ On a push the action passes no scope flags; the CLI reads the GitHub context (`G
 One comment per environment, marked with `<!-- sponson:<env> -->` and updated in place on every run. It is written for
 the reviewer: a headline that says what this pull request's preview has (on a plan: what it already has, and what
 applying would add), then one line per plan line with a link to the provider's console where Sponson knows one, the
-preview URL as a link, and what a waiting line waits for. Values are never shown: resources by name, inputs as
+preview URL as a link, and what a waiting line waits for. Hidden values are never shown: resources by name, inputs as
 references (`DATABASE_URL ← db.connection_string`), labelled by what they are in the plan: a `{ secret }` reference as
 `(secret)`, another value that is never shown (a connection string from `{ from }`) as `(value hidden)`, a literal
-with no label. A refused or failed line says what happened and then the fix, once (`sponson apply --reconcile`,
+as itself (`MODE = preview`: it is in the repository already). An unchanged value keeps its reference, on a plan and
+after an apply alike. A refused or failed line says what happened and then the fix, once (`sponson apply --reconcile`,
 `--approved-by <who>`, `sponson apply --confirm <line>`): a resource changed outside Sponson says so next to its name,
 and nowhere else. A line held back only because a line it depends on was refused is counted apart and has no fix of
 its own.
@@ -181,7 +182,7 @@ This preview has its own database branch and 2 variables.
 Still to come: 1 auth callback, once the preview deploy finishes (nothing to retry).
 
 - `db` Neon branch sponson/preview/pr-42 — set up in this run · [console](https://console.neon.tech/app/projects/proj_demo/branches/br-11)
-- `env` 2 variables (preview, feat/x): `DATABASE_URL` and `STRIPE_KEY`, values not shown — set up in this run · [console](https://vercel.com/d?to=%2F%5Bteam%5D%2F%5Bproject%5D%2Fsettings%2Fenvironment-variables&title=Go+to+Environment+Variables)
+- `env` 2 variables (preview, feat/x): `DATABASE_URL` ← `db.connection_string` (value hidden) and `STRIPE_KEY` ← `env://STRIPE_KEY` (secret) — set up in this run · [console](https://vercel.com/d?to=%2F%5Bteam%5D%2F%5Bproject%5D%2Fsettings%2Fenvironment-variables&title=Go+to+Environment+Variables)
 - `callback` auth callback — waits for the preview deploy: the run after the deploy finishes it, nothing to retry
 
 <sub>apply run-1a2b3c4d · plan 1e5d99ef · [run log](https://github.com/acme/app/actions/runs/1001)</sub>
@@ -198,7 +199,7 @@ This preview has its own database branch, 2 variables and 1 auth callback.
 **Preview:** [https://prj\_demo-01234567.vercel.app](https://prj_demo-01234567.vercel.app)
 
 - `db` Neon branch sponson/preview/pr-42 — unchanged · [console](https://console.neon.tech/app/projects/proj_demo/branches/br-11)
-- `env` 2 variables (preview, feat/x): `DATABASE_URL` and `STRIPE_KEY`, values not shown — unchanged · [console](https://vercel.com/d?to=%2F%5Bteam%5D%2F%5Bproject%5D%2Fsettings%2Fenvironment-variables&title=Go+to+Environment+Variables)
+- `env` 2 variables (preview, feat/x): `DATABASE_URL` ← `db.connection_string` (value hidden) and `STRIPE_KEY` ← `env://STRIPE_KEY` (secret) — unchanged · [console](https://vercel.com/d?to=%2F%5Bteam%5D%2F%5Bproject%5D%2Fsettings%2Fenvironment-variables&title=Go+to+Environment+Variables)
 - `callback` Clerk redirect https://prj\_demo-01234567.vercel.app — set up in this run · [console](https://dashboard.clerk.com)
 
 <sub>apply run-1a2b3c4d · plan 1e5d99ef · [run log](https://github.com/acme/app/actions/runs/1001)</sub>
@@ -215,7 +216,7 @@ This preview already has its own database branch.
 **1 line is refused**, and 1 line that depends on it is held back: see below for why and how to fix it.
 
 - `db` Neon branch sponson/preview/pr-42 — up to date
-- `env` 2 variables (preview, feat/x): `DATABASE_URL` ← `db.connection_string` (value hidden; changed outside Sponson) and `STRIPE_KEY` — refused (`DRIFT_CHANGED`) **Fix:** Keep that change by updating the plan, or overwrite it with `sponson apply --reconcile`.
+- `env` 2 variables (preview, feat/x): `DATABASE_URL` ← `db.connection_string` (value hidden; changed outside Sponson) and `STRIPE_KEY` ← `env://STRIPE_KEY` (secret) — refused (`DRIFT_CHANGED`) **Fix:** Keep that change by updating the plan, or overwrite it with `sponson apply --reconcile`.
 - `callback` auth callback — held back: depends on `env`, which cannot be applied (`DEPENDENCY_BLOCKED`)
 
 <sub>plan 1e5d99ef · [run log](https://github.com/acme/app/actions/runs/1001)</sub>
@@ -234,7 +235,7 @@ Still to come: 1 manual step.
 
 **Preview:** [https://prj\_demo-01234567.vercel.app](https://prj_demo-01234567.vercel.app)
 
-- `env` MODE (preview, feat/x), values not shown — set up in this run · [console](https://vercel.com/d?to=%2F%5Bteam%5D%2F%5Bproject%5D%2Fsettings%2Fenvironment-variables&title=Go+to+Environment+Variables)
+- `env` MODE (preview, feat/x) = `preview` — set up in this run · [console](https://vercel.com/d?to=%2F%5Bteam%5D%2F%5Bproject%5D%2Fsettings%2Fenvironment-variables&title=Go+to+Environment+Variables)
 - `google-redirect` manual step — waits for a person to do the manual step below
 
 **Manual steps waiting for a person** (no API can do these; a person does them, agents never confirm them)

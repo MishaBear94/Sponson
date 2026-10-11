@@ -72,7 +72,7 @@ outputs
   db.branch_id = br-11
   db.host = br-11.sim.neon.tech
 
-apply partial: waiting on deploy for lines callback
+apply partial: callback waits for the deploy
 ```
 <!-- generated:readme-apply:end -->
 
@@ -201,18 +201,21 @@ Credentials for release.plan.yaml:
 Neon  NEON_API_KEY
   create it: https://neon.com/docs/manage/api-keys
   pick:      A project-scoped API key for the one project (an organization admin creates it); otherwise a personal API key.
+  Sponson calls Neon with this key; it is Sponson's credential, not one of your app's variables.
   NEON_API_KEY (input hidden, Enter to skip):
   ok: GET /projects/proj_demo (reaches project proj_demo)
 
 Vercel  VERCEL_TOKEN
   create it: https://vercel.com/account/tokens
   pick:      A token whose Scope is the team that owns the project, with an expiration.
+  Sponson calls Vercel with this token; it is Sponson's credential, not one of your app's variables.
   VERCEL_TOKEN: from the environment
   ok: GET /v9/projects/prj_demo (reaches project prj_demo)
 
 Clerk  CLERK_SECRET_KEY
   create it: https://dashboard.clerk.com/last-active?path=api-keys
   pick:      The Secret Key of the instance whose redirect URLs the plan manages (sk_test_ for development); Clerk secret keys have no scopes.
+  Sponson calls Clerk with this key; it is Sponson's credential, not one of your app's variables.
   CLERK_SECRET_KEY (input hidden, Enter to skip):
   unauthorized: clerk: GET /redirect_urls?paginated=true&limit=1 → 401: {"error":"chaos"}
 
@@ -227,7 +230,7 @@ GitHub Actions secrets of acme/web (with your `gh`; the value goes to its stdin 
 
 Workflow: wrote .github/workflows/sponson.yml (action pinned to 3f1c0a9e7b2d, sponson@<version>).
 
-Not ready yet: Fix the credentials above (Clerk: unauthorized), then run `sponson init --setup` again and `sponson plan`.
+Not ready yet: Fix the credential that did not check ok (Clerk: unauthorized), then run `sponson init --setup` again and `sponson plan`.
 To try Sponson first without any account, against a local fake cloud: `npx --yes @sponson/sim --demo sponson-demo`
 ```
 

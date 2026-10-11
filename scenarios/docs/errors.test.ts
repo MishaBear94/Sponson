@@ -28,7 +28,7 @@ describe("generated docs", async () => {
     expect(block("readme-plan")).toContain("$ sponson plan\nsponson plan · preview · pr-42 · plan ");
     expect(block("readme-plan")).toMatch(/^\? env +vercel\.env +pending +waiting on `db`$/m);
     expect(block("readme-plan")).toContain("(secret ← env://STRIPE_KEY)");
-    expect(block("readme-apply")).toContain("apply partial: waiting on deploy for lines callback");
+    expect(block("readme-apply")).toContain("apply partial: callback waits for the deploy");
   });
 
   it("action/README.md shows every destroy case: the plain one and an edited resource deleted anyway", async () => {

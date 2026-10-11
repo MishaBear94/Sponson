@@ -527,6 +527,12 @@ export interface AdapterAbout {
   credentialUrl?: string;
   /** The least the credential needs, in the provider's own words (which scope, role or permission to pick). */
   credentialScope?: string;
+  /**
+   * The API answers 403, never 404, for what a credential cannot reach, so a 404 from `verifyCredential` means what
+   * the plan names does not exist (check its id), not that it is out of reach. Unset: a 404 may mean either (an API
+   * that hides what a credential cannot see behind a 404).
+   */
+  notFoundMeansMissing?: boolean;
   /** The provider as people write it (Vercel, Cloudflare Pages): `sponson init`'s summary and the provider catalog. */
   title?: string;
   /** The id of the docs/coverage.yaml category the adapter belongs to (deploy, databases, auth, …). */

@@ -2,7 +2,7 @@ import type { ErrorCode } from "../errors.js";
 import type { Redactor } from "../redact.js";
 import type { AncestryCheck } from "./history.js";
 import type { Registry } from "../registry.js";
-import type { Ctx, Drift, LockInfo, Plan, Receipt, ReceiptStore, ResolvedValue, ResourceDiff } from "../types.js";
+import type { Ctx, DiffSide, Drift, LockInfo, Plan, Receipt, ReceiptStore, ResolvedValue, ResourceDiff } from "../types.js";
 
 /** Everything a `planRun`, `applyRun` or `destroyRun` needs. Only the first four are required. */
 export interface RunOptions {
@@ -105,4 +105,10 @@ export interface ApplyResultSummary {
   warnings: string[];
   /** Manual steps this run left for a person to do (or undo), in plan order (ADR 0021). Absent when none. */
   manual?: ManualTodo[];
+  /**
+   * What the values of each line this run inspected stand for, by line id and resource key: the same description as
+   * a plan diff's `after` (a `{ secret }` or `{ from }` reference, a literal as itself), never a hidden value. Absent
+   * when no line has one.
+   */
+  inputs?: Record<string, Record<string, DiffSide>>;
 }

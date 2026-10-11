@@ -11,7 +11,7 @@
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
-import { GitBranchReceiptStore, SponsonError, isSecretRef, loadPlan, walkParams, type AdapterContext, type CredentialCheck, type Ctx, type Plan, type Redactor, type Registry } from "@sponson/core";
+import { GitBranchReceiptStore, SponsonError, isSecretRef, loadPlan, walkParams, type AdapterAbout, type AdapterContext, type CredentialCheck, type Ctx, type Plan, type Redactor, type Registry } from "@sponson/core";
 import type * as AdaptersModule from "@sponson/adapters";
 import type { DetectableProvider, Recipe } from "@sponson/adapters";
 import type { IO } from "./context.js";
@@ -19,14 +19,20 @@ import { childEnv, ghSecretSet, githubRepoOf } from "./gh.js";
 import type { Terminal } from "./terminal.js";
 import { VERSION } from "./version.js";
 import { WORKFLOW_PATH, releaseTag, renderWorkflow, resolveTagCommit } from "./workflow.js";
+import { envMatches } from "./stack.js";
 import { todoLines, type Todo } from "./starter.js";
 
 /** How one credential stands after setup. */
 export type CredentialStatus =
   /** Checked: the provider accepted it (and it reaches the project the plan names, when it names one). */
   | "ok"
-  /** Accepted as a credential, but without the permission or the project the plan needs (403, or 404 on the project). */
+  /** Accepted as a credential, but without the permission the plan needs (403). */
   | "wrong_scope"
+  /**
+   * What the plan names (a project, a site) was not found (404): its id is wrong, or, with an API that hides what a
+   * credential cannot see behind a 404, out of the credential's reach. `message` says which the provider can tell.
+   */
+  | "not_found"
   /** Rejected (401): mistyped, revoked or expired. */
   | "unauthorized"
   /** The check could not tell (the provider unreachable, the plan incomplete): see `message`. */
@@ -47,6 +53,12 @@ export interface SetupCredential {
   /** Where the credential is created, and the least it needs; null when the provider declares neither. */
   url: string | null;
   scope: string | null;
+  /**
+   * What the credential is for, in one sentence: Sponson calls the provider with it, and it is not the app's own
+   * variable (naming the app's differently named ones for the provider, from the `.env*` names init read). Null for
+   * the plan's own `env://` values.
+   */
+  purpose: string | null;
   status: CredentialStatus;
   /** The read-only request that checked it (`GET /v2/user`), and what it proved the credential reaches. */
   checked: string | null;
@@ -102,6 +114,10 @@ interface Need {
   scope?: string;
   /** The read-only check, given an adapter context whose `env` carries the values. */
   verify?: (actx: AdapterContext) => Promise<CredentialCheck>;
+  /** A 404 from the check means what the plan names does not exist (`AdapterAbout.notFoundMeansMissing`). */
+  notFoundMeansMissing?: boolean;
+  /** The variable names that say an app uses the provider (`detect.env`): the app's own variables for it. */
+  appEnv?: readonly string[];
 }
 
 /** What setup runs with. */
@@ -117,6 +133,8 @@ export interface SetupContext {
   todos?: Todo[];
   /** Defaults the plan runs with that a person should check (`planChecks`): listed as "please check", never blocking. */
   checks?: Todo[];
+  /** The variable names the repository's `.env*` files declare (detection's `envNames`; never a value). */
+  envNames?: string[];
 }
 
 /** Where setup's progress goes: each argument one line. */
@@ -168,7 +186,9 @@ function nextStep(todos: number, credentials: SetupCredential[], plan: string, i
   if (missing.length === bad.length && missing.length > 0 && !interactive) {
     return { command: "sponson init --setup", why: `Set ${missing.join(", ")} in the environment it runs with (nothing can prompt for ${missing.length === 1 ? "it" : "them"} here, without a terminal), or run it in an interactive terminal to type ${missing.length === 1 ? "it" : "them"}.` };
   }
-  return { command: null, why: `Fix the credentials above (${bad.map((x) => `${x.title}: ${x.status.replace("_", " ")}`).join("; ")}), ${again} and \`sponson plan\`.` };
+  // No "above": the JSON report has no above. Each credential is named with how it stands.
+  const which = bad.map((x) => `${x.title}: ${x.status.replace("_", " ")}`).join("; ");
+  return { command: null, why: `Fix ${bad.length === 1 ? "the credential that did not check ok" : `the ${bad.length} credentials that did not check ok`} (${which}), ${again} and \`sponson plan\`.` };
 }
 
 // ---------------------------------------------------------------------------
@@ -225,10 +245,19 @@ function adapterNeed(registry: Registry, name: string, block: Record<string, unk
     provider: name,
     title: about.title ?? name,
     variables,
+    ...(verify ? { verify: (actx: AdapterContext) => verify({ ...actx, provider: block }) } : {}),
+    ...aboutNeed(about),
+  };
+}
+
+/** What a Need takes over from an adapter's `about` as it is: the command, the token page, the scope and the hints. */
+function aboutNeed(about: AdapterAbout): Partial<Need> {
+  return {
     ...(about.credentialCommand ? { command: about.credentialCommand } : {}),
     ...(about.credentialUrl ? { url: about.credentialUrl } : {}),
     ...(about.credentialScope ? { scope: about.credentialScope } : {}),
-    ...(verify ? { verify: (actx: AdapterContext) => verify({ ...actx, provider: block }) } : {}),
+    ...(about.notFoundMeansMissing ? { notFoundMeansMissing: true } : {}),
+    ...(about.detect?.env ? { appEnv: about.detect.env } : {}),
   };
 }
 
@@ -259,6 +288,7 @@ function recipeNeed(adapters: Adapters, recipe: Recipe, api: string, block: Reco
     ...(command ? { command } : {}),
     ...(cred ? { url: cred.url, scope: cred.scope } : {}),
     ...(cred?.verify && !command ? { verify: (actx: AdapterContext) => adapters.verifyRecipeCredential(recipe, api, block, actx) } : {}),
+    ...(recipe.detect?.env ? { appEnv: recipe.detect.env } : {}),
   };
 }
 
@@ -290,7 +320,9 @@ async function setUpOne(c: SetupContext, need: Need, values: Map<string, string>
   say("", `${need.title}${need.variables.length ? `  ${need.variables.join(", ")}` : ""}`);
   if (need.url) say(`  create it: ${need.url}`);
   if (need.scope) say(`  pick:      ${need.scope}`);
-  const base = { provider: need.provider, title: need.title, url: need.url ?? null, scope: need.scope ?? null, checked: null, reaches: null };
+  const purpose = need.command ? null : purposeOf(need, c.envNames ?? []);
+  if (purpose) say(`  ${purpose}`);
+  const base = { provider: need.provider, title: need.title, url: need.url ?? null, scope: need.scope ?? null, purpose, checked: null, reaches: null };
   if (need.command) {
     say(`  uses \`${need.command.join(" ")}\`: sign in with that CLI; nothing to store`);
     return { ...base, variables: [], status: "login", message: `authenticates with \`${need.command.join(" ")}\`` };
@@ -306,6 +338,36 @@ async function setUpOne(c: SetupContext, need: Need, values: Map<string, string>
   const result = await check(c, need, values);
   say(`  ${statusLine(result)}`);
   return { ...base, variables, ...result };
+}
+
+/**
+ * One sentence on what the credential is for, from names only: Sponson calls the provider with it, and it is not the
+ * app's own variable. An app that names the provider's variables differently (`STRIPE_KEY` beside Sponson's
+ * `STRIPE_SECRET_KEY`) has them named; one that uses the very same name is told the two are read apart.
+ */
+export function purposeOf(need: Pick<Need, "provider" | "title" | "variables" | "appEnv">, envNames: readonly string[]): string | null {
+  if (need.provider === "plan" || need.variables.length === 0) return null;
+  const one = need.variables.length === 1;
+  const lead = `Sponson calls ${need.title} with ${one ? credentialNoun(need.variables[0]!) : "these"}`;
+  const app = envNames.filter((n) => envMatches(n, need.appEnv ?? []));
+  const same = app.filter((n) => need.variables.includes(n));
+  const other = app.filter((n) => !need.variables.includes(n));
+  if (other.length) return `${lead}; ${one ? "it is" : "they are"} not your app's ${orList(other)}.`;
+  if (same.length) return `${lead}; your app's own ${orList(same)} has the same name but is set separately, where your app runs.`;
+  return `${lead}; ${one ? "it is Sponson's credential" : "they are Sponson's credentials"}, not one of your app's variables.`;
+}
+
+/** "this token", "this key", or "this credential", by the variable's name. */
+function credentialNoun(name: string): string {
+  if (/TOKEN$/.test(name)) return "this token";
+  if (/KEY$/.test(name)) return "this key";
+  return "this credential";
+}
+
+/** "A", "A or B", "A, B or C", at most three names then "…". */
+function orList(names: string[]): string {
+  const shown = names.length > 3 ? [...names.slice(0, 3), "…"] : names;
+  return shown.length === 1 ? shown[0]! : `${shown.slice(0, -1).join(", ")} or ${shown.at(-1)!}`;
 }
 
 /** The value of `name`: the environment's, else typed (hidden) at a terminal. Registered for masking at once. */
@@ -344,20 +406,34 @@ async function check(c: SetupContext, need: Need, values: Map<string, string>): 
     const r = await need.verify(actx);
     return { status: "ok", checked: r.request, reaches: r.reaches, message: null };
   } catch (e) {
-    return classify(e);
+    return classify(e, { plan: relative(c.io.cwd, c.planPath) || c.planPath, notFoundMeansMissing: need.notFoundMeansMissing === true });
   }
 }
 
-/** A failed check, by what the HTTP client classified: 401 rejected, 403 or a 404 on the project out of scope. */
-export function classify(e: unknown): CheckResult {
+/** What `classify` says a 404 means: the plan file whose id to check, and whether the API tells missing from unreachable. */
+export interface ClassifyOpts {
+  plan?: string;
+  notFoundMeansMissing?: boolean;
+}
+
+/**
+ * A failed check, by what the HTTP client classified: 401 rejected, 403 wrong scope, 404 not found. A 404 is a wrong id
+ * where the API answers 403 for what a credential cannot reach (`notFoundMeansMissing`); elsewhere it may be either.
+ */
+export function classify(e: unknown, o: ClassifyOpts = {}): CheckResult {
   const err = e instanceof SponsonError ? e : new SponsonError("INTERNAL", e instanceof Error ? e.message : String(e));
   const d = err.details as { method?: unknown; path?: unknown; status?: unknown };
   const checked = typeof d.method === "string" && typeof d.path === "string" ? `${d.method} ${d.path.split("?")[0]!}` : null;
   const base = { checked, reaches: null, message: err.message };
   if (err.code === "PROVIDER_AUTH" && d.status === 403) return { ...base, status: "wrong_scope" };
   if (err.code === "PROVIDER_AUTH") return { ...base, status: "unauthorized" };
-  if (err.code === "PROVIDER_NOT_FOUND") return { ...base, status: "wrong_scope", message: `${err.message} (the credential does not reach it: another account or team, or a narrower scope)` };
+  if (err.code === "PROVIDER_NOT_FOUND") return { ...base, status: "not_found", message: `${err.message} (${notFoundHint(o)})` };
   return { ...base, status: "error" };
+}
+
+function notFoundHint(o: ClassifyOpts): string {
+  const id = `check the id in ${o.plan ?? "the plan"}`;
+  return o.notFoundMeansMissing ? id : `${id}; or the credential cannot see it: another account or team`;
 }
 
 /** How each check result reads, after two spaces of indentation. */
@@ -365,6 +441,7 @@ const STATUS_TEXT: Record<CredentialStatus, (r: CheckResult) => string> = {
   ok: (r) => `ok: ${r.checked!} (reaches ${r.reaches!})`,
   unchecked: () => "not checked: no read-only request to check it with",
   wrong_scope: (r) => `wrong scope: ${r.message!}`,
+  not_found: (r) => `not found: ${r.message!}`,
   unauthorized: (r) => `unauthorized: ${r.message!}`,
   error: (r) => `could not check: ${r.message!}`,
   missing: (r) => `missing: ${r.message!}`,

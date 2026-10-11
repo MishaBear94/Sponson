@@ -49,6 +49,12 @@ export function cliHint(code: ErrorCode | undefined): string {
   return code ? (cliHintFor(code) ?? "") : "";
 }
 
+/**
+ * What reconciling does to a resource replaced outside Sponson (drift `replaced: true`), said after DRIFT_CHANGED's
+ * remedy only then: a plain edit is overwritten, a replacement is adopted.
+ */
+export const DRIFT_REPLACED_HINT = "It was deleted and re-created, so reconciling adopts the new one instead: Sponson keeps it and will not delete it.";
+
 /** Exit code for an error: data in core's ERROR_CODES (0 ok, 1 failed, 2 wrong invocation/plan/ref/env/param, 3 lock). */
 export function exitCodeFor(e: SponsonError): number {
   return exitCodeOf(e.code);

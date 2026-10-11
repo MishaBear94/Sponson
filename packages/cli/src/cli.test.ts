@@ -241,7 +241,8 @@ describe("sponson apply", () => {
     const h = await harness(plan);
     const r = await h.exec("apply");
     expect(r.code).toBe(0);
-    expect(r.out).toContain("apply partial: waiting on deploy for lines c");
+    expect(r.out).toContain("apply partial: c waits for the deploy");
+    expect(r.out).not.toContain("for lines");
     h.state.deployed.add("alpha");
     const r2 = await h.exec("apply", "--json");
     expect(r2.code).toBe(0);

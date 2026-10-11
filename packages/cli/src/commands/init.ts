@@ -62,15 +62,20 @@ export async function initCommand(opts: InitOpts, io: IO, redactor: Redactor): P
   const existing = await readFile(planPath, "utf8").catch(() => null);
   const result: InitResult = { ok: true, command: "init", created: false, path: planPath, detected: null, added: [], warnings: [] };
   const text: string[] = [];
+  /** The variable names the repository's `.env*` files declare: setup tells the app's own from Sponson's credentials. */
+  let envNames: string[] = [];
 
   if (existing === null) {
     const starter = await writeStarter(planPath, io, opts.setup === true);
     result.created = true;
     result.detected = starter.detected;
+    envNames = starter.envNames;
     text.push(...starter.text);
   } else if (opts.setup) {
     // Setup on an existing plan detects again, so the report reads the same on every run, with the TODOs still left.
-    result.detected = (await detect(io, existing)).detected;
+    const again = await detect(io, existing);
+    result.detected = again.detected;
+    envNames = Object.keys(again.detection.envNames ?? {});
   } else {
     // Adopting reads live state with the credentials; with --setup they are what is being set up, so it waits.
     text.push(...(await withInvocation(opts, io, redactor, (inv) => adoptUnmanaged(inv, existing, opts, io, result))));
@@ -79,7 +84,7 @@ export async function initCommand(opts: InitOpts, io: IO, redactor: Redactor): P
 
   // Said right after the plan it was written for (or alone): init writes the plan and this one line, nothing else.
   if (await ensureGitignore(io.cwd)) text.splice(result.created ? 1 : text.length, 0, "Added .sponson/ to .gitignore");
-  if (opts.setup) return setupAfterInit(opts, io, redactor, result, text);
+  if (opts.setup) return setupAfterInit(opts, io, redactor, result, text, envNames);
 
   if (opts.json) {
     io.json(result);
@@ -95,7 +100,7 @@ export async function initCommand(opts: InitOpts, io: IO, redactor: Redactor): P
  * `--setup`: what init did so far, then the guided setup (setup.ts) with its progress as it happens: on stdout for
  * people, on stderr with `--json`, whose stdout is the one report (`setup` in it, never a value).
  */
-async function setupAfterInit(opts: InitOpts, io: IO, redactor: Redactor, result: InitResult, text: string[]): Promise<number> {
+async function setupAfterInit(opts: InitOpts, io: IO, redactor: Redactor, result: InitResult, text: string[], envNames: string[]): Promise<number> {
   const out = opts.json ? io.stderr : io.stdout;
   if (!opts.json && text.length) out.write(`${text.join("\n")}\n`);
   // Providers whose lines a starter written in this run may have left commented out; an existing plan says it all.
@@ -103,7 +108,7 @@ async function setupAfterInit(opts: InitOpts, io: IO, redactor: Redactor, result
   const todos = result.detected?.todo ?? [];
   const checks = result.detected?.check ?? [];
   const say = (...lines: string[]) => void out.write(`${lines.join("\n")}\n`);
-  result.setup = await runSetup({ io, redactor, terminal: io.terminal ?? NO_TERMINAL, opts, planPath: result.path, detected, todos, checks }, say);
+  result.setup = await runSetup({ io, redactor, terminal: io.terminal ?? NO_TERMINAL, opts, planPath: result.path, detected, todos, checks, envNames }, say);
   result.warnings = withRedactorWarnings(result.warnings, redactor);
   if (opts.json) io.json(result);
   else if (result.warnings.length) say("", "warnings", ...result.warnings.map((w) => `  ${w}`));
@@ -175,10 +180,10 @@ async function detect(io: IO, plan?: string): Promise<{ detection: StackDetectio
  * Detect the stack from the repository's files, write the starter plan composed for it, and summarise. With
  * `setup`, the TODOs and credentials are left out of the summary: setup lists them next.
  */
-async function writeStarter(planPath: string, io: IO, setup: boolean): Promise<{ detected: InitDetected; text: string[] }> {
+async function writeStarter(planPath: string, io: IO, setup: boolean): Promise<{ detected: InitDetected; text: string[]; envNames: string[] }> {
   const { detection, starter, detected } = await detect(io);
   await writeFile(planPath, starter.text, "utf8");
-  return { detected, text: [`Wrote ${shown(io, planPath)}`, ...initSummary(detected, credentialsFor(detection), { setup })] };
+  return { detected, envNames: Object.keys(detection.envNames ?? {}), text: [`Wrote ${shown(io, planPath)}`, ...initSummary(detected, credentialsFor(detection), { setup })] };
 }
 
 /**

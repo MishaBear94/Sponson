@@ -3,7 +3,7 @@
  * Display strings such as `(secret)` or `(pending ← db.x)` exist only here, in text; JSON carries engine data as-is.
  */
 import type { ErrorCode, ApplyResultSummary, DiffSide, Drift, LineStatus, ManualTodo, PlanLine, PlanLineStatus, PlanResult, ReceiptLine, ResourceDiff } from "@sponson/core";
-import { cliHint } from "./output.js";
+import { DRIFT_REPLACED_HINT, cliHint } from "./output.js";
 
 export interface RenderOptions {
   color: boolean;
@@ -75,12 +75,25 @@ function hidden(s: DiffSide | undefined): boolean {
   return s?.state === "sensitive" || s?.state === "secret";
 }
 
-/** Line errors in text output carry the same CLI remedy the JSON envelope does (from core's ERROR_CODES). */
-function errorText(error: string | undefined, code: string | undefined): string {
+/**
+ * Line errors in text output carry the same CLI remedy the JSON envelope does (from core's ERROR_CODES). `replaced`:
+ * the line's drift is a replacement, whose reconcile adopts rather than overwrites; said for DRIFT_CHANGED only then.
+ */
+function errorText(error: string | undefined, code: string | undefined, replaced = false): string {
   if (!error) return code ?? "";
-  const hint = cliHint(code as ErrorCode | undefined);
+  const hint = hintText(code, replaced);
   const text = hint ? `${error} ${hint}` : error;
   return code ? `${code}: ${text}` : text;
+}
+
+function hintText(code: string | undefined, replaced: boolean): string {
+  const hint = cliHint(code as ErrorCode | undefined);
+  return code === "DRIFT_CHANGED" && replaced ? `${hint} ${DRIFT_REPLACED_HINT}` : hint;
+}
+
+/** The lines whose drift is a replacement (`replaced: true`). */
+function replacedLines(drift: Drift[]): Set<string> {
+  return new Set(drift.flatMap((d) => (d.kind === "changed" && d.replaced && d.line ? [d.line] : [])));
 }
 
 interface Row {
@@ -137,7 +150,7 @@ function driftByResource(drift: Drift[]): Map<string, string> {
  * A plan line as a row. The resource identity is said once per line: a drifted resource says what happened to it on
  * its own sub-row, so the refused line's detail keeps only the code and the remedy.
  */
-function planRow(l: PlanLine, drifted: Map<string, string>): Row {
+function planRow(l: PlanLine, drifted: Map<string, string>, replaced: Set<string>): Row {
   const row: Row = { symbol: PLAN_SYMBOL[l.status], id: l.id, op: `${l.adapter}.${l.op}`, status: l.status, detail: "", sub: [] };
   const driftOf = (d: ResourceDiff) => drifted.get(`${l.id}\u0000${d.key}`);
   const text = (d: ResourceDiff) => diffText(d, driftOf(d));
@@ -147,7 +160,7 @@ function planRow(l: PlanLine, drifted: Map<string, string>): Row {
     row.sub = diffRows();
   } else if (l.status === "error" || l.status === "blocked") {
     const saidBelow = l.status === "blocked" && l.errorCode === "DRIFT_CHANGED" && l.diffs.some(driftOf);
-    row.detail = saidBelow ? `DRIFT_CHANGED: ${cliHint("DRIFT_CHANGED")}` : errorText(l.error, l.errorCode);
+    row.detail = saidBelow ? `DRIFT_CHANGED: ${hintText("DRIFT_CHANGED", replaced.has(l.id))}` : errorText(l.error, l.errorCode, replaced.has(l.id));
     if (l.status === "blocked") row.sub = diffRows();
   } else if (l.manual) {
     row.detail = `by hand: ${l.manual.title}`;
@@ -180,7 +193,8 @@ export function renderPlan(result: PlanResult, opts: RenderOptions): string {
   if (result.requiresApproval) notes.push("! apply needs approval: it writes to production (--approved-by <who>, from a human)");
   const noteText = notes.length ? `\n${notes.join("\n")}\n` : "";
   const drifted = driftByResource(result.drift);
-  const body = result.lines.length ? table(result.lines.map((l) => planRow(l, drifted)), opts.color) : "(no lines for this environment)";
+  const replaced = replacedLines(result.drift);
+  const body = result.lines.length ? table(result.lines.map((l) => planRow(l, drifted, replaced)), opts.color) : "(no lines for this environment)";
   return `${header}\n${noteText}\n${body}\n${driftSection(result.drift, shownInPlan(result.lines))}${warningsSection(result.warnings)}\n${planSummary(result.lines)}\n`;
 }
 
@@ -205,21 +219,21 @@ function manualSection(todos: ManualTodo[] | undefined): string {
 // apply
 // ---------------------------------------------------------------------------
 
-function receiptRow(l: ReceiptLine): Row {
+function receiptRow(l: ReceiptLine, replaced: Set<string>): Row {
   const row: Row = { symbol: LINE_SYMBOL[l.status], id: l.id, op: `${l.adapter}.${l.op}`, status: l.status, detail: "", sub: [] };
   if (l.orphan) row.detail = "(removed from the plan; left alone)";
   else if (l.status === "waiting") row.detail = `waiting on ${l.waitingFor ?? "external event"}`;
-  else if (l.error || l.errorCode) row.detail = errorText(l.error, l.errorCode);
+  else if (l.error || l.errorCode) row.detail = errorText(l.error, l.errorCode, replaced.has(l.id));
   else row.detail = l.resources.map((r) => r.label ?? r.key).join(", ");
   return row;
 }
 
-/** What a partial run waits on, by event, and which lines are blocked. */
+/** What a partial run waits on, by event ("callback waits for the deploy"), and which lines are blocked. */
 function partialParts(lines: ReceiptLine[]): string[] {
   const byEvent = new Map<string, string[]>();
   for (const l of lines) if (l.status === "waiting") byEvent.set(l.waitingFor ?? "external event", [...(byEvent.get(l.waitingFor ?? "external event") ?? []), l.id]);
   const blocked = lines.filter((l) => l.status === "blocked").map((l) => l.id);
-  const parts = [...byEvent].map(([ev, ids]) => `waiting on ${ev} for lines ${ids.join(", ")}`);
+  const parts = [...byEvent].map(([ev, ids]) => `${ids.join(", ")} ${ids.length === 1 ? "waits" : "wait"} for the ${ev}`);
   if (blocked.length) parts.push(`blocked: ${blocked.join(", ")}`);
   return parts;
 }
@@ -241,7 +255,7 @@ export function finalLine(summary: ApplyResultSummary, brief = false): string {
   const first = lines.find((l) => ["failed", "rollback_failed", "destroy_failed", "blocked"].includes(l.status));
   if (!first) return `${verb} failed: unknown error`;
   if (brief) return `${verb} failed: ${first.id} (${first.errorCode ?? first.status}, above)`;
-  return `${verb} failed: ${first.id}: ${errorText(first.error, first.errorCode) || first.status}`;
+  return `${verb} failed: ${first.id}: ${errorText(first.error, first.errorCode, replacedLines(summary.drift).has(first.id)) || first.status}`;
 }
 
 /**
@@ -254,7 +268,8 @@ export function renderApply(summary: ApplyResultSummary, opts: RenderOptions): s
   const approval = receipt.approvedBy ? ` · approved by ${receipt.approvedBy}` : "";
   const header = `sponson ${receipt.destroy ? "apply --destroy" : "apply"} · ${receipt.environment} · ${receipt.scope} · run ${receipt.runId}${approval}`;
   const lines = Object.values(receipt.lines);
-  const body = lines.length ? table(lines.map(receiptRow), opts.color) : "(nothing to do)";
+  const replaced = replacedLines(summary.drift);
+  const body = lines.length ? table(lines.map((l) => receiptRow(l, replaced)), opts.color) : "(nothing to do)";
   const outputs = receipt.destroy ? [] : lines.flatMap((l) => Object.entries(l.outputs).map(([k, v]) => `  ${l.id}.${k} = ${String(v)}`));
   const outputSection = outputs.length ? `\noutputs\n${outputs.join("\n")}\n` : "";
   const saidOnLine = (d: Drift) => d.kind === "changed" && lines.some((l) => l.id === d.line && l.errorCode === "DRIFT_CHANGED" && (l.error ?? "").includes(d.resource.label ?? d.resource.key));
@@ -292,6 +307,7 @@ export function applyJson(summary: ApplyResultSummary, code: number) {
     receipt: summary.receipt,
     drift: summary.drift,
     warnings: summary.warnings,
+    inputs: summary.inputs ?? {},
     ...(manual ? { manual } : {}),
     ...(manual && summary.receipt.status !== "failed" ? { error: manualError(manual) } : {}),
   };

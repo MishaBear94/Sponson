@@ -58,13 +58,14 @@ describe("renderMarkdown", () => {
       warnings: ["`w`\r\n<i>"],
     });
     expect(inert(plan), plan).toEqual([]);
-    expect(plan).not.toContain("SECRETISH");
+    // A literal is the plan's own text, already in the repository: shown as itself, in a code span (inert).
+    expect(plan).toContain("&lt;img src=x&gt; = `SECRETISH`");
     expect(plan).toContain("An apply is running on this scope (run-9&lt;x&gt;)");
     expect(plan).toContain("needs a person's approval");
     expect(plan).toContain("`sponson init --adopt <key>`");
   });
 
-  it("shows values only as references, and outputs only as URL links", () => {
+  it("shows a literal as itself, other values only as references, and outputs only as URL links", () => {
     const plan = renderMarkdown({
       ok: true,
       command: "plan",
@@ -87,12 +88,25 @@ describe("renderMarkdown", () => {
       drift: [],
       warnings: [],
     });
-    expect(plan).toContain("`env` 3 variables (preview): `FLAG`, `DATABASE_URL` ← `db.connection_string` and `STRIPE_KEY` ← `env://STRIPE_KEY` (secret) — will be updated");
-    expect(plan).not.toContain("on-value-123");
+    expect(plan).toContain("`env` 3 variables (preview): `FLAG` = `on-value-123`, `DATABASE_URL` ← `db.connection_string` and `STRIPE_KEY` ← `env://STRIPE_KEY` (secret) — will be updated");
     const md = renderMarkdown(apply({ db: line({ id: "db", adapter: "neon", op: "branch", resources: [{ key: "b", label: "Neon branch x" }], outputs: { host: "h.example", branch_id: "br-1", dashboard: "https://example.com/d", evil: "javascript:alert(1)" }, consoleUrl: "javascript:alert(1)" }) }));
     expect(md).not.toContain("h.example");
     expect(md).toContain("[dashboard](https://example.com/d)");
     expect(md).not.toContain("javascript:");
+  });
+
+  it("apply says what each value stands for, as plan does, from the envelope's inputs: a literal as itself, a reference kept when unchanged", () => {
+    const resources = [
+      { key: "a", label: "MODE (preview)" },
+      { key: "b", label: "DATABASE_URL (preview)" },
+      { key: "c", label: "STRIPE_KEY (preview)" },
+    ];
+    const inputs = { env: { a: { state: "literal", value: "preview" }, b: { state: "sensitive", ref: "db.connection_string" }, c: { state: "secret", ref: "env://STRIPE_KEY" } } };
+    const md = renderMarkdown(apply({ env: line({ status: "unchanged", resources }) }, {}, { inputs }));
+    expect(md).toContain("`env` 3 variables (preview): `MODE` = `preview`, `DATABASE_URL` ← `db.connection_string` (value hidden) and `STRIPE_KEY` ← `env://STRIPE_KEY` (secret) — unchanged");
+    expect(md).not.toContain("values not shown");
+    // An envelope without inputs (an older Sponson's) still says the values are not shown.
+    expect(renderMarkdown(apply({ env: line({ resources }) }))).toContain(", values not shown — set up in this run");
   });
 
   it("stale, orphan, rollback failure and blocked lines each say what happened", () => {

@@ -6,8 +6,8 @@
  * What it promises:
  * - a reviewer understands in five seconds what the preview has (a headline counting what exists) and what is
  *   cleaned up when the pull request closes (cleaned up / kept / left for you);
- * - no value is ever shown: resources by label, inputs as references (`← db.connection_string`, `← env://KEY`),
- *   only outputs that are URLs, as links (the envelope is redacted before it gets here; nothing is added back);
+ * - no hidden value is ever shown: resources by label, inputs as references (`← db.connection_string`,
+ *   `← env://KEY`), a literal as itself (it is in the repository already), only outputs that are URLs, as links (the envelope is redacted before it gets here; nothing is added back);
  * - provider text (errors, labels) cannot break out: HTML-escaped and flattened to one line, code spans cannot be
  *   closed early, links only to `http(s)` URLs;
  * - it starts with `<!-- sponson:<env> -->`, the marker the action updates its one comment per environment by;
@@ -452,14 +452,23 @@ const PLAN_PHRASE: Record<string, string> = {
 
 /**
  * A new value as a reference and what it is, the same words as the CLI (render.ts `sideText`): `secret` only for a
- * `{ secret }` reference, `value hidden` for another sensitive value (a `{ from }` output), nothing for a literal
- * (values are never shown here). `mark` is what happened to the resource outside Sponson, said here once.
+ * `{ secret }` reference, `value hidden` for another sensitive value (a `{ from }` output), and a literal as itself
+ * (it is in the repository already; one matching a secret arrives described as hidden), unless the label already ends
+ * in it. `mark` is what happened to the resource outside Sponson, said here once.
  */
-function sideText(after: Obj | undefined, mark?: string): string {
+function sideText(after: Obj | undefined, mark?: string, name = ""): string {
   const ref = after ? optStr(after.ref) : undefined;
   const label = after?.state === "secret" ? "secret" : after?.state === "sensitive" ? "value hidden" : after?.state === "pending" && !ref ? "pending" : "";
   const notes = [label, mark ?? ""].filter(Boolean);
-  return `${ref ? ` ← ${code(ref)}` : ""}${notes.length ? ` (${notes.join("; ")})` : ""}`;
+  return `${ref ? ` ← ${code(ref)}` : literalText(after, name)}${notes.length ? ` (${notes.join("; ")})` : ""}`;
+}
+
+/** A literal value as ` = \`value\``: clipped, and left out when the label already says it. */
+function literalText(after: Obj | undefined, label: string): string {
+  if (after?.state !== "literal" || typeof after.value !== "string") return "";
+  const v = after.value;
+  if (label === v || label.endsWith(` ${v}`)) return "";
+  return ` = ${code(v.length > 80 ? `${v.slice(0, 79)}…` : v)}`;
 }
 
 /** A plan line's resources by label, each value shown only as a reference, a drifted one saying so. */
@@ -467,7 +476,7 @@ function planWhat(l: Line, marks: Marks): string {
   return namesPhrase(
     l,
     l.diffs.map((d) => d.label),
-    (i) => sideText(l.diffs[i]!.after, markOf(marks, l, l.diffs[i]!.key)),
+    (i) => sideText(l.diffs[i]!.after, markOf(marks, l, l.diffs[i]!.key), l.diffs[i]!.label),
   );
 }
 
@@ -576,9 +585,18 @@ function applyPhrase(l: Line, marks: Marks): string {
   return APPLY_PHRASE[l.status] ?? esc(l.status);
 }
 
-function applyBullet(l: Line, marks: Marks): string {
-  const what = namesPhrase(l, l.resources.map((r) => r.label ?? r.key), (i) => sideText(undefined, markOf(marks, l, l.resources[i]!.key))) || esc(nounOf(l)[0]);
-  const values = VARIABLE_OPS.has(`${l.adapter}.${l.op}`) && l.resources.length ? ", values not shown" : "";
+/** What each resource's value stands for, by line and resource key: the apply envelope's `inputs`. */
+type Sides = Record<string, unknown>;
+
+function applyBullet(l: Line, marks: Marks, sides: Sides): string {
+  const own = sides[l.id];
+  const sideOf = (r: Res): Obj | undefined => {
+    const side = isObj(own) ? own[r.key] : undefined;
+    return isObj(side) ? side : undefined;
+  };
+  const what = namesPhrase(l, l.resources.map((r) => r.label ?? r.key), (i) => sideText(sideOf(l.resources[i]!), markOf(marks, l, l.resources[i]!.key), l.resources[i]!.label ?? l.resources[i]!.key)) || esc(nounOf(l)[0]);
+  const undescribed = VARIABLE_OPS.has(`${l.adapter}.${l.op}`) && l.resources.some((r) => sideOf(r) === undefined);
+  const values = undescribed ? ", values not shown" : "";
   const links = outputLinks(l.outputs);
   const extra = links.length ? ` · ${links.join(" · ")}` : "";
   return `- ${code(l.id)} ${what}${values} — ${applyPhrase(l, marks)}${consoleLink(LIVE.has(l.status) ? l.consoleUrl : undefined)}${extra}`;
@@ -629,7 +647,7 @@ function renderApply(e: Obj, rc: Obj, o: MarkdownOptions): Parts {
   return {
     title: applyTitle(rc, lines, todos.length > 0),
     lead: rc.stale === true ? ["Nothing was changed."] : applyLead(rc, lines),
-    items: lines.map((l) => applyBullet(l, marks)),
+    items: lines.map((l) => applyBullet(l, marks, isObj(e.inputs) ? e.inputs : {})),
     blocks: [manualSection(todos, "Manual steps waiting for a person"), driftSection(arr(e.drift), shown), warningsSection(arr(e.warnings))],
     footer: footer([`${runVerb} ${esc(rc.runId)}`, plan ? `plan ${esc(plan)}` : ""], o.runUrl),
   };

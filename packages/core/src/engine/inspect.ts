@@ -161,11 +161,14 @@ function judge(rc: RunContext, change: Change, provider: Record<string, unknown>
  * reference; a sensitive `{ from }` output is `sensitive` with its reference; a non-sensitive output or a literal is
  * the plan's own value (a literal is in the repository already, and one that looks like a secret is refused at
  * parse time; `scrubDiff` still hides anything matching a registered secret). Pending and kept values keep the
- * adapter's side.
+ * adapter's side. An unchanged diff, which an adapter gives no sides, is described the same way: the reference (or
+ * literal) a value stands for does not stop mattering when the value did not change.
  */
 export function describeInput(d: ResourceDiff, inputs: Record<string, ResolvedValue>): ResourceDiff {
   const input = d.input === undefined ? undefined : inputs[d.input];
-  if (!input || !d.after || d.after.state === "pending" || d.after.state === "absent") return d;
+  if (!input) return d;
+  if (!d.after && d.kind !== "unchanged") return d;
+  if (d.after?.state === "pending" || d.after?.state === "absent") return d;
   const after = sideOf(input);
   return after ? { ...d, after } : d;
 }
