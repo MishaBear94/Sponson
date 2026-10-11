@@ -27,6 +27,7 @@ Nygard's format). They explain *why* the code is the way it is; [ARCHITECTURE.md
 | [0019](0019-parent-object-locks.md) | Locks on shared parent objects | Accepted |
 | [0020](0020-recipes.md) | Recipes: verified http specs as one-line building blocks | Proposed |
 | [0021](0021-manual-steps.md) | Manual steps for state no API can manage | Proposed |
+| [0022](0022-one-off-actions.md) | One-off actions: `http.action` | Proposed |
 
 ## Writing a new record
 

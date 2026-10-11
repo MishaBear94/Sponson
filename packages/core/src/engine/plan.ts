@@ -117,6 +117,7 @@ async function planLine(rc: RunContext, prepared: Prepared, walk: PlanWalk, c: C
 
 /** What apply would write for an inspected line that is neither refused, waiting nor a manual step to do. */
 function writeStatus(rc: RunContext, inspection: Inspection): PlanLine["status"] {
+  if (inspection.action) return inspection.action.run ? "run" : "unchanged";
   if (inspection.diffs.some((d) => d.kind === "create") || recreating(rc, inspection)) return "create";
   if (inspection.diffs.some((d) => d.kind === "update")) return "update";
   return "unchanged";

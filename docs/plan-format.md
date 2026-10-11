@@ -246,7 +246,7 @@ The base URL override replaces the provider's API base URL (the test suites poin
 | `clerk` | [`clerk.redirect_allow`](#clerkredirect_allow) | `CLERK_SECRET_KEY` | `CLERK_API_URL` |
 | `planetscale` | [`planetscale.branch`](#planetscalebranch), [`planetscale.password`](#planetscalepassword) | `PLANETSCALE_SERVICE_TOKEN_ID` + `PLANETSCALE_SERVICE_TOKEN` | `PLANETSCALE_API_URL` |
 | `launchdarkly` | [`launchdarkly.flag_target`](#launchdarklyflag_target) | `LAUNCHDARKLY_ACCESS_TOKEN` | `LAUNCHDARKLY_API_URL` |
-| `http` | [`http.resource`](#httpresource), [`http.list_item`](#httplist_item) | `providers.http.<api>.auth` | `providers.http.<api>.base_url_env` |
+| `http` | [`http.resource`](#httpresource), [`http.list_item`](#httplist_item), [`http.action`](#httpaction) | `providers.http.<api>.auth` | `providers.http.<api>.base_url_env` |
 | `supabase` | [`supabase.branch`](#supabasebranch), [`supabase.auth_redirect`](#supabaseauth_redirect) | `SUPABASE_ACCESS_TOKEN` | `SUPABASE_API_URL` |
 | `netlify` | [`netlify.env`](#netlifyenv) | `NETLIFY_AUTH_TOKEN` | `NETLIFY_API_URL` |
 | `cloudflare` | [`cloudflare.pages_env`](#cloudflarepages_env) | `CLOUDFLARE_API_TOKEN` | `CLOUDFLARE_API_URL` |
@@ -781,6 +781,56 @@ never a credential): runs in other pull requests and environments that edit the 
 and never lose an item. A writer outside Sponson editing the parent at the same moment can still drop one; the
 re-read puts it back, or reports `PROVIDER_CONFLICT` after three rounds.
 
+### `http.action`
+
+One request sent when its trigger changes, for a side effect with nothing to read back or delete: an Inngest sync of
+a preview deployment, a cache purge, a deploy notification. The line declares the values that should make it run
+again (`trigger`); the ledger records the hash of the last trigger that ran in the scope, and `apply` sends the
+request only when the current one has not ([ADR 0022](adr/0022-one-off-actions.md)).
+
+```yaml
+- id: purge
+  adapter: http
+  op: action
+  api: cdn
+  trigger: { sha: "${ctx.git.sha}", url: { from: web.preview_url } }
+  vars: { zone: z1 }
+  request: { method: POST, path: "/zones/{zone}/purge", body: { everything: true }, idempotency_key: true }
+  expect: { /result/ok: true }
+  outputs: { purge_id: /result/id }
+  undo: { method: DELETE, path: "/zones/{zone}/purges/{purge_id}" }
+
+- id: sync                            # a request to the app itself: no `api`, no credential
+  adapter: http
+  op: action
+  trigger: { url: { from: web.preview_url }, sha: "${ctx.git.sha}" }
+  request: { method: PUT, url: { from: web.preview_url } }
+```
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `trigger` | map | (required) | The values whose change makes it run again: literals, `${ctx.*}`, `{ from }` (the line is `pending` until they are known, so an action on a preview URL waits for the deploy), even `{ secret }` (hashed, never shown). Hashed into the ledger (keyed, like every hash); the values are never stored. Only the trigger decides: a value used in the request but not in the trigger does not make it run again. |
+| `request` | map | (required) | `method` (`POST` by default, `GET`, `PUT`, `PATCH`, `DELETE`) and exactly one of `path` (relative to the API's `base_url`, sent with its credential and headers), `url` (an absolute http(s) URL, usually built from a preview URL, sent with **no** credential and none of the API's headers) or `graphql` (`{ query, variables, data_path? }`, a POST to the API's `base_url`). Optional `body` (values may be references), `headers` (values may be references and secrets; not `Authorization`, `Accept`, `Content-Type`, `Idempotency-Key`), `content_type`, and `idempotency_key: true`: an `Idempotency-Key` header derived from the scope, the ledger key and the trigger hash, so a run sent again after a crash is answered once. |
+| `api` | string | — | The API block under `providers.http`, for `path` and `graphql` requests. A line whose requests all use `url` takes none (`PARAM_INVALID` if it names one): a URL resolved at run time never receives an API's credential. |
+| `vars` | map | `{}` | Values for `{name}` placeholders in paths. |
+| `ok_status` | list of statuses 400–499 | `[]` | Statuses that mean success too (an "already done" 409); there is then no answer to read. Any 2xx succeeds. |
+| `expect` | map: JSON pointer → value | `{}` | What the answer must hold (`{ /data/status: success }`); otherwise the action failed (`PROVIDER_RESPONSE`) and nothing is recorded. |
+| `outputs` | map: name → JSON pointer | `{}` | Values of the answer other lines can read with `{ from }`. Never sensitive: an unchanged line passes on the values it recorded. |
+| `undo` | map | none | A request of the same form (without `idempotency_key`) that `apply --destroy` sends; its `path` may use the outputs as placeholders (`{purge_id}`). Resolved when the action runs and kept in the record, so it may hold no secret. Without it, destroy only forgets the record. |
+
+Key: `action:<line id>` in the line's API block (or in no block, for a `url` line); renaming the line makes its old
+record an orphan, whose undo `apply --destroy` still sends. What each command does:
+
+| Command | An action line |
+|---|---|
+| `plan` | `run` (symbol `>`) when no run of the current trigger is recorded in the scope (the diff's `after` is the trigger, `sensitive` if it holds a secret), `unchanged` when it is, `pending` while a trigger value (or a value the request needs) is not known. There is no drift: nothing can be read back. Exit 0. |
+| `apply` | `run`: the request is sent, the answer checked (status, `expect`), then the trigger hash, the undo and the outputs recorded (`applied`, with `notes.action.ranAt`). `unchanged`: nothing is sent; the recorded outputs reach the lines that read them. `--recreate <line>` sends it again although its trigger ran. |
+| failure | Nothing is recorded before the request is sent, and no intent either: a run that crashes, or whose answer fails `expect`, sends it again on the next apply (at least once; use `idempotency_key` where the API takes one). Rollback never undoes an action, whatever fails after it. |
+| `apply --destroy` | sends `undo` if there is one (a 404 counts as done), then forgets the record. |
+
+Another scope's record of the same action does not block it (`OWNED_BY_OTHER_SCOPE` is for what a line owns at a
+provider; an action owns nothing). Recipes may be actions too: [`inngest.sync`](recipes.md#inngestsync).
+
 ### `manual.step`
 
 A change a person makes by hand, because no API can: a Google OAuth web client's redirect URIs, a Clerk webhook
@@ -834,7 +884,7 @@ counts even when the verify request does not (yet) agree. A failed run never rol
 
 ### Recipes
 
-A recipe is a verified `http.resource` or `http.list_item` spec for one provider operation, shipped with Sponson:
+A recipe is a verified `http.resource`, `http.list_item` or `http.action` spec for one provider operation, shipped with Sponson:
 the line names it and fills in typed params instead of writing requests. Every recipe, its params, an example line
 and what it was verified against: [docs/recipes.md](recipes.md).
 
@@ -994,6 +1044,7 @@ the named event. Sensitive outputs are never displayed, logged or written to rec
 | `launchdarkly.flag_target` | `variation_value` | immediate | no |
 | `http.resource` | `id` | immediate | no |
 | `http.list_item` | (none) | | |
+| `http.action` | (none) | | |
 | `supabase.branch` | `project_ref` | immediate | no |
 | `supabase.branch` | `api_url` | immediate | no |
 | `supabase.branch` | `db_host` | immediate | no |

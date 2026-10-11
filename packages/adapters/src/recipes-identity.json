@@ -74,6 +74,11 @@
     "key": "/1/markers/__all__[message=deploy pr-42 0123456789abcdef0123456789abcdef01234567,type=deploy]",
     "id": "DELETE /1/markers/__all__/ID"
   },
+  "inngest.sync": {
+    "provider": {},
+    "key": "action:<line id>",
+    "id": "FORGET"
+  },
   "posthog.release_condition": {
     "provider": {
       "base_url": "https://us.posthog.com",

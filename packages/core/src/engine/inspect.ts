@@ -1,6 +1,7 @@
 import { isSponsonError } from "../errors.js";
 import { resolveParams, type LineOutputs, type ResolveResult } from "../resolve.js";
 import type { Change, DiffSide, Drift, LiveState, OpSpec, ResourceDiff, ResourceRecord } from "../types.js";
+import { inspectAction, type ActionState } from "./action.js";
 import { inspectManual, type ManualState } from "./manual.js";
 import { holdsCurrentValue } from "./once.js";
 import type { RunContext } from "./run-context.js";
@@ -25,6 +26,8 @@ export interface Inspection {
   desired: Set<string>;
   /** For a manual step whose inputs are known (ADR 0021): the step, and whether it is done. */
   manual?: ManualState;
+  /** For a one-off action whose trigger is known (ADR 0022): its ledger key, trigger hash, and whether it runs. */
+  action?: ActionState;
 }
 
 /**
@@ -35,18 +38,14 @@ export async function inspectLine(rc: RunContext, change: Change, op: OpSpec, pa
   const provider = rc.provider(change);
   const resolved = resolveParams(params, outputs, rc.secrets.values, (ref, line, output) => holdsCurrentValue(rc.ledger.all(), change.id, ref, line, output));
   if (op.manual) return inspectManual(rc, change, op, provider, resolved);
+  if (op.action) return withSecretRefusal(rc, inspectAction(rc, change, op, provider, resolved));
   const live = await op.read(rc.adapterContext(change.adapter, provider), resolved.params);
   if (live) rc.guardOutputs(live.outputs, op.outputs);
   const spent = diffOrSpent(change, op, live, resolved, changedOutside(rc, change, provider, live));
   const diffs = spent.diffs.map((d) => scrubDiff(rc, d));
   const inspection: Inspection = { change, op, provider, resolved, live, diffs, drift: [], desired: new Set(diffs.map((d) => d.key)) };
   if (spent.refusal) inspection.refusal = spent.refusal;
-
-  const missingSecret = resolved.secrets.find((s) => rc.secrets.failures.has(s.ref));
-  if (missingSecret) {
-    // The one place a secret failure gets its reference: sources throw the reason only, so it is never named twice.
-    inspection.refusal = { code: "SECRET_UNRESOLVED", message: `${missingSecret.ref}: ${rc.secrets.failures.get(missingSecret.ref)}` };
-  }
+  withSecretRefusal(rc, inspection);
 
   const byKey = new Map<string, ResourceRecord>((live?.resources ?? []).map((r) => [r.key, r]));
   for (const d of diffs) {
@@ -54,6 +53,16 @@ export async function inspectLine(rc: RunContext, change: Change, op: OpSpec, pa
     if (verdict.drift) inspection.drift.push(verdict.drift);
     // The first refusal is the one reported: it is the earliest line item apply would stop at.
     if (verdict.refusal) inspection.refusal ??= verdict.refusal;
+  }
+  return inspection;
+}
+
+/** Refuse the line (SECRET_UNRESOLVED) when a secret it uses could not be resolved. */
+function withSecretRefusal(rc: RunContext, inspection: Inspection): Inspection {
+  const missingSecret = inspection.resolved.secrets.find((s) => rc.secrets.failures.has(s.ref));
+  if (missingSecret) {
+    // The one place a secret failure gets its reference: sources throw the reason only, so it is never named twice.
+    inspection.refusal = { code: "SECRET_UNRESOLVED", message: `${missingSecret.ref}: ${rc.secrets.failures.get(missingSecret.ref)}` };
   }
   return inspection;
 }

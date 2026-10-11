@@ -6,7 +6,7 @@
  *   providers: { http: { cloudflare: { recipe: cloudflare } } }       # optional: the recipe's API defaults
  *   - { id: dns, adapter: http, op: resource, recipe: cloudflare.dns_cname, zone_id: …, name: …, target: … }
  *
- * A recipe line expands, before anything else reads it, into the `http.resource` or `http.list_item` params the
+ * A recipe line expands, before anything else reads it, into the `http.resource`, `http.list_item` or `http.action` params the
  * recipe declares, with `{ param: <name> }` values and `{<name>}` path placeholders filled from the line. Identity
  * is never the recipe's text: the ledger records the resolved API block (base URL, credential variable names,
  * headers, encoding) and the keys and record ids the expanded requests produce, exactly as for a hand-written
@@ -61,9 +61,9 @@ export interface RecipeSimHints {
   collection?: string;
 }
 
-/** One operation of a recipe: an `http.resource` or `http.list_item` spec with typed params. */
+/** One operation of a recipe: an `http.resource`, `http.list_item` or `http.action` spec with typed params. */
 export interface RecipeOp {
-  kind: "resource" | "list_item";
+  kind: "resource" | "list_item" | "action";
   title: string;
   summary: string;
   /** The ids of the rows of docs/coverage.yaml this op covers. */
@@ -100,8 +100,11 @@ export interface Recipe {
   verified_on: string;
   docs: Array<{ title: string; url: string }>;
   assumptions: RecipeAssumption[];
-  /** The API block defaults: what `providers.http.<api>: { recipe: <provider> }` means. */
-  api: Record<string, unknown>;
+  /**
+   * The API block defaults: what `providers.http.<api>: { recipe: <provider> }` means. Absent for a recipe whose
+   * ops are all `http.action`s sent to an absolute `url` (the app's own endpoint): those use no API block.
+   */
+  api?: Record<string, unknown>;
   /** For a per-account API (no default `base_url`): the base URL the docs' example block and the recipe tests use. */
   base_url_example?: string;
   ops: Record<string, RecipeOp>;
@@ -142,7 +145,7 @@ export function loadRecipe(provider: string, param = "recipe"): Recipe {
   if (!known.includes(provider)) throw paramError(ADAPTER, `no recipe for \`${provider}\` (known: ${known.join(", ") || "none"})`, param);
   const recipe = parseYaml(readFileSync(`${RECIPES_DIR}${provider}.yaml`, "utf8")) as Recipe;
   // A malformed shipped file is a bug of this package (packages/adapters/src/recipes.test.ts checks every one).
-  if (!isObject(recipe) || recipe.provider !== provider || !isObject(recipe.ops) || !isObject(recipe.api)) {
+  if (!isObject(recipe) || recipe.provider !== provider || !isObject(recipe.ops) || (recipe.api !== undefined && !isObject(recipe.api))) {
     throw new SponsonError("INTERNAL", `${ADAPTER}: recipes/${provider}.yaml is malformed`, { adapter: ADAPTER, recipe: provider });
   }
   cache.set(provider, recipe);
@@ -276,7 +279,9 @@ export function expandRecipe(params: Record<string, unknown>, kind: RecipeOp["ki
   const values = recipeValues(params);
   const spec = substitute(op.http, values) as Record<string, unknown>;
   const destroy = recipeDestroy(`recipe ${recipe.provider}.${name}`, op, params.destroy);
-  return { ...spec, api: lineApi(params), vars: values, ...(destroy !== undefined ? { destroy } : {}) };
+  // A recipe without an API block (only `url` actions) gives the line no `api` unless it writes one.
+  const api = recipe.api ? lineApi(params) : params.api;
+  return { ...spec, ...(api !== undefined ? { api } : {}), vars: values, ...(destroy !== undefined ? { destroy } : {}) };
 }
 
 /** The line's `destroy`, or the op's default; `delete` of an op the provider cannot delete is PARAM_INVALID. */
@@ -299,5 +304,7 @@ export function resolveRecipeApi(block: Record<string, unknown>, where: string):
   if (typeof provider !== "string" || !known.includes(provider)) {
     throw new SponsonError("PLAN_INVALID", `${ADAPTER}: ${where}.recipe: no recipe \`${String(provider)}\` (known: ${known.join(", ")})`, { adapter: ADAPTER, key: `${where}.recipe` });
   }
-  return { ...loadRecipe(provider).api, ...overrides };
+  const api = loadRecipe(provider).api;
+  if (!api) throw new SponsonError("PLAN_INVALID", `${ADAPTER}: ${where}.recipe: recipe \`${provider}\` has no API block (its ops call the app's own URL)`, { adapter: ADAPTER, key: `${where}.recipe` });
+  return { ...api, ...overrides };
 }

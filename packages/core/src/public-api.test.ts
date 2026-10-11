@@ -15,7 +15,7 @@ import { describe, expect, it } from "vitest";
 
 const PUBLIC_API: Record<string, string[]> = {
   "@sponson/core": [
-    "AdapterAbout", "AdapterContext", "AdoptedLine", "AncestryCheck", "ApplyResult", "ApplyResultSummary", "Change", "Ctx",
+    "ActionTrigger", "AdapterAbout", "AdapterContext", "AdoptedLine", "AncestryCheck", "ApplyResult", "ApplyResultSummary", "Change", "Ctx",
     "DiffKind", "DiffSide", "Drift", "DriftKind", "ERROR_CODES", "ErrorCode", "ErrorCodeSpec", "ExitCode", "FromRef",
     "GitBranchReceiptStore", "GitBranchStoreOptions", "KeepRef", "LEGACY_RECEIPTS_BRANCH", "Ledger", "LedgerEntry", "LineOutputs", "LineStatus",
     "Literal", "LiveState", "LocalReceiptStore", "LockHeldError", "LockInfo", "LockLostError", "MASK",
@@ -55,7 +55,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "CHAOS_KEYS", "ChaosAction", "ChaosConfig", "ChaosRequest", "ClerkRedirect", "ClerkSeed", "ClerkState",
     "CreatedBy", "DEFAULT_CHAOS", "DEFAULT_SEED", "DeploymentState", "DriftRequest", "NeonBranch", "NeonProject",
     "NeonSeed", "NeonState", "PROVIDERS", "PathParams", "ProviderName", "ProviderSim", "ProviderStates", "Reply", "Route",
-    "RestItem", "RestSeed", "RestState", "RestStyle", "RouteContext", "RouteRequest",
+    "RestCall", "RestEndpoint", "RestItem", "RestSeed", "RestState", "RestStyle", "RouteContext", "RouteRequest",
     "SIM_TOKENS", "SimCore", "SimHandle", "SimSeed", "SimState", "VercelDeployment", "VercelEnv", "VercelLink", "VercelProject",
     "VercelSeed", "VercelState", "WriteLogEntry", "chaosFor", "clerkSim", "connectionUri", "createBranch",
     "createDeployment", "createSimServer", "defaultChaos", "matchesRule", "neonSim", "page", "providerEntries",

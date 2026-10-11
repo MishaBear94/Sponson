@@ -292,3 +292,12 @@ the sim instead of being mirrored by it.
   `AdapterContext.secret` are new optional parts of the authoring API; nothing existing changes meaning.
 - `ProviderSim.authorized` receives the request (for signatures) and the provider's state, and may answer with a
   `Reply` (a challenge); `ProviderSim.isWrite` lets a sim keep non-mutating POSTs out of the write log.
+
+## Amendment: a third op, `http.action` (2026-10-11)
+
+One-off side effects with nothing to read back or delete (an Inngest sync, a cache purge, a deploy notification) are
+neither a `resource` nor a `list_item`. [ADR 0022](0022-one-off-actions.md) adds `http.action`: one request (or
+GraphQL request) sent when its declared `trigger` changes, its state owned by the engine through a new optional hook,
+`OpSpec.action`. It reuses this record's API blocks, credentials and GraphQL requests, and adds a request form this
+record did not have: an absolute `url` (the app's own endpoint), sent without any credential or API header, by a line
+that names no `api`.

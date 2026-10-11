@@ -44,9 +44,10 @@ export interface RunOptions {
 
 /**
  * What apply would do to a line: write it (`create`/`update`), nothing, wait for it, or refuse it; `todo` is a
- * manual step a person still has to do (ADR 0021).
+ * manual step a person still has to do (ADR 0021); `run` is a one-off action apply would send, its trigger never
+ * having run (ADR 0022).
  */
-export type PlanLineStatus = "create" | "update" | "unchanged" | "pending" | "todo" | "blocked" | "error";
+export type PlanLineStatus = "create" | "update" | "unchanged" | "run" | "pending" | "todo" | "blocked" | "error";
 
 /** A manual step as plan and apply show it to the person who must do it (ADR 0021). */
 export interface ManualTodo {

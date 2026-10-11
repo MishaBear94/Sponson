@@ -93,7 +93,8 @@ pin new ones the same way — Dependabot keeps the pins current, including in `a
 
 ## Adding a recipe
 
-A provider operation that is plain CRUD on one object, or one entry in a list on a parent, is a recipe: a YAML file
+A provider operation that is plain CRUD on one object, one entry in a list on a parent, or one request sent when
+its trigger changes, is a recipe: a YAML file
 the generic `http` adapter expands ([ADR 0020](/contributing/adr/0020-recipes), [docs/recipes.md](/reference/recipes)). Copy an
 existing file in `packages/adapters/recipes/` and:
 
@@ -108,7 +109,13 @@ existing file in `packages/adapters/recipes/` and:
    value the provider shows only in the create answer (an API key's token) is an output
    `{ path, sensitive: true, once: true }`; a value it shows on every read is not `once`. When destroying a scope must
    not delete what the op made, say so on the op: `destroy: keep` (shared history; a line may still opt into
-   `destroy: delete`) or `destroy: never` (the provider cannot delete it).
+   `destroy: delete`) or `destroy: never` (the provider cannot delete it). A one-off side effect with nothing to read
+   back (a sync, a purge, a notification) is `kind: action` ([ADR 0022](/contributing/adr/0022-one-off-actions)): declare
+   its `trigger` from params (put every param whose change should run it again there, and at least one string param
+   besides a URL, which the harness changes), its `request`, an `undo` only if the provider has one, and say in an
+   assumption whether sending it twice is harmless (an action is sent at least once) or use `idempotency_key`. An
+   action sent to the app's own `url` gets no credential, and a recipe whose ops are all such actions has no `api`;
+   give it `live.params` for the URL so a live run never calls the example host.
 3. **Mark the row covered** in `docs/coverage.yaml` (`covered_by: recipe:<provider>.<op>`) and list its id in the
    op's `covers`.
 4. **Run `SPONSON_UPDATE_RECIPE_LOCK=1 pnpm vitest run packages/adapters/src/recipes.test.ts`** to pin the new op's

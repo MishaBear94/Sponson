@@ -51,6 +51,10 @@
  *       behind a scheme prefix such as `Authorization: Api-Key <key>`), HTTP Digest (RFC 7616, qop=auth; a
  *       request without valid credentials gets a 401 with a fresh challenge), and AWS SigV4 (the signature
  *       recomputed and compared; see ../auth.ts). Anything else is 401.
+ *   R8. A seeded endpoint (seed `endpoints`, by path) stands for a one-off action's target (an app's sync URL, a
+ *       purge or notification endpoint): it answers every method with its fixed status and reply (default 200
+ *       `{}`), keeps nothing but a log of the calls (`calls`: method, path, headers, body), and with `public: true`
+ *       answers without a credential, as an app's own endpoint does.
  */
 import type { IncomingHttpHeaders } from "node:http";
 import { digestChallenge, digestProblem, issueToken, sigV4Problem, tokenValid, type DigestConfig, type IssuedToken, type SigV4Config } from "../auth.js";
@@ -94,6 +98,25 @@ export interface RestStyle {
   suffix_field?: string;
 }
 
+/** A one-off action's endpoint (assumption R8): a fixed answer to every method, and whether it needs a credential. */
+export interface RestEndpoint {
+  /** Default 200. */
+  status?: number;
+  /** Default `{}`. */
+  reply?: unknown;
+  /** Answers without a credential (an app's own endpoint). */
+  public?: boolean;
+}
+
+/** One call to a seeded endpoint (R8), as received. */
+export interface RestCall {
+  method: string;
+  path: string;
+  /** Lower-case names. */
+  headers: Record<string, string>;
+  body: unknown;
+}
+
 /** Simulated REST API state, by path: collections of objects, objects that are not in a collection, and styles. */
 export interface RestState {
   collections: Record<string, RestItem[]>;
@@ -106,6 +129,9 @@ export interface RestState {
   auth_headers: string[];
   /** Present when the seed configures real credentials (R7). */
   auth?: RestAuthState;
+  /** One-off action endpoints by path (R8), and every call they received. */
+  endpoints: Record<string, RestEndpoint>;
+  calls: RestCall[];
 }
 
 /**
@@ -150,6 +176,8 @@ export interface RestSeed {
   auth_headers?: string[];
   /** Real credentials (R7). */
   auth?: RestAuthSeed;
+  /** One-off action endpoints by path (R8). */
+  endpoints?: Record<string, RestEndpoint>;
 }
 
 /** Simulated generic REST API; see the assumptions at the top of this file. */
@@ -161,13 +189,7 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
   },
 
   reset(core, seed) {
-    const state: RestState = {
-      collections: {},
-      objects: byPath(structuredClone(seed?.objects ?? {})),
-      styles: byPath(structuredClone(seed?.styles ?? {})),
-      aliases: Object.fromEntries(Object.entries(seed?.aliases ?? {}).map(([a, p]) => [normPath(a), normPath(p)])),
-      auth_headers: (seed?.auth_headers ?? []).map((h) => h.toLowerCase()),
-    };
+    const state = emptyState(seed ?? {});
     for (const [path, items] of Object.entries(byPath(seed?.collections ?? {}))) {
       const field = styleOf(state, path).id_field;
       state.collections[path] = items.map((i) => ({ ...structuredClone(i), [field]: isId(i[field]) ? i[field] : newId(core, state, path) }));
@@ -200,6 +222,7 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
   },
 
   authorized(headers, state, req) {
+    if (state.endpoints[normPath(req.url.pathname.replace(/^\/rest(?=\/)/, ""))]?.public) return true;
     if (!state.auth) return authorized(headers, state.auth_headers);
     // The token endpoint authenticates the client itself.
     if (req.method === "POST" && req.url.pathname === "/rest/oauth/token") return true;
@@ -209,9 +232,25 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
   },
 
   routes(core, state, req) {
-    return routes(core, state, req);
+    const endpoint = state.endpoints[normPath(req.path)];
+    if (!endpoint) return routes(core, state, req);
+    state.calls.push({ method: req.method, path: normPath(req.path), headers: { ...(req.headers ?? {}) }, body: structuredClone(req.body) });
+    return new Reply(endpoint.status ?? 200, structuredClone(endpoint.reply ?? {}));
   },
 };
+
+/** The state a seed describes, before its collections get their ids. */
+function emptyState(seed: RestSeed): RestState {
+  return {
+    collections: {},
+    objects: byPath(structuredClone(seed.objects ?? {})),
+    styles: byPath(structuredClone(seed.styles ?? {})),
+    aliases: Object.fromEntries(Object.entries(seed.aliases ?? {}).map(([a, p]) => [normPath(a), normPath(p)])),
+    auth_headers: (seed.auth_headers ?? []).map((h) => h.toLowerCase()),
+    endpoints: byPath(structuredClone(seed.endpoints ?? {})),
+    calls: [],
+  };
+}
 
 /** R7: the request carries one of the credentials the seed configures, valid. */
 function strictlyAuthorized(headers: IncomingHttpHeaders, req: AuthRequest, auth: RestAuthState): boolean {

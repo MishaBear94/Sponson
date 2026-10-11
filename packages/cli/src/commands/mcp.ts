@@ -93,7 +93,7 @@ export function validateArgs(tool: string, args: unknown, spec: Record<string, A
 
 const PLAN_DESCRIPTION =
   "Read-only. Reads live provider state, diffs it against release.plan.yaml for the given environment and returns every line's `status`: " +
-  "create | update | unchanged | pending (waits on another line, `waitingOn`, or an event, `waitingFor`) | todo (a manual step a person must do by hand; `manual` has its title and instructions) | blocked (apply would refuse it; `errorCode` says why, e.g. DRIFT_CHANGED) | error (`errorCode`, `error`). " +
+  "create | update | unchanged | run (a one-off action apply would send: its trigger has not run in this scope) | pending (waits on another line, `waitingOn`, or an event, `waitingFor`) | todo (a manual step a person must do by hand; `manual` has its title and instructions) | blocked (apply would refuse it; `errorCode` says why, e.g. DRIFT_CHANGED) | error (`errorCode`, `error`). " +
   "Show every `todo` line's `manual.instructions` to the human verbatim: only a person can do it, and only a person can say it is done. " +
   "Also returns `drift`, `requiresApproval` and `lock` (an apply is running on this scope; the plan may change). Pending, secret and sensitive values are null, never text. " +
   "Nothing is changed. Call this first, show the human the diff, and stop before calling sponson_apply.";

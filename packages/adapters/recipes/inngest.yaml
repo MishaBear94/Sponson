@@ -1,0 +1,90 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Inngest recipes. Format and checklist: docs/adr/0020-recipes.md, docs/adr/0022-one-off-actions.md, CONTRIBUTING.md
+# "Adding a recipe". No API block: the sync is a request to the app's own serve endpoint, which registers itself
+# with Inngest using its own signing key, so Sponson sends no Inngest credential at all.
+provider: inngest
+title: Inngest
+category: queues
+verified_on: "2026-10-11"
+docs:
+  - title: Syncing an Inngest app (curl -X PUT on the serve endpoint), Inngest's integration guide
+    url: https://www.inngest.com/llm-context.md
+  - title: Apps in Inngest Cloud (sync methods, when to sync)
+    url: https://www.inngest.com/docs/apps/cloud
+  - title: Environments and branch environments
+    url: https://www.inngest.com/docs/platform/environments
+  - title: The TypeScript SDK's serve handler (InngestCommHandler, PUT = register)
+    url: https://github.com/inngest/inngest-js/blob/main/packages/inngest/src/components/InngestCommHandler.ts
+  - title: REST API v2 OpenAPI document (V2_SyncApp)
+    url: https://api-docs.inngest.com/api-specs/v2.json
+assumptions:
+  - id: IN1
+    verified: true
+    text: "A `PUT` to the app's serve endpoint (by convention `/api/inngest`, `curl -X PUT https://your-app.com/api/inngest --fail-with-body`) makes the app's SDK register its functions with Inngest; the SDK authenticates that registration with the app's own `INNGEST_SIGNING_KEY`, so the caller sends no credential."
+    source: https://www.inngest.com/llm-context.md
+  - id: IN2
+    verified: true
+    text: "The app registers into the environment its SDK is configured for: `INNGEST_ENV` (or the client's `env` option) names the branch environment and always wins; Vercel's `VERCEL_GIT_COMMIT_REF` is detected automatically, while Netlify, Cloudflare Pages, Railway and Render must pass their branch variable. Sponson does not choose the environment: the app must be configured so."
+    source: https://www.inngest.com/docs/platform/environments
+  - id: IN3
+    verified: true
+    text: "A branch environment is created on demand the first time an app syncs with it (or events are sent to it), and every branch environment shares one signing key and one event key, so a preview needs no per-branch key."
+    source: https://www.inngest.com/docs/platform/environments
+  - id: IN4
+    verified: true
+    text: "Without `x-inngest-sync-kind: in-band` (which this recipe never sends) the serve handler syncs out of band: it calls Inngest's register endpoint itself and answers with that call's status and a JSON body `{ message, modified }`; a failed registration answers 500 (`Failed to register`)."
+    source: https://github.com/inngest/inngest-js/blob/main/packages/inngest/src/components/InngestCommHandler.ts
+  - id: IN5
+    verified: true
+    text: "Sync only once the new version of the code is live: some hosts roll a deploy out over seconds or minutes and an early sync registers the old functions. The recipe's trigger is the deployment's URL (a deploy line's external output, so the line waits for the deploy) and a revision."
+    source: https://www.inngest.com/docs/apps/cloud
+  - id: IN6
+    verified: true
+    text: "Branch environments are archived automatically three days after their latest deployment (archiving stops functions from triggering and keeps the data), and archiving cannot be undone per app; there is no request to undo a sync, so destroy sends nothing and forgets the record."
+    source: https://www.inngest.com/docs/platform/environments
+  - id: IN7
+    verified: true
+    text: "The REST API's `POST /v2/apps/{appId}/syncs` (marked beta, `x-beta: true`) takes `{ url }` and answers a sync with `status` pending, success, error or duplicate, but the operation declares no header or parameter that selects a branch environment; this recipe does not use it."
+    source: https://api-docs.inngest.com/api-specs/v2.json
+  - id: IN8
+    verified: false
+    text: "Syncing the same deployment again is harmless (the same functions registered again, `modified: false`), so the at-least-once delivery of an action (sent again after a crash before it was recorded) needs no idempotency key."
+  - id: IN9
+    verified: false
+    text: "A preview behind Vercel Deployment Protection answers the `PUT` with 401 unless it carries `x-vercel-protection-bypass` with the project's automation bypass secret; pass it with `headers`, as a `{ secret }`."
+ops:
+  sync:
+    kind: action
+    title: App sync into its branch environment
+    summary: Registers a preview deployment's Inngest functions by sending `PUT` to its serve endpoint, once per deployment URL and revision; the app's SDK picks the branch environment (`INNGEST_ENV`, IN2) and signs the registration with its own key (IN1), so no Inngest credential is needed.
+    covers: [inngest-sync]
+    params:
+      url:
+        type: string
+        description: "The deployment's base URL, without a trailing slash: usually `{ from: <deploy line>.preview_url }`, so the sync waits for the deploy (IN5)."
+        required: true
+        pattern: "^https?://\\S+[^/]$"
+        example: https://acme-git-feat-x-acme.vercel.app
+      path:
+        type: string
+        description: Where the app serves Inngest's `serve()` handler, appended to `url`.
+        default: /api/inngest
+        pattern: "^/\\S*$"
+      revision:
+        type: string
+        description: "What else makes it sync again when it changes, usually the commit: `\"${ctx.git.sha}\"`."
+        required: true
+        example: "${ctx.git.sha}"
+      headers:
+        type: map
+        description: "Extra request headers, such as `x-vercel-protection-bypass: { secret: env://VERCEL_AUTOMATION_BYPASS_SECRET }` for a protected preview (IN9)."
+    http:
+      trigger: { url: { param: url }, path: { param: path }, revision: { param: revision } }
+      request:
+        method: PUT
+        url: { join: [{ param: url }, { param: path }] }
+        headers: { param: headers }
+      outputs: { modified: /modified }
+    live:
+      # A deployed app with Inngest's serve handler and INNGEST_ENV set to a throwaway branch environment.
+      params: { url: SPONSON_LIVE_INNGEST_APP_URL }

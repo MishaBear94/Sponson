@@ -252,3 +252,11 @@ Rows whose lifecycle needs waiting (Algolia's copy task, a Xata branch coming up
 first-class adapters instead of a polling extension: each waits on a different signal, and polling in a request
 template would be a small language. Inngest's sync stays uncovered (a one-off action with nothing to read back or
 delete).
+
+## Amendment 5 (2026-10-11): action recipes
+
+"Inngest's sync stays uncovered" (Amendment 4) is superseded by [ADR 0022](0022-one-off-actions.md): a recipe op may
+be `kind: action` (an `http.action`, one request sent when its trigger changes), and a recipe whose ops are all
+actions sent to the app's own `url` has no `api` block (it needs no credential). `inngest.sync` is the first. The
+identity lock records an action op's key as `action:<line id>` (the engine's) and its record id as `FORGET` or the
+undo request template; the recipe harness runs an action op as run → unchanged → new trigger → run → destroy.
