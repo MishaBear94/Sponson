@@ -439,11 +439,11 @@
                   "required": ["token_url", "client_id_env", "client_secret_env"],
                   "additionalProperties": false,
                   "properties": {
-                    "token_url": { "type": "string", "pattern": "^https?://\\S+$", "description": "The token endpoint, e.g. https://<tenant>.auth0.com/oauth/token." },
+                    "token_url": { "type": "string", "pattern": "^(https?://\\S+|/(?!/)\\S*)$", "description": "The token endpoint, e.g. https://<tenant>.auth0.com/oauth/token, or a path (/oauth/token) on the origin of the block's base_url." },
                     "token_url_env": { "$ref": "#/$defs/envName", "description": "Optional: a variable that overrides token_url when set." },
                     "client_id_env": { "$ref": "#/$defs/envName" },
                     "client_secret_env": { "$ref": "#/$defs/credentialEnvName" },
-                    "audience": { "type": "string", "minLength": 1, "description": "Sent as `audience` (Auth0: https://<tenant>/api/v2/; Kinde: https://<sub>.kinde.com/api)." },
+                    "audience": { "type": "string", "minLength": 1, "description": "Sent as `audience` (Auth0: https://<tenant>/api/v2/; Kinde: https://<sub>.kinde.com/api). A value starting with a single / is a path on the origin of the block's base_url." },
                     "scope": { "type": "string", "minLength": 1, "description": "Sent as `scope`, space-separated." },
                     "extra": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Further form parameters (never a credential)." },
                     "auth_method": { "enum": ["client_secret_post", "client_secret_basic"], "description": "How the client authenticates: in the form (default) or with HTTP Basic." }

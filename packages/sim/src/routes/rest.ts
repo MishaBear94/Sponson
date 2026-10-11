@@ -19,8 +19,9 @@
  *       not in a collection are answered bare. A collection's style (seed `styles`, by collection path) changes the
  *       envelopes, the cursor's place, and the id's field and type, so that a recipe is tested in its provider's
  *       own response shapes. An object's style (by its path) may give it an `item_path` envelope for reads; writes
- *       go to the object itself. A create may be posted to another path than the collection's (seed `aliases`:
- *       `POST /gates/g/rule` adds to `/gates/g/rules`).
+ *       go to the object itself, and its `write_fields` store a written field under another name (an API that
+ *       reads `{ redirect_urls }` and replaces it with `{ urls }`). A create may be posted to another path than the
+ *       collection's (seed `aliases`: `POST /gates/g/rule` adds to `/gates/g/rules`).
  *   R3. A path is known once seeded or created: a POST to an unknown path creates the collection; a GET of an
  *       unknown path is 404. A create may choose the id (the id field, or the style's `id_from` field, in the
  *       body, like a flag key or a database name); otherwise the sim assigns `it_<n>` (the next integer with
@@ -76,6 +77,8 @@ export interface RestStyle {
   once_fields?: string[];
   /** A query parameter that names an object of the collection by id (`url`), assumption R3. */
   item_query?: string;
+  /** For an object: top-level fields a write names otherwise than a read, written name → stored name (R2). */
+  write_fields?: Record<string, string>;
 }
 
 /** Simulated REST API state, by path: collections of objects, objects that are not in a collection, and styles. */
@@ -216,7 +219,7 @@ function authorized(headers: IncomingHttpHeaders, declared: string[]): boolean {
   return Object.entries(headers).some(([name, v]) => carries(name) && typeof v === "string" && v.trim() !== "");
 }
 
-type FullStyle = Required<Omit<RestStyle, "next_path" | "item_query">> & Pick<RestStyle, "item_query"> & { next_path: string | null };
+type FullStyle = Required<Omit<RestStyle, "next_path" | "item_query" | "write_fields">> & Pick<RestStyle, "item_query"> & { next_path: string | null };
 
 /** The style of the collection at `path`, every default filled in. */
 function styleOf(state: RestState, path: string): FullStyle {
@@ -373,10 +376,16 @@ function create(core: SimCore, state: RestState, path: string, body: unknown): R
   return new Reply(201, envelope(style.item_path, { ...item, ...shown }));
 }
 
+/** A write to the object at `path` with its style's `write_fields` stored under their read names (R2). */
+function renamed(state: RestState, path: string, body: Record<string, unknown>): Record<string, unknown> {
+  const names = state.styles[path]?.write_fields ?? {};
+  return Object.fromEntries(Object.entries(body).map(([k, v]) => [names[k] ?? k, v]));
+}
+
 function patch(state: RestState, t: Target, body: unknown): Reply {
   if (!isRecord(body)) return error(400, "body must be a JSON object");
   if (t.kind === "object") {
-    mergePatch(t.object, body);
+    mergePatch(t.object, renamed(state, t.path, body));
     return new Reply(200, t.object);
   }
   if (t.kind !== "item") return notFound();
@@ -390,7 +399,7 @@ function patch(state: RestState, t: Target, body: unknown): Reply {
 function put(state: RestState, t: Target, body: unknown): Reply {
   if (!isRecord(body)) return error(400, "body must be a JSON object");
   if (t.kind === "object") {
-    state.objects[t.path] = structuredClone(body);
+    state.objects[t.path] = structuredClone(renamed(state, t.path, body));
     return new Reply(200, state.objects[t.path]);
   }
   if (t.kind !== "item") return notFound();

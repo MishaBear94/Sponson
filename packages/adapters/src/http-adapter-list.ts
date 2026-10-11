@@ -46,6 +46,8 @@ interface Locator {
   missing_empty?: true;
   /** `parent.when_empty: delete`: an empty collection is removed with `DELETE <write path>` instead of written. */
   delete_empty?: true;
+  /** `parent.write_list_path`: where a write puts the collection, when not at `list`. */
+  write_list?: string;
 }
 
 /** One item of the collection: what identifies it, and its value. */
@@ -87,6 +89,8 @@ function locatorOf(spec: ListItemSpec): Locator | undefined {
     ...(spec.destroy === "keep" ? { keep: true as const } : {}),
     ...(spec.parent.ifMissing === "empty" ? { missing_empty: true as const } : {}),
     ...(spec.parent.whenEmpty === "delete" ? { delete_empty: true as const } : {}),
+    // Only when set, so the record ids of lines that do not use it are unchanged.
+    ...(spec.parent.writeListPath !== undefined ? { write_list: spec.parent.writeListPath } : {}),
   };
 }
 
@@ -242,7 +246,7 @@ function sentAlong(send: ParentSend, doc: Record<string, unknown>): Record<strin
  * patch of that entry, anything else as the whole collection, alone or in the parent read just before.
  */
 async function writeChange(api: ApiClient, loc: Locator, doc: Record<string, unknown>, entries: Entry[], change: Entry): Promise<void> {
-  const tokens = pointerTokens(loc.list);
+  const tokens = pointerTokens(loc.write_list ?? loc.list);
   const space = loc.write.indexOf(" ");
   if (loc.delete_empty && entries.length === 0) {
     // An API that refuses an empty collection (S3 CORS needs at least one rule) removes it instead.

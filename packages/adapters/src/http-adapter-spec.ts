@@ -231,7 +231,7 @@ export function parseApi(block: Record<string, unknown>, where: string, opts: { 
   const mediaType = parseMediaType(block.media_type, `${where}.media_type`, encoding);
   const cfg: ApiConfig = {
     baseUrl: base,
-    auth: block.auth === undefined && opts.authOptional ? { kind: "none" } : parseAuth(block.auth, `${where}.auth`),
+    auth: block.auth === undefined && opts.authOptional ? { kind: "none" } : parseAuth(block.auth, `${where}.auth`, base),
     headers: parseHeaders(block.headers, `${where}.headers`),
     encoding,
     ...(mediaType ? { mediaType } : {}),
@@ -569,9 +569,10 @@ export interface ListItemSpec {
   /**
    * `itemPath`: where the parent object is in the read answer (`/feature` for `{ feature: {...} }`); default the whole
    * body. `ifMissing: empty`: a 404 parent reads as an empty collection; `whenEmpty: delete`: an empty collection is
-   * removed with DELETE instead of written.
+   * removed with DELETE instead of written. `writeListPath`: where a write puts the collection, when the API names it
+   * otherwise than its read (Kinde reads `{ redirect_urls }` and replaces with `{ urls }`); default `list_path`.
    */
-  parent: { path: string; readPath: string; method: string; send: ParentSend; itemPath: string; contentType?: string; ifMissing: "error" | "empty"; whenEmpty: "write" | "delete" };
+  parent: { path: string; readPath: string; method: string; send: ParentSend; itemPath: string; contentType?: string; ifMissing: "error" | "empty"; whenEmpty: "write" | "delete"; writeListPath?: string };
   listPath: string;
   shape: ListShape;
   separator: string;
@@ -595,6 +596,7 @@ function parseParent(v: unknown, vars: Record<string, unknown>): ListItemSpec["p
   const ifMissing = oneOf(o.if_missing, ["error", "empty"] as const, "parent.if_missing", "`error` (the default: a parent that is not there is an error) or `empty` (a 404 reads as an empty collection, S3 CORS)");
   const whenEmpty = oneOf(o.when_empty, ["write", "delete"] as const, "parent.when_empty", "`write` (the default: write the empty collection) or `delete` (DELETE `parent.path` instead, S3 CORS)");
   const contentType = contentTypeParam(o.content_type, "parent.content_type");
+  const writeListPath = o.write_list_path === undefined ? undefined : pointerParam(o.write_list_path, "parent.write_list_path", "");
   return {
     path,
     readPath,
@@ -604,6 +606,7 @@ function parseParent(v: unknown, vars: Record<string, unknown>): ListItemSpec["p
     ifMissing,
     whenEmpty,
     ...(contentType ? { contentType } : {}),
+    ...(writeListPath !== undefined ? { writeListPath } : {}),
   };
 }
 

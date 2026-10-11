@@ -549,8 +549,12 @@ name (`url`) or a JSON pointer (`/config/url`); write a key that is literally `f
 - **OAuth2 client credentials** (RFC 6749 §4.4): the token endpoint gets a form with `grant_type=client_credentials`,
   `audience` and `scope` when set, the `extra` parameters, and the client's credentials in the form
   (`auth_method: client_secret_post`, the default) or as HTTP Basic (`client_secret_basic`). `private_key_jwt` is not
-  supported (Okta's own management API requires it). `token_url_env` overrides `token_url` when set, as
-  `base_url_env` does.
+  supported (Okta's own management API requires it for OAuth; its `SSWS` API tokens use the header form with
+  `prefix: "SSWS "`). `token_url_env` overrides `token_url` when set, as `base_url_env` does. A `token_url` or
+  `audience` written as a path (`/oauth/token`, `/api/v2/`) is resolved against the origin of the block's own
+  `base_url` (not its `base_url_env` override), so a per-account API names its account once: `base_url:
+  https://acme.eu.auth0.com/api/v2` with `token_url: /oauth/token` and `audience: /api/v2/` sends
+  `https://acme.eu.auth0.com/api/v2/` as the audience to `https://acme.eu.auth0.com/oauth/token`.
 - **Command**: a list of literal arguments, run without a shell with the run's environment; the first word is a
   program on `PATH`. An argument cannot be a reference, a `${…}` or a `$VAR`: nothing in it is expanded, so it is
   refused rather than passed on as text. Its standard output, trimmed, is the token; nothing printed, more than one
