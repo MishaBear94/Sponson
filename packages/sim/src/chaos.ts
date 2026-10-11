@@ -28,7 +28,10 @@ export interface ChaosConfig {
   deploy: string;
   /** QUEUED → BUILDING → READY takes this long for deployments created through the API (and `ok` auto-deploys). */
   deploy_ms: number;
-  /** After a Neon branch create, writes to that branch and further creates in the project answer 423 for this long. */
+  /**
+   * Opt-in fault: after a Neon branch create, writes to that branch and further creates in the project answer 423
+   * for this long. The real API was seen answering 201 to a second create meanwhile (N2); 423 is retried anyway.
+   */
   neon_op_ms: number;
   /** A PlanetScale branch created through the API reports `ready: false` for this long (0: ready at its first read). */
   planetscale_ready_ms: number;

@@ -17,9 +17,12 @@
  * the original three providers needs no LaunchDarkly account); they add and remove one individual target,
  * `sponson-contract-<random>`, on the given flag and environment. Use a test environment without required approvals.
  *
- * Use throwaway projects: the suite creates a Neon branch, preview env vars on a
- * unique git branch name, and a Clerk redirect URL, and destroys them in `afterAll`
- * even when an assertion fails. It never touches the production target.
+ * Use throwaway projects: the suite creates a Neon branch (forked from the project's default branch), preview env
+ * vars, and a Clerk redirect URL, and destroys them in `afterAll` even when an assertion fails. It never touches the
+ * production target. The Vercel project's `link` decides how the preview vars are written, and the suite logs which
+ * variant ran: connected to a Git repository, they are bound to a unique git branch name; not connected, Vercel
+ * refuses that (assumption V9, which is then checked), so they are project-wide (`branch: "*"`), named
+ * `DATABASE_URL` and `CONTRACT_TOKEN`: use a project that has no variables of those names.
  *
  * Cloudflare is optional in a live run: its block runs when these are set too, and is skipped otherwise.
  *
@@ -49,7 +52,7 @@ import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CLERK_DEFAULT_API_URL, CLOUDFLARE_DEFAULT_API_URL, CLOUD_RUN_DEFAULT_API_URL, algoliaAdapter, cloudRunAdapter, createCloudRunAdapter, digitaloceanAdapter, xataAdapter, LAUNCHDARKLY_DEFAULT_API_URL, NETLIFY_DEFAULT_API_URL, PLANETSCALE_DEFAULT_API_URL, SUPABASE_DEFAULT_API_URL, clerkAdapter, cloudflareAdapter, launchdarklyAdapter, neonAdapter, netlifyAdapter, planetscaleAdapter, supabaseAdapter, vercelAdapter } from "@sponson/adapters";
+import { CLERK_DEFAULT_API_URL, CLOUDFLARE_DEFAULT_API_URL, CLOUD_RUN_DEFAULT_API_URL, algoliaAdapter, cloudRunAdapter, createCloudRunAdapter, digitaloceanAdapter, xataAdapter, LAUNCHDARKLY_DEFAULT_API_URL, NEON_DEFAULT_API_URL, NETLIFY_DEFAULT_API_URL, PLANETSCALE_DEFAULT_API_URL, SUPABASE_DEFAULT_API_URL, VERCEL_DEFAULT_API_URL, clerkAdapter, cloudflareAdapter, launchdarklyAdapter, neonAdapter, netlifyAdapter, planetscaleAdapter, supabaseAdapter, vercelAdapter } from "@sponson/adapters";
 import type { AdapterContext, Ctx } from "@sponson/core";
 import { SUPABASE_DEMO_PROJECT, simEnv, startSim, type SimHandle } from "@sponson/sim";
 import { cliEnv, runCli, workspace, type CliRun, type Workspace } from "./support.js";
@@ -73,63 +76,48 @@ const SECRET = `contract-secret-${tag}`;
 
 let sim: SimHandle | null = null;
 let env: NodeJS.ProcessEnv;
-let ws: Workspace;
-let providers: { vercel: Record<string, unknown>; neon: Record<string, unknown> };
+
+/**
+ * The core block (Vercel, Neon, Clerk) runs once per Vercel project. Live: the given project, and what the block checks
+ * depends on its `link` (GET /v9/projects/:id): connected to a Git repository, preview values are bound to the run's
+ * git branch; not connected, Vercel refuses that (V9), so they are written project-wide (`branch: "*"`) and V9 is
+ * asserted instead. Against the sim: both, a connected `prj_demo` and an unconnected `prj_nogit`.
+ */
+const VERCEL_PROJECTS = LIVE ? [process.env.SPONSON_LIVE_VERCEL_PROJECT ?? ""] : ["prj_demo", "prj_nogit"];
 
 beforeAll(async () => {
-  if (LIVE) {
-    env = { ...process.env };
-    providers = {
-      vercel: { project: process.env.SPONSON_LIVE_VERCEL_PROJECT, ...(process.env.SPONSON_LIVE_VERCEL_TEAM ? { team: process.env.SPONSON_LIVE_VERCEL_TEAM } : {}) },
-      neon: { project: process.env.SPONSON_LIVE_NEON_PROJECT },
-    };
-  } else {
-    sim = await startSim();
+  if (LIVE) env = { ...process.env };
+  else {
+    sim = await startSim({ seed: { vercel: { projects: { prj_demo: { envs: [] }, prj_nogit: { envs: [], link: false } } } } });
     env = cliEnv(sim);
-    providers = { vercel: { project: "prj_demo" }, neon: { project: "proj_demo" } };
   }
   env.SPONSON_CONTRACT_SECRET = SECRET;
-  // No deploy-dependent line: a live run must not depend on a git push reaching Vercel.
-  ws = await workspace("contract", {
-    plan: `version: 1
-providers:
-  vercel: ${JSON.stringify(providers.vercel)}
-  neon: ${JSON.stringify(providers.neon)}
-changes:
-  - id: db
-    adapter: neon
-    op: branch
-  - id: env
-    adapter: vercel
-    op: env
-    target: preview
-    values:
-      DATABASE_URL: { from: db.connection_string }
-      CONTRACT_TOKEN: { secret: "env://SPONSON_CONTRACT_SECRET" }
-  - id: callback
-    adapter: clerk
-    op: redirect_allow
-    url: ${callbackUrl}
-`,
-  });
 }, 60_000);
 
 afterAll(async () => {
-  // Always clean up, even when assertions failed half-way.
-  if (ws) await cli(["apply", "--destroy"]).catch(() => {});
   await sim?.close();
-  await ws?.cleanup();
-}, 120_000);
-
-function cli(args: string[]): Promise<CliRun> {
-  return runCli([...args, "--json", "--receipts", "local", "--receipts-dir", join(ws.dir, "r"), "--pr", String(pr), "--branch", branch, "--sha", sha], { env, cwd: ws.dir });
-}
+});
 
 const CF_LIVE = ["CLOUDFLARE_API_TOKEN", "SPONSON_LIVE_CLOUDFLARE_ACCOUNT", "SPONSON_LIVE_CLOUDFLARE_PROJECT"].every((k) => process.env[k]);
 
-function actx(adapter: "vercel" | "neon" | "clerk" | "launchdarkly"): AdapterContext {
-  const ctx: Ctx = { env: "preview", git: { branch, sha, short_sha: sha.slice(0, 7) }, pr: { number: pr }, scope: `pr-${pr}` };
-  const provider = adapter === "clerk" ? {} : adapter === "launchdarkly" ? { project: ld.project, environment: ld.environment } : providers[adapter];
+/** One pass of the core block: its own scope, git branch and callback, so the sim's two passes never meet. */
+interface Run {
+  pr: number;
+  branch: string;
+  callbackUrl: string;
+  providers: { vercel: Record<string, unknown>; neon: Record<string, unknown> };
+}
+
+const CORE_RUN: Run = {
+  pr,
+  branch,
+  callbackUrl,
+  providers: LIVE ? { vercel: { project: process.env.SPONSON_LIVE_VERCEL_PROJECT }, neon: { project: process.env.SPONSON_LIVE_NEON_PROJECT } } : { vercel: { project: "prj_demo" }, neon: { project: "proj_demo" } },
+};
+
+function actx(adapter: "vercel" | "neon" | "clerk" | "launchdarkly", run: Run = CORE_RUN): AdapterContext {
+  const ctx: Ctx = { env: "preview", git: { branch: run.branch, sha, short_sha: sha.slice(0, 7) }, pr: { number: run.pr }, scope: `pr-${run.pr}` };
+  const provider = adapter === "clerk" ? {} : adapter === "launchdarkly" ? { project: ld.project, environment: ld.environment } : run.providers[adapter];
   return { ctx, provider, env, log: () => {}, intend: async () => {}, redact: (t) => t };
 }
 
@@ -148,8 +136,107 @@ function servedIndex(flag: Record<string, unknown>, key: string): number {
   return all.find((t) => (t.contextKind ?? "user") === "user" && t.values.includes(key))?.variation ?? -1;
 }
 
-describe(`contract (${LIVE ? "@live" : "sim"})`, () => {
+/** Vercel's REST API, called directly to pin what the adapter relies on. `teamId` is added when the run has a team. */
+async function vercelFetch(method: "GET" | "POST" | "DELETE", path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
+  const team = process.env.SPONSON_LIVE_VERCEL_TEAM;
+  const url = new URL(`${env.VERCEL_API_URL ?? VERCEL_DEFAULT_API_URL}${path}`);
+  if (LIVE && team) url.searchParams.set("teamId", team);
+  const headers: Record<string, string> = { authorization: `Bearer ${env.VERCEL_TOKEN}` };
+  if (body !== undefined) headers["content-type"] = "application/json";
+  const res = await fetch(url, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+  const text = await res.text();
+  return { status: res.status, body: (text ? JSON.parse(text) : {}) as Record<string, unknown> };
+}
+
+/** Neon's REST API, called directly to pin what the adapter relies on. */
+async function neonFetch(method: "GET" | "POST", path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
+  const headers: Record<string, string> = { authorization: `Bearer ${env.NEON_API_KEY}` };
+  if (body !== undefined) headers["content-type"] = "application/json";
+  const res = await fetch(`${env.NEON_API_URL ?? NEON_DEFAULT_API_URL}${path}`, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+  return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+}
+
+interface ListedEnv {
+  id: string;
+  key: string;
+  value?: string;
+  type?: string;
+  decrypted?: boolean;
+  gitBranch?: string | null;
+  target?: string | string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+describe.each(VERCEL_PROJECTS.map((project, i) => ({ project, i })))(`contract (${LIVE ? "@live" : "sim"}), vercel project $project`, ({ project, i }) => {
+  const suffix = i === 0 ? "" : `-${i}`;
+  const run: Run = {
+    pr: pr + i,
+    branch: `${branch}${suffix}`,
+    callbackUrl: `https://sponson-contract-${tag}${suffix}.example.com/callback`,
+    providers: { ...CORE_RUN.providers, vercel: { ...CORE_RUN.providers.vercel, project, ...(LIVE && process.env.SPONSON_LIVE_VERCEL_TEAM ? { team: process.env.SPONSON_LIVE_VERCEL_TEAM } : {}) } },
+  };
+  /** Whether the Vercel project is connected to a Git repository; read in beforeAll. */
+  let linked = true;
+  /** The `branch` param of the env line: the run's git branch when connected, project-wide otherwise. */
+  let envBranch: string | undefined;
+  let ws: Workspace;
+
+  const cli = (args: string[]): Promise<CliRun> => runCli([...args, "--json", "--receipts", "local", "--receipts-dir", join(ws.dir, "r"), "--pr", String(run.pr), "--branch", run.branch, "--sha", sha], { env, cwd: ws.dir });
+  const envParams = (values: Record<string, unknown>) => vercelAdapter.ops.env!.defaults!({ target: "preview", ...(envBranch ? { branch: envBranch } : {}), values }, actx("vercel", run).ctx);
+
+  beforeAll(async () => {
+    const p = await vercelFetch("GET", `/v9/projects/${project}`);
+    expect(p.status, JSON.stringify(p.body)).toBe(200);
+    linked = typeof p.body.link === "object" && p.body.link !== null;
+    envBranch = linked ? undefined : "*";
+    console.info(
+      linked
+        ? `contract: Vercel project ${project} is connected to a Git repository: checking preview values bound to git branch ${run.branch}.`
+        : `contract: Vercel project ${project} has no connected Git repository: checking project-wide preview values (branch: "*"), and V9 (a git-branch write is refused).`,
+    );
+    // No deploy-dependent line: a live run must not depend on a git push reaching Vercel.
+    ws = await workspace("contract", {
+      plan: `version: 1
+providers:
+  vercel: ${JSON.stringify(run.providers.vercel)}
+  neon: ${JSON.stringify(run.providers.neon)}
+changes:
+  - id: db
+    adapter: neon
+    op: branch
+  - id: env
+    adapter: vercel
+    op: env
+    target: preview
+${envBranch ? `    branch: "${envBranch}"\n` : ""}    values:
+      DATABASE_URL: { from: db.connection_string }
+      CONTRACT_TOKEN: { secret: "env://SPONSON_CONTRACT_SECRET" }
+  - id: callback
+    adapter: clerk
+    op: redirect_allow
+    url: ${run.callbackUrl}
+`,
+    });
+  }, 60_000);
+
+  afterAll(async () => {
+    // Always clean up, even when assertions failed half-way.
+    if (ws) await cli(["apply", "--destroy"]).catch(() => {});
+    await ws?.cleanup();
+  }, 120_000);
+
+  /** The CONTRACT_TOKEN record this pass wrote, as the env list shows it. */
+  const listedToken = async (): Promise<ListedEnv> => {
+    const r = await vercelFetch("GET", `/v10/projects/${project}/env?decrypt=true`);
+    expect(r.status).toBe(200);
+    const found = (r.body.envs as ListedEnv[]).find((e) => e.key === "CONTRACT_TOKEN" && (e.gitBranch ?? undefined) === (linked ? run.branch : undefined) && [e.target].flat().includes("preview"));
+    expect(found, "CONTRACT_TOKEN in the env list").toBeDefined();
+    return found!;
+  };
+
   it("plan is read-only and sees every line", async () => {
+    const before = sim?.state.writes.length ?? 0;
     const r = await cli(["plan"]);
     expect(r.code, r.stdout + r.stderr).toBe(0);
     const lines = (r.json!.lines as Array<{ id: string; status: string }>).map((l) => [l.id, l.status]);
@@ -158,7 +245,7 @@ describe(`contract (${LIVE ? "@live" : "sim"})`, () => {
       ["env", "pending"],
       ["callback", "create"],
     ]);
-    if (sim) expect(sim.state.writes).toHaveLength(0);
+    if (sim) expect(sim.state.writes.length).toBe(before);
   });
 
   it("apply creates all three and never prints the secret", async () => {
@@ -172,20 +259,87 @@ describe(`contract (${LIVE ? "@live" : "sim"})`, () => {
 
   it("assumption V1: an env var written by apply is immediately readable with the same value hash", async () => {
     const op = vercelAdapter.ops.env!;
-    const params = op.defaults!({ target: "preview", values: { CONTRACT_TOKEN: SECRET } }, actx("vercel").ctx);
-    const live = await op.read(actx("vercel"), params);
-    // v0.2 key: env:<target>:<gitBranch|*>:<KEY> (the preview var is scoped to this run's git branch).
-    const key = `env:preview:${branch}:CONTRACT_TOKEN`;
+    const params = envParams({ CONTRACT_TOKEN: SECRET });
+    const live = await op.read(actx("vercel", run), params);
+    // v0.2 key: env:<target>:<gitBranch|*>:<KEY> (scoped to this run's git branch when the project is connected).
+    const key = `env:preview:${linked ? run.branch : "*"}:CONTRACT_TOKEN`;
     expect(live?.resources.map((r) => r.key)).toContain(key);
     expect(op.diff(live, params).find((d) => d.key === key)?.kind).toBe("unchanged");
   });
 
+  it("assumption V3: the env list never decrypts an encrypted value, even with ?decrypt=true; GET /v1/projects/:id/env/:id does", async () => {
+    const listed = await listedToken();
+    expect(listed.type).toBe("encrypted");
+    expect(listed.decrypted).toBe(false);
+    expect(listed.value).not.toBe(SECRET);
+    const one = await vercelFetch("GET", `/v1/projects/${project}/env/${listed.id}`);
+    expect(one.status).toBe(200);
+    expect(one.body).toMatchObject({ id: listed.id, decrypted: true, value: SECRET });
+  });
+
+  it("assumption V4: an upsert of an existing key and target answers 201 with the same id in `created`, createdAt kept, updatedAt newer", async () => {
+    const before = await listedToken();
+    const entry = { key: "CONTRACT_TOKEN", value: SECRET, type: "encrypted", target: ["preview"], ...(linked ? { gitBranch: run.branch } : {}) };
+    const r = await vercelFetch("POST", `/v10/projects/${project}/env?upsert=true`, [entry]);
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(Array.isArray(r.body.created)).toBe(true);
+    const [created] = r.body.created as ListedEnv[];
+    expect(created).toMatchObject({ id: before.id, createdAt: before.createdAt });
+    expect(created!.updatedAt).toBeGreaterThan(before.updatedAt);
+    expect(r.body.failed).toEqual([]);
+  });
+
+  it("assumption V9: a git-branch value on a project with no connected Git repository is refused with 400, and nothing is written", async (t) => {
+    if (linked) {
+      console.info(`contract: V9 not checked: Vercel project ${project} is connected to a Git repository.`);
+      t.skip();
+    }
+    const key = `SPONSON_CONTRACT_${tag.toUpperCase()}_V9`;
+    const r = await vercelFetch("POST", `/v10/projects/${project}/env?upsert=true`, [{ key, value: "v9", type: "encrypted", target: ["preview"], gitBranch: run.branch }]);
+    const leftover = async () => ((await vercelFetch("GET", `/v10/projects/${project}/env`)).body.envs as ListedEnv[]).filter((e) => e.key === key);
+    try {
+      expect(r.status, JSON.stringify(r.body)).toBe(400);
+      expect(r.body.error).toMatchObject({ code: "BAD_REQUEST", key: "project", message: expect.stringMatching(/does not have a connected Git repository/) });
+      expect(await leftover()).toEqual([]);
+      // The adapter turns it into PARAM_INVALID naming both fixes.
+      const op = vercelAdapter.ops.env!;
+      const params = op.defaults!({ target: "preview", values: { [key]: "v9" } }, actx("vercel", run).ctx);
+      await expect(op.apply(actx("vercel", run), params, null)).rejects.toMatchObject({ code: "PARAM_INVALID", message: expect.stringMatching(/no connected Git repository.*`branch: "\*"`/) });
+    } finally {
+      for (const e of await leftover()) await vercelFetch("DELETE", `/v9/projects/${project}/env/${e.id}`);
+    }
+  });
+
   it("assumption N2: the Neon branch and its connection string are readable right after creation", async () => {
     const op = neonAdapter.ops.branch!;
-    const params = op.defaults!({}, actx("neon").ctx);
-    const live = await op.read(actx("neon"), params);
+    const params = op.defaults!({}, actx("neon", run).ctx);
+    const live = await op.read(actx("neon", run), params);
     expect(live?.resources).toHaveLength(1);
     expect(String(live?.outputs.connection_string)).toMatch(/^postgres(ql)?:\/\//);
+  });
+
+  it("assumption N6: the project's root branch is listed `default: true`, and a line without `parent` forked from it", async () => {
+    const neonProject = String(run.providers.neon.project);
+    const r = await neonFetch("GET", `/projects/${neonProject}/branches`);
+    expect(r.status).toBe(200);
+    const branches = r.body.branches as Array<{ id: string; name: string; parent_id?: string | null; default?: boolean }>;
+    const roots = branches.filter((b) => b.default === true);
+    expect(roots).toHaveLength(1);
+    console.info(`contract: Neon project ${neonProject}'s default branch is \`${roots[0]!.name}\`.`);
+    // A new project calls it `production` (checked live 2026-10-11); an older live project may still call it `main`.
+    if (!LIVE) expect(roots[0]!.name).toBe("production");
+    const ours = branches.find((b) => b.name === `sponson/preview/pr-${run.pr}`);
+    expect(ours?.parent_id).toBe(roots[0]!.id);
+  });
+
+  it("assumption N5: creating a branch whose name exists answers 409 BRANCH_ALREADY_EXISTS", async () => {
+    const neonProject = String(run.providers.neon.project);
+    const branches = (await neonFetch("GET", `/projects/${neonProject}/branches`)).body.branches as Array<{ id: string; default?: boolean }>;
+    const root = branches.find((b) => b.default === true)!;
+    const name = `sponson/preview/pr-${run.pr}`;
+    const r = await neonFetch("POST", `/projects/${neonProject}/branches`, { branch: { name, parent_id: root.id } });
+    expect(r.status, JSON.stringify(r.body)).toBe(409);
+    expect(r.body).toMatchObject({ code: "BRANCH_ALREADY_EXISTS", message: expect.stringMatching(/branch already exists/) });
   });
 
   it("assumption C2: GET /redirect_urls?paginated=true answers { data, total_count } (not in the spec; how Clerk's SDKs read it)", async () => {
@@ -198,7 +352,7 @@ describe(`contract (${LIVE ? "@live" : "sim"})`, () => {
   });
 
   it.skipIf(!LD_RUNS)("assumption LD5: adding a target its variation already serves succeeds and changes nothing; LD7: visible at once", async () => {
-    const key = `sponson-contract-${tag}`;
+    const key = `sponson-contract-${tag}${suffix}`;
     const path = `/flags/${encodeURIComponent(ld.project)}/${encodeURIComponent(ld.flag)}`;
     const flag = await ldFetch("GET", `${path}?env=${encodeURIComponent(ld.environment)}`);
     expect(flag.status).toBe(200);
@@ -218,16 +372,16 @@ describe(`contract (${LIVE ? "@live" : "sim"})`, () => {
 
   it.skipIf(!LD_RUNS)("assumption LD7: a flag target applied by the adapter reads back unchanged, and is gone after destroy", async () => {
     const op = launchdarklyAdapter.ops.flag_target!;
-    const params = op.defaults!({ flag: ld.flag, key: `sponson-contract-${tag}-adapter` }, actx("launchdarkly").ctx);
-    const applied = await op.apply(actx("launchdarkly"), params, null);
+    const params = op.defaults!({ flag: ld.flag, key: `sponson-contract-${tag}${suffix}-adapter` }, actx("launchdarkly", run).ctx);
+    const applied = await op.apply(actx("launchdarkly", run), params, null);
     try {
-      const live = await op.read(actx("launchdarkly"), params);
+      const live = await op.read(actx("launchdarkly", run), params);
       expect(live?.resources).toEqual(applied.resources);
       expect(op.diff(live, params)[0]!.kind).toBe("unchanged");
     } finally {
-      await op.destroy(actx("launchdarkly"), applied.resources);
+      await op.destroy(actx("launchdarkly", run), applied.resources);
     }
-    expect(await op.read(actx("launchdarkly"), params)).toBeNull();
+    expect(await op.read(actx("launchdarkly", run), params)).toBeNull();
   });
 
   it("second apply writes nothing", async () => {
@@ -239,13 +393,15 @@ describe(`contract (${LIVE ? "@live" : "sim"})`, () => {
     if (sim) expect(sim.state.writes.length).toBe(before);
   }, 120_000);
 
-  it("assumption N1: destroy is visible immediately (Neon branch delete is synchronous enough to re-read)", async () => {
+  it("assumption N1: destroy is visible immediately (a deleted Neon branch leaves the list at once)", async () => {
     const r = await cli(["apply", "--destroy"]);
     expect(r.code, r.stdout + r.stderr).toBe(0);
     const neon = neonAdapter.ops.branch!;
-    expect(await neon.read(actx("neon"), neon.defaults!({}, actx("neon").ctx))).toBeNull();
+    expect(await neon.read(actx("neon", run), neon.defaults!({}, actx("neon", run).ctx))).toBeNull();
     const clerk = clerkAdapter.ops.redirect_allow!;
-    expect(await clerk.read(actx("clerk"), { url: callbackUrl })).toBeNull();
+    expect(await clerk.read(actx("clerk", run), { url: run.callbackUrl })).toBeNull();
+    const vercel = vercelAdapter.ops.env!;
+    expect(await vercel.read(actx("vercel", run), envParams({ CONTRACT_TOKEN: SECRET, DATABASE_URL: "x" }))).toBeNull();
   }, 120_000);
 });
 

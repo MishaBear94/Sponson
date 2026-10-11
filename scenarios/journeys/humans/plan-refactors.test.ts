@@ -26,7 +26,6 @@ changes:
 const DB = `  - id: db
     adapter: neon
     op: branch
-    parent: main
     environments: [preview]
 `;
 
@@ -131,7 +130,7 @@ describe("plan refactors across applies", () => {
   it("change `name:` of a neon branch: the old branch is reported and destroyed, not leaked", async () => {
     j = await Journey.start(undefined, HEAD + DB + envLine("env", { DATABASE_URL: "{ from: db.connection_string }" }));
     expect((await j.apply()).code).toBe(0);
-    await j.writePlan(HEAD + DB.replace("parent: main", "parent: main\n    name: sponson/preview/pr-42-v2") + envLine("env", { DATABASE_URL: "{ from: db.connection_string }" }));
+    await j.writePlan(HEAD + DB.replace("    op: branch\n", "    op: branch\n    name: sponson/preview/pr-42-v2\n") + envLine("env", { DATABASE_URL: "{ from: db.connection_string }" }));
     const p = await j.plan();
     expect(lineStatus(p, "db")).toBe("create");
     const p1 = driftKinds(p);

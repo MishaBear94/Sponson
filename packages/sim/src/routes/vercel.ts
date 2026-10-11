@@ -2,27 +2,31 @@
  * Simulated Vercel: project env vars and deployments.
  *
  * Assumptions about the real API that this fake encodes, each marked with how far it is checked. "Verified" means
- * against Vercel's published OpenAPI document (https://openapi.vercel.sh/, fetched 2026-10-10); see
- * docs/api-verification.md for the per-call table. A local fake cannot prove the rest; scenarios/contract.test.ts
- * pins the critical ones against live accounts (`pnpm test:live`):
+ * against Vercel's published OpenAPI document (https://openapi.vercel.sh/, fetched 2026-10-10); "checked live
+ * 2026-10-11" means against the real API, through a logged-in dashboard session on a throwaway project. See
+ * docs/api-verification.md for the per-call table and the live runs. A local fake cannot prove the rest;
+ * scenarios/contract.test.ts pins the critical ones against live accounts (`pnpm test:live`):
  *   V1. Env writes are visible to the next deployment immediately (no propagation delay). Lists are
- *       read-your-writes here; the real list may lag a write, so adapters trust write responses instead.
- *       Unverified: needs a live account.
+ *       read-your-writes here. Verified for the list (checked live 2026-10-11: a variable written with
+ *       POST ?upsert=true is in the next GET list at once); visibility to a deployment is not separately checked.
+ *       Adapters still trust write responses for ids.
  *   V2. GET /v7/deployments?projectId=&sha= filters by commit and returns newest first. The `sha` filter is
  *       verified (a v7 query parameter; v6 is not in the spec); items carry `readyState` (required) and `state`
  *       (optional), and `url` may be null until the upload completes (verified). The order is unverified: the
  *       adapter sorts by createdAt anyway.
- *   V3. GET /v10/projects/:id/env?decrypt=true returns plaintext with `decrypted: true`; without `decrypt`,
- *       `encrypted` values are opaque. `decrypt` (deprecated), `decrypted` and GET /v1/projects/:id/env/:id
- *       ("Retrieve the decrypted value") are verified; whether the deprecated parameter still decrypts is
- *       unverified, so the adapter falls back to the per-variable GET. `sensitive` values are never returned
- *       (the GET /v1 variant without `value`), so those always diff as `update`.
+ *   V3. GET /v10/projects/:id/env never decrypts: an `encrypted` value is opaque with `decrypted: false`, with or
+ *       without `?decrypt=true`. Contradicted, then fixed (checked live 2026-10-11): the deprecated `decrypt`
+ *       parameter no longer decrypts, as the sim had assumed. GET /v1/projects/:id/env/:id answers
+ *       `decrypted: true` with the plaintext (verified live 2026-10-11), so the adapter reads values that way and
+ *       no longer sends `decrypt`. `sensitive` values are never returned (the GET /v1 variant without `value`),
+ *       so those always diff as `update`.
  *   V4. POST /v10/projects/:id/env?upsert=true answers 201 with `{ created, failed }` (verified: `upsert`, the
  *       status, `created` as one object or a list, `failed[].error` with `code`, `message`, `key`/`envVarKey`).
- *       Unverified: that `created` lists every entry written (new or updated, `createdAt === updatedAt` only for
- *       new ones), and that an entry whose key+gitBranch exists with an overlapping but different target set
- *       fails the whole request with 400 `ENV_CONFLICT`. Entries named in chaos `env_upsert_fail` come back under
- *       `failed` and are not written. Without `upsert` a duplicate answers 403 (verified: documented 403 reason).
+ *       Verified live 2026-10-11: an upsert of an existing key and target answers 201 with `created` a list
+ *       holding the same id, `createdAt` unchanged and a newer `updatedAt`, and `failed: []`. Unverified: that
+ *       an entry whose key+gitBranch exists with an overlapping but different target set fails the whole request
+ *       with 400 `ENV_CONFLICT`. Entries named in chaos `env_upsert_fail` come back under `failed` and are not
+ *       written. Without `upsert` a duplicate answers 403 (verified: documented 403 reason).
  *   V5. POST /v13/deployments: `project` overrides `name` and a GitHub `gitSource` needs `ref` plus `repoId` (or
  *       `org` + `repo`) — both verified, as is `forceNew`. Deployments go QUEUED → BUILDING → READY over chaos
  *       `deploy_ms` (default 0: READY at once; the real API also passes through INITIALIZING, which the adapter
@@ -36,6 +40,10 @@
  *       a custom environment name such as `staging`, or null for a preview; verified against the spec's
  *       `/v7/deployments` parameters and item schema. The git integration builds previews; production builds
  *       of a commit exist separately.
+ *   V9. POST /v10/projects/:id/env with `gitBranch` on a project with no connected Git repository (no `link`)
+ *       answers 400 `{ error: { code: "BAD_REQUEST", message: "Project \"<name>\" does not have a connected Git
+ *       repository.", key: "project", envVarKey, project } }` and writes nothing. Verified live 2026-10-11. Seeded
+ *       projects have a link unless the seed says `link: false`.
  */
 import { page, Reply, route, router, type CreatedBy, type ProviderSim, type SimCore } from "../provider.js";
 
@@ -92,9 +100,12 @@ export interface VercelState {
   projects: Record<string, VercelProject>;
 }
 
-/** Initial Vercel state. */
+/**
+ * Initial Vercel state. Every project is connected to a GitHub repository unless it says `link: false` (a project
+ * whose repository was never connected: branch-bound values are refused, V9).
+ */
 export interface VercelSeed {
-  projects: Record<string, { envs: Array<{ key: string; value: string; target: string; gitBranch?: string }> }>;
+  projects: Record<string, { envs: Array<{ key: string; value: string; target: string; gitBranch?: string }>; link?: false }>;
 }
 
 /** Simulated Vercel (env vars, deployments); see the assumptions at the top of this file. */
@@ -106,7 +117,8 @@ export const vercelSim: ProviderSim<VercelState, VercelSeed> = {
     const state: VercelState = { projects: {} };
     const now = Date.now();
     for (const [id, p] of Object.entries(seed?.projects ?? {})) {
-      const project: VercelProject = { envs: [], deployments: [], link: { type: "github", repoId: 100000 + Object.keys(state.projects).length, org: "sim", repo: id, productionBranch: "main" } };
+      const link: VercelLink | null = p.link === false ? null : { type: "github", repoId: 100000 + Object.keys(state.projects).length, org: "sim", repo: id, productionBranch: "main" };
+      const project: VercelProject = { envs: [], deployments: [], link };
       for (const e of p.envs) {
         project.envs.push({
           id: core.nextId("env_"),
@@ -163,18 +175,18 @@ const routes = router<VercelState>(
       return new Reply(200, { id: params.project, name: params.project, ...(p.link ? { link: p.link } : {}) });
     }),
 
+    // The list never decrypts, whatever `decrypt` says (V3).
     route("GET", "/v10/projects/:project/env", ({ core, state, params, url }) => {
       const p = state.projects[params.project];
       if (!p) return notFound("project");
-      const decrypt = url.searchParams.get("decrypt") === "true";
       const pg = page(core, p.envs, url.searchParams.get("until"));
-      return new Reply(200, { envs: pg.items.map((e) => listedEnv(e, decrypt)), pagination: { count: pg.items.length, next: pg.next, prev: null } });
+      return new Reply(200, { envs: pg.items.map((e) => listedEnv(e, false)), pagination: { count: pg.items.length, next: pg.next, prev: null } });
     }),
 
     route("POST", "/v10/projects/:project/env", ({ core, state, params, url, body }) => {
       const p = state.projects[params.project];
       if (!p) return notFound("project");
-      return upsertEnvs(core, p, Array.isArray(body) ? body : [body], url.searchParams.get("upsert") === "true");
+      return upsertEnvs(core, params.project, p, Array.isArray(body) ? body : [body], url.searchParams.get("upsert") === "true");
     }),
 
     route("GET", "/v1/projects/:project/env/:id", ({ state, params }) => {
@@ -273,11 +285,16 @@ function isEnvInput(v: unknown): v is EnvInput {
   return typeof it.key === "string" && typeof it.value === "string" && Array.isArray(it.target) && (it.gitBranch === undefined || typeof it.gitBranch === "string");
 }
 
-function upsertEnvs(core: SimCore, p: VercelProject, body: unknown[], upsert: boolean): Reply {
+function upsertEnvs(core: SimCore, projectId: string, p: VercelProject, body: unknown[], upsert: boolean): Reply {
   const sameScope = (e: VercelEnv, it: EnvInput) => e.key === it.key && (e.gitBranch ?? null) === (it.gitBranch ?? null);
   // Validate the whole batch first: a rejected request writes nothing.
   if (!body.every(isEnvInput)) return badRequest("bad_request", "bad env");
   const items = body;
+  // V9: a git branch needs a connected repository; the body is the one the real API answered.
+  const branchBound = items.find((it) => it.gitBranch);
+  if (branchBound && !p.link) {
+    return new Reply(400, { error: { code: "BAD_REQUEST", message: `Project "${projectId}" does not have a connected Git repository.`, key: "project", envVarKey: branchBound.key, project: projectId } });
+  }
   for (const it of items) {
     const overlapping = p.envs.find((e) => sameScope(e, it) && !sameSet(e.target, it.target) && e.target.some((t) => it.target.includes(t)));
     if (overlapping) {
@@ -296,7 +313,8 @@ function upsertEnvs(core: SimCore, p: VercelProject, body: unknown[], upsert: bo
       // Without `upsert`, the spec documents 403 "cannot be created because it already exists".
       if (!upsert) return new Reply(403, { error: { code: "ENV_ALREADY_EXISTS", key: it.key, message: "already exists" } });
       existing.value = it.value;
-      existing.updatedAt = Math.max(Date.now(), existing.createdAt + 1);
+      // V4: same id, `createdAt` kept, a newer `updatedAt`.
+      existing.updatedAt = Math.max(Date.now(), existing.updatedAt + 1);
       created.push(existing);
       continue;
     }
@@ -404,8 +422,8 @@ function deploymentDetail(d: VercelDeployment): { id: string; url: string; ready
 }
 
 /**
- * An env var as GET /v10/projects/:id/env (with `decrypt`) or GET /v1/projects/:id/env/:id (always decrypting)
- * shows it: an `encrypted` value is opaque unless decrypted, a `sensitive` one is never returned.
+ * An env var as GET /v10/projects/:id/env (never decrypting, V3) or GET /v1/projects/:id/env/:id (always
+ * decrypting) shows it: an `encrypted` value is opaque unless decrypted.
  */
 function listedEnv(e: VercelEnv, decrypt: boolean) {
   const { createdBy: _c, value, ...rest } = e;

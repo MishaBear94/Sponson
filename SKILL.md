@@ -24,7 +24,6 @@ changes:
   - id: db                      # lowercase id; other lines reference it
     adapter: neon
     op: branch
-    parent: main
     environments: [preview]     # omit to apply in every environment
 
   - id: env

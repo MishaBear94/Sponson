@@ -32,11 +32,11 @@ providers:
   neon: { project: proj_demo }
 
 changes:
-  # 1. A Neon database branch for this preview, forked from main.
+  # 1. A Neon database branch for this preview, forked from the project's default branch (\`parent: <name>\` picks
+  #    another).
   - id: db
     adapter: neon
     op: branch
-    parent: main
     environments: [preview]
 
   # 2. The branch's connection string as the preview's DATABASE_URL. A reference, never a value: nobody copies

@@ -17,8 +17,35 @@ describe("neon branch", () => {
 
   const params = () => op.defaults!({}, h.ctx);
 
-  it("defaults name and parent from ctx", () => {
-    expect(params()).toEqual({ parent: "main", name: "sponson/preview/pr-42" });
+  it("defaults the name from ctx, and no parent: an omitted parent is the project's default branch", () => {
+    expect(params()).toEqual({ name: "sponson/preview/pr-42" });
+  });
+
+  it("without `parent`, forks from the branch marked default (a new project's `production`, N6)", async () => {
+    const root = h.sim.state.neon.projects.proj_demo!.branches[0]!;
+    expect(root).toMatchObject({ name: "production", default: true });
+    const r = await op.apply(h.actx("neon"), params(), null);
+    expect(h.sim.state.neon.projects.proj_demo!.branches.find((b) => b.id === r.outputs.branch_id)?.parent_id).toBe(root.id);
+  });
+
+  it("without `parent`, forks from the default branch whatever it is called; an explicit name or id still picks another", async () => {
+    await h.close();
+    h = await harness({ neon: { projects: { proj_demo: { branches: [{ name: "dev" }, { name: "main" }, { name: "staging", parent: "dev" }] } } } });
+    const branches = () => h.sim.state.neon.projects.proj_demo!.branches;
+    // The first root branch of a seed is the default; make `main` the default instead, as an older project could have it.
+    for (const b of branches()) b.default = b.name === "main";
+    const actx = h.actx("neon");
+    const parentOf = (id: unknown) => branches().find((b) => b.id === branches().find((x) => x.id === id)?.parent_id)?.name;
+    expect(parentOf((await op.apply(actx, params(), null)).outputs.branch_id)).toBe("main");
+    expect(parentOf((await op.apply(actx, { ...params(), name: "a", parent: "staging" }, null)).outputs.branch_id)).toBe("staging");
+    const dev = branches().find((b) => b.name === "dev")!;
+    expect(parentOf((await op.apply(actx, { ...params(), name: "b", parent: dev.id }, null)).outputs.branch_id)).toBe("dev");
+  });
+
+  it("without `parent` and with no default branch listed, asks for one", async () => {
+    for (const b of h.sim.state.neon.projects.proj_demo!.branches) b.default = false;
+    await expect(op.apply(h.actx("neon"), params(), null)).rejects.toMatchObject({ code: "PARAM_INVALID", message: expect.stringMatching(/no default branch.*set `parent`/) });
+    expect(h.sim.state.writes).toEqual([]);
   });
 
   it("create → read → unchanged → destroy → 404 is fine", async () => {
@@ -120,7 +147,13 @@ describe("neon branch", () => {
   it("fails clearly when the parent does not exist", async () => {
     const e = await op.apply(h.actx("neon"), { ...params(), parent: "nope" }, null).catch((x: unknown) => x);
     expect(e).toBeInstanceOf(SponsonError);
-    expect(e).toMatchObject({ code: "PARAM_INVALID", message: expect.stringMatching(/parent branch `nope` not found/) });
+    expect(e).toMatchObject({ code: "PARAM_INVALID", message: expect.stringMatching(/parent branch `nope` not found.*omit `parent` to fork from the project's default branch \(`production`\)/) });
+  });
+
+  it("an old plan's `parent: main` on a new project (whose default branch is `production`) says how to fix it", async () => {
+    const e = await op.apply(h.actx("neon"), { ...params(), parent: "main" }, null).catch((x: unknown) => x);
+    expect(e).toMatchObject({ code: "PARAM_INVALID", details: { param: "parent" }, message: expect.stringMatching(/`main` not found.*\(`production`\)/) });
+    expect(h.sim.state.writes).toEqual([]);
   });
 
   it("listScope reports every branch but the project's default one", async () => {

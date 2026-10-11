@@ -290,26 +290,35 @@ describe("vercel env", () => {
     expect(h.sim.state.vercel.projects.prj_demo!.deployments).toHaveLength(1);
   });
 
-  it("reads a value the list does not decrypt from GET /v1/projects/:id/env/:id, so it diffs unchanged", async () => {
+  it("reads an encrypted value from GET /v1/projects/:id/env/:id (the list never decrypts, V3), so it diffs unchanged", async () => {
     const actx0 = h.actx("vercel");
     const p = params({ A: "plain-text-value" });
     await env.apply(actx0, p, null);
-    // The list's `decrypt` parameter is deprecated: model a list that answers ciphertext with `decrypted: false`.
-    const proxy = await recordingProxy(h.sim.url, (req, body) => {
-      if (req.method === "GET" && /\/v10\/projects\/[^/]+\/env$/.test(req.path)) {
-        const b = body as { envs: Array<Record<string, unknown>> };
-        return { ...b, envs: b.envs.map((e) => ({ ...e, value: "ciphertext", decrypted: false })) };
-      }
-      return body;
-    });
+    const proxy = await recordingProxy(h.sim.url);
     try {
       const actx = h.actx("vercel", undefined, { env: { ...h.env, VERCEL_API_URL: `${proxy.url}/vercel` } });
       const live = await env.read(actx, p);
       expect(env.diff(live, p).map((d) => d.kind)).toEqual(["unchanged"]);
       expect(proxy.log.filter((x) => /^\/vercel\/v1\/projects\/prj_demo\/env\/env_/.test(x.path))).toHaveLength(1);
+      // The deprecated `decrypt` parameter no longer decrypts, so it is not sent.
+      const lists = proxy.log.filter((x) => /\/v10\/projects\/[^/]+\/env$/.test(x.path));
+      expect(lists.length).toBeGreaterThan(0);
+      expect(lists.filter((x) => x.search?.includes("decrypt"))).toEqual([]);
     } finally {
       await proxy.close();
     }
+  });
+
+  it("a branch-bound write to a project with no connected Git repository fails with PARAM_INVALID and says how to fix it (V9)", async () => {
+    h.sim.state.vercel.projects.prj_demo!.link = null;
+    const e = await env.apply(h.actx("vercel"), params({ A: "1" }), null).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(SponsonError);
+    expect(e).toMatchObject({ code: "PARAM_INVALID", details: { param: "branch", project: "prj_demo", status: 400 } });
+    expect((e as Error).message).toMatch(/no connected Git repository.*git branch feat\/x.*Settings → Git.*`branch: "\*"`/);
+    expect(h.sim.state.vercel.projects.prj_demo!.envs).toEqual([]);
+    // Project-wide values are fine on such a project.
+    const r = await env.apply(h.actx("vercel"), params({ A: "1" }, { branch: "*" }), null);
+    expect(r.created).toEqual(["env:preview:*:A"]);
   });
 
   it("an env list that ignores the page cursor yields each variable once", async () => {

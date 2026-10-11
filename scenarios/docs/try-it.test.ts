@@ -212,7 +212,7 @@ describe("README: Try it in 60 seconds", () => {
       vercel: { projects: Record<string, { envs: unknown[] }> };
       clerk: { redirect_urls: unknown[] };
     };
-    expect(state.neon.projects.proj_demo!.branches.map((b) => b.name)).toEqual(["main"]);
+    expect(state.neon.projects.proj_demo!.branches.map((b) => b.name)).toEqual(["production"]);
     expect(state.vercel.projects.prj_demo!.envs).toEqual([]);
     expect(state.clerk.redirect_urls).toEqual([]);
   });

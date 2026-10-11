@@ -48,7 +48,7 @@ describe("sim chaos", () => {
     await chaos({ drift: { "vercel.env.preview.DATABASE_URL": "changed-in-console", "neon.branch.sponson/preview/pr-1": "delete", "clerk.redirect.https://c": "delete" } });
     const p = sim.state.vercel.projects.prj_demo!;
     expect(p.envs[0]).toMatchObject({ key: "DATABASE_URL", value: "changed-in-console", createdBy: "api" });
-    expect(sim.state.neon.projects.proj_demo!.branches.map((b) => b.name)).toEqual(["main"]);
+    expect(sim.state.neon.projects.proj_demo!.branches.map((b) => b.name)).toEqual(["production"]);
     expect(sim.state.clerk.redirect_urls).toEqual([]);
     await chaos({ drift: { "vercel.env.preview.DATABASE_URL": "delete" } });
     expect(p.envs).toEqual([]);
@@ -62,7 +62,7 @@ describe("sim chaos", () => {
     await fetch(`${sim.url}/_reset`, { method: "POST", body: JSON.stringify({ clerk: { redirect_urls: ["https://seeded"] } }), headers: auth });
     expect(sim.state.clerk.redirect_urls.map((r) => r.url)).toEqual(["https://seeded"]);
     // A partial seed keeps the default projects of the providers it does not name.
-    expect(sim.state.neon.projects.proj_demo!.branches.map((b) => b.name)).toEqual(["main"]);
+    expect(sim.state.neon.projects.proj_demo!.branches.map((b) => b.name)).toEqual(["production"]);
     expect(sim.state.vercel.projects.prj_demo).toMatchObject({ envs: [], deployments: [], link: { type: "github" } });
     await fetch(`${sim.url}/_reset`, { method: "POST", body: JSON.stringify({ neon: { projects: {} } }), headers: auth });
     expect(sim.state.neon.projects).toEqual({});
@@ -204,7 +204,7 @@ describe("sim providers: async operations, deployments, upsert conflicts, drift"
   const post = (path: string, body: unknown) => fetch(`${sim.url}${path}`, { method: "POST", body: JSON.stringify(body), headers: auth });
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-  it("neon_op_ms: after a create, further creates and writes to the new branch answer 423 until the operations finish", async () => {
+  it("neon_op_ms (an opt-in fault): after a create, further creates and writes to the new branch answer 423 until the operations finish", async () => {
     await chaos({ neon_op_ms: 100 });
     const main = sim.state.neon.projects.proj_demo!.branches[0]!.id;
     const r = (await (await post("/neon/projects/proj_demo/branches", { branch: { name: "x", parent_id: main } })).json()) as { branch: { id: string } };

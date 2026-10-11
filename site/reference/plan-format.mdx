@@ -274,7 +274,7 @@ A Neon branch. Requires `providers.neon.project`.
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
 | `name` | string | `sponson/${ctx.env}/${ctx.scope}` | Branch name; the branch's identity (key `branch:<name>`). |
-| `parent` | string | `main` | Parent branch, by name or id. Used only when the branch is created; a different parent on an existing branch is not a change. An unknown parent is `PARAM_INVALID`. |
+| `parent` | string | the project's default branch | Parent branch, by name or id. Omitted: the branch the project marks `default` (a new Neon project calls it `production`; older projects often `main`), whatever its name. Used only when the branch is created; a different parent on an existing branch is not a change. An unknown parent is `PARAM_INVALID`. |
 
 `connection_string` is the URI for the branch's database `neondb` (a new Neon project's default) or, when it has no
 such database, its first one, connecting as the role that owns that database.
@@ -288,7 +288,7 @@ Environment variables of one Vercel target and, for `preview`, one git branch. R
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
 | `target` | `preview` \| `production` \| `development` | `production` when `--env production`, else `preview` | The Vercel target. Anything else is `PARAM_INVALID`. `production` requires approval (see [Environments](/reference/plan-format#environments)). |
-| `branch` | string | the current git branch, for `target: preview` | The git branch the variables apply to. `"*"` (or `""`) means project-wide: every preview deployment sees them. A specific branch is only valid with `target: preview`. |
+| `branch` | string | the current git branch, for `target: preview` | The git branch the variables apply to. `"*"` (or `""`) means project-wide: every preview deployment sees them. A specific branch is only valid with `target: preview`, and only on a project connected to a Git repository: Vercel refuses branch-bound values otherwise, and the line fails with `PARAM_INVALID` (connect the repository, or set `branch: "*"`). |
 | `values` | map: NAME → value | `{}` | The variables. Each value is a literal, `{ from }`, `{ secret }` or `{ keep: true }`. All values are written as encrypted and shown as sensitive in diffs. |
 
 Each variable is a resource with key `env:<target>:<branch or *>:<NAME>`. A dashboard variable that one record shares

@@ -1,0 +1,74 @@
+# A new user's first apply against a Vercel project with no connected Git repository and a brand-new Neon project.
+# Vercel refuses branch-bound preview values on such a project (V9, checked live 2026-10-11): the env line fails with
+# a message naming both fixes, writing nothing, and the run rolls the Neon branch back. With `branch: "*"` the same
+# values apply project-wide. The Neon line has no `parent`: it forks from the project's default branch, which a new
+# project calls `production` (N6).
+# Format: see the top of scenarios/runner.test.ts.
+name: "vercel.env on a project with no Git repository: branch-bound values refused with the fix; project-wide values apply"
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_nogit }
+    neon: { project: proj_demo }
+  changes:
+    - id: db
+      adapter: neon
+      op: branch
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        DATABASE_URL: { from: db.connection_string }
+      environments: [preview]
+seed:
+  vercel:
+    projects:
+      prj_nogit: { envs: [], link: false }
+steps:
+  - run: apply --json
+    expect:
+      exit: 1
+      status: failed
+      lines: { db: rolled_back, env: failed }
+      errors: { env: 'no connected Git repository.*git branch feat/x.*Settings → Git.*branch: "\*"' }
+  - sim:
+      neon_branches: { sponson/preview/pr-42: absent }
+      state:
+        "vercel.projects.prj_nogit.envs": { length: 0 }
+        "neon.projects.proj_demo.branches.0.name": production
+        "neon.projects.proj_demo.branches.0.default": true
+  - plan: |
+      version: 1
+      providers:
+        vercel: { project: prj_nogit }
+        neon: { project: proj_demo }
+      changes:
+        - id: db
+          adapter: neon
+          op: branch
+          environments: [preview]
+        - id: env
+          adapter: vercel
+          op: env
+          target: preview
+          branch: "*"
+          values:
+            DATABASE_URL: { from: db.connection_string }
+          environments: [preview]
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { db: applied, env: applied }
+  - sim:
+      state:
+        "vercel.projects.prj_nogit.envs": { length: 1 }
+        "vercel.projects.prj_nogit.envs.0.key": DATABASE_URL
+  - run: apply --destroy --json
+    expect: { exit: 0, status: complete }
+  - sim:
+      neon_branches: { sponson/preview/pr-42: absent }
+      state:
+        "vercel.projects.prj_nogit.envs": { length: 0 }

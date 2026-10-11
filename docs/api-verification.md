@@ -48,11 +48,12 @@ too ("The preferred authorization scheme"): ✅.
 
 | Call | What the adapter sends and reads | Spec | Notes |
 |---|---|---|---|
-| `GET /v10/projects/{idOrName}/env` | `decrypt=true`, `teamId`; reads `envs[].id`, `key`, `value`, `target` (string or list), `gitBranch`, `type`, `decrypted` | ⚠️ → ✅ | Was `/v9/…`, which the spec no longer lists. `decrypt` is listed but deprecated, so a value with `decrypted` not `true` is fetched from the call below instead of being hashed as ciphertext. |
+| `GET /v10/projects/{idOrName}/env` | `teamId`; reads `envs[].id`, `key`, `value`, `target` (string or list), `gitBranch`, `type`, `decrypted` | ⚠️ → ✅ | Was `/v9/…`, which the spec no longer lists. `decrypt` is listed but deprecated, and checked live on 2026-10-11 it no longer decrypts (`decrypted: false`, an opaque value; V3), so the adapter no longer sends it: a value with `decrypted` not `true` is fetched from the call below instead of being hashed as ciphertext. |
 | same, pagination | follows `pagination.next` as `?until=` | ❓ | The response has the spec's `Pagination` object (`count`, `next`, `prev`), but this endpoint documents no page parameter. The adapter drops repeated records, so an API that ignores `until` costs one request, not duplicates. |
-| `GET /v1/projects/{idOrName}/env/{id}` | `teamId`; reads `value`, `decrypted`, `type` | ✅ | New. "Retrieve the decrypted value of an environment variable". A `sensitive` value is never returned (the response variant without `value`). |
+| `GET /v1/projects/{idOrName}/env/{id}` | `teamId`; reads `value`, `decrypted`, `type` | ✅ (live ✅) | New. "Retrieve the decrypted value of an environment variable"; live on 2026-10-11 it answered `decrypted: true` with the plaintext, the only way to read an `encrypted` value. A `sensitive` value is never returned (the response variant without `value`). |
 | `POST /v10/projects/{idOrName}/env` | `upsert=true`, `teamId`; body: list of `{ key, value, type: "encrypted", target: [t], gitBranch? }` | ✅ | Body matches the array form of the request schema. |
-| same, answer | `201 { created, failed }`; `created` one object or a list; `failed[].error` | ⚠️ → ✅ | The failure names the variable as `key` or `envVarKey`; the adapter read only `key`. The sim answered `200`; the spec says `201`. |
+| same, answer | `201 { created, failed }`; `created` one object or a list; `failed[].error` | ⚠️ → ✅ (live ✅) | The failure names the variable as `key` or `envVarKey`; the adapter read only `key`. The sim answered `200`; the spec says `201`. Live on 2026-10-11, an upsert of an existing key and target answered `201` with `created` a list holding the same id, `createdAt` unchanged, a newer `updatedAt`, and `failed: []` (V4). |
+| same, `gitBranch` without a Git connection | `400 { error: { code: "BAD_REQUEST", message: "Project \"<name>\" does not have a connected Git repository.", key: "project", envVarKey, project } }` → `PARAM_INVALID` | live ✅ | Not in the spec; found live on 2026-10-11 (V9). Branch-bound preview values (the default for `target: preview`) need a project connected to a repository; the adapter's message names both fixes: connect it, or `branch: "*"` for project-wide values. |
 | same, conflicts | an overlapping target set refused with `400 ENV_CONFLICT` | ❓ | Not described. Without `upsert`, a duplicate is documented as `403` ("cannot be created because it already exists"); the sim now answers that. A `400` for "an ongoing env update is already happening" is documented; it is reported as `PROVIDER_INVALID`, not retried. |
 | `DELETE /v9/projects/{idOrName}/env/{id}` | `teamId`; `404` is success | ✅ | `409` (project being transferred) surfaces as `PROVIDER_CONFLICT`. |
 | `GET /v7/deployments` | `projectId`, `sha`, `target`, `limit=20`, `teamId`; reads `uid`, `url`, `readyState`, `createdAt`, `target` | ⚠️ → ✅ | Was `/v6/deployments?sha=`: `sha` is a documented filter of `/v7` only, and v6 is not in the spec. The adapter required `state`, which is optional; `readyState` is the required field. `url` is null until an upload completes, which made the whole list a shape error. Lookups were also by commit only, so a production line could take the commit's preview build; they now pass the documented `target` filter and re-check each item's `target` (null = preview), see V8. |
@@ -66,14 +67,15 @@ too ("The preferred authorization scheme"): ✅.
 
 | Id | Assumption | Status |
 |---|---|---|
-| V1 | env writes visible to the next deployment and list at once | ❓ needs a live account (pinned by the contract suite) |
+| V1 | env writes visible to the next deployment and list at once | ✅ verified live 2026-10-11 for the list (a variable written with `?upsert=true` is in the next GET list); a deployment's view not checked separately (pinned by the contract suite) |
 | V2 | `GET /v7/deployments?sha=` filters by commit, newest first | `sha` filter verified; order ❓ (the adapter sorts anyway) |
 | V8 | `GET /v7/deployments?target=` filters by environment; items carry `target` (`production`, a custom environment, or null for previews) | ✅ verified (parameter and item schema) |
-| V3 | list decrypts with `decrypt=true`; `sensitive` values never returned | parameters and per-variable GET verified; whether the deprecated parameter still decrypts ❓ (handled either way) |
-| V4 | upsert answer `{ created, failed }`; `ENV_CONFLICT` on overlapping targets | answer shape and status verified; `created` listing updates, and `ENV_CONFLICT` ❓ |
+| V3 | the list never decrypts an `encrypted` value (even with `decrypt=true`); GET `/v1/projects/{id}/env/{id}` does; `sensitive` values never returned | ⚠️ contradicted live 2026-10-11 (the sim assumed `decrypt=true` decrypts; it answers `decrypted: false` and an opaque value): sim fixed, the adapter no longer sends `decrypt`; the per-variable GET verified live (pinned) |
+| V4 | upsert answer `{ created, failed }`; `ENV_CONFLICT` on overlapping targets | answer shape and status verified; `created` listing an update with the same id, `createdAt` kept and a newer `updatedAt` ✅ verified live 2026-10-11 (pinned); `ENV_CONFLICT` ❓ |
 | V5 | `project` overrides `name`; `gitSource` identity; states; one URL per deployment | verified, except auto-cancel of a branch's older builds ❓ |
 | V6 | `{ envs, pagination: { count, next, prev } }`, `?until=` | envelope verified; the page parameter ❓ |
 | V7 | `GET /v9/projects/{id}` carries `link` | verified |
+| V9 | a `gitBranch` value on a project with no connected Git repository answers `400 BAD_REQUEST` ("does not have a connected Git repository") and writes nothing | ✅ verified live 2026-10-11 (new; pinned) |
 
 ## Neon
 
@@ -84,11 +86,12 @@ too ("The preferred authorization scheme"): ✅.
 | `GET /projects/{project_id}/branches` | `cursor` from `pagination.next`; reads `branches[].id`, `name`, `parent_id`, `default` (and the deprecated `primary`) | ✅ | `CursorParam`, `CursorPagination`. A paged read starts with `limit`; the adapter sends none and follows `next` if present. |
 | `POST /projects/{project_id}/branches` | `{ branch: { name, parent_id }, endpoints: [{ type: "read_write" }] }` | ✅ | Matches the spec's own `branch_with_endpoint` example. |
 | same, answer | `201`; reads `branch`, `endpoints[].host`, `connection_uris[].connection_uri` | ✅ | `connection_uris` is absent when the parent has several databases or roles; the adapter then reads them with the calls below. |
-| same, refusals | `409` duplicate name → re-read and claim; `423` retried | `423` ✅, `409` ❓ | The generic error says `423 Locked` is always safe to retry. Which status a duplicate name gets is not documented. |
+| same, refusals | `409` duplicate name → re-read and claim; `423` retried | `423` ✅, `409` live ✅ | The generic error says `423 Locked` is always safe to retry. A duplicate name is not documented; live on 2026-10-11 it answered `409 { code: "BRANCH_ALREADY_EXISTS", message: "branch already exists; branch_name:…" }` (N5). |
+| same, `parent` omitted | forks from the branch listed `default: true` | live ✅ | Was `main` by default. A new Neon project's root branch is called `production` (checked live 2026-10-11, N6), so a first apply with the default failed; the default branch is now found by its flag, whatever its name. |
 | `GET /projects/{project_id}/branches/{branch_id}/endpoints` | reads `endpoints[].host`, preferring `type: read_write` | ✅ | |
 | `GET /projects/{project_id}/branches/{branch_id}/databases` | reads `databases[].name`, `owner_name` | ✅ | New (next row). |
 | `GET /projects/{project_id}/connection_uri` | `branch_id`, `database_name`, `role_name`; reads `uri` | ⚠️ → ✅ | Both names are required parameters. They were hard-coded to `neondb` / `neondb_owner`, a new project's defaults, so any other project failed to read. They now come from the branch's database list (`neondb` if present, else the first; its owner is the role). |
-| `DELETE /projects/{project_id}/branches/{branch_id}` | `404` is success | ✅ path and status; ⚠️ timing | "The deletion completes after all operations finish": not synchronous (N1). Not changed: whether a branch being deleted still lists needs a live run. |
+| `DELETE /projects/{project_id}/branches/{branch_id}` | `404` is success | ✅ path and status; timing live ✅ | "The deletion completes after all operations finish": not synchronous. Live on 2026-10-11, right after DELETE answered `200` (operations still running or scheduling) the branch was already absent from the list (N1), which is all the adapter relies on. |
 
 The spec also says a `503` is always safe to retry; the shared HTTP client retries `5xx` only for idempotent
 methods, which is more cautious than needed but not wrong.
@@ -97,11 +100,12 @@ methods, which is more cautious than needed but not wrong.
 
 | Id | Assumption | Status |
 |---|---|---|
-| N1 | branch deletion is synchronous | contradicted in part (the spec describes asynchronous completion); list visibility meanwhile ❓ (pinned by the contract suite) |
-| N2 | a create runs operations; `423` while they run; endpoint usable at once | operations and `423` retry-safety verified; which requests lock, and endpoint readiness ❓ (pinned) |
+| N1 | a deleted branch is gone from the list when DELETE returns | ✅ verified live 2026-10-11 (absent from the list at once, while the delete's operations still run; pinned) |
+| N2 | a create runs operations; endpoint usable at once; `423` only as the opt-in chaos fault `neon_op_ms` | ⚠️ contradicted in part live 2026-10-11: a second create in the same project right after a create (operations running) answered `201`, not `423`; the sim no longer locks creates by default. `423` retry-safety verified (the adapter retries it); endpoint readiness ❓ (pinned) |
 | N3 | `neondb` / `neondb_owner`; `default: true` on the root branch | the adapter no longer depends on the names (verified calls above); `default` verified |
 | N4 | `{ branches, pagination: { next } }`, `?cursor=` | verified |
-| N5 | a duplicate branch name answers `409` | ❓ |
+| N5 | a duplicate branch name answers `409 { code: "BRANCH_ALREADY_EXISTS", message: "branch already exists; branch_name:…" }` | ✅ verified live 2026-10-11 (sim body aligned; pinned) |
+| N6 | a new project's root branch is `production` and listed `default: true` | ✅ verified live 2026-10-11 (new; the adapter forks from `default` when `parent` is omitted; pinned) |
 
 ## Clerk
 
@@ -493,11 +497,10 @@ server and the generic REST sim (assumption R7's exact headers and fixed tokens)
 
 ## What still needs a live account
 
-- Vercel: V1 (propagation of env writes), the deployment list's order, whether `decrypt=true` still decrypts,
-  what `created` contains for updated entries and how overlapping target sets are refused, whether the env list
-  pages with `until`, branch auto-cancel, and that a `gitSource` deployment from the project's `link` builds.
-- Neon: N1 (list visibility during an asynchronous delete), N2 (which requests answer `423`, endpoint readiness),
-  N5 (status of a duplicate branch name).
+- Vercel: V1 for a deployment (the list was checked), the deployment list's order, how overlapping target sets
+  are refused, whether the env list pages with `until`, branch auto-cancel, and that a `gitSource` deployment from
+  the project's `link` builds.
+- Neon: N2 (whether any request answers `423` in practice, endpoint readiness).
 - Clerk: C1 (status and wording of a duplicate), C2 (the envelope, confirmed only through the SDKs).
 - LaunchDarkly: LD5 (re-adding a target the variation already serves; the status of a two-variation refusal), LD7
   (read-after-write), LD2 (an unknown environment), LD3 (the `user` placeholders in `contextTargets`).
@@ -537,4 +540,5 @@ published specifications and documentation only.
 | Date | What ran | Result |
 |---|---|---|
 | 2026-10-11 | `recipe:github.repo_webhook` against `api.github.com` (a public repository; the hook pointed at a reserved `example.com` name): create, re-apply, destroy | passed: re-apply wrote nothing (GH8 verified), destroy left no hook |
+| 2026-10-11 | Vercel env vars and Neon branches, checked by hand against the real APIs through a logged-in dashboard session on throwaway projects (not `pnpm test:live`) | Vercel: V1 (list) and V4 verified, V3 contradicted (`decrypt=true` no longer decrypts; the per-variable GET does), V9 new (a `gitBranch` write without a connected repository is `400`). Neon: N1 and N5 verified, N2 contradicted in part (a second create meanwhile answered `201`), N6 new (a new project's default branch is `production`). Sim, adapters and the contract suite updated to match |
 | 2026-10-11 | Release 0.6.1 through `scripts/publish-release.sh` | passed: all four packages carry SLSA v1 provenance (Sigstore transparency log), all four tags on origin; the first release with both |

@@ -140,7 +140,7 @@ export function previewPlan(extra: Record<string, unknown>[] = []) {
     receipts: "local",
     providers: { vercel: { project: "prj_demo" }, neon: { project: "proj_demo" } },
     changes: [
-      { id: "db", adapter: "neon", op: "branch", parent: "main", environments: ["preview"] },
+      { id: "db", adapter: "neon", op: "branch", environments: ["preview"] },
       {
         id: "env",
         adapter: "vercel",

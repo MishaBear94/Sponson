@@ -1,4 +1,4 @@
-import { canonicalJson, isPendingMarker, sha256, type AdapterContext, type LiveState, type OpSpec, type ResourceAdapter, type ResourceRecord } from "@sponson/core";
+import { canonicalJson, isPendingMarker, sha256, type AdapterContext, type LiveState, type OpSpec, type ResolvedParams, type ResourceAdapter, type ResourceRecord } from "@sponson/core";
 import { ABSENT, assertNoPending, clientFor, deleteIgnoringNotFound, desiredSide, optionalEnv, paramError, requireEnv, requireProvider, stringParam } from "./common.js";
 import { ShapeError, isProviderError, listAll, obj, records, type ApiClient, type Page } from "./http.js";
 
@@ -109,6 +109,29 @@ function parseCreated(body: unknown): Created {
   return { branch, ...(endpoints[0] ? { host: endpoints[0].host } : {}), ...(uris[0] ? { uri: uris[0].connection_uri } : {}) };
 }
 
+/** True for the project's root branch: `default` (or the deprecated `primary`). */
+function isDefault(b: NeonBranch): boolean {
+  return b.default === true || b.primary === true;
+}
+
+/**
+ * The branch a new one forks from: `parent` by name or id when given, else the project's default branch. A new Neon
+ * project's default branch is called `production`, not `main` (assumption N6), so no name is assumed.
+ */
+function parentOf(branches: NeonBranch[], params: ResolvedParams, project: string): NeonBranch {
+  const root = branches.find(isDefault);
+  const wanted = params.parent;
+  if (wanted === undefined || wanted === null || wanted === "") {
+    if (!root) throw paramError("neon", `project ${project} lists no default branch to fork from; set \`parent\` to a branch name or id`, "parent");
+    return root;
+  }
+  const name = stringParam(params, "parent", "neon");
+  const found = branches.find((b) => b.name === name || b.id === name);
+  if (found) return found;
+  const hint = root ? `; omit \`parent\` to fork from the project's default branch (\`${root.name}\`)` : "";
+  throw paramError("neon", `parent branch \`${name}\` not found in project ${project}${hint}`, "parent");
+}
+
 const branch: OpSpec = {
   outputs: {
     branch_id: { available: "immediate" },
@@ -116,8 +139,12 @@ const branch: OpSpec = {
     host: { available: "immediate" },
   },
 
+  /**
+   * No default `parent`: an omitted parent means the project's default branch (`default: true` in the list),
+   * whatever it is called. A new Neon project calls it `production`, older ones `main` (assumption N6).
+   */
   defaults(params, ctx) {
-    return { parent: "main", name: `sponson/${ctx.env}/${ctx.scope}`, ...params };
+    return { name: `sponson/${ctx.env}/${ctx.scope}`, ...params };
   },
 
   async read(actx, params) {
@@ -146,10 +173,7 @@ const branch: OpSpec = {
     const key = branchKey(name);
     if (live?.resources.some((r) => r.key === key)) return { resources: live.resources, outputs: live.outputs, created: [] };
 
-    const parentName = stringParam(params, "parent", "neon", "main");
-    const branches = await listBranches(c);
-    const parent = branches.find((b) => b.name === parentName || b.id === parentName);
-    if (!parent) throw paramError("neon", `parent branch \`${parentName}\` not found in project ${c.project}`, "parent");
+    const parent = parentOf(await listBranches(c), params, c.project);
 
     await actx.intend([key]);
     actx.log(`create branch ${name} from ${parent.name}`);
@@ -177,7 +201,7 @@ const branch: OpSpec = {
   /** Every branch but the project's root: anything else may be a preview branch some scope (or nobody) manages. */
   async listScope(actx) {
     const c = client(actx);
-    return (await listBranches(c)).filter((b) => !b.default && !b.primary).map(record);
+    return (await listBranches(c)).filter((b) => !isDefault(b)).map(record);
   },
 
   /** One line per branch, naming it: the line then manages exactly that branch. */

@@ -189,11 +189,11 @@ function dbLine(s: Shape): string[] {
   if (s.planetscale) return planetscaleLines(s);
   if (!s.neon) return [];
   return [
-    "  # One Neon branch per pull request (sponson/preview/pr-<n>), forked from `main`; deleted by `apply --destroy`.",
+    "  # One Neon branch per pull request (sponson/preview/pr-<n>), forked from the project's default branch",
+    "  # (`production` in a new Neon project; `parent: <name>` picks another); deleted by `apply --destroy`.",
     "  - id: db",
     "    adapter: neon",
     "    op: branch",
-    "    parent: main",
     "    environments: [preview]",
     "",
   ];

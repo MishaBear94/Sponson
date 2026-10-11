@@ -31,7 +31,7 @@ The format is specified in [docs/plan-format.md](/reference/plan-format).
 
 ## nextjs-neon-preview.plan.yaml
 
-The smallest useful plan. `db` creates a Neon branch named `sponson/preview/<scope>` from `main`; `env` writes
+The smallest useful plan. `db` creates a Neon branch named `sponson/preview/<scope>` from the project's default branch (`production` in a new Neon project); `env` writes
 `DATABASE_URL` (from the branch's sensitive `connection_string`), a host, a secret and a literal into the preview
 target for the current git branch.
 
@@ -66,11 +66,11 @@ providers:
 
 changes:
   # One Neon branch per scope. `name` defaults to sponson/<env>/<scope>, so pull request 42
-  # gets `sponson/preview/pr-42`; `parent` defaults to `main`.
+  # gets `sponson/preview/pr-42`. Without `parent`, it forks from the project's default branch
+  # (`production` in a new Neon project); `parent: <name or id>` picks another.
   - id: db
     adapter: neon
     op: branch
-    parent: main
     environments: [preview]
 
   # Preview variables. With target preview and no `branch:`, they apply to the current git

@@ -364,7 +364,6 @@ changes:
   - id: db
     adapter: neon
     op: branch
-    parent: main
     environments: [preview]
   - id: ${envId}
     adapter: vercel

@@ -115,7 +115,7 @@ describe("partial → complete, reconstructed from the receipt by a fresh sessio
     expect(rc.json.receipt.runId).toBe(d.json.receipt.runId);
     expect(w.sim.state.clerk.redirect_urls).toEqual([]);
     expect(w.sim.state.vercel.projects.prj_demo!.envs).toEqual([]);
-    expect(w.sim.state.neon.projects.proj_demo!.branches.map((b) => b.name)).toEqual(["main"]);
+    expect(w.sim.state.neon.projects.proj_demo!.branches.map((b) => b.name)).toEqual(["production"]);
     const plan = await session2!.plan();
     expect(plan.json.lines.map((l: any) => l.status)).toEqual(["create", "pending", "pending"]);
   });

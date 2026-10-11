@@ -351,7 +351,7 @@
         "op": true,
         "environments": true,
         "depends_on": true,
-        "parent": { "$ref": "#/$defs/stringOrRef", "description": "Parent branch name or id. Default: main." },
+        "parent": { "$ref": "#/$defs/stringOrRef", "description": "Parent branch name or id. Default: the project's default branch (`production` in a new Neon project)." },
         "name": { "$ref": "#/$defs/stringOrRef", "description": "Branch name. Default: sponson/${ctx.env}/${ctx.scope}. The branch is identified by its name." }
       },
       "additionalProperties": false

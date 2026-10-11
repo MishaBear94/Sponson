@@ -26,7 +26,7 @@ The format is specified in [docs/plan-format.md](../docs/plan-format.md).
 
 ## nextjs-neon-preview.plan.yaml
 
-The smallest useful plan. `db` creates a Neon branch named `sponson/preview/<scope>` from `main`; `env` writes
+The smallest useful plan. `db` creates a Neon branch named `sponson/preview/<scope>` from the project's default branch (`production` in a new Neon project); `env` writes
 `DATABASE_URL` (from the branch's sensitive `connection_string`), a host, a secret and a literal into the preview
 target for the current git branch.
 

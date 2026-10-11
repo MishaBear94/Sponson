@@ -9,11 +9,11 @@ providers:
 
 changes:
   # One Neon branch per scope. `name` defaults to sponson/<env>/<scope>, so pull request 42
-  # gets `sponson/preview/pr-42`; `parent` defaults to `main`.
+  # gets `sponson/preview/pr-42`. Without `parent`, it forks from the project's default branch
+  # (`production` in a new Neon project); `parent: <name or id>` picks another.
   - id: db
     adapter: neon
     op: branch
-    parent: main
     environments: [preview]
 
   # Preview variables. With target preview and no `branch:`, they apply to the current git

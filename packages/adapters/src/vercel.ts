@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { SponsonError, sha256, type AdapterContext, type Ctx, type Literal, type OpSpec, type ResolvedParams, type ResourceAdapter, type ResourceDiff, type ResourceRecord } from "@sponson/core";
 import { ABSENT, assertNoPending, clientFor, deleteIgnoringNotFound, diffValue, optionalEnv, optionalProvider, paramError, requireEnv, requireProvider, stringParam } from "./common.js";
-import { ShapeError, isTransient, listAll, obj, records, type ApiClient, type Page } from "./http.js";
+import { ShapeError, isProviderError, isTransient, listAll, obj, records, type ApiClient, type Page } from "./http.js";
 
 /** The environment vercel reads; declared once, used by the code below and by the generated docs. */
 const ABOUT = { credentialEnv: "VERCEL_TOKEN", baseUrlEnv: "VERCEL_API_URL", title: "Vercel", category: "deploy", detect: { deps: ["vercel", "@vercel/"], env: ["VERCEL_*"], files: ["vercel.json", ".vercel/project.json"] } } as const;
@@ -163,9 +163,13 @@ function parseUpsert(body: unknown): UpsertResult {
 // Lists
 // ---------------------------------------------------------------------------
 
-/** Every variable of the project, once each (by id). `decrypt=true` is deprecated in the spec but still listed. */
+/**
+ * Every variable of the project, once each (by id). No `decrypt=true`: the parameter is deprecated and no longer
+ * decrypts (`decrypted: false`, an opaque value; assumption V3, checked live 2026-10-11), so values come from the
+ * per-variable GET in comparableValue.
+ */
 async function listEnvs(c: Client): Promise<VercelEnv[]> {
-  const all = await listAll(c.api, `/v10/projects/${c.project}/env${query(c, { decrypt: "true" })}`, envPage);
+  const all = await listAll(c.api, `/v10/projects/${c.project}/env${query(c)}`, envPage);
   const seen = new Set<string>();
   return all.filter((e) => !seen.has(e.id) && seen.add(e.id));
 }
@@ -298,6 +302,45 @@ function refuseShared(e: VercelEnv, scope: EnvScope): SponsonError {
   );
 }
 
+/**
+ * Vercel's refusal of a `gitBranch` value on a project with no connected Git repository (assumption V9, checked live
+ * 2026-10-11): `400 { error: { code: "BAD_REQUEST", message: "Project \"<name>\" does not have a connected Git
+ * repository.", key: "project", … } }`.
+ */
+function isNoGitRepository(e: unknown): boolean {
+  return isProviderError(e, "PROVIDER_INVALID") && e.details.status === 400 && /does not have a connected Git repository/i.test(e.message);
+}
+
+/**
+ * The plan asks for branch-bound preview values (the default for `target: preview`), which Vercel only keeps on a
+ * project connected to a repository. The two ways out: connect it, or write the values project-wide.
+ */
+function noGitRepository(c: Client, scope: EnvScope, path: string): SponsonError {
+  return new SponsonError(
+    "PARAM_INVALID",
+    `vercel: project ${c.project} has no connected Git repository, so Vercel refuses preview values bound to git branch ${scope.branch}. ` +
+      `Connect the repository in the Vercel project's Settings → Git, or set \`branch: "*"\` on this line to write project-wide preview values (every preview deployment then sees them).`,
+    { adapter: "vercel", param: "branch", project: c.project, method: "POST", path, status: 400 },
+  );
+}
+
+/** One bulk upsert of the line's values to write; any entry Vercel rejects fails the line. */
+async function upsertEnvs(c: Client, scope: EnvScope, toWrite: Array<[string, unknown]>): Promise<{ r: UpsertResult; path: string }> {
+  const body = toWrite.map(([key, value]) => ({ key, value: String(value), type: "encrypted", target: [scope.target], ...(scope.branch ? { gitBranch: scope.branch } : {}) }));
+  const path = `/v10/projects/${c.project}/env${query(c, { upsert: "true" })}`;
+  let r: UpsertResult;
+  try {
+    r = await c.api.post(path, body, parseUpsert);
+  } catch (e) {
+    throw scope.branch && isNoGitRepository(e) ? noGitRepository(c, scope, path) : e;
+  }
+  // A bulk upsert answers 201 even when some entries were rejected.
+  if (r.failedKeys.length > 0) {
+    throw new SponsonError("PROVIDER_INVALID", `vercel: the bulk upsert rejected ${r.failedKeys.length} env var(s): ${r.failedKeys.join(", ")}`, { adapter: "vercel", method: "POST", path, keys: r.failedKeys });
+  }
+  return { r, path };
+}
+
 const env: OpSpec = {
   outputs: {
     preview_url: { available: "external", event: "deploy" },
@@ -354,19 +397,8 @@ const env: OpSpec = {
     if (toWrite.length > 0) {
       if (creating.length > 0) await actx.intend(creating);
       const startedAt = Date.now();
-      const body = toWrite.map(([key, value]) => ({ key, value: String(value), type: "encrypted", target: [scope.target], ...(scope.branch ? { gitBranch: scope.branch } : {}) }));
-      actx.log(`upsert ${body.length} env var(s) in ${scope.target}${scope.branch ? ` for ${scope.branch}` : ""}`);
-      const path = `/v10/projects/${c.project}/env${query(c, { upsert: "true" })}`;
-      const r = await c.api.post(path, body, parseUpsert);
-      // A bulk upsert answers 200 even when some entries were rejected.
-      if (r.failedKeys.length > 0) {
-        throw new SponsonError("PROVIDER_INVALID", `vercel: the bulk upsert rejected ${r.failedKeys.length} env var(s): ${r.failedKeys.join(", ")}`, {
-          adapter: "vercel",
-          method: "POST",
-          path,
-          keys: r.failedKeys,
-        });
-      }
+      actx.log(`upsert ${toWrite.length} env var(s) in ${scope.target}${scope.branch ? ` for ${scope.branch}` : ""}`);
+      const { r, path } = await upsertEnvs(c, scope, toWrite);
       // Trust the write's answer for ids: a list right after a write may not show it yet.
       for (const [name, value] of toWrite) {
         const written = r.created.find((e) => e.key === name && inScope(e, scope));

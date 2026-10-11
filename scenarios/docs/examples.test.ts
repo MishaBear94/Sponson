@@ -25,7 +25,7 @@ const SEEDS: Record<string, (plan: Plan) => Partial<SimSeed>> = {
         },
       },
     },
-    neon: { projects: { [project(plan, "neon")]: { branches: [{ name: "main" }, { name: "staging", parent: "main" }] } } },
+    neon: { projects: { [project(plan, "neon")]: { branches: [{ name: "production" }, { name: "staging", parent: "production" }] } } },
   }),
   // The generic REST sim serves any path once it is known: the example's collections (empty) and parents.
   "http-flags-webhooks-allowlists.plan.yaml": () => ({
@@ -61,7 +61,7 @@ function project(plan: Plan, adapter: string): string {
 function seedFor(file: string, plan: Plan): Partial<SimSeed> {
   const seed: Partial<SimSeed> = {};
   if (plan.providers.vercel) seed.vercel = { projects: { [project(plan, "vercel")]: { envs: [] } } };
-  if (plan.providers.neon) seed.neon = { projects: { [project(plan, "neon")]: { branches: [{ name: "main" }] } } };
+  if (plan.providers.neon) seed.neon = { projects: { [project(plan, "neon")]: { branches: [{ name: "production" }] } } };
   if (plan.providers.netlify) seed.netlify = { sites: { [String(plan.providers.netlify.site)]: { name: "acme-web", account: "acme" } } };
   const ps = plan.providers.planetscale;
   if (ps) seed.planetscale = { organizations: { [String(ps.organization)]: { [String(ps.database)]: [{ name: "main", production: true }] } } };

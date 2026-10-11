@@ -26,7 +26,6 @@ changes:
   - id: db
     adapter: neon
     op: branch
-    parent: main
 `,
     });
     w.proxy.on(isPath("POST", /^\/neon\/projects\/[^/]+\/branches$/), () => "drop", 1);

@@ -2,15 +2,19 @@
  * Simulated Neon: branches, their endpoints, databases and connection strings.
  *
  * Assumptions about the real API that this fake encodes, each marked with how far it is checked. "Verified" means
- * against Neon's published OpenAPI document (https://neon.tech/api_spec/release/v2.json, fetched 2026-10-10); see
+ * against Neon's published OpenAPI document (https://neon.tech/api_spec/release/v2.json, fetched 2026-10-10); "checked
+ * live 2026-10-11" means against the real API, through a logged-in console session on a throwaway project. See
  * docs/api-verification.md:
- *   N1. Branch deletion is synchronous here: the branch is gone when DELETE returns. Contradicted in part: the
- *       spec says "the deletion completes after all operations finish" and DELETE answers with `operations`.
- *       Whether the list still shows the branch meanwhile is unverified: needs a live account.
- *   N2. Branch creation runs async operations (verified: the create answer carries `operations`): for chaos
- *       `neon_op_ms` (default 0) after a create, further creates in the project and writes to the new branch
- *       answer 423 Locked, which the spec documents as safe to retry (verified). Which requests are locked, and
- *       that the endpoint is usable at once, are unverified: needs a live account.
+ *   N1. Branch deletion is synchronous here: the branch is gone from the list when DELETE returns. The spec says
+ *       "the deletion completes after all operations finish" and DELETE answers with `operations`; verified live
+ *       2026-10-11 that right after DELETE (200, its operations still running or scheduling) the branch is
+ *       already absent from the list, which is all the sim and the adapter rely on.
+ *   N2. Branch creation runs async operations (verified: the create answer carries `operations`). Contradicted in
+ *       part (checked live 2026-10-11): a second create in the same project right after a create, its operations
+ *       still running, answered 201, not 423. So by default nothing is locked here. 423 Locked may still happen
+ *       elsewhere and the spec documents it as safe to retry (verified), so the adapter retries it; chaos
+ *       `neon_op_ms` (default 0, opt-in) injects it as a fault: for that long after a create, further creates in
+ *       the project and writes to the new branch answer 423. That the endpoint is usable at once is unverified.
  *   N3. A root branch has one database `neondb` owned by role `neondb_owner` (a new project's defaults); a child
  *       copies its parent's. The adapter no longer relies on these names: it reads them from
  *       GET /projects/:id/branches/:id/databases (verified), and connection_uri requires both (verified).
@@ -18,7 +22,12 @@
  *   N4. Pagination (chaos `page_size`): `{ branches, pagination: { next } }` with `?cursor=`, cursors opaque
  *       (verified: CursorPagination). Without `limit` the list is not paged here; the spec says a paged read
  *       starts with `limit`, and the adapter follows `next` either way.
- *   N5. Creating a branch whose name exists answers 409. Unverified: the spec documents only the generic error.
+ *   N5. Creating a branch whose name exists answers 409 `{ code: "BRANCH_ALREADY_EXISTS", message: "branch already
+ *       exists; branch_name:\"<name>\"" }`. Verified live 2026-10-11 (the spec documents only the generic error).
+ *   N6. A new Neon project's root branch is called `production` (not `main`) and the list marks it `default: true`.
+ *       Verified live 2026-10-11. The default seed's root branch is `production`; a seed may name its root anything
+ *       (older projects often have `main`), and its first root branch is the default. The adapter forks from the
+ *       `default` branch when `parent` is omitted, so it depends on neither name.
  */
 import { page, Reply, route, router, type CreatedBy, type ProviderSim, type SimCore } from "../provider.js";
 
@@ -59,7 +68,8 @@ export interface NeonSeed {
 /** Simulated Neon (projects, branches, operations); see the assumptions at the top of this file. */
 export const neonSim: ProviderSim<NeonState, NeonSeed> = {
   env: { token: "NEON_API_KEY", url: "NEON_API_URL", testToken: "tok_neon" },
-  defaultSeed: { projects: { proj_demo: { branches: [{ name: "main" }] } } },
+  // A new project's root branch is `production` (N6).
+  defaultSeed: { projects: { proj_demo: { branches: [{ name: "production" }] } } },
 
   reset(core, seed) {
     const state: NeonState = { projects: {} };
@@ -111,7 +121,7 @@ const routes = router<NeonState>(
       const b = (body ?? {}) as { branch?: { name?: string; parent_id?: string } };
       const name = b.branch?.name;
       if (!name) return new Reply(400, { code: "", message: "branch.name required" });
-      if (p.branches.some((x) => x.name === name)) return new Reply(409, { code: "", message: "branch already exists" });
+      if (p.branches.some((x) => x.name === name)) return new Reply(409, { code: "BRANCH_ALREADY_EXISTS", message: `branch already exists; branch_name:${JSON.stringify(name)}` });
       const parentId = b.branch?.parent_id ?? null;
       if (parentId && !p.branches.some((x) => x.id === parentId)) return notFound("parent branch");
       const branch = createBranch(core, p, name, parentId, "api");
@@ -154,7 +164,7 @@ const routes = router<NeonState>(
       const b = branchOf(state, params.project, params.branch);
       if (!p || !b) return notFound("branch");
       if (Date.now() < b.opUntil) return locked();
-      // The real deletion "completes after all operations finish" (assumption N1); the sim removes it at once.
+      // The real deletion "completes after all operations finish", but the branch leaves the list at once (N1).
       p.branches = p.branches.filter((x) => x !== b);
       return new Reply(200, { branch: publicBranch(b), operations: [{ id: core.nextId("op-"), branch_id: b.id, action: "delete_timeline", status: "finished" }] });
     }),

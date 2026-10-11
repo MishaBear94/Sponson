@@ -26,7 +26,6 @@ changes:
   - id: db
     adapter: neon
     op: branch
-    parent: main
   - id: env
     adapter: vercel
     op: env

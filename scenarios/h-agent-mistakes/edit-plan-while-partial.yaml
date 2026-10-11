@@ -8,7 +8,6 @@ plan: |
     - id: db
       adapter: neon
       op: branch
-      parent: main
       environments: [preview]
     - id: env
       adapter: vercel
@@ -35,7 +34,6 @@ steps:
         - id: db
           adapter: neon
           op: branch
-          parent: main
         - id: env
           adapter: vercel
           op: env

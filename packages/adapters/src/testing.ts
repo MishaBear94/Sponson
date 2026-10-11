@@ -67,6 +67,8 @@ export function writeIndex(h: Harness, method: string, path: RegExp, from = 0): 
 export interface Recorded {
   method: string;
   path: string;
+  /** The query string, with its `?` ("" when none). */
+  search?: string;
 }
 
 /**
@@ -81,7 +83,7 @@ export async function recordingProxy(upstream: string, rewrite?: (req: Recorded,
     req.on("data", (c: Buffer) => chunks.push(c));
     const forward = async () => {
       const u = new URL(req.url ?? "/", "http://proxy.local");
-      const rec = { method: req.method ?? "GET", path: u.pathname };
+      const rec = { method: req.method ?? "GET", path: u.pathname, search: u.search };
       log.push(rec);
       const headers: Record<string, string> = {};
       for (const [k, v] of Object.entries(req.headers)) if (typeof v === "string" && !["host", "content-length", "connection"].includes(k)) headers[k] = v;

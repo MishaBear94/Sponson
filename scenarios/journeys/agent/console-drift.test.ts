@@ -75,6 +75,6 @@ describe("console drift → reconcile, driven by an agent", () => {
     expect(d.code).toBe(0);
     const left = w.sim.state.vercel.projects.prj_demo!.envs.map((e) => e.key);
     expect(left, `destroy receipt: ${JSON.stringify(Object.values(d.json.receipt.lines).map((l: any) => [l.id, l.status, l.error]))}`).toEqual([]);
-    expect(w.sim.state.neon.projects.proj_demo!.branches.map((b) => b.name)).toEqual(["main"]);
+    expect(w.sim.state.neon.projects.proj_demo!.branches.map((b) => b.name)).toEqual(["production"]);
   });
 });

@@ -44,11 +44,10 @@ providers:
   clerk: {}
 
 changes:
-  # The per-PR database. Parent is main so migrations run against real-ish data.
+  # The per-PR database. Forked from the project's default branch so migrations run against real-ish data.
   - id: db
     adapter: neon
     op: branch
-    parent: main
     environments: [preview]
 
   # Vars the app needs per preview.
