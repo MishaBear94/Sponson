@@ -1,0 +1,83 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Honeycomb API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: honeycomb
+title: Honeycomb
+category: observability
+verified_on: "2026-10-11"
+docs:
+  - title: Create a Marker
+    url: https://docs.honeycomb.io/api/markers/create-a-marker
+  - title: List All Markers
+    url: https://docs.honeycomb.io/api/markers
+  - title: Update a Marker
+    url: https://docs.honeycomb.io/api/markers/update-a-marker
+  - title: Delete a Marker
+    url: https://docs.honeycomb.io/api/markers/delete-a-marker
+api:
+  base_url: https://api.honeycomb.io
+  base_url_env: HONEYCOMB_API_URL
+  auth: { header: X-Honeycomb-Team, value_env: HONEYCOMB_API_KEY }
+assumptions:
+  - id: HC1
+    verified: true
+    text: "`POST /1/markers/{datasetSlug}` creates a marker from `start_time`, `end_time` (Unix seconds), `message`, `type` and `url` (all optional; `start_time` defaults to the request's arrival), answering 201 with the marker and its `id`; `__all__` as the dataset slug makes an environment-wide marker. Requests carry a Configuration Key with the Manage Markers permission in `X-Honeycomb-Team`."
+    source: https://docs.honeycomb.io/api/markers/create-a-marker
+  - id: HC2
+    verified: true
+    text: "`GET /1/markers/{datasetSlug}` answers a bare array of the dataset's markers (`id`, `message`, `type`, `url`, `start_time`, `end_time`, `created_at`, `updated_at`, `color`)."
+    source: https://docs.honeycomb.io/api/markers
+  - id: HC3
+    verified: true
+    text: "`PUT /1/markers/{datasetSlug}/{markerId}` replaces the marker: a field left out of the body is erased."
+    source: https://docs.honeycomb.io/api/markers/update-a-marker
+  - id: HC4
+    verified: true
+    text: "`DELETE /1/markers/{datasetSlug}/{markerId}` removes the marker and answers it (200)."
+    source: https://docs.honeycomb.io/api/markers/delete-a-marker
+  - id: HC5
+    verified: true
+    text: "The API is served from `api.honeycomb.io` (US) and `api.eu1.honeycomb.io` (EU); EU teams set `base_url` in the provider block."
+    source: https://docs.honeycomb.io/api/markers/create-a-marker
+  - id: HC6
+    verified: false
+    text: "Message and type identify the marker this recipe created among the dataset's markers (Honeycomb does not require them to be unique: two equal ones make `find` refuse with PARAM_INVALID), and the list holds every marker of the dataset in one answer."
+  - id: HC7
+    verified: false
+    text: "An update (a changed `url`) re-sends message, type and url but not `start_time`, which Honeycomb then sets to the time of the update (HC3), moving the marker; markers are rarely edited."
+  - id: HC8
+    verified: false
+    text: "A deleted marker answers 404 to DELETE, which destroy treats as already gone."
+ops:
+  marker:
+    kind: resource
+    title: Deploy marker
+    summary: "A marker on an environment's dataset (or on every dataset of the environment with `__all__`) for a deploy, such as `deploy pr-42 0123abc`. Located by its message and type; a console edit of its URL is drift. Destroying the scope removes it; write `destroy: keep` to keep the deploy history."
+    covers: [honeycomb-marker]
+    params:
+      dataset:
+        type: string
+        required: true
+        description: The dataset's slug, or `__all__` for an environment-wide marker.
+        example: __all__
+      message:
+        type: string
+        required: true
+        description: The marker's text; with its type, its identity (HC6).
+        example: "deploy ${ctx.scope} ${ctx.git.sha}"
+      type:
+        type: string
+        default: deploy
+        description: The marker's type, which groups markers (and their color).
+      url:
+        type: string
+        description: The link opened from the marker (the preview or the build).
+        example: "https://${ctx.scope}.preview.example.com"
+    http:
+      find:
+        path: "/1/markers/{dataset}"
+        match: { message: { param: message }, type: { param: type } }
+      create: { path: "/1/markers/{dataset}" }
+      update: { method: PUT, path: "/1/markers/{dataset}/{id}" }
+      delete: { path: "/1/markers/{dataset}/{id}" }
+      fields:
+        url: { param: url }

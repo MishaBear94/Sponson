@@ -10,6 +10,185 @@
     "key": "/zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records?type=CNAME&name.exact=pr-42.preview.example.com[name=pr-42.preview.example.com,type=CNAME]",
     "id": "DELETE /zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records/ID"
   },
+  "configcat.targeting_rule": {
+    "provider": {
+      "base_url": "https://api.configcat.com",
+      "base_url_env": "CONFIGCAT_API_URL",
+      "auth": {
+        "basic": {
+          "user_env": "CONFIGCAT_BASIC_AUTH_USERNAME",
+          "password_env": "CONFIGCAT_BASIC_AUTH_PASSWORD"
+        }
+      }
+    },
+    "key": "/v2/environments/08d8becf-d4d9-4c66-8b48-6ac74cd95fba/settings/12345/value#/targetingRules=pr-42",
+    "id": "{\"item\":\"pr-42\",\"key_field\":\"/conditions/0/userCondition/comparisonValue/listValue/0/value\",\"list\":\"/targetingRules\",\"read\":\"/v2/environments/08d8becf-d4d9-4c66-8b48-6ac74cd95fba/settings/12345/value\",\"send\":[\"defaultValue\",\"percentageEvaluationAttribute\"],\"shape\":\"array\",\"write\":\"PUT /v2/environments/08d8becf-d4d9-4c66-8b48-6ac74cd95fba/settings/12345/value\"}"
+  },
+  "github.repo_webhook": {
+    "provider": {
+      "base_url": "https://api.github.com",
+      "base_url_env": "GITHUB_API_URL",
+      "auth": {
+        "bearer_env": "GITHUB_TOKEN"
+      },
+      "headers": {
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "sponson"
+      }
+    },
+    "key": "/repos/acme/app/hooks?per_page=100[/config/url=https://pr-42.preview.example.com/api/github]",
+    "id": "DELETE /repos/acme/app/hooks/ID"
+  },
+  "growthbook.force_rule": {
+    "provider": {
+      "base_url": "https://api.growthbook.io/api",
+      "base_url_env": "GROWTHBOOK_API_URL",
+      "auth": {
+        "bearer_env": "GROWTHBOOK_API_KEY"
+      }
+    },
+    "key": "/v2/features/new-checkout#/rules=Sponson preview pr-42",
+    "id": "{\"item\":\"Sponson preview pr-42\",\"item_path\":\"/feature\",\"key_field\":\"description\",\"list\":\"/rules\",\"read\":\"/v2/features/new-checkout\",\"send\":\"field\",\"shape\":\"array\",\"write\":\"POST /v2/features/new-checkout\"}"
+  },
+  "honeycomb.marker": {
+    "provider": {
+      "base_url": "https://api.honeycomb.io",
+      "base_url_env": "HONEYCOMB_API_URL",
+      "auth": {
+        "header": "X-Honeycomb-Team",
+        "value_env": "HONEYCOMB_API_KEY"
+      }
+    },
+    "key": "/1/markers/__all__[message=deploy pr-42 0123456789abcdef0123456789abcdef01234567,type=deploy]",
+    "id": "DELETE /1/markers/__all__/ID"
+  },
+  "posthog.release_condition": {
+    "provider": {
+      "base_url": "https://us.posthog.com",
+      "base_url_env": "POSTHOG_API_URL",
+      "auth": {
+        "bearer_env": "POSTHOG_PERSONAL_API_KEY"
+      }
+    },
+    "key": "/api/projects/12345/feature_flags/678/#/filters/groups=pr-42.preview.example.com",
+    "id": "{\"item\":\"pr-42.preview.example.com\",\"key_field\":\"/properties/0/value/0\",\"list\":\"/filters/groups\",\"read\":\"/api/projects/12345/feature_flags/678/\",\"send\":\"field\",\"shape\":\"array\",\"write\":\"PATCH /api/projects/12345/feature_flags/678/\"}"
+  },
+  "postmark.server": {
+    "provider": {
+      "base_url": "https://api.postmarkapp.com",
+      "base_url_env": "POSTMARK_API_URL",
+      "auth": {
+        "header": "X-Postmark-Account-Token",
+        "value_env": "POSTMARK_ACCOUNT_TOKEN"
+      }
+    },
+    "key": "/servers?count=500&offset=0&name=sponson-preview-pr-42[Name=sponson-preview-pr-42]",
+    "id": "DELETE /servers/ID"
+  },
+  "postmark_server.webhook": {
+    "provider": {
+      "base_url": "https://api.postmarkapp.com",
+      "base_url_env": "POSTMARK_API_URL",
+      "auth": {
+        "header": "X-Postmark-Server-Token",
+        "value_env": "POSTMARK_SERVER_TOKEN"
+      }
+    },
+    "key": "/webhooks[Url=https://pr-42.preview.example.com/api/postmark]",
+    "id": "DELETE /webhooks/ID"
+  },
+  "resend.api_key": {
+    "provider": {
+      "base_url": "https://api.resend.com",
+      "base_url_env": "RESEND_API_URL",
+      "auth": {
+        "bearer_env": "RESEND_API_KEY"
+      }
+    },
+    "key": "/api-keys[name=sponson-preview-pr-42]",
+    "id": "DELETE /api-keys/ID"
+  },
+  "resend.webhook": {
+    "provider": {
+      "base_url": "https://api.resend.com",
+      "base_url_env": "RESEND_API_URL",
+      "auth": {
+        "bearer_env": "RESEND_API_KEY"
+      }
+    },
+    "key": "/webhooks[endpoint=https://pr-42.preview.example.com/api/resend]",
+    "id": "DELETE /webhooks/ID"
+  },
+  "sendgrid.event_webhook": {
+    "provider": {
+      "base_url": "https://api.sendgrid.com",
+      "base_url_env": "SENDGRID_API_URL",
+      "auth": {
+        "bearer_env": "SENDGRID_API_KEY"
+      }
+    },
+    "key": "/v3/user/webhooks/event/settings/all[url=https://pr-42.preview.example.com/api/sendgrid/events]",
+    "id": "DELETE /v3/user/webhooks/event/settings/ID"
+  },
+  "sendgrid.parse_setting": {
+    "provider": {
+      "base_url": "https://api.sendgrid.com",
+      "base_url_env": "SENDGRID_API_URL",
+      "auth": {
+        "bearer_env": "SENDGRID_API_KEY"
+      }
+    },
+    "key": "/v3/user/webhooks/parse/settings/pr-42.parse.example.com",
+    "id": "DELETE /v3/user/webhooks/parse/settings/pr-42.parse.example.com"
+  },
+  "sentry.release": {
+    "provider": {
+      "base_url": "https://sentry.io/api/0",
+      "base_url_env": "SENTRY_API_URL",
+      "auth": {
+        "bearer_env": "SENTRY_AUTH_TOKEN"
+      }
+    },
+    "key": "/organizations/acme/releases/app%400123456789abcdef0123456789abcdef01234567/",
+    "id": "KEEP /organizations/acme/releases/app%400123456789abcdef0123456789abcdef01234567/"
+  },
+  "sentry.deploy": {
+    "provider": {
+      "base_url": "https://sentry.io/api/0",
+      "base_url_env": "SENTRY_API_URL",
+      "auth": {
+        "bearer_env": "SENTRY_AUTH_TOKEN"
+      }
+    },
+    "key": "/organizations/acme/releases/app%400123456789abcdef0123456789abcdef01234567/deploys/[environment=preview,name=sponson-pr-42]",
+    "id": "KEEP /organizations/acme/releases/app%400123456789abcdef0123456789abcdef01234567/deploys/ID/"
+  },
+  "split.targeting_rule": {
+    "provider": {
+      "base_url": "https://api.split.io/internal/api/v2",
+      "base_url_env": "SPLIT_API_URL",
+      "auth": {
+        "bearer_env": "SPLIT_ADMIN_API_KEY"
+      }
+    },
+    "key": "/splits/ws/a3b6f5d0-0e8f-11ee-9b0f-0242ac120002/new_checkout/environments/Staging#/rules=pr-42",
+    "id": "{\"item\":\"pr-42\",\"key_field\":\"/condition/matchers/0/strings/0\",\"list\":\"/rules\",\"read\":\"/splits/ws/a3b6f5d0-0e8f-11ee-9b0f-0242ac120002/new_checkout/environments/Staging\",\"send\":[\"treatments\",\"defaultTreatment\",\"baselineTreatment\",\"trafficAllocation\",\"defaultRule\"],\"shape\":\"array\",\"write\":\"PUT /splits/ws/a3b6f5d0-0e8f-11ee-9b0f-0242ac120002/new_checkout/environments/Staging\"}"
+  },
+  "statsig.gate_rule": {
+    "provider": {
+      "base_url": "https://statsigapi.net/console/v1",
+      "base_url_env": "STATSIG_API_URL",
+      "auth": {
+        "header": "STATSIG-API-KEY",
+        "value_env": "STATSIG_CONSOLE_API_KEY"
+      },
+      "headers": {
+        "STATSIG-API-VERSION": "20240601"
+      }
+    },
+    "key": "/gates/new_checkout/rules[name=preview pr-42]",
+    "id": "DELETE /gates/new_checkout/rules/ID"
+  },
   "stripe.webhook_endpoint": {
     "provider": {
       "base_url": "https://api.stripe.com/v1",
@@ -100,6 +279,17 @@
     "key": "/pwa/v3/projects/my-app/environments/test/redirect_urls/all[url=https://pr-42.preview.example.com/authenticate]",
     "id": "DELETE /pwa/v3/projects/my-app/environments/test/redirect_urls?url=ID&do_not_promote_defaults=true"
   },
+  "svix.endpoint": {
+    "provider": {
+      "base_url": "https://api.us.svix.com",
+      "base_url_env": "SVIX_API_URL",
+      "auth": {
+        "bearer_env": "SVIX_AUTH_TOKEN"
+      }
+    },
+    "key": "/api/v1/app/acme-customer/endpoint/sponson-preview-pr-42",
+    "id": "DELETE /api/v1/app/acme-customer/endpoint/ID"
+  },
   "turso.database_branch": {
     "provider": {
       "base_url": "https://api.turso.tech/v1",
@@ -110,6 +300,18 @@
     },
     "key": "/organizations/acme/databases/app-pr-42",
     "id": "DELETE /organizations/acme/databases/app-pr-42"
+  },
+  "unleash.flag_strategy": {
+    "provider": {
+      "base_url_env": "UNLEASH_API_URL",
+      "auth": {
+        "header": "Authorization",
+        "value_env": "UNLEASH_AUTH_TOKEN"
+      },
+      "base_url": "https://unleash.example.com"
+    },
+    "key": "/api/admin/projects/default/features/new-checkout/environments/development/strategies[title=preview pr-42]",
+    "id": "DELETE /api/admin/projects/default/features/new-checkout/environments/development/strategies/ID"
   },
   "workos.redirect_uri": {
     "provider": {

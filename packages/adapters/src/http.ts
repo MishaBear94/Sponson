@@ -57,8 +57,11 @@ export interface ApiClientOptions {
   adapter: string;
   baseUrl: string;
   token: string;
-  /** `bearer` sends `Authorization: Bearer <token>`; `header:<name>` sends the token in a custom header. */
-  authHeader?: "bearer" | `header:${string}`;
+  /**
+   * `bearer` sends `Authorization: Bearer <token>`; `header:<name>` sends the token in a custom header; `none` sends
+   * no credential (a public endpoint; `token` is ignored).
+   */
+  authHeader?: "bearer" | "none" | `header:${string}`;
   /**
    * Extra headers sent with every request (an API version pin). They never replace `accept`, `content-type` or the
    * credential's header.
@@ -241,7 +244,7 @@ export function apiClient(opts: ApiClientOptions): ApiClient {
   const policy = policyFrom(opts.env);
   const headers: Record<string, string> = { ...extraHeaders(opts.headers ?? {}), accept: "application/json" };
   if (auth === "bearer") headers.authorization = `Bearer ${opts.token}`;
-  else headers[auth.slice("header:".length).toLowerCase()] = opts.token;
+  else if (auth !== "none") headers[auth.slice("header:".length).toLowerCase()] = opts.token;
   const form = opts.encoding === "form";
   const defaultContentType = opts.contentType ?? (form ? "application/x-www-form-urlencoded" : "application/json");
 

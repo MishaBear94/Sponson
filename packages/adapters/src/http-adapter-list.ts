@@ -13,15 +13,16 @@
  * - Writes replace the whole collection (`PUT`, or `PATCH`/`POST` sent as idempotent, so a dropped connection is
  *   retried), except a keyed map with `send: field`, which is sent as a merge patch of the one entry (`null`
  *   deletes it). Then the parent is read again: the write counts only once the item is seen as planned. A
- *   collection that loses the item to a concurrent writer is written again, up to MAX_ATTEMPTS times. There is no
- *   precondition (ETag): two writers can still interleave between a read and a write; see the ADR.
+ *   collection that loses the item to a concurrent writer is written again, up to MAX_ATTEMPTS times.
+ * - Lock: the parent object (`lockOn`, ADR 0019), so Sponson's writers in other scopes and environments never
+ *   interleave between a read and a write. There is no precondition (ETag): only a writer outside Sponson can.
  */
-import { SponsonError, canonicalJson, type AdapterContext, type DiffSide, type LiveState, type OpSpec, type ResourceDiff, type ResourceRecord } from "@sponson/core";
+import { SponsonError, canonicalJson, type AdapterContext, type DiffSide, type LiveState, type OpSpec, type ResolvedParams, type ResourceDiff, type ResourceRecord } from "@sponson/core";
 import { ABSENT, SENSITIVE, assertNoPending, desiredSide, paramError } from "./common.js";
 import { isObject, type ApiClient } from "./http.js";
 import { failedWith, httpClient, write } from "./http-adapter-client.js";
 import { expandRecipe } from "./recipes.js";
-import { ADAPTER, apiBlock, at, fieldTokens, fillPath, firstMarker, isKeep, parseListItem, pointerTokens, projection, setAt, stateHash, type ListItemSpec, type ListShape } from "./http-adapter-spec.js";
+import { ADAPTER, apiBlock, apiEnvironment, at, fieldTokens, fillPath, firstMarker, isKeep, parseListItem, pointerTokens, projection, setAt, stateHash, type ListItemSpec, type ListShape, type ParentSend } from "./http-adapter-spec.js";
 
 /** Read-modify-write rounds before giving up on a collection that keeps changing under us. */
 export const MAX_ATTEMPTS = 3;
@@ -31,7 +32,9 @@ interface Locator {
   read: string;
   write: string;
   list: string;
-  send: "field" | "parent";
+  send: ParentSend;
+  /** Where the parent object is in the read answer; absent: the whole body. */
+  item_path?: string;
   shape: ListShape;
   sep?: string;
   key_field?: string;
@@ -71,6 +74,7 @@ function locatorOf(spec: ListItemSpec): Locator | undefined {
     write: `${spec.parent.method} ${path}`,
     list: spec.listPath,
     send: spec.parent.send,
+    ...(spec.parent.itemPath !== "" ? { item_path: spec.parent.itemPath } : {}),
     shape: spec.shape,
     ...(spec.shape === "delimited" ? { sep: spec.separator } : {}),
     ...(spec.keyField !== undefined ? { key_field: spec.keyField } : {}),
@@ -191,13 +195,24 @@ function hasKeep(spec: ListItemSpec): boolean {
 
 /** The parent object and its collection. */
 async function readParent(api: ApiClient, loc: Locator): Promise<{ doc: Record<string, unknown>; entries: Entry[] }> {
-  const doc = await api.get(loc.read);
-  if (!isObject(doc)) throw badShape(loc, "an object");
+  const body = await api.get(loc.read);
+  const doc = loc.item_path ? at(body, pointerTokens(loc.item_path)) : body;
+  if (!isObject(doc)) throw loc.item_path ? new SponsonError("PROVIDER_RESPONSE", `${ADAPTER}: GET ${loc.read}: no object at \`parent.item_path\` ${loc.item_path}`, { adapter: ADAPTER, param: "parent.item_path" }) : badShape(loc, "an object");
   return { doc, entries: decode(at(doc, pointerTokens(loc.list)), loc) };
 }
 
 function clientFor(actx: AdapterContext, loc: Locator): ApiClient {
   return httpClient(actx, loc.content_type ? { contentType: loc.content_type } : {});
+}
+
+/** What a write sends besides the collection: nothing, the parent read just before, or the listed fields of it. */
+function sentAlong(send: ParentSend, doc: Record<string, unknown>): Record<string, unknown> {
+  if (send === "field") return {};
+  if (send === "parent") return doc;
+  return send.reduce<Record<string, unknown>>((body, f) => {
+    const v = at(doc, fieldTokens(f));
+    return v === undefined ? body : setAt(body, fieldTokens(f), v);
+  }, {});
 }
 
 /**
@@ -208,7 +223,7 @@ async function writeChange(api: ApiClient, loc: Locator, doc: Record<string, unk
   const tokens = pointerTokens(loc.list);
   let body: unknown;
   if (loc.shape === "map" && loc.send === "field") body = place({}, tokens, { [String(change.key as string)]: change.value });
-  else body = place(loc.send === "parent" ? doc : {}, tokens, encode(entries, loc));
+  else body = place(sentAlong(loc.send, doc), tokens, encode(entries, loc));
   const space = loc.write.indexOf(" ");
   await write(api, loc.write.slice(0, space), loc.write.slice(space + 1), body, true);
 }
@@ -299,12 +314,28 @@ function diffExisting(spec: ListItemSpec, key: string, label: string, current: R
   return { key, kind: "update", label, before, after: side(desired) };
 }
 
+/**
+ * The parent object's identity for its lock (ADR 0019): `http:<base URL><parent path>`. The base URL is the API
+ * block's `base_url` (not its `base_url_env` override, so every runner names the object alike) without user info,
+ * query or fragment: an identity is written to receipts, so it never carries a credential. Every collection of
+ * one parent shares the lock, since `send: parent` writes them all back.
+ */
+function parentLock(params: ResolvedParams, provider: Record<string, unknown>): string | null {
+  const spec = parseListItem(params);
+  const path = fillPath(spec.parent.path, spec.vars);
+  if (path === undefined || typeof provider.base_url !== "string") return null;
+  const base = new URL(provider.base_url);
+  return `${ADAPTER}:${base.protocol}//${base.host}${base.pathname.replace(/\/+$/, "")}${path}`;
+}
+
 /** `http.list_item`: one value kept in a collection on a parent object, by read-modify-write. */
 export const listItem: OpSpec = {
   outputs: {},
   // A recipe line's params are checked before any request (PARAM_INVALID naming the param); it declares no outputs.
   outputsFor: (params) => (params.recipe === undefined ? {} : (expandRecipe(params, "list_item"), {})),
   providerFor: apiBlock,
+  lockOn: parentLock,
+  writesEnvironment: apiEnvironment,
 
   async read(actx, params) {
     const spec = parseListItem(params);

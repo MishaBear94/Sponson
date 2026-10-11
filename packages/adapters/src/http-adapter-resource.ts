@@ -15,7 +15,7 @@ import { SponsonError, canonicalJson, sha256, type AdapterContext, type ApplyRes
 import { ABSENT, SENSITIVE, assertNoPending, desiredSide, paramError } from "./common.js";
 import { isObject, listAll, type ApiClient } from "./http.js";
 import { failedWith, httpClient, idOf, itemOf, literalOf, write } from "./http-adapter-client.js";
-import { ADAPTER, apiBlock, at, bodyOf, deepMerge, fieldTokens, fillPath, firstMarker, isKeep, parseResource, pointerTokens, projection, resourceOutputs, stateHash, type FindSpec, type ResourceSpec } from "./http-adapter-spec.js";
+import { ADAPTER, apiBlock, apiEnvironment, at, bodyOf, deepMerge, fieldTokens, fillPath, firstMarker, isKeep, parseResource, pointerTokens, projection, resourceOutputs, stateHash, type FindSpec, type ResourceSpec } from "./http-adapter-spec.js";
 
 /** An object as found: its provider id and its body. */
 interface Located {
@@ -85,14 +85,13 @@ function record(spec: ResourceSpec, key: string, l: Located): ResourceRecord {
 }
 
 /**
- * The line's outputs read from `item`. A `once` output is taken only from the answer to the create that made the
- * object (`created`): anywhere else a value would be a guess, and the engine would fingerprint it as a new one
- * (ADR 0018).
+ * The outputs read from `item`. A `once` output only from `revealed`, the answer of the create that made the object:
+ * anywhere else the provider does not show it, and a value taken from a read would be a fake (ADR 0018).
  */
-function outputsOf(spec: ResourceSpec, item: Record<string, unknown> | undefined, id: string, created = false): Record<string, Literal> {
+function outputsOf(spec: ResourceSpec, item: Record<string, unknown> | undefined, id: string, revealed = false): Record<string, Literal> {
   const out: Record<string, Literal> = { id };
   for (const [name, d] of Object.entries(spec.outputs)) {
-    if (d.once && !created) continue;
+    if (d.once && !revealed) continue;
     const v = literalOf(at(item, pointerTokens(d.path)));
     if (v !== undefined) out[name] = v;
   }
@@ -215,17 +214,19 @@ async function create(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, 
     if (!existing) throw new SponsonError("PROVIDER_CONFLICT", `${ADAPTER}: ${label(spec, key)}: the provider says it exists, but it cannot be found with the line's \`find\`/\`read\``, { adapter: ADAPTER, key });
     return { resources: [record(spec, key, existing)], outputs: outputsOf(spec, existing.item, existing.id), created: [] };
   }
-  let item = itemOf(sent.response, spec.itemPath);
+  // `create.locate`: the answer is not the object (the parent it was added to, an acknowledgement).
+  let item = spec.create.locate ? undefined : itemOf(sent.response, spec.itemPath);
   let id = idOf(item, spec.idPath);
-  const answered = id !== undefined;
+  const revealed = id !== undefined;
   if (id === undefined) {
-    // Some APIs answer a create with no body (201, 204): find what was created. A `once` output is then lost.
+    // Some APIs answer a create with no body (201, 204), or with something else: find what was created. Found so,
+    // it reveals no once-only value.
     const l = await locate(api, spec);
     if (!l) throw noId(spec, `the answer to ${spec.create.method} ${path}`);
     ({ id, item } = l);
   }
   const resource = { key, id: locator(spec, id), hash: stateHash(desiredState(spec, undefined)), label: label(spec, key) };
-  return { resources: [resource], outputs: outputsOf(spec, item, id, answered), created: [key] };
+  return { resources: [resource], outputs: outputsOf(spec, item, id, revealed), created: [key] };
 }
 
 async function update(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, key: string, current: ResourceRecord, live: LiveState): Promise<ApplyResult> {
@@ -252,6 +253,7 @@ export const resource: OpSpec = {
   outputs: { id: { available: "immediate" } },
   outputsFor: resourceOutputs,
   providerFor: apiBlock,
+  writesEnvironment: apiEnvironment,
 
   async read(actx, params) {
     const spec = parseResource(params);

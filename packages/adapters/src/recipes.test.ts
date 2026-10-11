@@ -30,8 +30,24 @@ const cases = loadRecipes().flatMap((r) => Object.entries(r.ops).map(([name, op]
 /** The example values with `${ctx.*}` filled as for PR 42, as the engine would hand them over. */
 function exampleLine(r: Recipe, name: string, op: RecipeOp): Record<string, unknown> {
   const params = Object.fromEntries(Object.entries(op.params).flatMap(([p, s]) => (s.example === undefined ? [] : [[p, s.example]])));
-  const text = JSON.stringify(params).replace(/\$\{ctx\.scope\}/g, "pr-42").replace(/\$\{ctx\.env\}/g, "preview");
+  const text = JSON.stringify(params)
+    .replace(/\$\{ctx\.scope\}/g, "pr-42")
+    .replace(/\$\{ctx\.env\}/g, "preview")
+    .replace(/\$\{ctx\.git\.sha\}/g, "0123456789abcdef0123456789abcdef01234567");
   return { recipe: `${r.provider}.${name}`, ...(JSON.parse(text) as Record<string, unknown>) };
+}
+
+/**
+ * The `providers.http` blocks an example line needs: none, or for a per-account API (no default `base_url`) one
+ * that sets the recipe's `base_url_example`.
+ */
+function blocksFor(r: Recipe): Record<string, unknown> {
+  return r.api.base_url === undefined ? { [r.provider]: { recipe: r.provider, base_url: r.base_url_example } } : {};
+}
+
+/** The API block an example line resolves to. */
+function resolvedApi(r: Recipe): Record<string, unknown> {
+  return r.api.base_url === undefined ? { ...r.api, base_url: r.base_url_example } : r.api;
 }
 
 function codeOf(f: () => unknown): string {
@@ -61,8 +77,8 @@ describe.each(recipeNames())("recipes/%s.yaml", (name) => {
     const r = loadRecipe(name);
     expect(coverage.categories.map((c) => c.id), "category is a docs/coverage.yaml category").toContain(r.category);
     expect(new Set(r.assumptions.map((a) => a.id)).size, "assumption ids are unique").toBe(r.assumptions.length);
-    const block = apiBlock({}, { recipe: `${name}.${Object.keys(r.ops)[0]!}` });
-    expect(block).toEqual(r.api);
+    const block = apiBlock(blocksFor(r), { recipe: `${name}.${Object.keys(r.ops)[0]!}` });
+    expect(block).toEqual(resolvedApi(r));
   });
 });
 
@@ -97,7 +113,7 @@ describe.each(cases)("recipe %s", (_ref, r, name, op) => {
       expect(() => parseListItem(line)).not.toThrow();
       expect(listItem.outputsFor!(line)).toEqual({});
     }
-    expect(resource.providerFor!({}, line)).toEqual(r.api);
+    expect(resource.providerFor!(blocksFor(r), line)).toEqual(resolvedApi(r));
   });
 
   it("checks its params at plan time: missing, unknown and mistyped are PARAM_INVALID naming the param", () => {
@@ -161,6 +177,32 @@ describe("recipe errors", () => {
     }
   });
 
+  it("an op's `destroy` sets the line's default: `keep` may be overridden, `never` refuses `destroy: delete`", () => {
+    const op = (destroy?: "keep" | "never"): RecipeOp => ({
+      kind: "resource",
+      title: "Marker",
+      summary: "A marker that stays as history.",
+      covers: [],
+      params: { name: { type: "string", required: true, description: "The name.", example: "m" } },
+      http: { read: { path: "/markers/{name}" }, create: { path: "/markers" } },
+      ...(destroy ? { destroy } : {}),
+    });
+    const forget = useRecipe({ ...ORIGINS, provider: "history", ops: { plain: op(), kept: op("keep"), undeletable: op("never") } });
+    try {
+      const line = (o: string, extra: Record<string, unknown> = {}) => ({ recipe: `history.${o}`, name: "m", ...extra });
+      expect(expandRecipe(line("plain"), "resource")).not.toHaveProperty("destroy");
+      expect(parseResource(line("plain")).destroy).toBe("delete");
+      expect(parseResource(line("kept")).destroy).toBe("keep");
+      expect(parseResource(line("kept", { destroy: "delete" })).destroy).toBe("delete");
+      expect(parseResource(line("undeletable")).destroy).toBe("keep");
+      expect(parseResource(line("undeletable", { destroy: "keep" })).destroy).toBe("keep");
+      expect(codeOf(() => parseResource(line("undeletable", { destroy: "delete" })))).toMatch(/^PARAM_INVALID: .*recipe history\.undeletable: the provider offers no way to delete/);
+      expect(resourceIdentity(parseResource(line("undeletable")), "ID").id).toBe("KEEP /markers/m");
+    } finally {
+      forget();
+    }
+  });
+
   it("substitutes whole values, drops absent optional ones, and leaves lines without `recipe` alone", () => {
     expect(substitute({ a: { param: "x" }, b: [{ param: "y" }, 1], c: { d: { param: "x" } } }, { x: "X" })).toEqual({ a: "X", b: [1], c: { d: "X" } });
     // `{ join }` concatenates whole values; a value not known yet stands for the whole, a missing one removes it.
@@ -183,7 +225,7 @@ const LOCK = fileURLToPath(new URL("./recipes-identity.json", import.meta.url));
 /** What the ledger would record for the op's example line: the resolved API block, the key and the record id. */
 function identityOf(r: Recipe, name: string, op: RecipeOp): unknown {
   const line = exampleLine(r, name, op);
-  const provider = resource.providerFor!({}, line);
+  const provider = resource.providerFor!(blocksFor(r), line);
   const ident = op.kind === "resource" ? resourceIdentity(parseResource(line), "ID") : listItemIdentity(parseListItem(line));
   return { provider, ...ident };
 }
@@ -239,6 +281,8 @@ describe("a recipe line through the http ops", () => {
       expect(codeOf(() => listItem.outputsFor!({ ...line, origin: 1 }))).toMatch(/`origin` must be a string/);
       const actx = h.actx("http", listItem.providerFor!({}, line));
       const params = resolveParams(line, new Map(), new Map()).params;
+      // The same parent lock (ADR 0019) as the hand-written line: the resolved block's base URL and the parent path.
+      expect(listItem.lockOn!(params, listItem.providerFor!({}, line))).toBe("http:https://api.example.test/v1/apps/demo");
       expect(await listItem.read(actx, params)).toBeNull();
       expect(listItem.diff(null, params)).toMatchObject([{ kind: "create", key: "/apps/demo#/allowed_origins=https://pr-42.example.app" }]);
       const r = await listItem.apply(actx, params, null);

@@ -127,7 +127,8 @@ chosen: its signing secret exists only in the create response, which the `http` 
   recipe's text, and the lock makes the identity-changing edits explicit.
 - **No schema per recipe in `schema/release.plan.schema.json`**: an editor checks `recipe:`'s form, `sponson plan`
   checks the params.
-- Everything ADR 0017 leaves out stays out (once-only outputs, polling, OAuth exchanges, SigV4).
+- Everything ADR 0017 leaves out stays out (polling, OAuth exchanges, SigV4). Once-only outputs were left out too,
+  until Amendment 2 below.
 
 ## Alternatives considered
 
@@ -152,23 +153,82 @@ chosen: its signing secret exists only in the create response, which the `http` 
 - The sim proves a recipe consistent with its own declarations, not with the provider: the verified assumptions and
   `pnpm test:live` are what tie a recipe to the real API.
 
-## Amendment: `{ join }`, refused credentials, and the Stripe webhook (2026-10-11)
+## Amendment 1 (2026-10-11): what the feature-flag recipes needed
 
-The Stripe webhook endpoint row (P0) needed two things this record left out: a once-only output, which the `http`
-adapter now declares (`outputs.<name>.once`, [ADR 0017](0017-generic-http-adapter.md), amendment), and a URL made of
-the preview URL plus a path, since `{ from: web.preview_url }` is a whole value in a plan.
+Writing the feature-flag recipes (Statsig, GrowthBook, Unleash, PostHog, ConfigCat, Split) found four shapes the
+framework could not express. Each was added as a general option, with no provider named in the code:
+
+- **`create.locate: true`** (`http.resource`): the create answers with something other than the object (Statsig's
+  add-rule answers with the whole gate, whose own `id` would be taken for the rule's). The new object is located with
+  `find`/`read` after the create, as for an empty answer. Identity is unchanged.
+- **`parent.item_path`** (`http.list_item`): the parent is read in an envelope (`{ feature: {...} }`) but written
+  bare. `list_path` and `send` are relative to it. It joins the locator only when set, so existing record ids are
+  unchanged.
+- **`parent.send: [fields]`** (`http.list_item`): a `PUT` that resets what it is not sent and is not documented to
+  take the read-only fields of its own GET (ConfigCat's value, Split's definition) gets those fields back and nothing
+  else.
+- **Per-account recipes in the tests and docs**: a recipe without a default `base_url` names a `base_url_example`
+  (required then, by the schema); the unit checks, the sim harness and docs/recipes.md write the provider block
+  with it. The sim harness also follows `sim.collection` (a create posted to another path than the list: the sim's
+  new `aliases`), list and key fields given as JSON pointers, and parent envelopes; the rest sim accepts a bare
+  token in `Authorization` (Unleash), and answers a styled object in its `item_path` envelope (assumptions R1, R2).
+
+Flagsmith was not written: its Admin API takes `Authorization: Api-Key <key>` (or `Token <key>`), a scheme prefix the
+three auth forms do not send, and Bearer only for short-lived OIDC-exchanged tokens. Adding a prefix form to `auth`
+was left for a decision of its own.
+## Amendment 2 (2026-10-11): once-only outputs, destroy defaults, and sim shapes
+
+Writing the webhook, API key and release-marker recipes of [docs/coverage.yaml](../coverage.yaml) found three gaps.
+Each is closed by the smallest general change; none names a provider.
+
+- **Once-only outputs in `http.resource`.** An API key's token is in the create answer only. `outputs` now takes
+  `{ path, sensitive: true, once: true }`: the op declares the output `once` ([ADR 0018](0018-once-only-outputs.md))
+  and takes its value only from the answer of the create that made the object, never from a read, an update, an answer
+  without the object (found afterwards), or a create the provider refused as existing (a lost answer, retried). The
+  engine's fingerprints and `--recreate` then work as for `planetscale.password`. `once` without `sensitive: true` is
+  `PARAM_INVALID`: a value shown once is a credential.
+- **Destroy defaults per recipe op.** A release or a deploy record is history shared beyond one scope, and some
+  providers offer no way to delete it at all (deploy records). A recipe op may say `destroy: keep` (lines leave what
+  they made unless they write `destroy: delete`) or `destroy: never` (no delete request exists: always left, and a
+  line's `destroy: delete` is `PARAM_INVALID` naming the recipe). The record id is then `KEEP <path>`, as for a
+  hand-written line with `destroy: keep`, so identity follows ADR 0017 unchanged; a `never` op still declares the
+  object's URL as `delete.path`, used only as its identity.
+- **Sim shapes.** Amendment 1's `aliases` now name their collection for every method, not only for a create, so a
+  provider that lists at another URL than its objects' collection (`GET /settings/all`) is served too (the recipe
+  harness derives that alias from `find.path`); seeded paths, aliases and create paths ignore a trailing slash
+  (`/releases/` is `/releases`); and the sim accepts the credential in a header the seed names (`auth_headers`,
+  derived from the recipe's `auth.header`, for header names that do not end in `-Key` or `-Token`, such as
+  `X-Honeycomb-Team`). `ProviderSim.authorized` receives the provider's state for this.
+
+Still out of reach for recipes, and recorded on the coverage rows that need them: an API that needs two credentials on
+every request, a list request sent as a POST, a delete that names the object in its body, and a credential that is
+itself an output of another line (a per-environment server's token).
+
+## Amendment 3 (2026-10-11): `{ join }`, refused credentials, archiving destroys, and the Stripe webhook
+
+The Stripe webhook endpoint row (P0) uses Amendment 2's once-only outputs for its signing secret. It also needed a URL
+made of the preview URL plus a path, since `{ from: web.preview_url }` is a whole value in a plan; the Stripe catalog
+rows needed a destroy that archives; and a preview must never use a live Stripe key. None of these names a provider
+in the code.
 
 - **`{ join: [<part>, …] }`** is a second template form: literal strings and numbers and `{ param: <name> }` parts,
   concatenated into one string. It is not interpolation (no parsing of strings, no expressions): a part that is not
   known yet (a pending reference) makes the whole value that part, so the line shows as pending; a part without a
   value removes the value. This keeps recipes data, as ADR 0001 wants, while letting a recipe take `url` and `path`
   as two params.
-- **`api.refuse_credential`** may be declared by a recipe (Stripe: `sk_live_`, `rk_live_`, opt-out
-  `SPONSON_STRIPE_ALLOW_LIVE`) and cannot be overridden by a plan's block.
-- **`sim` hints** gained `list_suffix` and `item_query` for providers that list a collection under a suffix
-  (`…/redirect_urls/all`) and key objects by a value in the query string (`…/redirect_urls?url=…`), as Stytch does.
-  The recipe harness also derives the sim's `form_types` (typed form values) from `encoding: form`, its once fields
-  from `once` outputs, and checks an archiving destroy (`delete.body`) by the archive fields instead of absence.
+- **`api.refuse_credential: { prefixes, unless_env }`** (an API block key, [ADR 0017](0017-generic-http-adapter.md),
+  amendment): a credential starting with one of the prefixes is `PROVIDER_AUTH` before any request, in plan, apply and
+  destroy, unless the named variable is `1` or `true`. A recipe may declare it (Stripe: `sk_live_`, `rk_live_`, opt-out
+  `SPONSON_STRIPE_ALLOW_LIVE`); a plan's block cannot override a recipe's. It complements `production: true`, which
+  asks for approval for an API that is production: this refuses a credential a preview must never use.
+- **`delete.body`** with `method: POST` (`http.resource`): archive instead of delete (Stripe never deletes prices, or
+  products that have prices). The body, literals only, joins the record id as ` body=<canonical JSON>`, so destroy
+  needs only the ledger; record ids without a body are unchanged.
+- **Sim**: a collection style may name objects by a query parameter (`sim.item_query`: `…/redirect_urls?url=…`, as
+  Stytch does; its list at `…/all` is Amendment 2's alias), read form values typed (`form_types`, derived from
+  `encoding: form`), show once-only fields only in the create's answer (`once_fields`, derived from `once` outputs),
+  and take a POST update to an object of a collection. The harness checks an archiving destroy by the archive fields
+  instead of absence.
 
 "Stripe's webhook endpoint was not chosen" (under *First recipes*) is superseded: `stripe.webhook_endpoint` ships with
 the catalog ops `stripe.product`, `stripe.price` and `stripe.coupon`.

@@ -50,9 +50,9 @@ describe("rest sim styles", () => {
     expect(sim.state.rest.collections["/webhook_endpoints"]![0]).not.toHaveProperty("secret");
   });
 
-  it("lists under a suffix and names objects by a query parameter (R3)", async () => {
+  it("lists at an alias and names objects by a query parameter (R3)", async () => {
     const coll = "/projects/p/environments/e/redirect_urls";
-    sim = await startSim({ seed: { rest: { collections: { [coll]: [] }, styles: { [coll]: { list_path: "/redirect_urls", item_path: "/redirect_url", next_path: null, id_field: "url", list_suffix: "/all", item_query: "url" } } } } });
+    sim = await startSim({ seed: { rest: { collections: { [coll]: [] }, styles: { [coll]: { list_path: "/redirect_urls", item_path: "/redirect_url", next_path: null, id_field: "url", item_query: "url" } }, aliases: { [`${coll}/all`]: coll } } } });
     await call("POST", coll, { url: "https://a/cb", valid_types: [{ type: "LOGIN", is_default: false }] });
     expect((await call("GET", `${coll}/all`)).body).toEqual({ redirect_urls: [{ url: "https://a/cb", valid_types: [{ type: "LOGIN", is_default: false }] }] });
     const q = `${coll}?url=${encodeURIComponent("https://a/cb")}`;
@@ -63,10 +63,40 @@ describe("rest sim styles", () => {
     expect(sim.state.rest.collections[coll]).toEqual([]);
   });
 
-  it("accepts a credential in any *-Key or *-Token header", async () => {
+  it("accepts a credential in any *-Key or *-Token header, or bare in Authorization", async () => {
     sim = await startSim();
     expect((await call("GET", "/gates", undefined, { "x-auth-token": "t" })).status).toBe(200);
     expect((await call("GET", "/gates", undefined, { "x-postmark-server-key": "t" })).status).toBe(200);
+    expect((await call("GET", "/gates", undefined, { authorization: "user:abc123" })).status).toBe(200);
     expect((await call("GET", "/gates", undefined, { "x-other": "t" })).status).toBe(401);
+    expect((await call("GET", "/gates", undefined, { authorization: "Bearer" })).status).toBe(401);
+    expect((await call("GET", "/gates", undefined, { authorization: "two words" })).status).toBe(401);
+  });
+
+  it("adds a create posted to an alias to its collection, and answers a styled object in its envelope", async () => {
+    sim = await startSim({ seed: { rest: { collections: { "/gates/g/rules": [] }, aliases: { "/gates/g/rule": "/gates/g/rules" }, objects: { "/features/f": { rules: [] } }, styles: { "/features/f": { item_path: "/feature" } } } } });
+    expect((await call("POST", "/gates/g/rule", { name: "a" })).status).toBe(201);
+    expect(sim.state.rest.collections["/gates/g/rules"]).toEqual([{ name: "a", id: expect.stringMatching(/^it_/) }]);
+    expect((await call("GET", "/features/f")).body).toEqual({ feature: { rules: [] } });
+    await call("POST", "/features/f", { rules: [{ id: "r1" }] });
+    expect((await call("GET", "/features/f")).body).toEqual({ feature: { rules: [{ id: "r1" }] } });
+  });
+
+  it("accepts a credential in a header the seed declares, and only there", async () => {
+    sim = await startSim({ seed: { rest: { collections: { "/markers": [] }, auth_headers: ["X-Honeycomb-Team"] } } });
+    expect((await call("GET", "/markers", undefined, { "x-honeycomb-team": "t" })).status).toBe(200);
+    expect((await call("GET", "/markers", undefined, { "x-honeycomb-team": " " })).status).toBe(401);
+    expect((await call("GET", "/markers", undefined, { "x-other": "t" })).status).toBe(401);
+  });
+
+  it("ignores a trailing slash, and lists a collection under its aliases", async () => {
+    sim = await startSim({ seed: { rest: { collections: { "/releases/": [] }, styles: { "/releases/": { id_field: "version", item_path: "" } }, aliases: { "/hooks/all": "/hooks" } } } });
+    const created = await call("POST", "/releases/", { version: "1.0" });
+    expect(created).toEqual({ status: 201, body: { version: "1.0" } });
+    expect((await call("GET", "/releases/1.0/")).body).toEqual({ version: "1.0" });
+    expect(Object.keys(sim.state.rest.collections)).toContain("/releases");
+    await call("POST", "/hooks/", { url: "https://a" });
+    expect(((await call("GET", "/hooks/all")).body.data as unknown[]).length).toBe(1);
+    expect(sim.state.rest.collections["/hooks"]).toHaveLength(1);
   });
 });

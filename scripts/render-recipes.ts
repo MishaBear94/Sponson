@@ -44,7 +44,10 @@ export function exampleParams(op: RecipeOp): Record<string, unknown> {
 
 function exampleLine(r: Recipe, name: string, op: RecipeOp): string {
   const line = { id: name, adapter: "http", op: op.kind, recipe: `${r.provider}.${name}`, ...exampleParams(op) };
-  return `# under changes: (no provider block needed)\n${stringify([line], { lineWidth: 0 }).trimEnd()}`;
+  if (typeof r.api.base_url === "string") return `# under changes: (no provider block needed)\n${stringify([line], { lineWidth: 0 }).trimEnd()}`;
+  // A per-account API: the block names the account's base URL.
+  const block = stringify({ providers: { http: { [r.provider]: { recipe: r.provider, base_url: r.base_url_example } } } }, { lineWidth: 0 }).trimEnd();
+  return `${block}\nchanges:\n${stringify([line], { lineWidth: 0 }).trimEnd().replace(/^/gm, "  ")}`;
 }
 
 function paramsTable(op: RecipeOp): string[] {
@@ -59,12 +62,18 @@ function paramsTable(op: RecipeOp): string[] {
 function outputsOf(op: RecipeOp): string {
   if (op.kind === "list_item") return "none";
   const outputs = Object.entries((op.http.outputs as Record<string, unknown> | undefined) ?? {});
-  const marks = (d: unknown) => {
-    const decl = typeof d === "object" && d !== null ? (d as { sensitive?: boolean; once?: boolean }) : {};
-    const tags = [decl.sensitive ? "sensitive" : "", decl.once ? "once-only: only in the run that creates it" : ""].filter(Boolean);
-    return tags.length ? ` (${tags.join(", ")})` : "";
+  const mark = (d: unknown) => {
+    const decl = (typeof d === "object" && d !== null ? d : {}) as { sensitive?: boolean; once?: boolean };
+    return decl.once ? " (sensitive, [once](plan-format.md#once-only-outputs): only from the create)" : decl.sensitive ? " (sensitive)" : "";
   };
-  return ["`id`", ...outputs.map(([o, d]) => `\`${o}\`${marks(d)}`)].join(", ");
+  return ["`id`", ...outputs.map(([o, d]) => `\`${o}\`${mark(d)}`)].join(", ");
+}
+
+/** What destroying the scope does with what the op made. */
+function destroyOf(op: RecipeOp): string {
+  if (op.destroy === "never") return "left in place: the provider offers no way to delete it (`destroy: delete` is refused).";
+  if (op.destroy === "keep") return "left in place by default (`destroy: delete` on the line removes it).";
+  return "deleted (`destroy: keep` on the line leaves it).";
 }
 
 function opSection(r: Recipe, name: string, op: RecipeOp): string[] {
@@ -73,7 +82,7 @@ function opSection(r: Recipe, name: string, op: RecipeOp): string[] {
     "",
     `**${op.title}** (\`http.${op.kind}\`). ${op.summary}`,
     "",
-    `Covers: ${op.covers.map((c) => `\`${c}\``).join(", ") || "—"} in [the coverage matrix](coverage.md#coverage-matrix). Outputs: ${outputsOf(op)}.`,
+    `Covers: ${op.covers.map((c) => `\`${c}\``).join(", ") || "—"} in [the coverage matrix](coverage.md#coverage-matrix). Outputs: ${outputsOf(op)}. On destroy: ${destroyOf(op)}`,
     "",
     ...paramsTable(op),
     "",

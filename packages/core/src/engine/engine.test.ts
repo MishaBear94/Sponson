@@ -627,6 +627,16 @@ describe("v2: scope and environment boundaries", () => {
     await expect(applyRun(opts(src, { approvedBy: "   " }))).rejects.toMatchObject({ code: "ENV_NOT_APPROVED" });
   });
 
+  it("an op may decide from its provider block that a line writes to production (writesEnvironment's third argument)", async () => {
+    const src = PLAN.replace("version: 1\n", "version: 1\nproviders:\n  fake: { production: true }\n");
+    await expect(applyRun(opts(src))).rejects.toMatchObject({ code: "ENV_NOT_APPROVED", details: { productionLines: ["a", "b", "c"] } });
+    expect(cloud.writes).toHaveLength(0);
+    expect(cloud.reads).toBe(0);
+    expect((await planRun(opts(src))).requiresApproval).toBe(true);
+    expect((await planRun(opts(PLAN.replace("version: 1\n", "version: 1\nproviders:\n  fake: { production: false }\n")))).requiresApproval).toBe(false);
+    expect((await applyRun(opts(src, { approvedBy: "alice" }))).receipt.status).toBe("complete");
+  });
+
   it("another scope's resources are neither unmanaged nor changeable, but may be relied on", async () => {
     const shared = `version: 1\nchanges:\n  - { id: s, adapter: fake, op: item, name: shared, value: v1 }\n`;
     await applyRun(opts(shared));

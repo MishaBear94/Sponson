@@ -136,9 +136,10 @@ Adapters that do not define them behave exactly as before.
 
 ## What it deliberately does not do
 
-- **No preconditions** (ETag / `If-Match`, version fields) for list writes, and no per-parent lock across scopes.
-  The re-read narrows the window and reports what it sees; it cannot close it. Two scopes editing one parent at the
-  same moment can still lose a write (ROADMAP, the shared-parent item).
+- **No preconditions** (ETag / `If-Match`, version fields) for list writes. The re-read narrows the window and
+  reports what it sees; it cannot close it. *Amended:* `http.list_item` now declares its parent object with `lockOn`
+  ([ADR 0019](/contributing/adr/0019-parent-object-locks)), so two scopes editing one parent no longer lose a write; only a writer
+  outside Sponson still can.
 - **No polling**: an object that becomes ready asynchronously, or whose output appears later, needs a first-class
   adapter.
 - **Create-only outputs** (a Stripe webhook signing secret) are returned by the run that creates the object and
@@ -181,16 +182,14 @@ Adapters that do not define them behave exactly as before.
   real provider, not by the sim.
 - `destroy: keep` is an explicit, per-line exception to "after a destroy nothing Sponson created survives".
 
-## Amendment: once-only outputs, archive deletes, refused credentials (2026-10-11)
+## Amendment: archive deletes and refused credentials (2026-10-11)
 
-Three gaps above stood between the adapter and Stripe's webhook endpoints and catalog objects. Each is closed with the
-smallest declaration that says what the provider does, and none changes an existing line's identity:
+Create-only outputs are declared since [ADR 0020](/contributing/adr/0020-recipes), Amendment 2 (`outputs.<name>: { path, sensitive:
+true, once: true }`), so "Create-only outputs … there is no declaration" under *What it deliberately does not do* no
+longer holds. Two more gaps stood between the adapter and Stripe's webhook endpoints and catalog objects (ADR 0020,
+Amendment 3). Each is closed with the smallest declaration that says what the provider does, and neither changes an
+existing line's identity:
 
-- **`outputs.<name>.once: true`** (with `sensitive: true`, which it requires). The op declares the output `once`
-  ([ADR 0018](/contributing/adr/0018-once-only-outputs)), takes it only from the answer to the create that made the object, and never
-  from `read`, an update or an existing object a create found. The engine's fingerprints, refusals and `--recreate`
-  then apply unchanged. "Create-only outputs … there is no declaration" under *What it deliberately does not do* no
-  longer holds.
 - **`delete.body`** with `method: POST`: the archive request for objects a provider never deletes (a Stripe price is
   only ever `active: false`). The body (literals only) is appended to the record id as ` body=<canonical JSON>`, so
   destroy still needs nothing but the ledger; record ids without a body are unchanged.

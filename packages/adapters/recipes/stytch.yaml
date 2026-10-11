@@ -100,7 +100,6 @@ ops:
       fields:
         valid_types: { param: valid_types }
     sim:
-      list_suffix: /all
       item_query: url
     live:
       params: { project_slug: SPONSON_LIVE_STYTCH_PROJECT_SLUG, environment_slug: SPONSON_LIVE_STYTCH_ENVIRONMENT_SLUG }

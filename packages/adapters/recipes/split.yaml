@@ -1,0 +1,113 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Split (Harness FME) Admin API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: split
+title: Split (Harness FME)
+category: flags
+verified_on: "2026-10-11"
+docs:
+  - title: Authentication
+    url: https://docs.split.io/reference/authentication
+  - title: Get feature flag definition in environment
+    url: https://docs.split.io/reference/get-feature-flag-definition-in-environment
+  - title: Full update feature flag definition in environment
+    url: https://docs.split.io/reference/full-update-feature-flag-definition-in-environment
+  - title: Feature flag definition, rule, condition, matcher
+    url: https://docs.split.io/reference/feature-flag-definition
+  - title: Matcher types
+    url: https://docs.split.io/reference/matcher-type
+  - title: API for Split admins after the move to Harness
+    url: https://developer.harness.io/docs/feature-management-experimentation/split-to-harness/api-for-split-admins/
+api:
+  base_url: https://api.split.io/internal/api/v2
+  base_url_env: SPLIT_API_URL
+  auth: { bearer_env: SPLIT_ADMIN_API_KEY }
+assumptions:
+  - id: SP1
+    verified: true
+    text: "The Admin API is at `https://api.split.io/internal/api/v2`, authenticated as `Authorization: Bearer` with a Split Admin API key (or a Harness PAT/SAT, accepted as Bearer on the non-deprecated endpoints). Host and paths are unchanged by the move to Harness; the workspace id is still Split's `wsId`."
+    source: https://developer.harness.io/docs/feature-management-experimentation/split-to-harness/api-for-split-admins/
+  - id: SP2
+    verified: true
+    text: "`GET /splits/ws/{wsId}/{featureFlagName}/environments/{environmentIdOrName}` answers the flag's definition in the environment bare: `treatments`, `defaultTreatment`, `baselineTreatment`, `trafficAllocation`, `rules`, `defaultRule` and read-only fields (`name`, `environment`, `trafficType`, times)."
+    source: https://docs.split.io/reference/get-feature-flag-definition-in-environment
+  - id: SP3
+    verified: true
+    text: "`PUT` on the same path replaces the definition with `treatments`, `defaultTreatment`, `baselineTreatment`, `trafficAllocation`, `rules` and `defaultRule` (the first three of the required fields). Those are sent as read, with the rule list changed (`parent.send`); whether PUT takes the read-only fields back is not documented, so they are not sent."
+    source: https://docs.split.io/reference/full-update-feature-flag-definition-in-environment
+  - id: SP4
+    verified: true
+    text: "A rule is `{ condition: { combiner: AND, matchers: [...] }, buckets: [{ treatment, size }] }` (bucket sizes sum to 100); rules have no id and are evaluated in order. `IN_LIST_STRING` with `attribute` and `strings` matches an attribute in a list."
+    source: https://docs.split.io/reference/matcher-type
+  - id: SP5
+    verified: false
+    text: "A rule is read back with its matcher exactly as written (no added `negate: false` or null members); otherwise every plan shows the rule as changed."
+  - id: SP6
+    verified: false
+    text: "A full update leaves the flag's killed state alone (`killed` is not a documented PUT field)."
+  - id: SP7
+    verified: true
+    text: "In a project that requires a title and comment on changes, they are query parameters of the update; this recipe does not send them, so such a project refuses the write and the apply fails."
+    source: https://developer.harness.io/docs/feature-management-experimentation/api/feature-flags/
+ops:
+  targeting_rule:
+    kind: list_item
+    title: Feature flag targeting rule
+    summary: "A targeting rule on a feature flag's definition in one environment that serves a treatment to the preview, such as `if preview is in list [pr-42] serve on`. Added after the flag's other rules (evaluated in order: an earlier matching rule wins); the treatments, default rule and traffic allocation are written back as read. Identified by the matched value; a console edit of its matcher or treatment is drift. Destroy removes the rule."
+    covers: [split-rule]
+    params:
+      workspace_id:
+        type: string
+        required: true
+        description: The workspace (project) id, Split's `wsId`.
+        example: a3b6f5d0-0e8f-11ee-9b0f-0242ac120002
+      flag:
+        type: string
+        required: true
+        description: The feature flag's name.
+        example: new_checkout
+      environment:
+        type: string
+        required: true
+        description: The environment's id or name; the flag must have a definition there.
+        example: Staging
+      attribute:
+        type: string
+        required: true
+        description: The attribute the rule tests (passed with the evaluation).
+        example: preview
+      match:
+        type: string
+        required: true
+        description: The attribute value that is the preview; it identifies the rule.
+        example: "${ctx.scope}"
+      treatment:
+        type: string
+        required: true
+        description: The treatment served to the preview; one of the flag's treatments.
+        example: "on"
+    http:
+      parent:
+        path: "/splits/ws/{workspace_id}/{flag}/environments/{environment}"
+        method: PUT
+        send: [treatments, defaultTreatment, baselineTreatment, trafficAllocation, defaultRule]
+      list_path: /rules
+      key_field: /condition/matchers/0/strings/0
+      item:
+        condition:
+          combiner: AND
+          matchers:
+            - type: IN_LIST_STRING
+              attribute: { param: attribute }
+              strings: [{ param: match }]
+        buckets: [{ treatment: { param: treatment }, size: 100 }]
+    sim:
+      objects:
+        "/splits/ws/{workspace_id}/{flag}/environments/{environment}":
+          treatments: [{ name: "on" }, { name: "off" }]
+          defaultTreatment: "off"
+          baselineTreatment: "off"
+          trafficAllocation: 100
+          rules: []
+          defaultRule: [{ treatment: "off", size: 100 }]
+    live:
+      params: { workspace_id: SPONSON_LIVE_SPLIT_WORKSPACE_ID, flag: SPONSON_LIVE_SPLIT_FLAG, environment: SPONSON_LIVE_SPLIT_ENVIRONMENT }
