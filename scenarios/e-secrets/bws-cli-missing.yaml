@@ -1,0 +1,26 @@
+name: "bws:// without the bws CLI: the line is blocked naming the reference, nothing is written"
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values: { STRIPE_KEY: { secret: "bws://be8e0ad8-d545-4017-a55a-b02f014d4158" } }
+env: { PATH: "/sponson-scenario-no-such-dir" }
+steps:
+  - run: plan --json
+    expect:
+      exit: 1
+      plan_lines: { env: blocked }
+      errors: { env: "^bws://be8e0ad8-d545-4017-a55a-b02f014d4158: the `bws` CLI is not installed or not on PATH$" }
+  - run: apply --json
+    expect:
+      exit: 1
+      status: failed
+      lines: { env: blocked }
+      errors: { env: "bws://be8e0ad8-d545-4017-a55a-b02f014d4158" }
+      writes: 0

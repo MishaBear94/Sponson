@@ -306,7 +306,7 @@ Without the interactive prompt, write the file by hand as `.changeset/<any-name>
 "@sponson/adapters": minor
 ---
 
-Add the `infisical://` secret source.
+Add the `keeper://` secret source.
 ```
 
 The package names are `sponson` (the CLI), `@sponson/core`, `@sponson/adapters` and `@sponson/sim`.

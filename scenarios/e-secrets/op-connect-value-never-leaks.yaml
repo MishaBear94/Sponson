@@ -1,0 +1,49 @@
+name: "op-connect:// against a 1Password Connect server: plan resolves the value only to mask it, apply sends it, and neither the value nor the token appears in any output or receipt"
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values: { STRIPE_KEY: { secret: "op-connect://ytrfte14kw1uex5txaore1emkz/wepiqdxdzncjtnvmv5fegud4qy/test/secret key" } }
+# The generic REST sim stands in for Connect: the item details `GET /v1/vaults/{vault}/items/{item}` answers, served
+# only to the bearer token. The field is named by its section and label; another section holds a field of the same
+# label, which must not be the one picked.
+seed:
+  rest:
+    objects:
+      /v1/vaults/ytrfte14kw1uex5txaore1emkz/items/wepiqdxdzncjtnvmv5fegud4qy:
+        id: wepiqdxdzncjtnvmv5fegud4qy
+        title: Stripe
+        vault: { id: ytrfte14kw1uex5txaore1emkz }
+        category: API_CREDENTIAL
+        sections:
+          - { id: 95cdbc3b-7742-47ec-9056-44d6af82d562, label: test }
+          - { id: c9f6a1a6-1a2b-4c3d-8e9f-0a1b2c3d4e5f, label: live }
+        fields:
+          - { id: k1, type: CONCEALED, label: secret key, value: fake_ts_opconnect_5t7y, section: { id: 95cdbc3b-7742-47ec-9056-44d6af82d562 } }
+          - { id: k2, type: CONCEALED, label: secret key, value: fake_ts_opconnect_live_88, section: { id: c9f6a1a6-1a2b-4c3d-8e9f-0a1b2c3d4e5f } }
+    auth:
+      tokens: [eyJ_fake_scenario_connect_token]
+env:
+  OP_CONNECT_HOST: "${SIM_URL}/rest"
+  OP_CONNECT_TOKEN: eyJ_fake_scenario_connect_token
+secrets: [fake_ts_opconnect_5t7y, fake_ts_opconnect_live_88, eyJ_fake_scenario_connect_token]
+chaos: { fail_on: "POST /vercel/*", fail_next: 1, status: 500 }
+steps:
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { env: create } }
+  - run: plan
+    expect: { exit: 0, stdout: ["(secret)"] }
+  - run: apply --json
+    expect: { exit: 1, status: failed }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { env: applied } }
+  - sim:
+      vercel_env: { preview: { STRIPE_KEY: "fake_ts_opconnect_5t7y" } }
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { env: unchanged } }

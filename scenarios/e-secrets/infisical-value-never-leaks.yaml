@@ -1,0 +1,32 @@
+name: "infisical:// through a fake infisical CLI: plan resolves the value only to mask it, apply sends it, and it never appears in any output or receipt"
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values: { STRIPE_KEY: { secret: "infisical://6f1c2d3e-proj/prod/backend/STRIPE_KEY" } }
+# The fake `infisical` checks it was asked the right question, then answers like `secrets get --output json` does.
+bins:
+  infisical: |
+    [ "$*" = "secrets get STRIPE_KEY --projectId 6f1c2d3e-proj --env prod --path /backend --output json --silent" ] || { echo "unexpected: infisical $*" >&2; exit 1; }
+    echo '[{"secretKey":"STRIPE_KEY","secretValue":"fake_ts_infisical_2w8e6r"}]'
+secrets: ["fake_ts_infisical_2w8e6r"]
+chaos: { fail_on: "POST /vercel/*", fail_next: 1, status: 500 }
+steps:
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { env: create } }
+  - run: plan
+    expect: { exit: 0, stdout: ["(secret)"] }
+  - run: apply --json
+    expect: { exit: 1, status: failed }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { env: applied } }
+  - sim:
+      vercel_env: { preview: { STRIPE_KEY: "fake_ts_infisical_2w8e6r" } }
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { env: unchanged } }

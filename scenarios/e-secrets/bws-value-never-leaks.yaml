@@ -1,0 +1,36 @@
+name: "bws:// through a fake bws CLI: plan resolves the value only to mask it, apply sends it, and it never appears in any output or receipt"
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values: { STRIPE_KEY: { secret: "bws://be8e0ad8-d545-4017-a55a-b02f014d4158" } }
+# The fake `bws` checks it was asked the right question and given the access token through the environment, then
+# answers like `bws secret get --output json` does: the secret object, pretty-printed.
+bins:
+  bws: |
+    [ "$*" = "secret get be8e0ad8-d545-4017-a55a-b02f014d4158 --output json --color no" ] || { echo "unexpected: bws $*" >&2; exit 1; }
+    [ "$BWS_ACCESS_TOKEN" = "0.fake_bws_access_token.k9" ] || { echo "Error: Missing access token" >&2; exit 1; }
+    printf '{\n  "object": "secret",\n  "id": "be8e0ad8-d545-4017-a55a-b02f014d4158",\n  "organizationId": "10e8d5b6-1c63-4f4a-b0d5-b02f014d4158",\n  "projectId": null,\n  "key": "STRIPE_KEY",\n  "value": "fake_ts_bws_8u4i0o",\n  "note": "",\n  "creationDate": "2026-01-01T00:00:00Z",\n  "revisionDate": "2026-01-01T00:00:00Z"\n}\n'
+env:
+  BWS_ACCESS_TOKEN: 0.fake_bws_access_token.k9
+secrets: ["fake_ts_bws_8u4i0o", "0.fake_bws_access_token.k9"]
+chaos: { fail_on: "POST /vercel/*", fail_next: 1, status: 500 }
+steps:
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { env: create } }
+  - run: plan
+    expect: { exit: 0, stdout: ["(secret)"] }
+  - run: apply --json
+    expect: { exit: 1, status: failed }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { env: applied } }
+  - sim:
+      vercel_env: { preview: { STRIPE_KEY: "fake_ts_bws_8u4i0o" } }
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { env: unchanged } }
