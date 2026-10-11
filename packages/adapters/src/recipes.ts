@@ -59,6 +59,18 @@ export interface RecipeSimHints {
    * `POST /gates/{id}/rule` and lists them at `/gates/{id}/rules`). Default: the create's path.
    */
   collection?: string;
+  /**
+   * A first-class sim to run the op against instead of the generic REST sim, for an API the REST sim cannot stand
+   * in for (a GraphQL API: `railway`, `fly`). Then `seed` is that sim's seed, `present` a JSON pointer into its state
+   * that exists once the op applied (and not after destroy), and `drift` its drift keys (without the provider
+   * prefix) that edit a declared field (`changed`) and remove what the op made (`missing`).
+   */
+  provider?: string;
+  /** With `provider`: the path under the sim that the API's base URL stands for (default `/<provider>`). */
+  base_path?: string;
+  seed?: Record<string, unknown>;
+  present?: string;
+  drift?: { changed?: Record<string, string>; missing: Record<string, string> };
 }
 
 /** One operation of a recipe: an `http.resource`, `http.list_item` or `http.action` spec with typed params. */

@@ -1,5 +1,5 @@
 /**
- * `http.action` (ADR 0022) against the REST sim's logged endpoints (R8): parsing, where each request goes and with
+ * `http.action` (ADR 0022) against the REST sim's logged endpoints (R9): parsing, where each request goes and with
  * which credential, the idempotency key, success criteria, outputs, and the undo kept in the record id.
  */
 import { afterEach, describe, expect, it } from "vitest";

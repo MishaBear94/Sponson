@@ -1,0 +1,106 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Azure Static Web Apps (Azure Resource Manager) recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: azure_swa
+title: Azure Static Web Apps
+category: deploy
+verified_on: "2026-10-11"
+docs:
+  - title: Static Sites - Create Or Update Static Site Build App Settings
+    url: https://learn.microsoft.com/en-us/rest/api/appservice/static-sites/create-or-update-static-site-build-app-settings?view=rest-appservice-2024-04-01
+  - title: Static Sites - List Static Site Build App Settings
+    url: https://learn.microsoft.com/en-us/rest/api/appservice/static-sites/list-static-site-build-app-settings?view=rest-appservice-2024-04-01
+  - title: Static Sites - Get Static Site Builds
+    url: https://learn.microsoft.com/en-us/rest/api/appservice/static-sites/get-static-site-builds?view=rest-appservice-2024-04-01
+  - title: Preview environments in Azure Static Web Apps
+    url: https://learn.microsoft.com/en-us/azure/static-web-apps/preview-environments
+  - title: Configure application settings for Azure Static Web Apps
+    url: https://learn.microsoft.com/en-us/azure/static-web-apps/application-settings
+  - title: az account get-access-token
+    url: https://learn.microsoft.com/en-us/cli/azure/account#az-account-get-access-token
+api:
+  base_url: https://management.azure.com
+  base_url_env: AZURE_SWA_API_URL
+  auth: { command: [az, account, get-access-token, --query, accessToken, -o, tsv] }
+assumptions:
+  - id: AZ1
+    verified: true
+    text: "`PUT https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.Web/staticSites/{name}/builds/{environmentName}/config/appsettings?api-version=2024-04-01` with `{ properties: { <name>: <value>, … } }` sets the app settings of one environment (build) and answers 200 with the same `properties`."
+    source: https://learn.microsoft.com/en-us/rest/api/appservice/static-sites/create-or-update-static-site-build-app-settings?view=rest-appservice-2024-04-01
+  - id: AZ2
+    verified: true
+    text: "The settings are read with `POST …/builds/{environmentName}/listAppSettings?api-version=2024-04-01` (no body), which answers a StringDictionary `{ id, properties }`; there is no GET, so the recipe reads with `parent.read_method: POST`."
+    source: https://learn.microsoft.com/en-us/rest/api/appservice/static-sites/list-static-site-build-app-settings?view=rest-appservice-2024-04-01
+  - id: AZ3
+    verified: true
+    text: "Each environment is a `builds/{environmentName}` resource: production is `default`, a pull request's preview environment is named by the pull request's number (`builds/12`)."
+    source: https://learn.microsoft.com/en-us/rest/api/appservice/static-sites/get-static-site-builds?view=rest-appservice-2024-04-01
+  - id: AZ4
+    verified: true
+    text: "A preview environment exists from the pull request's first deployment and is deleted, with its settings, when the pull request is closed; app settings reach the app's managed API (Functions), not the front-end build."
+    source: https://learn.microsoft.com/en-us/azure/static-web-apps/preview-environments
+  - id: AZ5
+    verified: true
+    text: "`az account get-access-token --query accessToken -o tsv` prints an Azure Resource Manager access token for the signed-in account (the default resource is `https://management.azure.com/`), sent as a bearer token."
+    source: https://learn.microsoft.com/en-us/cli/azure/account#az-account-get-access-token
+  - id: AZ6
+    verified: false
+    text: "The PUT replaces the whole settings map (a setting it is not sent is removed), so the recipe sends the map as read with the one entry changed (`send: collection`); there is no ETag on this resource, so only Sponson's own writers are serialised (the parent lock), and a setting added in the portal between the read and the write is lost."
+  - id: AZ7
+    verified: false
+    text: "Listing the settings of an environment that does not exist (not deployed yet, or deleted with its pull request) answers 404, which the recipe reads as no settings (`if_missing: empty`): plan shows a create before the first deploy, and destroy after the pull request closed is a no-op. A write before the first deploy fails with that 404; order the line after the deploy."
+ops:
+  build_app_setting:
+    kind: list_item
+    title: App setting of a preview environment
+    summary: "One app setting of a Static Web App environment (a pull request's preview environment is named by its number), by read-modify-write of the environment's settings: read with `listAppSettings`, written whole with a PUT. Other settings are left alone and the environment is locked while Sponson writes it. Settings reach the app's managed API, not the front-end build (AZ4); the environment exists only after the PR's first deploy (AZ7)."
+    covers: [azure-swa-settings]
+    params:
+      subscription_id:
+        type: string
+        required: true
+        description: The Azure subscription id.
+        example: 00000000-0000-0000-0000-000000000000
+      resource_group:
+        type: string
+        required: true
+        description: The resource group of the static web app.
+        example: rg-web
+      site:
+        type: string
+        required: true
+        description: The static web app's name.
+        example: web
+      environment:
+        type: string
+        required: true
+        pattern: "^[a-zA-Z0-9]+$"
+        description: The environment's name (the pull request's number for its preview environment; `default` is production).
+        example: "42"
+      name:
+        type: string
+        required: true
+        description: The setting's name.
+        example: API_URL
+      value:
+        type: string
+        required: true
+        description: The setting's value.
+        example: "https://api-${ctx.scope}.example.app"
+    http:
+      parent:
+        path: "/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Web/staticSites/{site}/builds/{environment}/config/appsettings?api-version=2024-04-01"
+        read_path: "/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Web/staticSites/{site}/builds/{environment}/listAppSettings?api-version=2024-04-01"
+        read_method: POST
+        method: PUT
+        send: collection
+        if_missing: empty
+      list_path: /properties
+      shape: map
+      item: { param: name }
+      value: { param: value }
+    sim:
+      objects:
+        "/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Web/staticSites/{site}/builds/{environment}/config/appsettings":
+          properties: { SHARED_SETTING: from-the-portal }
+    live:
+      params: { subscription_id: SPONSON_LIVE_AZURE_SUBSCRIPTION_ID, resource_group: SPONSON_LIVE_AZURE_RESOURCE_GROUP, site: SPONSON_LIVE_AZURE_SWA_SITE, environment: SPONSON_LIVE_AZURE_SWA_ENVIRONMENT }

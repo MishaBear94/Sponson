@@ -88,9 +88,10 @@ export interface ProviderSim<S, Seed> {
   authorized?(headers: IncomingHttpHeaders, state: S, req: AuthRequest, core: SimCore): boolean | Reply;
   /**
    * Whether a POST, PUT, PATCH or DELETE changes state, for the write log (I4: `plan` writes nothing). Absent: every
-   * one does. A token endpoint or a GraphQL query is a POST that does not.
+   * one does. A token endpoint, a GraphQL query or a read sent as a POST (an ARM list action) is a POST that does
+   * not. `state` is the provider's current state, for a provider whose seed declares such reads.
    */
-  isWrite?(req: { method: string; path: string; body: unknown }): boolean;
+  isWrite?(req: { method: string; path: string; body: unknown }, state: S): boolean;
   /** Answer one authenticated, chaos-checked request under `/<name>/`. */
   routes(core: SimCore, state: S, req: RouteRequest): Reply;
 }

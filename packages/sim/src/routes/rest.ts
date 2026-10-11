@@ -19,8 +19,9 @@
  *       not in a collection are answered bare. A collection's style (seed `styles`, by collection path) changes the
  *       envelopes, the cursor's place, and the id's field and type, so that a recipe is tested in its provider's
  *       own response shapes. An object's style (by its path) may give it an `item_path` envelope for reads; writes
- *       go to the object itself. A create may be posted to another path than the collection's (seed `aliases`:
- *       `POST /gates/g/rule` adds to `/gates/g/rules`).
+ *       go to the object itself, and its `write_fields` store a written field under another name (an API that
+ *       reads `{ redirect_urls }` and replaces it with `{ urls }`). A create may be posted to another path than the
+ *       collection's (seed `aliases`: `POST /gates/g/rule` adds to `/gates/g/rules`).
  *   R3. A path is known once seeded or created: a POST to an unknown path creates the collection; a GET of an
  *       unknown path is 404. A create may choose the id (the id field, or the style's `id_from` field, in the
  *       body, like a flag key or a database name); otherwise the sim assigns `it_<n>` (the next integer with
@@ -51,7 +52,9 @@
  *       behind a scheme prefix such as `Authorization: Api-Key <key>`), HTTP Digest (RFC 7616, qop=auth; a
  *       request without valid credentials gets a 401 with a fresh challenge), and AWS SigV4 (the signature
  *       recomputed and compared; see ../auth.ts). Anything else is 401.
- *   R8. A seeded endpoint (seed `endpoints`, by path) stands for a one-off action's target (an app's sync URL, a
+ *   R8. A path the seed lists in `reads` is a read sent as a POST (an Azure Resource Manager list action such as
+ *       `…/listAppSettings`): it answers the object it names, as a GET of that object would, and is not a write.
+ *   R9. A seeded endpoint (seed `endpoints`, by path) stands for a one-off action's target (an app's sync URL, a
  *       purge or notification endpoint): it answers every method with its fixed status and reply (default 200
  *       `{}`), keeps nothing but a log of the calls (`calls`: method, path, headers, body), and with `public: true`
  *       answers without a credential, as an app's own endpoint does.
@@ -86,6 +89,8 @@ export interface RestStyle {
   once_fields?: string[];
   /** A query parameter that names an object of the collection by id (`url`), assumption R3. */
   item_query?: string;
+  /** For an object: top-level fields a write names otherwise than a read, written name → stored name (R2). */
+  write_fields?: Record<string, string>;
   /**
    * Request headers (lower-case names) whose values a create or update stores as fields, for an API that takes an
    * object's settings in headers (QStash: `upstash-cron` → `cron`, `upstash-schedule-id` → `scheduleId`).
@@ -98,7 +103,7 @@ export interface RestStyle {
   suffix_field?: string;
 }
 
-/** A one-off action's endpoint (assumption R8): a fixed answer to every method, and whether it needs a credential. */
+/** A one-off action's endpoint (assumption R9): a fixed answer to every method, and whether it needs a credential. */
 export interface RestEndpoint {
   /** Default 200. */
   status?: number;
@@ -108,7 +113,7 @@ export interface RestEndpoint {
   public?: boolean;
 }
 
-/** One call to a seeded endpoint (R8), as received. */
+/** One call to a seeded endpoint (R9), as received. */
 export interface RestCall {
   method: string;
   path: string;
@@ -127,9 +132,11 @@ export interface RestState {
   aliases: Record<string, string>;
   /** Further header names (lower-case) that carry a credential (assumption R1). */
   auth_headers: string[];
+  /** Paths read with a POST, by path: the object each answers (assumption R8). */
+  reads: Record<string, string>;
   /** Present when the seed configures real credentials (R7). */
   auth?: RestAuthState;
-  /** One-off action endpoints by path (R8), and every call they received. */
+  /** One-off action endpoints by path (R9), and every call they received. */
   endpoints: Record<string, RestEndpoint>;
   calls: RestCall[];
 }
@@ -174,9 +181,11 @@ export interface RestSeed {
   aliases?: Record<string, string>;
   /** Further header names that carry a credential, for an API whose header is not named `*-Key` or `*-Token`. */
   auth_headers?: string[];
+  /** Paths read with a POST (an ARM list action), by path: the object each answers (assumption R8). */
+  reads?: Record<string, string>;
   /** Real credentials (R7). */
   auth?: RestAuthSeed;
-  /** One-off action endpoints by path (R8). */
+  /** One-off action endpoints by path (R9). */
   endpoints?: Record<string, RestEndpoint>;
 }
 
@@ -217,8 +226,8 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
     return false;
   },
 
-  isWrite(req) {
-    return !(req.method === "POST" && req.path === "/oauth/token");
+  isWrite(req, state) {
+    return !(req.method === "POST" && (req.path === "/oauth/token" || normPath(req.path) in state.reads));
   },
 
   authorized(headers, state, req) {
@@ -245,8 +254,9 @@ function emptyState(seed: RestSeed): RestState {
     collections: {},
     objects: byPath(structuredClone(seed.objects ?? {})),
     styles: byPath(structuredClone(seed.styles ?? {})),
-    aliases: Object.fromEntries(Object.entries(seed.aliases ?? {}).map(([a, p]) => [normPath(a), normPath(p)])),
+    aliases: pathPairs(seed.aliases),
     auth_headers: (seed.auth_headers ?? []).map((h) => h.toLowerCase()),
+    reads: pathPairs(seed.reads),
     endpoints: byPath(structuredClone(seed.endpoints ?? {})),
     calls: [],
   };
@@ -271,7 +281,7 @@ function authorized(headers: IncomingHttpHeaders, declared: string[]): boolean {
   return Object.entries(headers).some(([name, v]) => carries(name) && typeof v === "string" && v.trim() !== "");
 }
 
-type FullStyle = Required<Omit<RestStyle, "next_path" | "item_query" | "header_fields" | "suffix_field">> & Pick<RestStyle, "item_query"> & { next_path: string | null };
+type FullStyle = Required<Omit<RestStyle, "next_path" | "item_query" | "header_fields" | "suffix_field" | "write_fields">> & Pick<RestStyle, "item_query"> & { next_path: string | null };
 
 /** The style of the collection at `path`, every default filled in. */
 function styleOf(state: RestState, path: string): FullStyle {
@@ -376,6 +386,11 @@ function normPath(path: string): string {
   return path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
 }
 
+/** A seed map of path to path, both normalised. */
+function pathPairs(m: Record<string, string> | undefined): Record<string, string> {
+  return Object.fromEntries(Object.entries(m ?? {}).map(([a, p]) => [normPath(a), normPath(p)]));
+}
+
 /** A seed map keyed by normalised paths. */
 function byPath<T>(m: Record<string, T>): Record<string, T> {
   return Object.fromEntries(Object.entries(m).map(([p, v]) => [normPath(p), v]));
@@ -421,6 +436,12 @@ function queriedItem(state: RestState, path: string, query: URLSearchParams | un
 
 const notFound = (): Reply => error(404, "not found");
 
+/** R8: the object a read sent as a POST names, answered as a GET of it would be. */
+function readObject(state: RestState, path: string): Reply {
+  const object = state.objects[path];
+  return object ? new Reply(200, envelope(state.styles[path]?.item_path ?? "", object)) : notFound();
+}
+
 /** The fields the request's headers set, by the collection's `header_fields`. */
 function headerFields(state: RestState, collection: string, headers: Record<string, string>): Record<string, unknown> {
   const map = state.styles[collection]?.header_fields ?? {};
@@ -462,10 +483,16 @@ function create(core: SimCore, state: RestState, path: string, raw: unknown, hea
   return new Reply(201, envelope(style.item_path, { ...item, ...shown }));
 }
 
+/** A write to the object at `path` with its style's `write_fields` stored under their read names (R2). */
+function renamed(state: RestState, path: string, body: Record<string, unknown>): Record<string, unknown> {
+  const names = state.styles[path]?.write_fields ?? {};
+  return Object.fromEntries(Object.entries(body).map(([k, v]) => [names[k] ?? k, v]));
+}
+
 function patch(state: RestState, t: Target, body: unknown): Reply {
   if (!isRecord(body)) return error(400, "body must be a JSON object");
   if (t.kind === "object") {
-    mergePatch(t.object, body);
+    mergePatch(t.object, renamed(state, t.path, body));
     return new Reply(200, t.object);
   }
   if (t.kind !== "item") return notFound();
@@ -493,7 +520,7 @@ function put(state: RestState, t: Target, body: unknown, raw: string): Reply {
   if (!isRecord(body)) return error(400, "body must be a JSON object");
   if (t.kind === "none") return putNew(state, raw, body);
   if (t.kind === "object") {
-    state.objects[t.path] = structuredClone(body);
+    state.objects[t.path] = structuredClone(renamed(state, t.path, body));
     return new Reply(200, state.objects[t.path]);
   }
   if (t.kind !== "item") return notFound();
@@ -526,6 +553,8 @@ const routes = router<RestState>(
     }),
 
     route("POST", "/*path", ({ core, state, params, body, headers }) => {
+      const read = state.reads[normPath(`/${params.path}`)];
+      if (read !== undefined) return readObject(state, read);
       const suffix = suffixTarget(state, normPath(`/${params.path}`));
       if (suffix) return upsertAt(core, state, suffix, body, headers);
       const t = resolve(state, `/${params.path}`);

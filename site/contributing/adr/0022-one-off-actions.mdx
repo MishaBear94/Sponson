@@ -114,7 +114,7 @@ Recipes may declare `kind: action`. A recipe whose ops are all `url` actions has
 (`schema/recipe.schema.json`), and its docs say the op needs no credential. The recipe harness
 (`scenarios/recipes.test.ts`) runs every action recipe op as run → re-apply unchanged with zero writes → a trigger
 param changed in the plan → run again → destroy (undo sent or nothing), against an endpoint of the REST sim that
-answers what the op expects and logs every call (assumption R8); a `url` op's calls must carry no credential.
+answers what the op expects and logs every call (assumption R9); a `url` op's calls must carry no credential.
 
 ### Inngest
 

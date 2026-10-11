@@ -126,6 +126,20 @@ describe("auth: oauth2_client_credentials", () => {
     const r = await failure(listItem.read(run({ ...env(), AUTH0_TOKEN_URL: `${h.sim.url}/rest/not-a-token-endpoint` }, AUTH0({ auth_method: "client_secret_basic" })).actx, CALLBACK));
     expect(r.code).toBe("PROVIDER_RESPONSE");
   });
+
+  it("a token_url and audience written as paths are resolved against the origin of the block's base_url", async () => {
+    await start(AUTH0_SEED);
+    const { actx } = run(env(), AUTH0({ token_url: "/oauth/token", audience: "/api/v2/" }));
+    expect(await listItem.read(actx, CALLBACK)).toBeNull();
+    // The audience comes from the block's base_url, not from the base_url_env override pointing at the sim.
+    expect(h.sim.state.rest.auth!.issued.map((t) => t.audience)).toEqual(["https://tenant.eu.auth0.com/api/v2/"]);
+    const w = "providers.http.auth0.auth";
+    const oauth = { token_url: "/oauth2/token", client_id_env: "ID", client_secret_env: "SECRET", audience: "/api" };
+    expect(parseAuth({ oauth2_client_credentials: oauth }, w, "https://acme.kinde.com/api/v1")).toMatchObject({ tokenUrl: "https://acme.kinde.com/oauth2/token", audience: "https://acme.kinde.com/api" });
+    expect(parseAuth({ oauth2_client_credentials: { ...oauth, audience: "urn:acme" } }, w, "https://acme.kinde.com/api/v1")).toMatchObject({ audience: "urn:acme" });
+    expect(() => parseAuth({ oauth2_client_credentials: { ...oauth, token_url: "//evil.example/token" } }, w, "https://acme.kinde.com/api/v1")).toThrow(/single "\/"/);
+    expect(() => parseAuth({ oauth2_client_credentials: oauth }, w)).toThrow(/needs the block's `base_url`/);
+  });
 });
 
 // ---------------------------------------------------------------------------

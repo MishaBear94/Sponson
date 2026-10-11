@@ -1,4 +1,138 @@
 {
+  "amplify.branch": {
+    "provider": {
+      "base_url": "https://amplify.us-east-1.amazonaws.com",
+      "base_url_env": "AMPLIFY_API_URL",
+      "auth": {
+        "aws_sigv4": {
+          "region": "us-east-1",
+          "service": "amplify",
+          "access_key_id_env": "AWS_ACCESS_KEY_ID",
+          "secret_access_key_env": "AWS_SECRET_ACCESS_KEY"
+        }
+      }
+    },
+    "key": "/apps/d1demo/branches/pr-42",
+    "id": "DELETE /apps/d1demo/branches/pr-42"
+  },
+  "amplify.branch_variable": {
+    "provider": {
+      "base_url": "https://amplify.us-east-1.amazonaws.com",
+      "base_url_env": "AMPLIFY_API_URL",
+      "auth": {
+        "aws_sigv4": {
+          "region": "us-east-1",
+          "service": "amplify",
+          "access_key_id_env": "AWS_ACCESS_KEY_ID",
+          "secret_access_key_env": "AWS_SECRET_ACCESS_KEY"
+        }
+      }
+    },
+    "key": "/apps/d1demo/branches/pr-42#/environmentVariables=API_URL",
+    "id": "{\"item\":\"API_URL\",\"item_path\":\"/branch\",\"list\":\"/environmentVariables\",\"missing_empty\":true,\"read\":\"/apps/d1demo/branches/pr-42\",\"send\":\"collection\",\"shape\":\"map\",\"write\":\"POST /apps/d1demo/branches/pr-42\"}"
+  },
+  "auth0.callback_url": {
+    "provider": {
+      "base_url_env": "AUTH0_API_URL",
+      "auth": {
+        "oauth2_client_credentials": {
+          "token_url": "/oauth/token",
+          "token_url_env": "AUTH0_TOKEN_URL",
+          "client_id_env": "AUTH0_CLIENT_ID",
+          "client_secret_env": "AUTH0_CLIENT_SECRET",
+          "audience": "/api/v2/"
+        }
+      },
+      "base_url": "https://acme.eu.auth0.com/api/v2"
+    },
+    "key": "/clients/AbC123dEf456GhI789jKl012MnO345pQ#/callbacks=https://pr-42.preview.example.app/callback",
+    "id": "{\"item\":\"https://pr-42.preview.example.app/callback\",\"list\":\"/callbacks\",\"read\":\"/clients/AbC123dEf456GhI789jKl012MnO345pQ?fields=callbacks,allowed_logout_urls,web_origins,allowed_origins&include_fields=true\",\"send\":\"field\",\"shape\":\"array\",\"write\":\"PATCH /clients/AbC123dEf456GhI789jKl012MnO345pQ\"}"
+  },
+  "auth0.logout_url": {
+    "provider": {
+      "base_url_env": "AUTH0_API_URL",
+      "auth": {
+        "oauth2_client_credentials": {
+          "token_url": "/oauth/token",
+          "token_url_env": "AUTH0_TOKEN_URL",
+          "client_id_env": "AUTH0_CLIENT_ID",
+          "client_secret_env": "AUTH0_CLIENT_SECRET",
+          "audience": "/api/v2/"
+        }
+      },
+      "base_url": "https://acme.eu.auth0.com/api/v2"
+    },
+    "key": "/clients/AbC123dEf456GhI789jKl012MnO345pQ#/allowed_logout_urls=https://pr-42.preview.example.app",
+    "id": "{\"item\":\"https://pr-42.preview.example.app\",\"list\":\"/allowed_logout_urls\",\"read\":\"/clients/AbC123dEf456GhI789jKl012MnO345pQ?fields=callbacks,allowed_logout_urls,web_origins,allowed_origins&include_fields=true\",\"send\":\"field\",\"shape\":\"array\",\"write\":\"PATCH /clients/AbC123dEf456GhI789jKl012MnO345pQ\"}"
+  },
+  "auth0.web_origin": {
+    "provider": {
+      "base_url_env": "AUTH0_API_URL",
+      "auth": {
+        "oauth2_client_credentials": {
+          "token_url": "/oauth/token",
+          "token_url_env": "AUTH0_TOKEN_URL",
+          "client_id_env": "AUTH0_CLIENT_ID",
+          "client_secret_env": "AUTH0_CLIENT_SECRET",
+          "audience": "/api/v2/"
+        }
+      },
+      "base_url": "https://acme.eu.auth0.com/api/v2"
+    },
+    "key": "/clients/AbC123dEf456GhI789jKl012MnO345pQ#/web_origins=https://pr-42.preview.example.app",
+    "id": "{\"item\":\"https://pr-42.preview.example.app\",\"list\":\"/web_origins\",\"read\":\"/clients/AbC123dEf456GhI789jKl012MnO345pQ?fields=callbacks,allowed_logout_urls,web_origins,allowed_origins&include_fields=true\",\"send\":\"field\",\"shape\":\"array\",\"write\":\"PATCH /clients/AbC123dEf456GhI789jKl012MnO345pQ\"}"
+  },
+  "auth0.allowed_origin": {
+    "provider": {
+      "base_url_env": "AUTH0_API_URL",
+      "auth": {
+        "oauth2_client_credentials": {
+          "token_url": "/oauth/token",
+          "token_url_env": "AUTH0_TOKEN_URL",
+          "client_id_env": "AUTH0_CLIENT_ID",
+          "client_secret_env": "AUTH0_CLIENT_SECRET",
+          "audience": "/api/v2/"
+        }
+      },
+      "base_url": "https://acme.eu.auth0.com/api/v2"
+    },
+    "key": "/clients/AbC123dEf456GhI789jKl012MnO345pQ#/allowed_origins=https://pr-42.preview.example.app",
+    "id": "{\"item\":\"https://pr-42.preview.example.app\",\"list\":\"/allowed_origins\",\"read\":\"/clients/AbC123dEf456GhI789jKl012MnO345pQ?fields=callbacks,allowed_logout_urls,web_origins,allowed_origins&include_fields=true\",\"send\":\"field\",\"shape\":\"array\",\"write\":\"PATCH /clients/AbC123dEf456GhI789jKl012MnO345pQ\"}"
+  },
+  "azure_swa.build_app_setting": {
+    "provider": {
+      "base_url": "https://management.azure.com",
+      "base_url_env": "AZURE_SWA_API_URL",
+      "auth": {
+        "command": [
+          "az",
+          "account",
+          "get-access-token",
+          "--query",
+          "accessToken",
+          "-o",
+          "tsv"
+        ]
+      }
+    },
+    "key": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-web/providers/Microsoft.Web/staticSites/web/builds/42/config/appsettings?api-version=2024-04-01#/properties=API_URL",
+    "id": "{\"item\":\"API_URL\",\"list\":\"/properties\",\"missing_empty\":true,\"read\":\"/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-web/providers/Microsoft.Web/staticSites/web/builds/42/listAppSettings?api-version=2024-04-01\",\"read_method\":\"POST\",\"send\":\"collection\",\"shape\":\"map\",\"write\":\"PUT /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-web/providers/Microsoft.Web/staticSites/web/builds/42/config/appsettings?api-version=2024-04-01\"}"
+  },
+  "cloud_run.traffic_tag": {
+    "provider": {
+      "base_url": "https://run.googleapis.com/v2",
+      "base_url_env": "CLOUD_RUN_API_URL",
+      "auth": {
+        "command": [
+          "gcloud",
+          "auth",
+          "print-access-token"
+        ]
+      }
+    },
+    "key": "/projects/demo-project/locations/us-central1/services/web?updateMask=traffic#/traffic=pr-42",
+    "id": "{\"item\":\"pr-42\",\"key_field\":\"tag\",\"list\":\"/traffic\",\"read\":\"/projects/demo-project/locations/us-central1/services/web\",\"send\":[\"etag\"],\"shape\":\"array\",\"write\":\"PATCH /projects/demo-project/locations/us-central1/services/web?updateMask=traffic\"}"
+  },
   "cloudflare.dns_cname": {
     "provider": {
       "base_url": "https://api.cloudflare.com/client/v4",
@@ -23,6 +157,43 @@
     },
     "key": "/v2/environments/08d8becf-d4d9-4c66-8b48-6ac74cd95fba/settings/12345/value#/targetingRules=pr-42",
     "id": "{\"item\":\"pr-42\",\"key_field\":\"/conditions/0/userCondition/comparisonValue/listValue/0/value\",\"list\":\"/targetingRules\",\"read\":\"/v2/environments/08d8becf-d4d9-4c66-8b48-6ac74cd95fba/settings/12345/value\",\"send\":[\"defaultValue\",\"percentageEvaluationAttribute\"],\"shape\":\"array\",\"write\":\"PUT /v2/environments/08d8becf-d4d9-4c66-8b48-6ac74cd95fba/settings/12345/value\"}"
+  },
+  "firebase.authorized_domain": {
+    "provider": {
+      "base_url": "https://identitytoolkit.googleapis.com/admin/v2",
+      "base_url_env": "FIREBASE_API_URL",
+      "auth": {
+        "command": [
+          "gcloud",
+          "auth",
+          "print-access-token"
+        ]
+      }
+    },
+    "key": "/projects/demo-project/config?updateMask=authorizedDomains#/authorizedDomains=pr-42.preview.example.app",
+    "id": "{\"item\":\"pr-42.preview.example.app\",\"list\":\"/authorizedDomains\",\"read\":\"/projects/demo-project/config\",\"send\":\"field\",\"shape\":\"array\",\"write\":\"PATCH /projects/demo-project/config?updateMask=authorizedDomains\"}"
+  },
+  "fly.secret": {
+    "provider": {
+      "base_url": "https://api.fly.io/graphql",
+      "base_url_env": "FLY_API_URL",
+      "auth": {
+        "bearer_env": "FLY_API_TOKEN"
+      }
+    },
+    "key": "graphql:app({\"appName\":\"demo-pr-42\"})/app/secrets[name=DATABASE_URL]",
+    "id": "GRAPHQL {\"query\":\"mutation($input: UnsetSecretsInput!) { unsetSecrets(input: $input) { release { id version } } }\",\"variables\":{\"input\":{\"appId\":\"demo-pr-42\",\"keys\":[\"DATABASE_URL\"]}}}"
+  },
+  "fly_machines.app": {
+    "provider": {
+      "base_url": "https://api.machines.dev/v1",
+      "base_url_env": "FLY_MACHINES_API_URL",
+      "auth": {
+        "bearer_env": "FLY_API_TOKEN"
+      }
+    },
+    "key": "/apps/demo-pr-42",
+    "id": "DELETE /apps/demo-pr-42?force=true"
   },
   "github.repo_webhook": {
     "provider": {
@@ -78,6 +249,79 @@
     "provider": {},
     "key": "action:<line id>",
     "id": "FORGET"
+  },
+  "kinde.callback_url": {
+    "provider": {
+      "base_url_env": "KINDE_API_URL",
+      "auth": {
+        "oauth2_client_credentials": {
+          "token_url": "/oauth2/token",
+          "token_url_env": "KINDE_TOKEN_URL",
+          "client_id_env": "KINDE_MANAGEMENT_CLIENT_ID",
+          "client_secret_env": "KINDE_MANAGEMENT_CLIENT_SECRET",
+          "audience": "/api"
+        }
+      },
+      "base_url": "https://acme.kinde.com/api/v1"
+    },
+    "key": "/applications/3b0b5c6c8fcc464fab397f4969b5f482/auth_redirect_urls#/redirect_urls=https://pr-42.preview.example.app/api/auth/kinde_callback",
+    "id": "{\"item\":\"https://pr-42.preview.example.app/api/auth/kinde_callback\",\"list\":\"/redirect_urls\",\"read\":\"/applications/3b0b5c6c8fcc464fab397f4969b5f482/auth_redirect_urls\",\"send\":\"field\",\"shape\":\"array\",\"write\":\"PUT /applications/3b0b5c6c8fcc464fab397f4969b5f482/auth_redirect_urls\",\"write_list\":\"/urls\"}"
+  },
+  "kinde.logout_url": {
+    "provider": {
+      "base_url_env": "KINDE_API_URL",
+      "auth": {
+        "oauth2_client_credentials": {
+          "token_url": "/oauth2/token",
+          "token_url_env": "KINDE_TOKEN_URL",
+          "client_id_env": "KINDE_MANAGEMENT_CLIENT_ID",
+          "client_secret_env": "KINDE_MANAGEMENT_CLIENT_SECRET",
+          "audience": "/api"
+        }
+      },
+      "base_url": "https://acme.kinde.com/api/v1"
+    },
+    "key": "/applications/3b0b5c6c8fcc464fab397f4969b5f482/auth_logout_urls#/logout_urls=https://pr-42.preview.example.app",
+    "id": "{\"item\":\"https://pr-42.preview.example.app\",\"list\":\"/logout_urls\",\"read\":\"/applications/3b0b5c6c8fcc464fab397f4969b5f482/auth_logout_urls\",\"send\":\"field\",\"shape\":\"array\",\"write\":\"PUT /applications/3b0b5c6c8fcc464fab397f4969b5f482/auth_logout_urls\",\"write_list\":\"/urls\"}"
+  },
+  "okta.redirect_uri": {
+    "provider": {
+      "base_url_env": "OKTA_API_URL",
+      "auth": {
+        "header": "Authorization",
+        "value_env": "OKTA_API_TOKEN",
+        "prefix": "SSWS "
+      },
+      "base_url": "https://acme.okta.com/api/v1"
+    },
+    "key": "/apps/0oa1gjh63g214q0Hq0g4#/settings/oauthClient/redirect_uris=https://pr-42.preview.example.app/login/callback",
+    "id": "{\"item\":\"https://pr-42.preview.example.app/login/callback\",\"list\":\"/settings/oauthClient/redirect_uris\",\"read\":\"/apps/0oa1gjh63g214q0Hq0g4\",\"send\":\"parent\",\"shape\":\"array\",\"write\":\"PUT /apps/0oa1gjh63g214q0Hq0g4\"}"
+  },
+  "okta.post_logout_redirect_uri": {
+    "provider": {
+      "base_url_env": "OKTA_API_URL",
+      "auth": {
+        "header": "Authorization",
+        "value_env": "OKTA_API_TOKEN",
+        "prefix": "SSWS "
+      },
+      "base_url": "https://acme.okta.com/api/v1"
+    },
+    "key": "/apps/0oa1gjh63g214q0Hq0g4#/settings/oauthClient/post_logout_redirect_uris=https://pr-42.preview.example.app",
+    "id": "{\"item\":\"https://pr-42.preview.example.app\",\"list\":\"/settings/oauthClient/post_logout_redirect_uris\",\"read\":\"/apps/0oa1gjh63g214q0Hq0g4\",\"send\":\"parent\",\"shape\":\"array\",\"write\":\"PUT /apps/0oa1gjh63g214q0Hq0g4\"}"
+  },
+  "okta.trusted_origin": {
+    "provider": {
+      "base_url_env": "OKTA_API_URL",
+      "auth": {
+        "header": "Authorization",
+        "value_env": "OKTA_API_TOKEN",
+        "prefix": "SSWS "
+      },
+      "base_url": "https://acme.okta.com/api/v1"
+    },
+    "key": "/trustedOrigins?q=https%3A%2F%2Fpr-42.preview.example.app&limit=200[origin=https://pr-42.preview.example.app]",
+    "id": "DELETE /trustedOrigins/ID"
   },
   "posthog.release_condition": {
     "provider": {
@@ -146,6 +390,17 @@
     },
     "key": "/v2/schedules/cron-pr-42",
     "id": "DELETE /v2/schedules/cron-pr-42"
+  },
+  "railway.variable": {
+    "provider": {
+      "base_url": "https://backboard.railway.com/graphql/v2",
+      "base_url_env": "RAILWAY_API_URL",
+      "auth": {
+        "bearer_env": "RAILWAY_API_TOKEN"
+      }
+    },
+    "key": "graphql:variables({\"environmentId\":\"env-pr-42\",\"projectId\":\"prj-railway-demo\",\"serviceId\":\"svc-web\",\"unrendered\":true})/variables/API_URL",
+    "id": "GRAPHQL {\"query\":\"mutation variableDelete($input: VariableDeleteInput!) { variableDelete(input: $input) }\",\"variables\":{\"input\":{\"environmentId\":\"env-pr-42\",\"name\":\"API_URL\",\"projectId\":\"prj-railway-demo\",\"serviceId\":\"svc-web\"}}}"
   },
   "render.env_var": {
     "provider": {

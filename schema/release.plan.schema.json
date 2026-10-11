@@ -472,11 +472,11 @@
                   "required": ["token_url", "client_id_env", "client_secret_env"],
                   "additionalProperties": false,
                   "properties": {
-                    "token_url": { "type": "string", "pattern": "^https?://\\S+$", "description": "The token endpoint, e.g. https://<tenant>.auth0.com/oauth/token." },
+                    "token_url": { "type": "string", "pattern": "^(https?://\\S+|/(?!/)\\S*)$", "description": "The token endpoint, e.g. https://<tenant>.auth0.com/oauth/token, or a path (/oauth/token) on the origin of the block's base_url." },
                     "token_url_env": { "$ref": "#/$defs/envName", "description": "Optional: a variable that overrides token_url when set." },
                     "client_id_env": { "$ref": "#/$defs/envName" },
                     "client_secret_env": { "$ref": "#/$defs/credentialEnvName" },
-                    "audience": { "type": "string", "minLength": 1, "description": "Sent as `audience` (Auth0: https://<tenant>/api/v2/; Kinde: https://<sub>.kinde.com/api)." },
+                    "audience": { "type": "string", "minLength": 1, "description": "Sent as `audience` (Auth0: https://<tenant>/api/v2/; Kinde: https://<sub>.kinde.com/api). A value starting with a single / is a path on the origin of the block's base_url." },
                     "scope": { "type": "string", "minLength": 1, "description": "Sent as `scope`, space-separated." },
                     "extra": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Further form parameters (never a credential)." },
                     "auth_method": { "enum": ["client_secret_post", "client_secret_basic"], "description": "How the client authenticates: in the form (default) or with HTTP Basic." }
@@ -697,6 +697,7 @@
           "properties": {
             "path": { "$ref": "#/$defs/httpPath", "description": "The parent object: read with GET, written with `method`." },
             "read_path": { "$ref": "#/$defs/httpPath", "description": "GET this instead when reading differs from writing." },
+            "read_method": { "enum": ["GET", "POST"], "description": "Default: GET. POST: the parent is read with a POST without a body, which changes nothing (an Azure Resource Manager list action such as listAppSettings)." },
             "method": { "enum": ["PATCH", "PUT", "POST"], "description": "Default: PATCH." },
             "send": {
               "anyOf": [{ "enum": ["field", "parent", "collection"] }, { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }],
@@ -705,7 +706,8 @@
             "item_path": { "$ref": "#/$defs/jsonPointer", "description": "Where the parent object is in the read answer (`/branch` for `{ branch: {…} }`). Default: the whole body." },
             "content_type": { "type": "string" },
             "if_missing": { "enum": ["error", "empty"], "description": "error (default); empty: a 404 on the parent reads as an empty collection (S3 CORS)." },
-            "when_empty": { "enum": ["write", "delete"], "description": "write (default); delete: an empty collection is removed with DELETE path instead (S3 CORS)." }
+            "when_empty": { "enum": ["write", "delete"], "description": "write (default); delete: an empty collection is removed with DELETE path instead (S3 CORS)." },
+            "write_list_path": { "$ref": "#/$defs/jsonPointer", "description": "Where a write puts the collection, when the API names it otherwise than its read (Kinde reads `{ redirect_urls }`, replaces with `{ urls }`). Default: list_path." }
           }
         },
         "list_path": { "$ref": "#/$defs/jsonPointer", "description": "Where the collection is in the parent." },

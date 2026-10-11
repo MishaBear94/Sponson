@@ -36,12 +36,70 @@
           "description": "The credential, under the provider's conventional variable name (its CLI's or SDK's).",
           "oneOf": [
             { "type": "object", "required": ["bearer_env"], "additionalProperties": false, "properties": { "bearer_env": { "$ref": "#/$defs/credentialEnv" } } },
-            { "type": "object", "required": ["header", "value_env"], "additionalProperties": false, "properties": { "header": { "type": "string", "minLength": 1 }, "value_env": { "$ref": "#/$defs/credentialEnv" } } },
+            {
+              "type": "object",
+              "required": ["header", "value_env"],
+              "additionalProperties": false,
+              "properties": {
+                "header": { "type": "string", "minLength": 1 },
+                "value_env": { "$ref": "#/$defs/credentialEnv" },
+                "prefix": { "type": "string", "pattern": "^[\\x20-\\x7e]{1,64}$", "description": "Literal text sent before the value (`SSWS `, `Api-Key `)." }
+              }
+            },
             {
               "type": "object",
               "required": ["basic"],
               "additionalProperties": false,
               "properties": { "basic": { "type": "object", "required": ["user_env", "password_env"], "additionalProperties": false, "properties": { "user_env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" }, "password_env": { "$ref": "#/$defs/credentialEnv" } } } }
+            },
+            {
+              "type": "object",
+              "required": ["oauth2_client_credentials"],
+              "additionalProperties": false,
+              "properties": {
+                "oauth2_client_credentials": {
+                  "type": "object",
+                  "description": "A bearer token from the provider's token endpoint (client credentials). A per-account API writes `token_url` and `audience` as paths, resolved against the origin of the plan's `base_url`.",
+                  "required": ["token_url", "token_url_env", "client_id_env", "client_secret_env"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "token_url": { "type": "string", "pattern": "^(https://\\S+|/(?!/)\\S*)$" },
+                    "token_url_env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*_TOKEN_URL$", "description": "The override variable, `<PROVIDER>_TOKEN_URL`; the recipe tests point it at the fake cloud's token endpoint." },
+                    "client_id_env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+                    "client_secret_env": { "$ref": "#/$defs/credentialEnv" },
+                    "audience": { "type": "string", "minLength": 1 },
+                    "scope": { "type": "string", "minLength": 1 },
+                    "auth_method": { "enum": ["client_secret_post", "client_secret_basic"] }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["command"],
+              "additionalProperties": false,
+              "description": "A token the provider's own CLI prints (gcloud, az), run without a shell; literal arguments only.",
+              "properties": { "command": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[^{$]*$" } } }
+            },
+            {
+              "type": "object",
+              "required": ["aws_sigv4"],
+              "additionalProperties": false,
+              "description": "AWS Signature Version 4, from the AWS CLI's and SDKs' conventional variables.",
+              "properties": {
+                "aws_sigv4": {
+                  "type": "object",
+                  "required": ["region", "service", "access_key_id_env", "secret_access_key_env"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "region": { "type": "string", "pattern": "^[a-z]{2}(-[a-z]+)+-[0-9]+$" },
+                    "service": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+                    "access_key_id_env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+                    "secret_access_key_env": { "$ref": "#/$defs/credentialEnv" },
+                    "session_token_env": { "$ref": "#/$defs/credentialEnv" }
+                  }
+                }
+              }
             }
           ]
         },
@@ -139,7 +197,21 @@
             "objects": { "type": "object", "additionalProperties": { "type": "object" }, "description": "Objects to seed, by path (placeholders filled from the examples)." },
             "header_fields": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Request headers a create or update stores as fields (header → field), for an API that takes settings in headers." },
             "suffix_field": { "type": "string", "description": "For a create at `<collection>/{+param}`: the field the sim stores that path suffix in; the POST is an upsert by the chosen id." },
-            "collection": { "type": "string", "description": "The collection path (placeholders filled from the examples) a resource lives in, when its create is posted elsewhere. Default: the create's path." }
+            "collection": { "type": "string", "description": "The collection path (placeholders filled from the examples) a resource lives in, when its create is posted elsewhere. Default: the create's path." },
+            "provider": { "type": "string", "pattern": "^[a-z][a-z0-9]*$", "description": "A first-class sim (packages/sim/src/routes/<provider>.ts) to run the op against instead of the generic REST sim, for an API the REST sim cannot stand in for (GraphQL). Then `seed`, `present` and `drift` describe the test." },
+            "base_path": { "type": "string", "pattern": "^/", "description": "With `provider`: the path under the sim the API's base URL stands for (default `/<provider>`; `/aws/amplify`)." },
+            "seed": { "type": "object", "description": "With `provider`: that sim's seed (the example values' project, environment or app)." },
+            "present": { "type": "string", "pattern": "^/", "description": "With `provider`: a JSON pointer into that sim's state that exists once the op applied and is gone after destroy." },
+            "drift": {
+              "type": "object",
+              "required": ["missing"],
+              "additionalProperties": false,
+              "description": "With `provider`: that sim's drift keys (without the provider prefix) and values that edit a declared field (`changed`) and remove what the op made (`missing`).",
+              "properties": {
+                "changed": { "type": "object", "minProperties": 1, "additionalProperties": { "type": "string" } },
+                "missing": { "type": "object", "minProperties": 1, "additionalProperties": { "type": "string" } }
+              }
+            }
           }
         },
         "live": {

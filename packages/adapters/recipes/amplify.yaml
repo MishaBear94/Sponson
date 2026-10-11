@@ -1,0 +1,140 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# AWS Amplify Hosting API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: amplify
+title: AWS Amplify Hosting
+category: deploy
+verified_on: "2026-10-11"
+docs:
+  - title: CreateBranch
+    url: https://docs.aws.amazon.com/amplify/latest/APIReference/API_CreateBranch.html
+  - title: GetBranch
+    url: https://docs.aws.amazon.com/amplify/latest/APIReference/API_GetBranch.html
+  - title: UpdateBranch
+    url: https://docs.aws.amazon.com/amplify/latest/APIReference/API_UpdateBranch.html
+  - title: DeleteBranch
+    url: https://docs.aws.amazon.com/amplify/latest/APIReference/API_DeleteBranch.html
+  - title: Amplify endpoints and quotas
+    url: https://docs.aws.amazon.com/general/latest/gr/amplify.html
+  - title: Create a signed AWS API request (SigV4)
+    url: https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv-create-signed-request.html
+api:
+  base_url: https://amplify.us-east-1.amazonaws.com
+  base_url_env: AMPLIFY_API_URL
+  auth:
+    aws_sigv4: { region: us-east-1, service: amplify, access_key_id_env: AWS_ACCESS_KEY_ID, secret_access_key_env: AWS_SECRET_ACCESS_KEY }
+assumptions:
+  - id: AM1
+    verified: true
+    text: "The Amplify API is regional (`https://amplify.<region>.amazonaws.com`) and signed with SigV4 for the service `amplify`. The recipe defaults to `us-east-1`; an app in another region sets `base_url` and `auth` (with its `region`) in the provider block, and temporary credentials (a CI role) add `session_token_env: AWS_SESSION_TOKEN` there."
+    source: https://docs.aws.amazon.com/general/latest/gr/amplify.html
+  - id: AM2
+    verified: true
+    text: "`POST /apps/{appId}/branches` (CreateBranch) creates a branch from `branchName` (required) and optional `description`, `stage` (PRODUCTION, BETA, DEVELOPMENT, EXPERIMENTAL, PULL_REQUEST), `enableAutoBuild`, `environmentVariables`, …; it answers 200 with `{ branch }`."
+    source: https://docs.aws.amazon.com/amplify/latest/APIReference/API_CreateBranch.html
+  - id: AM3
+    verified: true
+    text: "`GET /apps/{appId}/branches/{branchName}` (GetBranch) answers `{ branch }` with `branchName`, `stage`, `description`, `enableAutoBuild` and `environmentVariables` (a map of string to string)."
+    source: https://docs.aws.amazon.com/amplify/latest/APIReference/API_GetBranch.html
+  - id: AM4
+    verified: true
+    text: "`POST /apps/{appId}/branches/{branchName}` (UpdateBranch) takes the same optional fields and answers `{ branch }`; `environmentVariables` is the branch's whole map of variables."
+    source: https://docs.aws.amazon.com/amplify/latest/APIReference/API_UpdateBranch.html
+  - id: AM5
+    verified: true
+    text: "`DELETE /apps/{appId}/branches/{branchName}` (DeleteBranch) deletes a branch; an unknown app or branch is 404 `NotFoundException`."
+    source: https://docs.aws.amazon.com/amplify/latest/APIReference/API_DeleteBranch.html
+  - id: AM6
+    verified: false
+    text: "UpdateBranch leaves the fields it is not sent as they are (so the branch op's update does not reset the variables, and the variable op's write does not reset the branch's settings), while an `environmentVariables` it is sent replaces the whole map, as the sim models it (assumption A4 of packages/sim/src/routes/aws.ts)."
+  - id: AM7
+    verified: false
+    text: "A build that ran before a variable was written does not see it: Sponson does not start a new job (StartJob), so order the variable lines before the branch's first build (`enable_auto_build: false` and a CI-started job, or the branch line, then the variables, then the push). The branches Amplify's own pull request previews make are not modelled; this recipe manages a branch the plan names."
+ops:
+  branch:
+    kind: resource
+    title: Branch
+    summary: "An Amplify branch named by the plan (the git branch of the pull request, `${ctx.git.branch}`), created with CreateBranch and deleted on destroy. Its `stage`, `description` and auto-build setting are compared: a console edit is drift. Variables on it are `amplify.branch_variable` lines."
+    covers: [amplify-branch]
+    params:
+      app_id:
+        type: string
+        required: true
+        pattern: "^d[a-z0-9]+$"
+        description: The Amplify app's id.
+        example: d1demo
+      branch_name:
+        type: string
+        required: true
+        description: The branch's name, as the repository names it.
+        example: "${ctx.scope}"
+      stage:
+        type: string
+        enum: [PRODUCTION, BETA, DEVELOPMENT, EXPERIMENTAL, PULL_REQUEST]
+        description: The branch's stage.
+        example: PULL_REQUEST
+      description:
+        type: string
+        description: The branch's description.
+        example: "Preview of ${ctx.scope}"
+      enable_auto_build:
+        type: boolean
+        description: Build automatically on every push (false lets CI start the build after the variables are written; AM7).
+    http:
+      read: { path: "/apps/{app_id}/branches/{branch_name}" }
+      create:
+        path: "/apps/{app_id}/branches"
+        body: { branchName: { param: branch_name } }
+      update: { method: POST }
+      item_path: /branch
+      id_path: /branchName
+      fields:
+        stage: { param: stage }
+        description: { param: description }
+        enableAutoBuild: { param: enable_auto_build }
+    sim:
+      id_from: branchName
+    live:
+      params: { app_id: SPONSON_LIVE_AMPLIFY_APP_ID }
+  branch_variable:
+    kind: list_item
+    title: Branch environment variable
+    summary: "One entry of a branch's `environmentVariables`, by read-modify-write of the whole map (UpdateBranch replaces the map it is sent); other variables are left alone, and the branch is locked while Sponson writes it. A branch that is not there yet reads as having no variables, so a plan that also creates the branch shows a create. Builds started before the write do not see it (AM7)."
+    covers: [amplify-branch]
+    params:
+      app_id:
+        type: string
+        required: true
+        pattern: "^d[a-z0-9]+$"
+        description: The Amplify app's id.
+        example: d1demo
+      branch_name:
+        type: string
+        required: true
+        description: The branch's name (a `{ from }` of the `amplify.branch` line orders the two).
+        example: "${ctx.scope}"
+      name:
+        type: string
+        required: true
+        description: The variable's name.
+        example: API_URL
+      value:
+        type: string
+        required: true
+        description: The variable's value.
+        example: "https://api-${ctx.scope}.example.app"
+    http:
+      parent: { path: "/apps/{app_id}/branches/{branch_name}", method: POST, send: collection, item_path: /branch, if_missing: empty }
+      list_path: /environmentVariables
+      shape: map
+      item: { param: name }
+      value: { param: value }
+    sim:
+      provider: aws
+      base_path: /aws/amplify
+      seed: { amplify: { d1demo: { branches: { pr-42: { environmentVariables: { NODE_ENV: production } } } } } }
+      present: /amplify/d1demo/branches/pr-42/environmentVariables/API_URL
+      drift:
+        changed: { amplify.d1demo.pr-42.API_URL: "https://somewhere-else.example" }
+        missing: { amplify.d1demo.pr-42.API_URL: delete }
+    live:
+      params: { app_id: SPONSON_LIVE_AMPLIFY_APP_ID, branch_name: SPONSON_LIVE_AMPLIFY_BRANCH }
