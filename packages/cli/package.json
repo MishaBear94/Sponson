@@ -1,6 +1,6 @@
 {
   "name": "sponson",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "One release, one plan. CLI and MCP server for Sponson.",
   "keywords": [
     "sponson",
