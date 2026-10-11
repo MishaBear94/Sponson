@@ -38,6 +38,36 @@ describe("rest sim styles", () => {
     expect(((await call("GET", "/hooks")).body as unknown as unknown[]).length).toBe(2);
   });
 
+  it("creates an object with a PUT at a client-chosen key in a known collection; elsewhere a PUT to nothing is 404", async () => {
+    sim = await startSim({ seed: { rest: { collections: { "/services/srv-1/env-vars": [] }, styles: { "/services/srv-1/env-vars": { item_path: "", list_path: "", next_path: null, id_field: "key" } } } } });
+    expect(await call("PUT", "/services/srv-1/env-vars/API_URL", { value: "https://a" })).toEqual({ status: 200, body: { value: "https://a", key: "API_URL" } });
+    expect((await call("PUT", "/services/srv-1/env-vars/API_URL", { value: "https://b" })).body).toEqual({ value: "https://b", key: "API_URL" });
+    expect((await call("GET", "/services/srv-1/env-vars/API_URL")).body).toEqual({ value: "https://b", key: "API_URL" });
+    expect(sim.state.rest.collections["/services/srv-1/env-vars"]).toHaveLength(1);
+    expect((await call("PUT", "/services/srv-2/env-vars/API_URL", { value: "x" })).status).toBe(404);
+  });
+
+  it("an alias of a collection lists it and addresses its objects too", async () => {
+    sim = await startSim({ seed: { rest: { collections: { "/projects/p/databases": [] }, aliases: { "/databases": "/projects/p/databases", "/all-databases": "/projects/p/databases" } } } });
+    const created = await call("POST", "/projects/p/databases", { name: "app-pr-1" });
+    const id = (created.body.data as { id: string }).id;
+    expect((await call("GET", `/databases/${id}`)).body).toEqual({ data: { name: "app-pr-1", id } });
+    expect((await call("GET", "/all-databases")).body).toEqual({ data: [{ name: "app-pr-1", id }], next_cursor: null });
+    expect((await call("PATCH", `/databases/${id}`, { size: 2 })).status).toBe(200);
+    expect((await call("DELETE", `/databases/${id}`)).body).toEqual({ id, deleted: true });
+    expect(sim.state.rest.collections["/projects/p/databases"]).toEqual([]);
+  });
+
+  it("stores header_fields from a create's headers, and upserts by chosen id on a POST to <collection>/<suffix>", async () => {
+    sim = await startSim({ seed: { rest: { collections: { "/schedules": [] }, styles: { "/schedules": { item_path: "", list_path: "", next_path: null, id_field: "scheduleId", header_fields: { "X-Cron": "cron", "x-schedule-id": "scheduleId" }, suffix_field: "destination" } } } } });
+    const h = { ...headers, "x-cron": "*/5 * * * *", "x-schedule-id": "s1" };
+    expect((await call("POST", "/schedules/https://a.example/api", { ping: 1 }, h)).body).toEqual({ ping: 1, cron: "*/5 * * * *", scheduleId: "s1", destination: "https://a.example/api" });
+    await call("POST", "/schedules/https://b.example/api", {}, { ...h, "x-cron": "0 * * * *" });
+    expect(sim.state.rest.collections["/schedules"]).toEqual([{ ping: 1, cron: "0 * * * *", scheduleId: "s1", destination: "https://b.example/api" }]);
+    expect((await call("GET", "/schedules/s1")).body).toMatchObject({ cron: "0 * * * *" });
+    expect((await call("POST", "/schedules", { name: "plain" }, { ...headers, "x-cron": "1 * * * *" })).body).toMatchObject({ name: "plain", cron: "1 * * * *" });
+  });
+
   it("types form values, shows once fields only in the create's answer, and updates by POST to the object (R4, R6)", async () => {
     sim = await startSim({ seed: { rest: { collections: { "/webhook_endpoints": [] }, styles: { "/webhook_endpoints": { list_path: "/data", item_path: "", next_path: null, form_types: true, once_fields: ["secret"] } } } } });
     const form = { authorization: "Bearer t", "content-type": "application/x-www-form-urlencoded" };

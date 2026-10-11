@@ -1,0 +1,116 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Vercel REST API recipes. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+# Environment variables and deployments have the first-class `vercel` adapter (vercel.env, vercel.deploy).
+provider: vercel
+title: Vercel
+category: dns
+verified_on: "2026-10-11"
+docs:
+  - title: Add a domain to a project
+    url: https://vercel.com/docs/rest-api/projects/add-a-domain-to-a-project
+  - title: Get a project domain
+    url: https://vercel.com/docs/rest-api/projects/get-a-project-domain
+  - title: Update a project domain
+    url: https://vercel.com/docs/rest-api/projects/update-a-project-domain
+  - title: Remove a domain from a project
+    url: https://vercel.com/docs/rest-api/projects/remove-a-domain-from-a-project
+  - title: Errors
+    url: https://vercel.com/docs/rest-api/errors
+  - title: CLI global options (VERCEL_TOKEN)
+    url: https://vercel.com/docs/cli/global-options
+  - title: Working with domains (verification)
+    url: https://vercel.com/docs/domains/working-with-domains
+api:
+  base_url: https://api.vercel.com
+  base_url_env: VERCEL_API_URL
+  auth: { bearer_env: VERCEL_TOKEN }
+assumptions:
+  - id: VD1
+    verified: true
+    text: "Requests authenticate as `Authorization: Bearer <token>`; the Vercel CLI reads the token from `VERCEL_TOKEN` (the built-in `vercel` adapter uses the same variable)."
+    source: https://vercel.com/docs/cli/global-options
+  - id: VD2
+    verified: true
+    text: "`POST /v10/projects/{idOrName}/domains?teamId=` with `{ name, gitBranch, redirect, redirectStatusCode }` adds the domain to the project and answers it bare: `{ name, apexName, projectId, verified, gitBranch, redirect, redirectStatusCode, verification[] }`."
+    source: https://vercel.com/docs/rest-api/projects/add-a-domain-to-a-project
+  - id: VD3
+    verified: true
+    text: "`GET /v9/projects/{idOrName}/domains/{domain}?teamId=` answers the same shape; the domain's name identifies it within the project, so the read path names it and a create whose answer was lost is found by it."
+    source: https://vercel.com/docs/rest-api/projects/get-a-project-domain
+  - id: VD4
+    verified: false
+    text: "A domain that is not on the project answers 404 on GET and DELETE (documented with no description)."
+    source: https://vercel.com/docs/rest-api/projects/get-a-project-domain
+  - id: VD5
+    verified: true
+    text: "`PATCH /v9/projects/{idOrName}/domains/{domain}` changes `gitBranch`, `redirect` and `redirectStatusCode`; `DELETE` on the same path removes the domain from the project (200, `{}`)."
+    source: https://vercel.com/docs/rest-api/projects/update-a-project-domain
+  - id: VD6
+    verified: true
+    text: "Adding a domain that is already on a project of the account answers 409 (and, for the same project, the description says 400): someone else's domain is never taken over by name, and the conflict surfaces as an error."
+    source: https://vercel.com/docs/rest-api/projects/add-a-domain-to-a-project
+  - id: VD7
+    verified: true
+    text: "`gitBranch` and `redirect` cannot be set together, and the production branch cannot be a `gitBranch` (400)."
+    source: https://vercel.com/docs/rest-api/projects/add-a-domain-to-a-project
+  - id: VD8
+    verified: true
+    text: "A domain the account does not own answers `verified: false` with a `verification` challenge (a TXT record) that must be completed before it serves traffic; a domain bought through Vercel needs none."
+    source: https://vercel.com/docs/domains/working-with-domains
+  - id: VD9
+    verified: false
+    text: "A free `<name>.vercel.app` domain that no other project uses is verified on the spot (`verified: true`)."
+  - id: VD10
+    verified: false
+    text: "Every account has a team id (personal accounts are Hobby teams), so `teamId` can always be sent; the recipe requires it."
+ops:
+  project_domain:
+    kind: resource
+    title: Branch-bound project domain
+    summary: "A domain on a Vercel project that serves one git branch's latest preview, such as `pr-42.preview.example.com` for `feat/x`: a stable preview hostname. Located by name; a console edit of its branch or redirect is drift; destroy removes it from the project. Its `verified` output says whether DNS verification is still needed (VD8)."
+    covers: [vercel-domain]
+    params:
+      project:
+        type: string
+        required: true
+        description: The project's id or name.
+        example: prj_12HKQaOmR5t5Uy6vdcQsNIiZgHGB
+      team_id:
+        type: string
+        required: true
+        pattern: "^team_[A-Za-z0-9]+$"
+        description: The team's id (`team_…`, under Settings → General).
+        example: team_1a2b3c4d5e6f7g8h9i0j1k2l
+      name:
+        type: string
+        required: true
+        pattern: "^[a-z0-9*.-]+$"
+        description: The domain, lower-case.
+        example: "${ctx.scope}.preview.example.com"
+      git_branch:
+        type: string
+        description: The git branch whose latest deployment the domain serves.
+        example: "${ctx.git.branch}"
+      redirect:
+        type: string
+        description: Redirect to this domain instead of serving a branch (not with `git_branch`).
+      redirect_status_code:
+        type: integer
+        enum: [301, 302, 307, 308]
+        description: The redirect's status code.
+    http:
+      read: { path: "/v9/projects/{project}/domains/{name}?teamId={team_id}" }
+      create:
+        path: "/v10/projects/{project}/domains?teamId={team_id}"
+        body: { name: { param: name } }
+      update: { method: PATCH }
+      id_path: /name
+      fields:
+        gitBranch: { param: git_branch }
+        redirect: { param: redirect }
+        redirectStatusCode: { param: redirect_status_code }
+      outputs: { verified: /verified, apex_name: /apexName }
+    sim:
+      id_from: name
+    live:
+      params: { project: SPONSON_LIVE_VERCEL_PROJECT, team_id: SPONSON_LIVE_VERCEL_TEAM_ID, name: SPONSON_LIVE_VERCEL_DOMAIN }

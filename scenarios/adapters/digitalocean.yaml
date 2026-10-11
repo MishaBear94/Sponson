@@ -1,0 +1,69 @@
+# The DigitalOcean adapter end to end through the CLI against the sim: an App Platform app per scope from a whole
+# app spec (a secret variable among its envs), waited for until deployed; re-apply without writes despite the
+# platform's defaults and encrypted secret; a console edit of a declared variable refused until --reconcile;
+# destroy. Format: see the top of scenarios/runner.test.ts.
+name: "digitalocean.app: app per scope from its spec, deployed and waited for, drift on declared fields, destroy"
+plan: |
+  version: 1
+  changes:
+    - id: web
+      adapter: digitalocean
+      op: app
+      spec:
+        name: "web-${ctx.scope}"
+        services:
+          - name: web
+            github: { repo: acme/web, branch: "${ctx.git.branch}" }
+        envs:
+          - { key: API_URL, value: "https://api-${ctx.scope}.example.com", scope: RUN_AND_BUILD_TIME }
+          - { key: DATABASE_URL, value: { secret: "env://DO_SCENARIO_DB_URL" }, type: SECRET }
+      environments: [preview]
+env:
+  SPONSON_DIGITALOCEAN_POLL_MS: "5"
+  DO_SCENARIO_DB_URL: postgres://app:do_scenario_db_pw_0042@db.example.com/app
+secrets: [do_scenario_db_pw_0042]
+seed:
+  digitalocean:
+    deployPolls: 2
+steps:
+  - run: plan --json
+    expect:
+      exit: 0
+      plan_lines: { web: create }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { web: applied }
+  - sim:
+      write_order: ["POST /digitalocean/v2/apps"]
+      state:
+        "digitalocean.apps": { length: 1 }
+  - run: apply --json
+    expect:
+      exit: 0
+      writes: 0
+      lines: { web: unchanged }
+  # Someone edits the declared variable in the control panel: refused until --reconcile, which writes the plan's spec back.
+  - chaos:
+      drift: { "digitalocean.app.web-pr-42.env.API_URL": "https://edited.example.com" }
+  - run: plan --json
+    expect:
+      exit: 1
+      drift: [{ kind: changed, line: web }]
+      plan_lines: { web: blocked }
+  - run: apply --reconcile --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { web: applied }
+  - run: apply --json
+    expect: { exit: 0, writes: 0, lines: { web: unchanged } }
+  - run: apply --destroy --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { web: destroyed }
+  - sim:
+      state:
+        "digitalocean.apps": { length: 0 }

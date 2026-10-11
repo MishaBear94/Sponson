@@ -98,6 +98,11 @@ Adapters that do not define them behave exactly as before.
   `PARAM_INVALID` at plan time.
 - `exists_status` / `gone_status` add a provider's own statuses for "already exists" and "gone"; `destroy: keep`
   leaves the object in place.
+- *Amended:* `create` and `update` take per-request `headers` (values may be references) and `send_fields: false`
+  (the declared `fields` are compared but not put in the body, for an API that takes them in headers, as QStash takes
+  a schedule's cron in `Upstash-Cron`); a path placeholder written `{+name}` keeps `/` and `:` (RFC 6570 reserved
+  expansion), for an API that takes a URL in the path. The sim's REST styles gained `header_fields` and
+  `suffix_field` to stand in for such APIs in the recipe tests.
 
 ### Op `list_item`: one entry in a collection on a parent
 
@@ -144,7 +149,8 @@ Adapters that do not define them behave exactly as before.
   adapter.
 - **Create-only outputs** (a Stripe webhook signing secret) are returned by the run that creates the object and
   reach dependent lines in that run, but a later run cannot read them again. There is no declaration that makes the
-  engine refuse such a later run.
+  engine refuse such a later run. *Amended (ADR 0020, Amendment 2):
+  `outputs.<name>: { path, sensitive: true, once: true }` declares one.*
 - ~~No OAuth2 client-credentials exchange, no command-produced tokens, no request signing (SigV4).~~ Added by the
   [amendment](/contributing/adr/0017-generic-http-adapter#amendment-run-time-credentials-xml-and-graphql) below, with HTTP Digest.
 - **No expressions or scripts**, no JSON Patch generation, no pagination by page number or `Link` header (only a

@@ -131,11 +131,20 @@ function methodParam(v: unknown, param: string, allowed: readonly string[], fall
   return m;
 }
 
-const PLACEHOLDER = /\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+/** `{name}` (the value URI-encoded as one segment) or `{+name}` (reserved expansion, RFC 6570: `/` and `:` kept). */
+const PLACEHOLDER = /\{(\+?)([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
-/** The `{name}` placeholders of a path. */
+/** The `{name}` and `{+name}` placeholders of a path, by name. */
 export function placeholders(path: string): string[] {
-  return [...path.matchAll(PLACEHOLDER)].map((m) => m[1]!);
+  return [...path.matchAll(PLACEHOLDER)].map((m) => m[2]!);
+}
+
+/**
+ * A value as a path placeholder: one segment, URI-encoded; or, for `{+name}`, a URL or path written as it is
+ * (QStash takes the destination URL raw in the path), with only what cannot stand in a path escaped.
+ */
+function encodeSegment(value: string, reserved: boolean): string {
+  return reserved ? encodeURI(value).replace(/[?#]/g, (c) => encodeURIComponent(c)) : encodeURIComponent(value);
 }
 
 /** Every placeholder of `path` must be `{id}` (when `id` is allowed) or a key of `vars`. */
@@ -147,14 +156,14 @@ function checkPlaceholders(path: string, param: string, vars: Record<string, unk
 }
 
 /**
- * `path` with `{id}` and every `{var}` substituted (URI-encoded); undefined when a value is not known yet (a pending
- * reference).
+ * `path` with `{id}` and every `{var}` substituted (URI-encoded; `{+var}` keeps `/` and `:`); undefined when a value
+ * is not known yet (a pending reference).
  */
 export function fillPath(path: string, vars: Record<string, unknown>, id?: string): string | undefined {
   const value = (name: string): unknown => (name === "id" && id !== undefined ? id : vars[name]);
   const known = (v: unknown) => markerKind(v) === null && v !== undefined && v !== null && typeof v !== "object";
   if (!placeholders(path).every((name) => known(value(name)))) return undefined;
-  return path.replace(PLACEHOLDER, (_m, name: string) => encodeURIComponent(String(value(name))));
+  return path.replace(PLACEHOLDER, (_m, plus: string, name: string) => encodeSegment(String(value(name)), plus === "+"));
 }
 
 // ---------------------------------------------------------------------------
@@ -320,14 +329,18 @@ function noUnknownParams(params: Record<string, unknown>, known: string[], op: s
 // ---------------------------------------------------------------------------
 
 /**
- * One request of a spec: method and path (placeholders unfilled), the extra body it sends, its media type; or a
- * GraphQL request (`path` is then "", the endpoint being the API's base URL).
+ * One request of a spec: method and path (placeholders unfilled), the extra body it sends, its media type, the
+ * headers it sends (values may be references until apply), and whether the declared `fields` go in its body
+ * (`send_fields: false` when the request carries them elsewhere, such as in headers); or a GraphQL request (`path`
+ * is then "", the endpoint being the API's base URL).
  */
 export interface RequestSpec {
   method: string;
   path: string;
   body: Record<string, unknown>;
   contentType?: string;
+  headers: Record<string, unknown>;
+  sendFields: boolean;
   graphql?: GraphqlSpec;
 }
 
@@ -380,12 +393,22 @@ export interface ResourceSpec {
 
 const RESOURCE_PARAMS = ["api", "vars", "create", "read", "find", "update", "delete", "destroy", "item_path", "id_path", "fields", "outputs", "exists_status", "gone_status"];
 
+/** Per-request headers: names Sponson does not set itself; values are checked once resolved (`requestHeaders`). */
+function requestHeadersParam(v: unknown, param: string): Record<string, unknown> {
+  const o = optionalObject(v, param) ?? {};
+  for (const k of Object.keys(o)) {
+    if (!HEADER_NAME.test(k)) throw fail(`\`${param}.${k}\` is not a header name`, `${param}.${k}`);
+    if (/^(authorization|accept|content-type|idempotency-key)$/i.test(k)) throw fail(`\`${param}.${k}\` is set by Sponson or the API block`, `${param}.${k}`);
+  }
+  return o;
+}
+
 /** `{ graphql }` in place of a REST request: nothing else may be next to it. */
 function asGraphql(o: Record<string, unknown>, param: string, idAllowed: boolean): RequestSpec | undefined {
   if (o.graphql === undefined) return undefined;
   const extra = Object.keys(o).find((k) => k !== "graphql");
   if (extra) throw fail(`\`${param}.${extra}\` does not apply to a GraphQL request (the query and its variables say everything)`, `${param}.${extra}`);
-  return { method: "POST", path: "", body: {}, graphql: parseGraphql(o.graphql, `${param}.graphql`, idAllowed) };
+  return { method: "POST", path: "", body: {}, headers: {}, sendFields: true, graphql: parseGraphql(o.graphql, `${param}.graphql`, idAllowed) };
 }
 
 function parseRequest(v: unknown, param: string, methods: readonly string[], fallback: string, vars: Record<string, unknown>, idAllowed: boolean, defaultPath?: string): RequestSpec {
@@ -395,7 +418,25 @@ function parseRequest(v: unknown, param: string, methods: readonly string[], fal
   const path = o.path === undefined && defaultPath !== undefined ? defaultPath : pathParam(o.path, `${param}.path`);
   checkPlaceholders(path, `${param}.path`, vars, idAllowed);
   const contentType = contentTypeParam(o.content_type, `${param}.content_type`);
-  return { method: methodParam(o.method, `${param}.method`, methods, fallback), path, body: optionalObject(o.body, `${param}.body`) ?? {}, ...(contentType ? { contentType } : {}) };
+  if (o.send_fields !== undefined && typeof o.send_fields !== "boolean") throw fail(`\`${param}.send_fields\` must be true or false`, `${param}.send_fields`);
+  return {
+    method: methodParam(o.method, `${param}.method`, methods, fallback),
+    path,
+    body: optionalObject(o.body, `${param}.body`) ?? {},
+    ...(contentType ? { contentType } : {}),
+    headers: requestHeadersParam(o.headers, `${param}.headers`),
+    sendFields: o.send_fields !== false,
+  };
+}
+
+/** A request's headers with their resolved values, as strings; PARAM_INVALID for a value that is not a scalar. */
+export function requestHeaders(req: RequestSpec, param: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(req.headers)) {
+    if (typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") throw fail(`\`${param}.headers.${k}\` must be a string, number or boolean`, `${param}.headers.${k}`);
+    out[k] = String(v);
+  }
+  return out;
 }
 
 function parseCreate(v: unknown, vars: Record<string, unknown>): ResourceSpec["create"] {

@@ -15,9 +15,9 @@
  */
 import { SponsonError, canonicalJson, sha256, type AdapterContext, type ApplyResult, type DiffSide, type Literal, type LiveState, type OpSpec, type ResourceDiff, type ResourceRecord } from "@sponson/core";
 import { ABSENT, SENSITIVE, assertNoPending, desiredSide, paramError } from "./common.js";
-import { isObject, listAll, type ApiClient } from "./http.js";
+import { isObject, isProviderError, listAll, type ApiClient } from "./http.js";
 import { failedWith, httpClient, idOf, itemOf, literalOf, write } from "./http-adapter-client.js";
-import { ADAPTER, apiBlock, apiEnvironment, at, bodyOf, deepMerge, fieldTokens, fillPath, firstMarker, isKeep, parseResource, pointerTokens, projection, resourceOutputs, stateHash, type FindSpec, type ResourceSpec } from "./http-adapter-spec.js";
+import { ADAPTER, apiBlock, apiEnvironment, at, bodyOf, deepMerge, fieldTokens, fillPath, firstMarker, isKeep, parseResource, pointerTokens, projection, requestHeaders, resourceOutputs, stateHash, type FindSpec, type ResourceSpec } from "./http-adapter-spec.js";
 import { fillVariables, graphqlRequest, requestName, usesId, variablesPending, type GraphqlSpec } from "./http-adapter-graphql.js";
 
 /** An object as found: its provider id and its body. */
@@ -277,7 +277,8 @@ function idempotencyKey(actx: AdapterContext, key: string, body: unknown): strin
 async function sendCreate(actx: AdapterContext, spec: ResourceSpec, key: string, path: string, body: Record<string, unknown>): Promise<{ response: unknown } | null> {
   const { method, idempotencyKey: withKey, contentType, graphql } = spec.create;
   if (graphql) return sendGraphqlCreate(actx, spec, graphql);
-  const api = httpClient(actx, { ...(contentType ? { contentType } : {}), ...(withKey ? { headers: { "Idempotency-Key": idempotencyKey(actx, key, body) } } : {}) });
+  const headers = { ...requestHeaders(spec.create, "create"), ...(withKey ? { "Idempotency-Key": idempotencyKey(actx, key, body) } : {}) };
+  const api = httpClient(actx, { ...(contentType ? { contentType } : {}), headers });
   try {
     // With an idempotency key, a create whose answer was lost can be sent again: the provider answers it once.
     return { response: await write(api, method, path, body, method === "PUT" || withKey) };
@@ -310,7 +311,8 @@ function createdItem(spec: ResourceSpec, response: unknown): Record<string, unkn
 async function create(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, key: string): Promise<ApplyResult> {
   if (Object.values(spec.fields).some(isKeep)) throw keepWithoutObject(spec, key);
   const path = fillPath(spec.create.path, spec.vars)!;
-  const body = deepMerge(deepMerge(bodyOf(spec.find?.match ?? {}), bodyOf(spec.fields)), spec.create.body);
+  const declared = spec.create.sendFields ? deepMerge(bodyOf(spec.find?.match ?? {}), bodyOf(spec.fields)) : {};
+  const body = deepMerge(declared, spec.create.body);
   await actx.intend([key]);
   actx.log(`create ${label(spec, key)}`);
   const sent = await sendCreate(actx, spec, key, path, body);
@@ -344,12 +346,14 @@ async function sendUpdate(actx: AdapterContext, api: ApiClient, spec: ResourceSp
     const v = at(data, pointerTokens(upd.graphql.dataPath ?? spec.itemPath));
     return isObject(v) ? v : undefined;
   }
-  const { method, contentType } = upd;
+  const { method, contentType, sendFields } = upd;
   // PUT replaces the object, so the identifying fields and kept fields are sent back as they are; PATCH and POST
-  // send only what the plan sets.
-  const fields = method === "PUT" ? deepMerge(bodyOf(spec.find?.match ?? {}), bodyOf(desired)) : bodyOf(spec.fields, isKeep);
+  // send only what the plan sets; `send_fields: false` sends none (the request carries them in headers).
+  const fields = !sendFields ? {} : method === "PUT" ? deepMerge(bodyOf(spec.find?.match ?? {}), bodyOf(desired)) : bodyOf(spec.fields, isKeep);
   const path = fillPath(upd.path, spec.vars, id)!;
-  const response = await write(contentType ? httpClient(actx, { contentType }) : api, method, path, deepMerge(fields, upd.body), true);
+  const headers = requestHeaders(upd, "update");
+  const client = contentType || Object.keys(headers).length ? httpClient(actx, { ...(contentType ? { contentType } : {}), headers }) : api;
+  const response = await write(client, method, path, deepMerge(fields, upd.body), true);
   return itemOf(response, spec.itemPath);
 }
 
@@ -366,6 +370,16 @@ async function update(actx: AdapterContext, api: ApiClient, spec: ResourceSpec, 
 }
 
 const PENDING_KEY = "(pending)";
+
+/**
+ * A delete the provider accepted (2xx) but answered with something that is not JSON (Upstash answers `OK`): the
+ * answer is never read, so the object is gone all the same.
+ */
+function acceptedWithoutJson(e: unknown): boolean {
+  if (!isProviderError(e, "PROVIDER_RESPONSE")) return false;
+  const status = e.details.status;
+  return typeof status === "number" && status >= 200 && status < 300;
+}
 
 /** `http.resource`: one object per item, located by a path or by `find`, its declared `fields` kept as planned. */
 export const resource: OpSpec = {
@@ -414,7 +428,7 @@ export const resource: OpSpec = {
         if (req.graphql) await graphqlRequest(httpClient(actx, { encoding: "json" }), req.graphql, undefined, actx.redact, true);
         else await write(httpClient(actx), req.method, req.path, req.method === "POST" ? req.body : undefined, true);
       } catch (e) {
-        if (!failedWith(e, "PROVIDER_NOT_FOUND", req.gone)) throw e;
+        if (!failedWith(e, "PROVIDER_NOT_FOUND", req.gone) && !acceptedWithoutJson(e)) throw e;
       }
     }
   },

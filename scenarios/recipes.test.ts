@@ -32,7 +32,7 @@ function credentialVars(r: Recipe): string[] {
 
 /** `${ctx.*}` as the CLI fills it for `scope`. */
 function interpolate<T>(v: T, scope: string): T {
-  return JSON.parse(JSON.stringify(v).replace(/\$\{ctx\.scope\}/g, scope).replace(/\$\{ctx\.env\}/g, "preview").replace(/\$\{ctx\.git\.sha\}/g, SHA)) as T;
+  return JSON.parse(JSON.stringify(v).replace(/\$\{ctx\.scope\}/g, scope).replace(/\$\{ctx\.env\}/g, "preview").replace(/\$\{ctx\.git\.sha\}/g, SHA).replace(/\$\{ctx\.git\.branch\}/g, "feat/x")) as T;
 }
 
 /** The op's example params (live: with the `live.params` variables' values over them). */
@@ -45,7 +45,8 @@ function exampleParams(op: RecipeOp, env: NodeJS.ProcessEnv = {}): Record<string
 
 /** `{name}` placeholders of a sim path filled from values (the expanded line's `vars`), without query or trailing slash. */
 function fill(path: string, vars: Record<string, unknown>): string {
-  const filled = path.split("?")[0]!.replace(/\{([A-Za-z_]\w*)\}/g, (_m, n: string) => encodeURIComponent(String(vars[n])));
+  // `{+name}` is written as it is (a URL in the path), `{name}` as one URI-encoded segment.
+  const filled = path.split("?")[0]!.replace(/\{(\+?)([A-Za-z_]\w*)\}/g, (_m, plus: string, n: string) => (plus ? encodeURI(String(vars[n])) : encodeURIComponent(String(vars[n]))));
   return filled.length > 1 ? filled.replace(/\/$/, "") : filled;
 }
 
@@ -95,7 +96,13 @@ function simSeed(r: Recipe, op: RecipeOp, spec: Record<string, unknown>) {
   if (op.kind === "resource" && create?.path) {
     const find = spec.find as { list_path?: string; next?: string } | undefined;
     const coll = collectionOf(op, spec);
-    if (coll !== fill(create.path, vars)) aliases[fill(create.path, vars)] = coll;
+    // A PUT to the object's own path (an upsert at a client-chosen key) creates there; anything else is aliased.
+    if (coll !== fill(create.path, vars) && create.method?.toUpperCase() !== "PUT") aliases[fill(create.path, vars)] = coll;
+    // Objects read, updated or deleted under another path than their collection (`/databases/{id}`).
+    for (const req of [spec.read, spec.update, spec.delete] as Array<{ path?: string } | undefined>) {
+      const p = req?.path?.split("?")[0];
+      if (p && /\/\{[A-Za-z_]\w*\}$/.test(p) && fill(p.slice(0, p.lastIndexOf("/")), vars) !== coll) aliases[fill(p.slice(0, p.lastIndexOf("/")), vars)] = coll;
+    }
     // Outputs the provider shows only in the create's answer (a signing secret): the sim generates them there only.
     const once = Object.values((spec.outputs as Record<string, unknown> | undefined) ?? {}).flatMap((d) => (typeof d === "object" && d !== null && (d as { once?: boolean }).once ? [token((d as { path: string }).path, "")] : []));
     collections[coll] = [];
@@ -106,6 +113,8 @@ function simSeed(r: Recipe, op: RecipeOp, spec: Record<string, unknown>) {
       id_field: token(spec.id_path, "id"),
       ...(op.sim?.id_from ? { id_from: op.sim.id_from } : {}),
       ...(op.sim?.numeric_ids ? { numeric_ids: true } : {}),
+      ...(op.sim?.header_fields ? { header_fields: op.sim.header_fields } : {}),
+      ...(op.sim?.suffix_field ? { suffix_field: op.sim.suffix_field } : {}),
       ...(op.sim?.item_query ? { item_query: op.sim.item_query } : {}),
       ...(r.api.encoding === "form" ? { form_types: true } : {}),
       ...(once.length ? { once_fields: once } : {}),
