@@ -569,9 +569,10 @@ export interface ListItemSpec {
   /**
    * `itemPath`: where the parent object is in the read answer (`/feature` for `{ feature: {...} }`); default the whole
    * body. `ifMissing: empty`: a 404 parent reads as an empty collection; `whenEmpty: delete`: an empty collection is
-   * removed with DELETE instead of written.
+   * removed with DELETE instead of written. `readMethod: POST`: the parent is read with a POST without a body (an
+   * Azure Resource Manager list action such as `listAppSettings`), which changes nothing.
    */
-  parent: { path: string; readPath: string; method: string; send: ParentSend; itemPath: string; contentType?: string; ifMissing: "error" | "empty"; whenEmpty: "write" | "delete" };
+  parent: { path: string; readPath: string; readMethod: "GET" | "POST"; method: string; send: ParentSend; itemPath: string; contentType?: string; ifMissing: "error" | "empty"; whenEmpty: "write" | "delete" };
   listPath: string;
   shape: ListShape;
   separator: string;
@@ -598,6 +599,7 @@ function parseParent(v: unknown, vars: Record<string, unknown>): ListItemSpec["p
   return {
     path,
     readPath,
+    readMethod: methodParam(o.read_method, "parent.read_method", ["GET", "POST"], "GET") as "GET" | "POST",
     method: methodParam(o.method, "parent.method", ["PATCH", "PUT", "POST"], "PATCH"),
     send: parseSend(o.send),
     itemPath: pointerParam(o.item_path, "parent.item_path", ""),

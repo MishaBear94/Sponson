@@ -626,6 +626,7 @@
           "properties": {
             "path": { "$ref": "#/$defs/httpPath", "description": "The parent object: read with GET, written with `method`." },
             "read_path": { "$ref": "#/$defs/httpPath", "description": "GET this instead when reading differs from writing." },
+            "read_method": { "enum": ["GET", "POST"], "description": "Default: GET. POST: the parent is read with a POST without a body, which changes nothing (an Azure Resource Manager list action such as listAppSettings)." },
             "method": { "enum": ["PATCH", "PUT", "POST"], "description": "Default: PATCH." },
             "send": {
               "anyOf": [{ "enum": ["field", "parent", "collection"] }, { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }],

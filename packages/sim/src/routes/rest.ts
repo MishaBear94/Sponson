@@ -45,6 +45,8 @@
  *       behind a scheme prefix such as `Authorization: Api-Key <key>`), HTTP Digest (RFC 7616, qop=auth; a
  *       request without valid credentials gets a 401 with a fresh challenge), and AWS SigV4 (the signature
  *       recomputed and compared; see ../auth.ts). Anything else is 401.
+ *   R8. A path the seed lists in `reads` is a read sent as a POST (an Azure Resource Manager list action such as
+ *       `…/listAppSettings`): it answers the object it names, as a GET of that object would, and is not a write.
  */
 import type { IncomingHttpHeaders } from "node:http";
 import { digestChallenge, digestProblem, issueToken, sigV4Problem, tokenValid, type DigestConfig, type IssuedToken, type SigV4Config } from "../auth.js";
@@ -88,6 +90,8 @@ export interface RestState {
   aliases: Record<string, string>;
   /** Further header names (lower-case) that carry a credential (assumption R1). */
   auth_headers: string[];
+  /** Paths read with a POST, by path: the object each answers (assumption R8). */
+  reads: Record<string, string>;
   /** Present when the seed configures real credentials (R7). */
   auth?: RestAuthState;
 }
@@ -132,6 +136,8 @@ export interface RestSeed {
   aliases?: Record<string, string>;
   /** Further header names that carry a credential, for an API whose header is not named `*-Key` or `*-Token`. */
   auth_headers?: string[];
+  /** Paths read with a POST (an ARM list action), by path: the object each answers (assumption R8). */
+  reads?: Record<string, string>;
   /** Real credentials (R7). */
   auth?: RestAuthSeed;
 }
@@ -151,6 +157,7 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
       styles: byPath(structuredClone(seed?.styles ?? {})),
       aliases: Object.fromEntries(Object.entries(seed?.aliases ?? {}).map(([a, p]) => [normPath(a), normPath(p)])),
       auth_headers: (seed?.auth_headers ?? []).map((h) => h.toLowerCase()),
+      reads: Object.fromEntries(Object.entries(seed?.reads ?? {}).map(([a, p]) => [normPath(a), normPath(p)])),
     };
     for (const [path, items] of Object.entries(byPath(seed?.collections ?? {}))) {
       const field = styleOf(state, path).id_field;
@@ -179,8 +186,8 @@ export const restSim: ProviderSim<RestState, RestSeed> = {
     return false;
   },
 
-  isWrite(req) {
-    return !(req.method === "POST" && req.path === "/oauth/token");
+  isWrite(req, state) {
+    return !(req.method === "POST" && (req.path === "/oauth/token" || normPath(req.path) in state.reads));
   },
 
   authorized(headers, state, req) {
@@ -359,6 +366,12 @@ function queriedItem(state: RestState, path: string, query: URLSearchParams | un
 
 const notFound = (): Reply => error(404, "not found");
 
+/** R8: the object a read sent as a POST names, answered as a GET of it would be. */
+function readObject(state: RestState, path: string): Reply {
+  const object = state.objects[path];
+  return object ? new Reply(200, envelope(state.styles[path]?.item_path ?? "", object)) : notFound();
+}
+
 function create(core: SimCore, state: RestState, path: string, body: unknown): Reply {
   if (!isRecord(body)) return error(400, "body must be a JSON object");
   const list = (state.collections[path] ??= []);
@@ -423,6 +436,8 @@ const routes = router<RestState>(
     }),
 
     route("POST", "/*path", ({ core, state, params, body, headers }) => {
+      const read = state.reads[normPath(`/${params.path}`)];
+      if (read !== undefined) return readObject(state, read);
       const t = resolve(state, `/${params.path}`);
       if (t.kind === "object") return patch(state, t, body);
       if (t.kind === "item") return patch(state, t, bodyFor(state, t.collection, body, headers));
