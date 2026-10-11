@@ -1,9 +1,9 @@
-import { canonicalJson, isPendingMarker, sha256, type AdapterContext, type LiveState, type OpSpec, type ResolvedParams, type ResourceAdapter, type ResourceRecord } from "@sponson/core";
-import { ABSENT, assertNoPending, clientFor, deleteIgnoringNotFound, desiredSide, optionalEnv, paramError, requireEnv, requireProvider, stringParam } from "./common.js";
+import { canonicalJson, isPendingMarker, sha256, type AdapterContext, type LiveState, type OpSpec, type ResolvedParams, type ResourceAdapter, type ResourceRecord, type CredentialCheck } from "@sponson/core";
+import { ABSENT, assertNoPending, clientFor, deleteIgnoringNotFound, desiredSide, optionalEnv, paramError, requireEnv, requireProvider, stringParam, verifyByGet, optionalProvider } from "./common.js";
 import { ShapeError, isProviderError, listAll, obj, records, type ApiClient, type Page } from "./http.js";
 
 /** The environment neon reads; declared once, used by the code below and by the generated docs. */
-const ABOUT = { credentialEnv: "NEON_API_KEY", baseUrlEnv: "NEON_API_URL", title: "Neon", category: "databases", detect: { deps: ["@neondatabase/", "@prisma/adapter-neon", "neonctl"], env: ["NEON_*"], files: [".neon"], dbHosts: [".neon.tech"] } } as const;
+const ABOUT = { credentialEnv: "NEON_API_KEY", credentialUrl: "https://neon.com/docs/manage/api-keys", credentialScope: "A project-scoped API key for the one project (an organization admin creates it); otherwise a personal API key.", baseUrlEnv: "NEON_API_URL", title: "Neon", category: "databases", detect: { deps: ["@neondatabase/", "@prisma/adapter-neon", "neonctl"], env: ["NEON_*"], files: [".neon"], dbHosts: [".neon.tech"] } } as const;
 
 /** Neon's API base URL; `NEON_API_URL` overrides it (the sim and tests use that). */
 export const NEON_DEFAULT_API_URL = "https://console.neon.tech/api/v2";
@@ -213,8 +213,15 @@ const branch: OpSpec = {
   },
 };
 
+/** One read-only request that proves the credential works, and reaches the project when the plan names it (`sponson init --setup`). */
+async function verifyCredential(actx: AdapterContext): Promise<CredentialCheck> {
+  const api = clientFor(actx, "neon", { baseUrl: optionalEnv(actx.env, ABOUT.baseUrlEnv) ?? NEON_DEFAULT_API_URL, token: requireEnv(actx.env, ABOUT.credentialEnv, "neon") });
+  const project = optionalProvider(actx, "project");
+  return project ? verifyByGet(api, `/projects/${encodeURIComponent(project)}`, `project ${project}`) : verifyByGet(api, "/projects?limit=1", "account");
+}
+
 /**
  * Neon: op `branch` creates a database branch per scope and outputs its connection string (sensitive). Needs
  * `NEON_API_KEY` and `providers.neon.project`.
  */
-export const neonAdapter: ResourceAdapter = { name: "neon", ops: { branch }, about: ABOUT };
+export const neonAdapter: ResourceAdapter = { name: "neon", ops: { branch }, about: ABOUT, verifyCredential };

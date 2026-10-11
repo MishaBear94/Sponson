@@ -22,13 +22,14 @@ import { cloudRunAdapter } from "./cloud_run.js";
  * `withQuery` and `isProviderError`; the rest of http.ts is exported for the built-in adapters and tests.
  * scenarios/tooling/new-adapter.test.ts fails if the template imports a helper that is not exported here.
  */
-export { clientFor, requireEnv, optionalEnv, requireProvider, diffValue, desiredSide, assertNoPending, deleteIgnoringNotFound, paramError, stringParam } from "./common.js";
+export { clientFor, requireEnv, optionalEnv, requireProvider, diffValue, desiredSide, assertNoPending, deleteIgnoringNotFound, paramError, stringParam, verifyByGet } from "./common.js";
+export { verifyRecipeCredential } from "./credentials.js";
 export * from "./http.js";
 export * from "./neon.js";
 export * from "./vercel.js";
 export * from "./clerk.js";
 export { httpAdapter } from "./http-adapter.js";
-export { RECIPES_DIR, expandRecipe, loadRecipe, loadRecipes, recipeCredentialEnv, recipeNames, resolveRecipeApi, type Recipe, type RecipeAssumption, type RecipeDetect, type RecipeOp, type RecipeParam, type RecipeParamType, type RecipeSimHints, type RecipeStarter } from "./recipes.js";
+export { RECIPES_DIR, expandRecipe, loadRecipe, loadRecipes, recipeCredentialEnv, recipeNames, resolveRecipeApi, type Recipe, type RecipeAssumption, type RecipeCredential, type RecipeDetect, type RecipeOp, type RecipeParam, type RecipeParamType, type RecipeSimHints, type RecipeStarter } from "./recipes.js";
 export { detectableProviders, type DetectableProvider } from "./providers.js";
 export * from "./secrets.js";
 export * from "./planetscale.js";

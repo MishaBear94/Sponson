@@ -119,9 +119,23 @@ export interface Recipe {
   api?: Record<string, unknown>;
   /** For a per-account API (no default `base_url`): the base URL the docs' example block and the recipe tests use. */
   base_url_example?: string;
+  /** Where a person creates the API block's credential, the least it needs, and how `sponson init --setup` checks it. */
+  credential?: RecipeCredential;
   /** How `sponson init` detects the provider, and the lines it writes for it (schema/recipe.schema.json, `detect`). */
   detect?: RecipeDetect;
   ops: Record<string, RecipeOp>;
+}
+
+/** A recipe's `credential` block (schema/recipe.schema.json): where the credential is made, and how setup checks it. */
+export interface RecipeCredential {
+  /** The page where the credential is created. */
+  url: string;
+  /** The least it needs: which scope, role or permission to pick. */
+  scope: string;
+  /** The provider's docs page `url` and `scope` were verified against. */
+  source: string;
+  /** A read-only `GET /path` relative to the API's base URL that any working credential may send. */
+  verify?: string;
 }
 
 /** A line `sponson init` writes for a detected recipe provider. */

@@ -125,6 +125,28 @@ function detectOf(o: OpRef, providers: DetectableProvider[]): ProviderDetect | u
   return providers.find((p) => p.id === o.provider)?.detect;
 }
 
+/**
+ * Where an op's credential is created, the least it needs, and the request `sponson init --setup` checks it with: an
+ * adapter's `about.credentialUrl`/`credentialScope` and `verifyCredential`, a recipe's `credential` block.
+ */
+function tokenOf(o: OpRef, registry: Registry): string | undefined {
+  if (`${o.provider}.${o.op}` === MANUAL_STEP) return undefined;
+  const LOGIN = "`sponson init --setup` shows this; there is no token to store.";
+  if (o.kind === "recipe") {
+    const r = loadRecipe(o.provider);
+    const c = r.credential;
+    if (!c) return undefined;
+    const login = (r.api?.auth as { command?: unknown } | undefined)?.command !== undefined;
+    const check = login ? LOGIN : c.verify ? `\`sponson init --setup\` checks it with \`${c.verify.split("?")[0]!}\`.` : "`sponson init --setup` cannot check it (no read-only request every such credential may send).";
+    return `[${login ? "set up access" : "create it"}](${c.url}): ${c.scope} ${check}`;
+  }
+  const a = registry.adapter(o.provider);
+  if (!a.about?.credentialUrl) return undefined;
+  const login = a.about.credentialCommand !== undefined;
+  const check = login ? LOGIN : a.verifyCredential ? "`sponson init --setup` checks it with one read-only request." : "";
+  return `[${login ? "set up access" : "create it"}](${a.about.credentialUrl}): ${a.about.credentialScope ?? ""} ${check}`.trim();
+}
+
 function detectText(d: ProviderDetect | undefined): string {
   if (!d) return "—";
   const parts = [
@@ -198,6 +220,7 @@ function exampleOf(o: OpRef, plans: ReturnType<typeof testedPlans>): string {
 function entrySection(e: Entry, registry: Registry, providers: DetectableProvider[], plans: ReturnType<typeof testedPlans>): string[] {
   const credentials = unique(e.ops.map((o) => credentialOf(o, registry)));
   const detect = unique(e.ops.map((o) => detectText(detectOf(o, providers)))).filter((t) => t !== "—");
+  const tokens = unique(e.ops.map((o) => tokenOf(o, registry)).filter((t): t is string => t !== undefined));
   return [
     `### ${e.provider}`,
     "",
@@ -205,6 +228,7 @@ function entrySection(e: Entry, registry: Registry, providers: DetectableProvide
     "",
     `- **Ops**: ${e.ops.map(opLink).join(", ")}`,
     `- **Credential**: ${credentials.join("; ")}`,
+    ...tokens.map((t) => `- **Token**: ${t}`),
     `- **Detected by \`sponson init\` from**: ${detect.length ? detect.join("; ") : "not detected (write the line yourself)"}`,
     "",
     "```yaml",
@@ -227,7 +251,8 @@ export function renderProviders(data: CoverageData, repo: string): string {
     "# Supported providers",
     "",
     "Every provider whose per-environment state Sponson manages, by category: what it manages, the op or recipe that",
-    "does it, the credential it reads from the environment, what `sponson init` detects it by, and a line to start from.",
+    "does it, the credential it reads from the environment (where to create it, and what to pick: `sponson init --setup` walks",
+    "through the same), what `sponson init` detects it by, and a line to start from.",
     "`sponson init` reads dependency names, config files and variable names (never their values) and writes these lines",
     "for every provider it detects: ready to apply when it knows every value, else commented out with a `# TODO:` that",
     "says where to find each missing one.",

@@ -148,6 +148,18 @@
       }
     },
     "base_url_example": { "type": "string", "pattern": "^https://\\S+$", "description": "For a per-account API (no `api.base_url`): an example base URL, used by the docs' example provider block and the recipe tests. Required then." },
+    "credential": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "scope", "source"],
+      "description": "Where a person creates the API block's credential and the least it needs (shown by `sponson init --setup`, listed in docs/providers.md), and the read-only request setup checks it with. Required for a recipe with an API block.",
+      "properties": {
+        "url": { "type": "string", "pattern": "^https://\\S+$", "description": "The page where the credential is created: a dashboard deep link when the provider has a stable one, else the docs page that explains it." },
+        "scope": { "type": "string", "minLength": 1, "description": "The least the credential needs: which scope, role or permission to pick, in the provider's own words." },
+        "source": { "type": "string", "pattern": "^https://\\S+$", "description": "The provider's docs page `url` and `scope` were verified against." },
+        "verify": { "type": "string", "pattern": "^GET /[^\\s{}]*$", "description": "A read-only request, `GET /path` relative to the API's base URL, that succeeds with any credential the recipe's ops work with (no placeholders). Absent: setup cannot check the credential." }
+      }
+    },
     "detect": {
       "type": "object",
       "additionalProperties": false,

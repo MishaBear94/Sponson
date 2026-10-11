@@ -23,6 +23,11 @@ base_url_example: https://unleash.example.com
 api:
   base_url_env: UNLEASH_API_URL
   auth: { header: Authorization, value_env: UNLEASH_AUTH_TOKEN }
+credential:
+  url: "https://docs.getunleash.io/concepts/api-tokens-and-client-keys"
+  scope: "A personal access token (or an Enterprise service account token) whose role edits flags and strategies in the project; not a client or frontend token."
+  source: "https://docs.getunleash.io/concepts/api-tokens-and-client-keys"
+  verify: "GET /api/admin/projects"
 detect:
   deps: [unleash-client, unleash-proxy-client, "@unleash/"]
   env: ["UNLEASH_*"]

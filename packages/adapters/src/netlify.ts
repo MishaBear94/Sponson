@@ -8,13 +8,13 @@
  * checked against Netlify's OpenAPI document; see the NL assumptions in packages/sim/src/routes/netlify.ts and the
  * Netlify section of docs/api-verification.md.
  */
-import { SponsonError, sha256, type AdapterContext, type Literal, type OpSpec, type ResolvedParams, type ResourceAdapter, type ResourceRecord } from "@sponson/core";
-import { assertNoPending, clientFor, deleteIgnoringNotFound, diffValue, optionalEnv, optionalProvider, paramError, requireEnv, requireProvider, stringParam } from "./common.js";
+import { SponsonError, sha256, type AdapterContext, type Literal, type OpSpec, type ResolvedParams, type ResourceAdapter, type ResourceRecord, type CredentialCheck } from "@sponson/core";
+import { assertNoPending, clientFor, deleteIgnoringNotFound, diffValue, optionalEnv, optionalProvider, paramError, requireEnv, requireProvider, stringParam, verifyByGet } from "./common.js";
 import { ShapeError, isProviderError, isTransient, obj, records, type ApiClient } from "./http.js";
 
 const ADAPTER = "netlify";
 /** The environment Netlify reads; declared once, used by the code below and by the generated docs (`about`). */
-const ABOUT = { credentialEnv: "NETLIFY_AUTH_TOKEN", baseUrlEnv: "NETLIFY_API_URL", title: "Netlify", category: "deploy", detect: { deps: ["@netlify/", "netlify-cli"], env: ["NETLIFY_*"], files: ["netlify.toml", ".netlify/state.json"] } } as const;
+const ABOUT = { credentialEnv: "NETLIFY_AUTH_TOKEN", credentialUrl: "https://app.netlify.com/user/applications#personal-access-tokens", credentialScope: "A personal access token (Netlify tokens have no scopes) with an expiration; allow access to a SAML-protected team if yours enforces SSO.", baseUrlEnv: "NETLIFY_API_URL", title: "Netlify", category: "deploy", detect: { deps: ["@netlify/", "netlify-cli"], env: ["NETLIFY_*"], files: ["netlify.toml", ".netlify/state.json"] } } as const;
 
 /** Netlify's API base URL (OpenAPI `host` + `basePath`); `NETLIFY_API_URL` overrides it (the sim and tests use that). */
 export const NETLIFY_DEFAULT_API_URL = "https://api.netlify.com/api/v1";
@@ -491,8 +491,15 @@ const env: OpSpec = {
   },
 };
 
+/** One read-only request that proves the credential works, and reaches the project when the plan names it (`sponson init --setup`). */
+async function verifyCredential(actx: AdapterContext): Promise<CredentialCheck> {
+  const api = clientFor(actx, ADAPTER, { baseUrl: optionalEnv(actx.env, ABOUT.baseUrlEnv) ?? NETLIFY_DEFAULT_API_URL, token: requireEnv(actx.env, ABOUT.credentialEnv, ADAPTER) });
+  const site = optionalProvider(actx, "site");
+  return site ? verifyByGet(api, `/sites/${encodeURIComponent(site)}`, `site ${site}`) : verifyByGet(api, "/user", "account");
+}
+
 /**
  * Netlify (`adapter: netlify`): op `env` manages environment variable values per deploy context and outputs the
  * `preview_url` of the deploy that carries them. Needs `NETLIFY_AUTH_TOKEN` and `providers.netlify.site`.
  */
-export const netlifyAdapter: ResourceAdapter = { name: ADAPTER, ops: { env }, about: ABOUT };
+export const netlifyAdapter: ResourceAdapter = { name: ADAPTER, ops: { env }, about: ABOUT, verifyCredential };

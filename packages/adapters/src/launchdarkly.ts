@@ -4,13 +4,13 @@
  * destroy. Writes are LaunchDarkly semantic patches (`addTargets` / `removeTargets`); the API assumptions are
  * numbered LD1… at the top of packages/sim/src/routes/launchdarkly.ts and checked in docs/api-verification.md.
  */
-import { SponsonError, canonicalJson, markerKind, sha256, type AdapterContext, type Literal, type OpSpec, type ResolvedParams, type ResourceAdapter, type ResourceDiff, type ResourceRecord } from "@sponson/core";
-import { assertNoPending, clientFor, desiredSide, optionalEnv, paramError, requireEnv, requireProvider, stringParam } from "./common.js";
+import { SponsonError, canonicalJson, markerKind, sha256, type AdapterContext, type Literal, type OpSpec, type ResolvedParams, type ResourceAdapter, type ResourceDiff, type ResourceRecord, type CredentialCheck } from "@sponson/core";
+import { assertNoPending, clientFor, desiredSide, optionalEnv, paramError, requireEnv, requireProvider, stringParam, verifyByGet, optionalProvider } from "./common.js";
 import { ShapeError, isObject, isProviderError, obj, records, type ApiClient } from "./http.js";
 
 const ADAPTER = "launchdarkly";
 /** The environment LaunchDarkly reads; declared once, used by the code below and by the generated docs (`about`). */
-const ABOUT = { credentialEnv: "LAUNCHDARKLY_ACCESS_TOKEN", baseUrlEnv: "LAUNCHDARKLY_API_URL", title: "LaunchDarkly", category: "flags", detect: { deps: ["@launchdarkly/", "launchdarkly-node-server-sdk", "launchdarkly-js-client-sdk", "launchdarkly-react-client-sdk"], env: ["LAUNCHDARKLY_*"] } } as const;
+const ABOUT = { credentialEnv: "LAUNCHDARKLY_ACCESS_TOKEN", credentialUrl: "https://app.launchdarkly.com/settings/authorization", credentialScope: "An access token whose custom role allows updateTargets on the environment's flags and viewProject (without custom roles: the Writer role).", baseUrlEnv: "LAUNCHDARKLY_API_URL", title: "LaunchDarkly", category: "flags", detect: { deps: ["@launchdarkly/", "launchdarkly-node-server-sdk", "launchdarkly-js-client-sdk", "launchdarkly-react-client-sdk"], env: ["LAUNCHDARKLY_*"] } } as const;
 
 /** LaunchDarkly's REST API base URL (LD1). `LAUNCHDARKLY_API_URL` overrides it: the sim, or a federal or EU instance. */
 export const LAUNCHDARKLY_DEFAULT_API_URL = "https://app.launchdarkly.com/api/v2";
@@ -371,9 +371,15 @@ const flag_target: OpSpec = {
   },
 };
 
+/** One read-only request that proves the credential works, and reaches the project when the plan names it (`sponson init --setup`). */
+async function verifyCredential(actx: AdapterContext): Promise<CredentialCheck> {
+  const project = optionalProvider(actx, "project");
+  return project ? verifyByGet(api(actx), `/projects/${encodeURIComponent(project)}`, `project ${project}`) : verifyByGet(api(actx), "/caller-identity", "account");
+}
+
 /**
  * The LaunchDarkly adapter (`adapter: launchdarkly` in a plan): op `flag_target` serves a flag variation to one
  * context key (a preview URL, `pr-42`) in one environment. Registered in `createRegistry()`; needs
  * `LAUNCHDARKLY_ACCESS_TOKEN` and `providers.launchdarkly.project` / `.environment`.
  */
-export const launchdarklyAdapter: ResourceAdapter = { name: ADAPTER, ops: { flag_target }, about: ABOUT };
+export const launchdarklyAdapter: ResourceAdapter = { name: ADAPTER, ops: { flag_target }, about: ABOUT, verifyCredential };

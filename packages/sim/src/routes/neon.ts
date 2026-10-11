@@ -107,6 +107,10 @@ export const neonSim: ProviderSim<NeonState, NeonSeed> = {
 
 const routes = router<NeonState>(
   [
+    // Token checks (`sponson init --setup`): the projects the key reaches, and one project.
+    route("GET", "/projects", ({ state }) => new Reply(200, { projects: Object.keys(state.projects).map((id) => ({ id, name: id })) })),
+    route("GET", "/projects/:project", ({ state, params }) => (state.projects[params.project] ? new Reply(200, { project: { id: params.project, name: params.project } }) : notFound("project"))),
+
     route("GET", "/projects/:project/branches", ({ core, state, params, url }) => {
       const p = state.projects[params.project];
       if (!p) return notFound("project");

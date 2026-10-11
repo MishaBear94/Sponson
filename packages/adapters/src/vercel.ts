@@ -1,10 +1,10 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { SponsonError, sha256, type AdapterContext, type Ctx, type Literal, type OpSpec, type ResolvedParams, type ResourceAdapter, type ResourceDiff, type ResourceRecord } from "@sponson/core";
-import { ABSENT, assertNoPending, clientFor, deleteIgnoringNotFound, diffValue, optionalEnv, optionalProvider, paramError, requireEnv, requireProvider, stringParam } from "./common.js";
+import { SponsonError, sha256, type AdapterContext, type Ctx, type Literal, type OpSpec, type ResolvedParams, type ResourceAdapter, type ResourceDiff, type ResourceRecord, type CredentialCheck } from "@sponson/core";
+import { ABSENT, assertNoPending, clientFor, deleteIgnoringNotFound, diffValue, optionalEnv, optionalProvider, paramError, requireEnv, requireProvider, stringParam, verifyByGet } from "./common.js";
 import { ShapeError, isProviderError, isTransient, listAll, obj, records, type ApiClient, type Page } from "./http.js";
 
 /** The environment vercel reads; declared once, used by the code below and by the generated docs. */
-const ABOUT = { credentialEnv: "VERCEL_TOKEN", baseUrlEnv: "VERCEL_API_URL", title: "Vercel", category: "deploy", detect: { deps: ["vercel", "@vercel/"], env: ["VERCEL_*"], files: ["vercel.json", ".vercel/project.json"] } } as const;
+const ABOUT = { credentialEnv: "VERCEL_TOKEN", credentialUrl: "https://vercel.com/account/tokens", credentialScope: "A token whose Scope is the team that owns the project, with an expiration.", baseUrlEnv: "VERCEL_API_URL", title: "Vercel", category: "deploy", detect: { deps: ["vercel", "@vercel/"], env: ["VERCEL_*"], files: ["vercel.json", ".vercel/project.json"] } } as const;
 
 /** Vercel's API base URL; `VERCEL_API_URL` overrides it (the sim and tests use that). */
 export const VERCEL_DEFAULT_API_URL = "https://api.vercel.com";
@@ -577,8 +577,17 @@ const deploy: OpSpec = {
   async destroy() {},
 };
 
+/** One read-only request that proves the credential works, and reaches the project when the plan names it (`sponson init --setup`). */
+async function verifyCredential(actx: AdapterContext): Promise<CredentialCheck> {
+  const api = clientFor(actx, "vercel", { baseUrl: optionalEnv(actx.env, ABOUT.baseUrlEnv) ?? VERCEL_DEFAULT_API_URL, token: requireEnv(actx.env, ABOUT.credentialEnv, "vercel") });
+  const project = optionalProvider(actx, "project");
+  if (!project) return verifyByGet(api, "/v2/user", "account");
+  const team = optionalProvider(actx, "team");
+  return verifyByGet(api, `/v9/projects/${encodeURIComponent(project)}${team ? `?teamId=${encodeURIComponent(team)}` : ""}`, `project ${project}`);
+}
+
 /**
  * Vercel: op `env` manages environment variables per target and git branch; op `deploy` triggers or watches a
  * deployment and outputs its `preview_url`. Needs `VERCEL_TOKEN` and `providers.vercel.project`.
  */
-export const vercelAdapter: ResourceAdapter = { name: "vercel", ops: { env, deploy }, about: ABOUT };
+export const vercelAdapter: ResourceAdapter = { name: "vercel", ops: { env, deploy }, about: ABOUT, verifyCredential };

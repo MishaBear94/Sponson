@@ -19,6 +19,11 @@ api:
   base_url_env: MONGODB_ATLAS_API_URL
   media_type: application/vnd.atlas.2023-01-01+json
   auth: { digest: { user_env: MONGODB_ATLAS_PUBLIC_API_KEY, password_env: MONGODB_ATLAS_PRIVATE_API_KEY } }
+credential:
+  url: "https://www.mongodb.com/docs/atlas/configure-api-access-project/"
+  scope: "A project API key with Project Network Access Manager (access list) or Project Database Access Admin (database users), and an API access list entry."
+  source: "https://www.mongodb.com/docs/atlas/configure-api-access/"
+  verify: "GET /groups?itemsPerPage=1"
 detect:
   env: ["MONGODB_ATLAS_*"]
   db_hosts: [.mongodb.net]

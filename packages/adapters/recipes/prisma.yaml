@@ -15,6 +15,11 @@ api:
   base_url: https://api.prisma.io/v1
   base_url_env: PRISMA_API_URL
   auth: { bearer_env: PRISMA_SERVICE_TOKEN }
+credential:
+  url: "https://console.prisma.io/"
+  scope: "A workspace service token (Workspace Settings > Service Tokens); it covers the whole workspace, with no finer scopes."
+  source: "https://www.prisma.io/docs/management-api/getting-started"
+  verify: "GET /projects"
 detect:
   deps: ["@prisma/ppg"]
   db_hosts: [.prisma.io, .prisma-data.net]

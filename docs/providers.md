@@ -3,7 +3,8 @@
 # Supported providers
 
 Every provider whose per-environment state Sponson manages, by category: what it manages, the op or recipe that
-does it, the credential it reads from the environment, what `sponson init` detects it by, and a line to start from.
+does it, the credential it reads from the environment (where to create it, and what to pick: `sponson init --setup` walks
+through the same), what `sponson init` detects it by, and a line to start from.
 `sponson init` reads dependency names, config files and variable names (never their values) and writes these lines
 for every provider it detects: ready to apply when it knows every value, else commented out with a `# TODO:` that
 says where to find each missing one.
@@ -51,6 +52,7 @@ Env vars per target and git branch; wait for the preview deployment, redeploy if
 
 - **Ops**: [`vercel.env`](plan-format.md#vercelenv), [`vercel.deploy`](plan-format.md#verceldeploy)
 - **Credential**: `VERCEL_TOKEN`
+- **Token**: [create it](https://vercel.com/account/tokens): A token whose Scope is the team that owns the project, with an expiration. `sponson init --setup` checks it with one read-only request.
 - **Detected by `sponson init` from**: `vercel`, `@vercel/*`, `vercel.json`, `.vercel/project.json`, `VERCEL_*`
 
 ```yaml
@@ -74,6 +76,7 @@ Env var values per deploy context (`deploy-preview`, `branch` + `context_paramet
 
 - **Ops**: [`netlify.env`](plan-format.md#netlifyenv)
 - **Credential**: `NETLIFY_AUTH_TOKEN`
+- **Token**: [create it](https://app.netlify.com/user/applications#personal-access-tokens): A personal access token (Netlify tokens have no scopes) with an expiration; allow access to a SAML-protected team if yours enforces SSO. `sponson init --setup` checks it with one read-only request.
 - **Detected by `sponson init` from**: `@netlify/*`, `netlify-cli`, `netlify.toml`, `.netlify/state.json`, `NETLIFY_*`
 
 ```yaml
@@ -95,6 +98,7 @@ Pages: `deployment_configs.preview.env_vars` (all previews share one set, no per
 
 - **Ops**: [`cloudflare.pages_env`](plan-format.md#cloudflarepages_env)
 - **Credential**: `CLOUDFLARE_API_TOKEN`
+- **Token**: [create it](https://dash.cloudflare.com/profile/api-tokens): A custom token with Account > Cloudflare Pages > Edit, limited to the one account. `sponson init --setup` checks it with one read-only request.
 - **Detected by `sponson init` from**: `wrangler`, `@cloudflare/next-on-pages`, `wrangler.json`, `wrangler.jsonc`, `wrangler.toml`, `CLOUDFLARE_*`
 
 ```yaml
@@ -117,6 +121,7 @@ Env vars on a preview service / preview environment (per variable on a service w
 
 - **Ops**: recipe [`render.env_var`](recipes.md#renderenv_var)
 - **Credential**: `RENDER_API_KEY` (bearer)
+- **Token**: [create it](https://dashboard.render.com/u/settings?add-api-key): An API key; Render keys have no scopes and reach every workspace of the user who creates them. `sponson init --setup` checks it with `GET /owners`.
 - **Detected by `sponson init` from**: `render.yaml`, `RENDER_*`
 
 ```yaml
@@ -136,6 +141,7 @@ Variables in a PR environment (Railway creates PR environments natively) (the PR
 
 - **Ops**: recipe [`railway.variable`](recipes.md#railwayvariable)
 - **Credential**: `RAILWAY_API_TOKEN` (bearer)
+- **Token**: [create it](https://railway.com/account/tokens): A workspace token for the workspace that holds the project. `sponson init --setup` cannot check it (no read-only request every such credential may send).
 - **Detected by `sponson init` from**: `railway.json`, `railway.toml`, `RAILWAY_*`
 
 ```yaml
@@ -157,6 +163,8 @@ Per-PR app (the usual pattern is one app per PR) plus its secrets (secrets befor
 
 - **Ops**: recipe [`fly_machines.app`](recipes.md#fly_machinesapp), recipe [`fly.secret`](recipes.md#flysecret)
 - **Credential**: `FLY_API_TOKEN` (bearer)
+- **Token**: [create it](https://fly.io/dashboard): An org token (`fly tokens create org`): it creates and deletes apps in the organization. `sponson init --setup` cannot check it (no read-only request every such credential may send).
+- **Token**: [create it](https://fly.io/dashboard): A deploy token for the one app (`fly tokens create deploy -a <app>`), or an org token (`fly tokens create org`) for an app per PR. `sponson init --setup` cannot check it (no read-only request every such credential may send).
 - **Detected by `sponson init` from**: `fly.toml`, `FLY_*`
 
 ```yaml
@@ -175,6 +183,7 @@ Review app per PR; config vars on it (config vars on an existing app (a review a
 
 - **Ops**: recipe [`heroku.config_var`](recipes.md#herokuconfig_var)
 - **Credential**: `HEROKU_API_KEY` (bearer)
+- **Token**: [create it](https://dashboard.heroku.com/account/applications): A long-lived authorization from `heroku authorizations:create -s write-protected`: the narrowest scope that reads and writes config vars. `sponson init --setup` cannot check it (no read-only request every such credential may send).
 - **Detected by `sponson init` from**: `heroku.yml`, `HEROKU_*`
 
 ```yaml
@@ -194,6 +203,7 @@ Branch (per-PR previews built in); env vars per branch (variables before the bra
 
 - **Ops**: recipe [`amplify.branch`](recipes.md#amplifybranch), recipe [`amplify.branch_variable`](recipes.md#amplifybranch_variable)
 - **Credential**: `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (AWS SigV4, `amplify` in `us-east-1`)
+- **Token**: [create it](https://console.aws.amazon.com/iam/home#/users): An IAM user's access key whose policy allows amplify:ListApps, amplify:GetBranch, amplify:CreateBranch, amplify:UpdateBranch and amplify:DeleteBranch on the app. `sponson init --setup` checks it with `GET /apps`.
 - **Detected by `sponson init` from**: `amplify.yml`
 
 ```yaml
@@ -214,6 +224,7 @@ Tagged revision per PR (`--tag pr-42`), env vars on it (a revision of an existin
 
 - **Ops**: [`cloud_run.revision`](plan-format.md#cloud_runrevision)
 - **Credential**: the token `gcloud auth print-access-token` prints (bearer)
+- **Token**: [set up access](https://console.cloud.google.com/iam-admin/iam): Sign in with `gcloud auth login` as an identity holding Cloud Run Developer (roles/run.developer) and Service Account User on the service's runtime service account. `sponson init --setup` shows this; there is no token to store.
 - **Detected by `sponson init` from**: `@google-cloud/run`, `CLOUD_RUN_*`, `K_SERVICE`
 
 ```yaml
@@ -239,6 +250,7 @@ Preview environment per PR (built in); app settings (after the PR's first deploy
 
 - **Ops**: recipe [`azure_swa.build_app_setting`](recipes.md#azure_swabuild_app_setting)
 - **Credential**: the token `az account get-access-token --query accessToken -o tsv` prints (bearer)
+- **Token**: [set up access](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles): Sign in with `az login` as an identity holding Contributor on the static web app (or a custom role with Microsoft.Web/staticSites/*). `sponson init --setup` shows this; there is no token to store.
 - **Detected by `sponson init` from**: `staticwebapp.config.json`, `AZURE_STATIC_WEB_APPS_*`
 
 ```yaml
@@ -261,6 +273,7 @@ No native PR previews; app per PR via its GitHub action; envs in the app spec (a
 
 - **Ops**: [`digitalocean.app`](plan-format.md#digitaloceanapp)
 - **Credential**: `DIGITALOCEAN_ACCESS_TOKEN`
+- **Token**: [create it](https://cloud.digitalocean.com/account/api/tokens): A personal access token with Custom Scopes: app:read and app:update. `sponson init --setup` checks it with one read-only request.
 - **Detected by `sponson init` from**: `.do/app.yaml`, `.do/deploy.template.yaml`, `DIGITALOCEAN_*`
 
 ```yaml
@@ -303,6 +316,7 @@ Copy-on-write branch per PR, connection string out.
 
 - **Ops**: [`neon.branch`](plan-format.md#neonbranch)
 - **Credential**: `NEON_API_KEY`
+- **Token**: [create it](https://neon.com/docs/manage/api-keys): A project-scoped API key for the one project (an organization admin creates it); otherwise a personal API key. `sponson init --setup` checks it with one read-only request.
 - **Detected by `sponson init` from**: `@neondatabase/*`, `@prisma/adapter-neon`, `neonctl`, `.neon`, `NEON_*`, database URL on `*.neon.tech`
 
 ```yaml
@@ -323,6 +337,7 @@ Preview branch per PR (a separate project with its own ref, keys and URL).
 
 - **Ops**: [`supabase.branch`](plan-format.md#supabasebranch)
 - **Credential**: `SUPABASE_ACCESS_TOKEN`
+- **Token**: [create it](https://supabase.com/dashboard/account/tokens): A personal access token limited to the project, with Development Branches, Auth Config and Project Settings set to Read-write. `sponson init --setup` checks it with one read-only request.
 - **Detected by `sponson init` from**: `@supabase/*`, `supabase/config.toml`, `supabase/.temp/project-ref`, `SUPABASE_*`, database URL on `*.supabase.co`, database URL on `*.supabase.com`
 
 ```yaml
@@ -342,6 +357,7 @@ Branch per PR; password (credential) per branch; deploy request on merge (deploy
 
 - **Ops**: [`planetscale.branch`](plan-format.md#planetscalebranch), [`planetscale.password`](plan-format.md#planetscalepassword)
 - **Credential**: `PLANETSCALE_SERVICE_TOKEN_ID` + `PLANETSCALE_SERVICE_TOKEN`
+- **Token**: [create it](https://planetscale.com/docs/api/reference/service-tokens): A service token with create_branch, delete_branch, read_branch and connect_branch (and delete_branch_password) on the one database. `sponson init --setup` checks it with one read-only request.
 - **Detected by `sponson init` from**: `@planetscale/*`, `PLANETSCALE_*`, database URL on `*.psdb.cloud`
 
 ```yaml
@@ -362,6 +378,7 @@ Database branched from a parent (`seed: {type: database}`), token per DB.
 
 - **Ops**: recipe [`turso.database_branch`](recipes.md#tursodatabase_branch)
 - **Credential**: `TURSO_API_TOKEN` (bearer)
+- **Token**: [create it](https://docs.turso.tech/api-reference/authentication): A platform API token for the organization (`turso auth api-tokens mint <name> --org <org>`). `sponson init --setup` checks it with `GET /auth/validate`.
 - **Detected by `sponson init` from**: `@libsql/client`, `@tursodatabase/*`, `TURSO_*`, database URL on `*.turso.io`
 
 ```yaml
@@ -381,6 +398,7 @@ Copy-on-write Postgres branch (waits until the branch is healthy; only its exist
 
 - **Ops**: [`xata.branch`](plan-format.md#xatabranch)
 - **Credential**: `XATA_API_KEY`
+- **Token**: [create it](https://xata.io/docs/platform/api-key.md): An API key limited to the project, with Branch: Read and Write. `sponson init --setup` checks it with one read-only request.
 - **Detected by `sponson init` from**: `@xata.io/*`, `.xatarc`, `XATA_*`
 
 ```yaml
@@ -402,6 +420,7 @@ No branching; per-PR database user and database name on a shared cluster (cluste
 
 - **Ops**: recipe [`mongodb_atlas.database_user`](recipes.md#mongodb_atlasdatabase_user)
 - **Credential**: `MONGODB_ATLAS_PUBLIC_API_KEY` / `MONGODB_ATLAS_PRIVATE_API_KEY` (HTTP Digest)
+- **Token**: [create it](https://www.mongodb.com/docs/atlas/configure-api-access-project/): A project API key with Project Network Access Manager (access list) or Project Database Access Admin (database users), and an API access list entry. `sponson init --setup` checks it with `GET /groups`.
 - **Detected by `sponson init` from**: `MONGODB_ATLAS_*`, database URL on `*.mongodb.net`
 
 ```yaml
@@ -425,6 +444,7 @@ No branching; per-PR database is SQL (`CREATE DATABASE`), a cluster per PR is in
 
 - **Ops**: recipe [`cockroachdb.database`](recipes.md#cockroachdbdatabase), recipe [`cockroachdb.sql_user`](recipes.md#cockroachdbsql_user)
 - **Credential**: `COCKROACH_API_KEY` (bearer)
+- **Token**: [create it](https://cockroachlabs.cloud/access): A service account (Access Management > Service Accounts) with the Cluster Admin role on the cluster, then Create API Key. `sponson init --setup` checks it with `GET /clusters`.
 - **Detected by `sponson init` from**: `COCKROACH_*`, database URL on `*.cockroachlabs.cloud`
 
 ```yaml
@@ -443,6 +463,7 @@ Database per PR in a project, connection string per database (connection strings
 
 - **Ops**: recipe [`prisma.database`](recipes.md#prismadatabase), recipe [`prisma.database_copy`](recipes.md#prismadatabase_copy)
 - **Credential**: `PRISMA_SERVICE_TOKEN` (bearer)
+- **Token**: [create it](https://console.prisma.io/): A workspace service token (Workspace Settings > Service Tokens); it covers the whole workspace, with no finer scopes. `sponson init --setup` checks it with `GET /projects`.
 - **Detected by `sponson init` from**: `@prisma/ppg`, database URL on `*.prisma.io`, database URL on `*.prisma-data.net`
 
 ```yaml
@@ -475,6 +496,7 @@ Preview URL on the instance's redirect allow-list.
 
 - **Ops**: [`clerk.redirect_allow`](plan-format.md#clerkredirect_allow)
 - **Credential**: `CLERK_SECRET_KEY`
+- **Token**: [create it](https://dashboard.clerk.com/last-active?path=api-keys): The Secret Key of the instance whose redirect URLs the plan manages (sk_test_ for development); Clerk secret keys have no scopes. `sponson init --setup` checks it with one read-only request.
 - **Detected by `sponson init` from**: `@clerk/*`, `CLERK_*`
 
 ```yaml
@@ -493,6 +515,7 @@ Preview URL in an application's `callbacks`, `allowed_logout_urls`, `web_origins
 
 - **Ops**: recipe [`auth0.callback_url`](recipes.md#auth0callback_url), recipe [`auth0.logout_url`](recipes.md#auth0logout_url), recipe [`auth0.web_origin`](recipes.md#auth0web_origin), recipe [`auth0.allowed_origin`](recipes.md#auth0allowed_origin)
 - **Credential**: `AUTH0_CLIENT_ID` / `AUTH0_CLIENT_SECRET` (OAuth2 client credentials)
+- **Token**: [create it](https://manage.auth0.com/#/applications): A Machine to Machine application authorized for the Auth0 Management API with only the read:clients and update:clients scopes. `sponson init --setup` checks it with `GET /clients`.
 - **Detected by `sponson init` from**: `auth0`, `@auth0/*`, `AUTH0_*`
 
 ```yaml
@@ -516,6 +539,7 @@ Preview URL in "Additional Redirect URLs".
 
 - **Ops**: [`supabase.auth_redirect`](plan-format.md#supabaseauth_redirect)
 - **Credential**: `SUPABASE_ACCESS_TOKEN`
+- **Token**: [create it](https://supabase.com/dashboard/account/tokens): A personal access token limited to the project, with Development Branches, Auth Config and Project Settings set to Read-write. `sponson init --setup` checks it with one read-only request.
 - **Detected by `sponson init` from**: `@supabase/*`, `supabase/config.toml`, `supabase/.temp/project-ref`, `SUPABASE_*`, database URL on `*.supabase.co`, database URL on `*.supabase.com`
 
 ```yaml
@@ -537,6 +561,7 @@ Preview domain in `authorizedDomains`.
 
 - **Ops**: recipe [`firebase.authorized_domain`](recipes.md#firebaseauthorized_domain)
 - **Credential**: the token `gcloud auth print-access-token` prints (bearer)
+- **Token**: [set up access](https://firebase.google.com/docs/projects/iam/roles-predefined-product): Sign in with `gcloud auth login` as an identity holding Firebase Authentication Admin (roles/firebaseauth.admin) on the project. `sponson init --setup` shows this; there is no token to store.
 - **Detected by `sponson init` from**: `firebase`, `firebase-admin`, `firebase.json`, `.firebaserc`, `FIREBASE_*`
 
 ```yaml
@@ -555,6 +580,7 @@ Redirect URI for AuthKit.
 
 - **Ops**: recipe [`workos.redirect_uri`](recipes.md#workosredirect_uri)
 - **Credential**: `WORKOS_API_KEY` (bearer)
+- **Token**: [create it](https://dashboard.workos.com/api-keys): The secret API key of the environment (staging for previews); WorkOS keys have no finer permissions. `sponson init --setup` checks it with `GET /organizations`.
 - **Detected by `sponson init` from**: `@workos-inc/*`, `WORKOS_*`
 
 ```yaml
@@ -572,6 +598,7 @@ Redirect URL per environment.
 
 - **Ops**: recipe [`stytch.redirect_url`](recipes.md#stytchredirect_url)
 - **Credential**: `STYTCH_WORKSPACE_KEY_ID` / `STYTCH_WORKSPACE_KEY_SECRET` (basic)
+- **Token**: [create it](https://stytch.com/dashboard/settings/management-api): A Workspace Management API key (Workspace settings > Management API); its key ID and secret, no finer scopes. `sponson init --setup` checks it with `GET /pwa/v3/projects`.
 - **Detected by `sponson init` from**: `stytch`, `@stytch/*`, `STYTCH_*`
 
 ```yaml
@@ -591,6 +618,7 @@ Redirect URL per environment.
 
 - **Ops**: recipe [`okta.redirect_uri`](recipes.md#oktaredirect_uri), recipe [`okta.post_logout_redirect_uri`](recipes.md#oktapost_logout_redirect_uri), recipe [`okta.trusted_origin`](recipes.md#oktatrusted_origin)
 - **Credential**: `OKTA_API_TOKEN` (header `Authorization`, after `SSWS`)
+- **Token**: [create it](https://developer.okta.com/docs/guides/create-an-api-token/main/): An API token (Security > API > Tokens) created by an admin whose role can edit the app (it acts with that admin's permissions). `sponson init --setup` checks it with `GET /users/me`.
 - **Detected by `sponson init` from**: `@okta/*`, `OKTA_*`
 
 ```yaml
@@ -614,6 +642,7 @@ Callback and logout URLs on an application.
 
 - **Ops**: recipe [`kinde.callback_url`](recipes.md#kindecallback_url), recipe [`kinde.logout_url`](recipes.md#kindelogout_url)
 - **Credential**: `KINDE_MANAGEMENT_CLIENT_ID` / `KINDE_MANAGEMENT_CLIENT_SECRET` (OAuth2 client credentials)
+- **Token**: [create it](https://docs.kinde.com/developer-tools/kinde-api/connect-to-kinde-api/): A Machine to Machine application authorized for the Kinde Management API with only the application redirect and logout URI scopes. `sponson init --setup` cannot check it (no read-only request every such credential may send).
 - **Detected by `sponson init` from**: `@kinde-oss/*`, `KINDE_*`
 
 ```yaml
@@ -679,6 +708,7 @@ Flag on for a preview: target a context key or add a rule on `url`, in a per-PR 
 
 - **Ops**: [`launchdarkly.flag_target`](plan-format.md#launchdarklyflag_target)
 - **Credential**: `LAUNCHDARKLY_ACCESS_TOKEN`
+- **Token**: [create it](https://app.launchdarkly.com/settings/authorization): An access token whose custom role allows updateTargets on the environment's flags and viewProject (without custom roles: the Writer role). `sponson init --setup` checks it with one read-only request.
 - **Detected by `sponson init` from**: `@launchdarkly/*`, `launchdarkly-node-server-sdk`, `launchdarkly-js-client-sdk`, `launchdarkly-react-client-sdk`, `LAUNCHDARKLY_*`
 
 ```yaml
@@ -702,6 +732,7 @@ Release condition matching the preview host on a flag (condition on a person or 
 
 - **Ops**: recipe [`posthog.release_condition`](recipes.md#posthogrelease_condition)
 - **Credential**: `POSTHOG_PERSONAL_API_KEY` (bearer)
+- **Token**: [create it](https://us.posthog.com/settings/user-api-keys): A personal API key with only the feature_flag:read and feature_flag:write scopes, limited to the project (EU: eu.posthog.com). `sponson init --setup` cannot check it (no read-only request every such credential may send).
 - **Detected by `sponson init` from**: `posthog-js`, `posthog-node`, `posthog-react-native`, `POSTHOG_*`
 
 ```yaml
@@ -722,6 +753,7 @@ Gate rule for the preview (condition `url` or `environment_tier`) (gates requiri
 
 - **Ops**: recipe [`statsig.gate_rule`](recipes.md#statsiggate_rule)
 - **Credential**: `STATSIG_CONSOLE_API_KEY` (header `STATSIG-API-KEY`)
+- **Token**: [create it](https://console.statsig.com/api_keys): A Console API key (Project Settings > API Keys) that can edit gates. `sponson init --setup` checks it with `GET /gates`.
 - **Detected by `sponson init` from**: `statsig-js`, `statsig-node`, `statsig-react`, `@statsig/*`, `STATSIG_*`
 
 ```yaml
@@ -743,6 +775,7 @@ Force rule in a per-environment feature (v2 API (rules with per-rule environment
 
 - **Ops**: recipe [`growthbook.force_rule`](recipes.md#growthbookforce_rule)
 - **Credential**: `GROWTHBOOK_API_KEY` (bearer)
+- **Token**: [create it](https://app.growthbook.io/settings/keys): A Secret API key (Settings > API Keys) with a role that can edit features, limited to the project. `sponson init --setup` checks it with `GET /v1/features`.
 - **Detected by `sponson init` from**: `@growthbook/*`, `GROWTHBOOK_*`
 
 ```yaml
@@ -764,6 +797,7 @@ Strategy (with constraints) on a flag in an environment (deleting the last strat
 
 - **Ops**: recipe [`unleash.flag_strategy`](recipes.md#unleashflag_strategy)
 - **Credential**: `UNLEASH_AUTH_TOKEN` (header `Authorization`)
+- **Token**: [create it](https://docs.getunleash.io/concepts/api-tokens-and-client-keys): A personal access token (or an Enterprise service account token) whose role edits flags and strategies in the project; not a client or frontend token. `sponson init --setup` checks it with `GET /api/admin/projects`.
 - **Detected by `sponson init` from**: `unleash-client`, `unleash-proxy-client`, `@unleash/*`, `UNLEASH_*`
 
 ```yaml
@@ -791,6 +825,7 @@ Segment override or a per-PR environment (a per-PR environment (its client-side 
 
 - **Ops**: recipe [`flagsmith.environment`](recipes.md#flagsmithenvironment)
 - **Credential**: `FLAGSMITH_MASTER_API_KEY` (header `Authorization`, after `Api-Key`)
+- **Token**: [create it](https://app.flagsmith.com/): An Organisation API key (Organisation Settings > API Keys); with role-based access, give it a role limited to the project. `sponson init --setup` checks it with `GET /organisations/`.
 - **Detected by `sponson init` from**: `flagsmith`, `flagsmith-nodejs`, `react-native-flagsmith`, `FLAGSMITH_*`
 
 ```yaml
@@ -809,6 +844,7 @@ Targeting rule on a setting in an environment (boolean flags; products requiring
 
 - **Ops**: recipe [`configcat.targeting_rule`](recipes.md#configcattargeting_rule)
 - **Credential**: `CONFIGCAT_BASIC_AUTH_USERNAME` / `CONFIGCAT_BASIC_AUTH_PASSWORD` (basic)
+- **Token**: [create it](https://app.configcat.com/my-account/public-api-credentials): Public Management API credentials; they act with your user's product permissions, so use a member limited to the product. `sponson init --setup` checks it with `GET /v1/me`.
 - **Detected by `sponson init` from**: `configcat-js`, `configcat-js-ssr`, `configcat-js-full`, `configcat-node`, `configcat-react`, `CONFIGCAT_*`
 
 ```yaml
@@ -829,6 +865,7 @@ Targeting rule / individual target in an environment (targeting rule (not indivi
 
 - **Ops**: recipe [`split.targeting_rule`](recipes.md#splittargeting_rule)
 - **Credential**: `SPLIT_ADMIN_API_KEY` (bearer)
+- **Token**: [create it](https://developer.harness.io/docs/feature-management-experimentation/api-keys/): An Admin API key (Admin settings > API keys), restricted to the environments the lines change. `sponson init --setup` checks it with `GET /workspaces`.
 - **Detected by `sponson init` from**: `@splitsoftware/*`, `SPLIT_*`
 
 ```yaml
@@ -860,6 +897,7 @@ Test-mode webhook endpoint pointing at the preview URL; its signing secret into 
 
 - **Ops**: recipe [`stripe.webhook_endpoint`](recipes.md#stripewebhook_endpoint)
 - **Credential**: `STRIPE_SECRET_KEY` (bearer)
+- **Token**: [create it](https://dashboard.stripe.com/test/apikeys): A test-mode restricted key (Create restricted key) with Webhook Endpoints set to Write and everything else None. `sponson init --setup` checks it with `GET /webhook_endpoints`.
 - **Detected by `sponson init` from**: `stripe`, `@stripe/*`, `STRIPE_*`
 
 ```yaml
@@ -882,6 +920,7 @@ Repository webhook to the preview URL.
 
 - **Ops**: recipe [`github.repo_webhook`](recipes.md#githubrepo_webhook)
 - **Credential**: `GITHUB_TOKEN` (bearer)
+- **Token**: [create it](https://github.com/settings/personal-access-tokens/new): A fine-grained token for the one repository with the permission the line's op needs (Webhooks, Administration or Environments: Read and write). `sponson init --setup` checks it with `GET /user`.
 - **Detected by `sponson init` from**: `@octokit/webhooks`, `probot`, `GITHUB_WEBHOOK_SECRET`
 
 ```yaml
@@ -901,6 +940,7 @@ Endpoint per environment on an application.
 
 - **Ops**: recipe [`svix.endpoint`](recipes.md#svixendpoint)
 - **Credential**: `SVIX_AUTH_TOKEN` (bearer)
+- **Token**: [create it](https://dashboard.svix.com/api-access): The environment's API key (API Access); keys have no finer scopes. `sponson init --setup` checks it with `GET /api/v1/app`.
 - **Detected by `sponson init` from**: `svix`, `SVIX_*`
 
 ```yaml
@@ -957,6 +997,7 @@ Restricted API key or webhook per environment (domains are long-lived; test addr
 
 - **Ops**: recipe [`resend.api_key`](recipes.md#resendapi_key), recipe [`resend.webhook`](recipes.md#resendwebhook)
 - **Credential**: `RESEND_API_KEY` (bearer)
+- **Token**: [create it](https://resend.com/api-keys): An API key with Full access: Sending access can only send email, not manage webhooks, domains or keys. `sponson init --setup` checks it with `GET /domains`.
 - **Detected by `sponson init` from**: `resend`, `RESEND_*`
 
 ```yaml
@@ -974,6 +1015,8 @@ Server per environment, webhook per server (chained in one plan by a line creden
 
 - **Ops**: recipe [`postmark.server`](recipes.md#postmarkserver), recipe [`postmark_server.webhook`](recipes.md#postmark_serverwebhook)
 - **Credential**: `POSTMARK_ACCOUNT_TOKEN` (header `X-Postmark-Account-Token`); `POSTMARK_SERVER_TOKEN` (header `X-Postmark-Server-Token`)
+- **Token**: [create it](https://account.postmarkapp.com/api_tokens): The Account API token (Account Owner or Admin only); Postmark tokens have no scopes. `sponson init --setup` checks it with `GET /servers`.
+- **Token**: [create it](https://postmarkapp.com/developer/api/overview): The server's Server API token (the server's API Tokens tab); Postmark tokens have no scopes. `sponson init --setup` checks it with `GET /server`.
 - **Detected by `sponson init` from**: `postmark`, `POSTMARK_*`
 
 ```yaml
@@ -992,6 +1035,7 @@ Event webhook or inbound-parse host per environment.
 
 - **Ops**: recipe [`sendgrid.event_webhook`](recipes.md#sendgridevent_webhook), recipe [`sendgrid.parse_setting`](recipes.md#sendgridparse_setting)
 - **Credential**: `SENDGRID_API_KEY` (bearer)
+- **Token**: [create it](https://app.sendgrid.com/settings/api_keys): A Restricted Access key with Mail Settings > Event Notification set to Full Access. `sponson init --setup` checks it with `GET /v3/scopes`.
 - **Detected by `sponson init` from**: `@sendgrid/*`, `SENDGRID_*`
 
 ```yaml
@@ -1018,6 +1062,7 @@ Release for the commit, deploy record for the environment; finalize.
 
 - **Ops**: recipe [`sentry.release`](recipes.md#sentryrelease), recipe [`sentry.deploy`](recipes.md#sentrydeploy)
 - **Credential**: `SENTRY_AUTH_TOKEN` (bearer)
+- **Token**: [create it](https://docs.sentry.io/account/auth-tokens/): An organization auth token (Settings > Auth Tokens), or a personal token with project:releases. `sponson init --setup` cannot check it (no read-only request every such credential may send).
 - **Detected by `sponson init` from**: `@sentry/*`, `sentry.client.config.ts`, `sentry.client.config.js`, `sentry.server.config.ts`, `sentry.server.config.js`, `sentry.properties`, `.sentryclirc`, `SENTRY_*`
 
 ```yaml
@@ -1038,6 +1083,7 @@ Deployment marker / synthetic test against the preview URL (covered by a Synthet
 
 - **Ops**: recipe [`datadog.synthetic_api_test`](recipes.md#datadogsynthetic_api_test)
 - **Credential**: `DD_API_KEY` (header `DD-API-KEY`) and `DD_APP_KEY` (header `DD-APPLICATION-KEY`)
+- **Token**: [create it](https://app.datadoghq.com/organization-settings/api-keys): An API key, plus an Application key (Organization Settings > Application Keys) limited to the scopes the lines need. `sponson init --setup` checks it with `GET /validate`.
 - **Detected by `sponson init` from**: `dd-trace`, `@datadog/*`, `DD_*`, `DATADOG_*`
 
 ```yaml
@@ -1058,6 +1104,7 @@ Marker per deploy in the environment's dataset.
 
 - **Ops**: recipe [`honeycomb.marker`](recipes.md#honeycombmarker)
 - **Credential**: `HONEYCOMB_API_KEY` (header `X-Honeycomb-Team`)
+- **Token**: [create it](https://ui.honeycomb.io/): An environment Configuration Key (Manage Environments > API Keys) with only the permission the lines need, such as Manage Markers. `sponson init --setup` checks it with `GET /1/auth`.
 - **Detected by `sponson init` from**: `@honeycombio/*`, `HONEYCOMB_*`
 
 ```yaml
@@ -1084,6 +1131,7 @@ CNAME `pr-42.preview.example.com` → the preview.
 
 - **Ops**: recipe [`cloudflare.dns_cname`](recipes.md#cloudflaredns_cname)
 - **Credential**: `CLOUDFLARE_API_TOKEN` (bearer)
+- **Token**: [create it](https://dash.cloudflare.com/profile/api-tokens): A custom token (or the Edit zone DNS template) with Zone > DNS > Edit, its Zone Resources limited to the zone. `sponson init --setup` checks it with `GET /user/tokens/verify`.
 - **Detected by `sponson init` from**: `wrangler`, `@cloudflare/next-on-pages`, `wrangler.json`, `wrangler.jsonc`, `wrangler.toml`, `CLOUDFLARE_*`
 
 ```yaml
@@ -1104,6 +1152,7 @@ Branch-bound project domain (`gitBranch`) for a stable preview hostname.
 
 - **Ops**: recipe [`vercel.project_domain`](recipes.md#vercelproject_domain)
 - **Credential**: `VERCEL_TOKEN` (bearer)
+- **Token**: [create it](https://vercel.com/account/tokens): A token scoped to the team that owns the project, with an expiration. `sponson init --setup` checks it with `GET /v2/user`.
 - **Detected by `sponson init` from**: `vercel`, `@vercel/*`, `vercel.json`, `.vercel/project.json`, `VERCEL_*`
 
 ```yaml
@@ -1131,6 +1180,7 @@ Preview origin in the bucket's `cors`.
 
 - **Ops**: recipe [`gcs.bucket_cors`](recipes.md#gcsbucket_cors)
 - **Credential**: the token `gcloud auth print-access-token` prints (bearer)
+- **Token**: [set up access](https://cloud.google.com/storage/docs/using-cors): Sign in with `gcloud auth login` as an identity holding Storage Admin (roles/storage.admin) on the bucket: storage.buckets.get and storage.buckets.update. `sponson init --setup` shows this; there is no token to store.
 - **Detected by `sponson init` from**: `@google-cloud/storage`
 
 ```yaml
@@ -1149,6 +1199,7 @@ Preview origin in the bucket CORS rules.
 
 - **Ops**: recipe [`s3.bucket_cors`](recipes.md#s3bucket_cors)
 - **Credential**: `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (AWS SigV4, `s3` in `us-east-1`)
+- **Token**: [create it](https://console.aws.amazon.com/iam/home#/users): AWS: an access key whose policy allows s3:GetBucketCORS and s3:PutBucketCORS on the bucket. R2: an API token with Admin Read & Write. `sponson init --setup` cannot check it (no read-only request every such credential may send).
 - **Detected by `sponson init` from**: `@aws-sdk/client-s3`
 
 ```yaml
@@ -1180,6 +1231,7 @@ Database per PR, REST URL and token out.
 
 - **Ops**: recipe [`upstash.redis_database`](recipes.md#upstashredis_database)
 - **Credential**: `UPSTASH_EMAIL` / `UPSTASH_API_KEY` (basic)
+- **Token**: [create it](https://console.upstash.com/account/api): A Developer API key (Account > Developer API) with Read/Write; the account's email is its user name. `sponson init --setup` checks it with `GET /redis/databases`.
 - **Detected by `sponson init` from**: `@upstash/redis`, `UPSTASH_REDIS_*`
 
 ```yaml
@@ -1198,6 +1250,7 @@ Schedule that calls the preview URL.
 
 - **Ops**: recipe [`qstash.schedule`](recipes.md#qstashschedule)
 - **Credential**: `QSTASH_TOKEN` (bearer)
+- **Token**: [create it](https://console.upstash.com/qstash): The QStash token of the region (QStash tab); it has no scopes. `sponson init --setup` checks it with `GET /v2/schedules`.
 - **Detected by `sponson init` from**: `@upstash/qstash`, `QSTASH_*`
 
 ```yaml
@@ -1243,6 +1296,7 @@ Index per environment, copied from a template index (copies records, settings, s
 
 - **Ops**: [`algolia.index`](plan-format.md#algoliaindex)
 - **Credential**: `ALGOLIA_API_KEY`
+- **Token**: [create it](https://dashboard.algolia.com/account/api-keys/): A restricted API key (not the Admin key) with the addObject, deleteIndex, editSettings, settings and listIndexes ACLs. `sponson init --setup` checks it with one read-only request.
 - **Detected by `sponson init` from**: `algoliasearch`, `@algolia/*`, `instantsearch.js`, `react-instantsearch`, `ALGOLIA_*`
 
 ```yaml
@@ -1264,6 +1318,7 @@ Products / prices / coupons the preview's code expects.
 
 - **Ops**: recipe [`stripe.product`](recipes.md#stripeproduct), recipe [`stripe.price`](recipes.md#stripeprice), recipe [`stripe.coupon`](recipes.md#stripecoupon)
 - **Credential**: `STRIPE_SECRET_KEY` (bearer)
+- **Token**: [create it](https://dashboard.stripe.com/test/apikeys): A test-mode restricted key (Create restricted key) with Webhook Endpoints set to Write and everything else None. `sponson init --setup` checks it with `GET /webhook_endpoints`.
 - **Detected by `sponson init` from**: `stripe`, `@stripe/*`, `STRIPE_*`
 
 ```yaml

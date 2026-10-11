@@ -164,6 +164,10 @@ function variationIndex(f: LaunchdarklyFlag, value: string, key: string): number
 /** The API, one route per method and path, under `/api/v2` (part of the base URL). */
 const routes = router<LaunchdarklyState>(
   [
+    // Token checks (`sponson init --setup`): who the token is, and one project.
+    route("GET", "/caller-identity", () => new Reply(200, { accountId: "acct_sim", tokenKind: "personal" })),
+    route("GET", "/projects/:project", ({ state, params }) => (state.projects[params.project] ? new Reply(200, { key: params.project, name: params.project }) : ldError(404, "not_found", "Unknown resource"))),
+
     route("GET", "/flags/:project/:flag", ({ state, params, url }) => {
       const f = state.projects[params.project]?.flags[params.flag];
       if (!f) return ldError(404, "not_found", "Unknown resource");

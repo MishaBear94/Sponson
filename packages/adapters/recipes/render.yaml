@@ -23,6 +23,11 @@ api:
   base_url: https://api.render.com/v1
   base_url_env: RENDER_API_URL
   auth: { bearer_env: RENDER_API_KEY }
+credential:
+  url: "https://dashboard.render.com/u/settings?add-api-key"
+  scope: "An API key; Render keys have no scopes and reach every workspace of the user who creates them."
+  source: "https://render.com/docs/api"
+  verify: "GET /owners?limit=1"
 detect:
   env: ["RENDER_*"]
   files: [render.yaml]

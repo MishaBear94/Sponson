@@ -13,6 +13,11 @@ api:
   base_url: https://api.workos.com
   base_url_env: WORKOS_API_URL
   auth: { bearer_env: WORKOS_API_KEY }
+credential:
+  url: "https://dashboard.workos.com/api-keys"
+  scope: "The secret API key of the environment (staging for previews); WorkOS keys have no finer permissions."
+  source: "https://workos.com/docs/reference/api-keys"
+  verify: "GET /organizations?limit=1"
 detect:
   deps: ["@workos-inc/"]
   env: ["WORKOS_*"]

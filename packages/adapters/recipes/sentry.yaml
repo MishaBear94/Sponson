@@ -23,6 +23,10 @@ api:
   base_url: https://sentry.io/api/0
   base_url_env: SENTRY_API_URL
   auth: { bearer_env: SENTRY_AUTH_TOKEN }
+credential:
+  url: "https://docs.sentry.io/account/auth-tokens/"
+  scope: "An organization auth token (Settings > Auth Tokens), or a personal token with project:releases."
+  source: "https://docs.sentry.io/api/permissions/"
 detect:
   deps: ["@sentry/"]
   env: ["SENTRY_*"]

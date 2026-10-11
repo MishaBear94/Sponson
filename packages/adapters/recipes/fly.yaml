@@ -18,6 +18,10 @@ api:
   base_url: https://api.fly.io/graphql
   base_url_env: FLY_API_URL
   auth: { bearer_env: FLY_API_TOKEN }
+credential:
+  url: "https://fly.io/dashboard"
+  scope: "A deploy token for the one app (`fly tokens create deploy -a <app>`), or an org token (`fly tokens create org`) for an app per PR."
+  source: "https://fly.io/docs/security/tokens/"
 detect:
   env: ["FLY_*"]
   files: [fly.toml]

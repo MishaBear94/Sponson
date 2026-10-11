@@ -198,6 +198,9 @@ function siteFor({ state, params, url }: Ctx): NetlifySite | Reply {
 
 const routes = router<NetlifyState>(
   [
+    // A token check (`sponson init --setup`): the token's user.
+    route("GET", "/user", () => new Reply(200, { id: "user_sim", email: "sim@example.com", full_name: "Sim" })),
+
     route("GET", "/sites/:site", ({ state, params }) => {
       const s = state.sites[params.site];
       if (!s) return notFound("site");

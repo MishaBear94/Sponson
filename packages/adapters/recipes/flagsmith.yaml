@@ -16,6 +16,11 @@ api:
   base_url: https://api.flagsmith.com/api/v1
   base_url_env: FLAGSMITH_API_URL
   auth: { header: Authorization, value_env: FLAGSMITH_MASTER_API_KEY, prefix: "Api-Key " }
+credential:
+  url: "https://app.flagsmith.com/"
+  scope: "An Organisation API key (Organisation Settings > API Keys); with role-based access, give it a role limited to the project."
+  source: "https://docs.flagsmith.com/integrating-with-flagsmith/flagsmith-api-overview/admin-api/authentication"
+  verify: "GET /organisations/"
 detect:
   deps: [flagsmith, flagsmith-nodejs, react-native-flagsmith]
   env: ["FLAGSMITH_*"]

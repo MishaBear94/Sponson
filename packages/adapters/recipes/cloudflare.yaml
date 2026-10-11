@@ -19,6 +19,11 @@ api:
   base_url: https://api.cloudflare.com/client/v4
   base_url_env: CLOUDFLARE_API_URL
   auth: { bearer_env: CLOUDFLARE_API_TOKEN }
+credential:
+  url: "https://dash.cloudflare.com/profile/api-tokens"
+  scope: "A custom token (or the Edit zone DNS template) with Zone > DNS > Edit, its Zone Resources limited to the zone."
+  source: "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/"
+  verify: "GET /user/tokens/verify"
 assumptions:
   - id: CF1
     verified: true

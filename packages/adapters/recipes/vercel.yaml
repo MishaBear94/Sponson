@@ -24,6 +24,11 @@ api:
   base_url: https://api.vercel.com
   base_url_env: VERCEL_API_URL
   auth: { bearer_env: VERCEL_TOKEN }
+credential:
+  url: "https://vercel.com/account/tokens"
+  scope: "A token scoped to the team that owns the project, with an expiration."
+  source: "https://vercel.com/kb/guide/how-do-i-use-a-vercel-api-access-token"
+  verify: "GET /v2/user"
 assumptions:
   - id: VD1
     verified: true

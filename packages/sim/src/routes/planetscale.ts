@@ -157,6 +157,14 @@ const ROLES = new Set(["reader", "writer", "admin", "readwriter"]);
 /** One route per method and path; `:name` segments arrive URI-decoded in `params`. */
 const routes = router<PlanetscaleState>(
   [
+    // Token checks (`sponson init --setup`): organizations, their databases, one database.
+    route("GET", "/organizations", ({ state }) => new Reply(200, { data: Object.keys(state.organizations).map((name) => ({ name })) })),
+    route("GET", "/organizations/:org/databases", ({ state, params }) => {
+      const o = state.organizations[params.org];
+      return o ? new Reply(200, { data: Object.keys(o.databases).map((name) => ({ name })) }) : notFound();
+    }),
+    route("GET", "/organizations/:org/databases/:db", ({ state, params }) => (dbOf(state, params.org, params.db) ? new Reply(200, { name: params.db }) : notFound())),
+
     route("GET", "/organizations/:org/databases/:db/branches", ({ core, state, params, url }) => {
       const d = dbOf(state, params.org, params.db);
       return d ? listReply(core, d.branches.map(publicBranch), url) : notFound();

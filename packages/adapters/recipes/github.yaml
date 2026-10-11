@@ -16,6 +16,11 @@ api:
   base_url_env: GITHUB_API_URL
   auth: { bearer_env: GITHUB_TOKEN }
   headers: { X-GitHub-Api-Version: "2022-11-28", User-Agent: sponson }
+credential:
+  url: "https://github.com/settings/personal-access-tokens/new"
+  scope: "A fine-grained token for the one repository with the permission the line's op needs (Webhooks, Administration or Environments: Read and write)."
+  source: "https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens"
+  verify: "GET /user"
 detect:
   deps: ["@octokit/webhooks", probot]
   env: [GITHUB_WEBHOOK_SECRET]

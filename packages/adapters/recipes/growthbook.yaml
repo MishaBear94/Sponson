@@ -17,6 +17,11 @@ api:
   base_url: https://api.growthbook.io/api
   base_url_env: GROWTHBOOK_API_URL
   auth: { bearer_env: GROWTHBOOK_API_KEY }
+credential:
+  url: "https://app.growthbook.io/settings/keys"
+  scope: "A Secret API key (Settings > API Keys) with a role that can edit features, limited to the project."
+  source: "https://docs.growthbook.io/api/"
+  verify: "GET /v1/features?limit=1"
 detect:
   deps: ["@growthbook/"]
   env: ["GROWTHBOOK_*"]

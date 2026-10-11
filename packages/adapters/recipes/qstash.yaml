@@ -22,6 +22,11 @@ api:
   base_url: https://qstash.upstash.io
   base_url_env: QSTASH_API_URL
   auth: { bearer_env: QSTASH_TOKEN }
+credential:
+  url: "https://console.upstash.com/qstash"
+  scope: "The QStash token of the region (QStash tab); it has no scopes."
+  source: "https://upstash.com/docs/qstash/overall/getstarted"
+  verify: "GET /v2/schedules"
 detect:
   deps: ["@upstash/qstash"]
   env: ["QSTASH_*"]

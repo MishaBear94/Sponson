@@ -14,6 +14,10 @@ api:
   base_url: https://api.machines.dev/v1
   base_url_env: FLY_MACHINES_API_URL
   auth: { bearer_env: FLY_API_TOKEN }
+credential:
+  url: "https://fly.io/dashboard"
+  scope: "An org token (`fly tokens create org`): it creates and deletes apps in the organization."
+  source: "https://fly.io/docs/security/tokens/"
 assumptions:
   - id: FM1
     verified: true

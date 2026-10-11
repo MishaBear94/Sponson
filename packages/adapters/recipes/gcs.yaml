@@ -18,6 +18,10 @@ api:
   base_url: https://storage.googleapis.com/storage/v1
   base_url_env: GCS_API_URL
   auth: { command: [gcloud, auth, print-access-token] }
+credential:
+  url: "https://cloud.google.com/storage/docs/using-cors"
+  scope: "Sign in with `gcloud auth login` as an identity holding Storage Admin (roles/storage.admin) on the bucket: storage.buckets.get and storage.buckets.update."
+  source: "https://cloud.google.com/storage/docs/using-cors"
 detect:
   deps: ["@google-cloud/storage"]
   starter:

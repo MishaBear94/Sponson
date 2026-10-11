@@ -97,6 +97,11 @@ write a starter plan, or adopt unmanaged resources into the existing one
 
 Options:
   --adopt <key>  adopt only the unmanaged resource with this key, id or label
+  --setup        then set up the plan's credentials: where to create each token,
+                 check it, store it as a GitHub Actions secret, write the
+                 workflow
+  --yes          with --setup: store every checked token and write the workflow
+                 without asking
   -h, --help     display help for command
 ```
 

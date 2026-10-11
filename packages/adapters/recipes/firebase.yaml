@@ -18,6 +18,10 @@ api:
   base_url: https://identitytoolkit.googleapis.com/admin/v2
   base_url_env: FIREBASE_API_URL
   auth: { command: [gcloud, auth, print-access-token] }
+credential:
+  url: "https://firebase.google.com/docs/projects/iam/roles-predefined-product"
+  scope: "Sign in with `gcloud auth login` as an identity holding Firebase Authentication Admin (roles/firebaseauth.admin) on the project."
+  source: "https://firebase.google.com/docs/projects/iam/roles-predefined-product"
 detect:
   deps: [firebase, firebase-admin]
   env: ["FIREBASE_*"]

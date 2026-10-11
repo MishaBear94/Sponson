@@ -154,6 +154,10 @@ export function supabaseAllowList(p: SupabaseProject): string[] {
 /** The Management API, one route per method and path. Errors are `{ message }`, as Supabase's are. */
 const routes = router<SupabaseState>(
   [
+    // Token checks (`sponson init --setup`): the projects the token reaches, and one project.
+    route("GET", "/projects", ({ state }) => new Reply(200, Object.keys(state.projects).map((ref) => ({ id: ref, ref, name: ref })))),
+    route("GET", "/projects/:ref", ({ state, params }) => (state.projects[params.ref] ? new Reply(200, { id: params.ref, ref: params.ref, name: params.ref }) : notFound("project"))),
+
     route("GET", "/projects/:ref/branches", ({ state, params }) => {
       const p = state.projects[params.ref];
       return p ? new Reply(200, p.branches.map(publicBranch)) : notFound("project");

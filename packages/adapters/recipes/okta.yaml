@@ -17,6 +17,11 @@ api:
   base_url_env: OKTA_API_URL
   auth: { header: Authorization, value_env: OKTA_API_TOKEN, prefix: "SSWS " }
 base_url_example: https://acme.okta.com/api/v1
+credential:
+  url: "https://developer.okta.com/docs/guides/create-an-api-token/main/"
+  scope: "An API token (Security > API > Tokens) created by an admin whose role can edit the app (it acts with that admin's permissions)."
+  source: "https://developer.okta.com/docs/guides/create-an-api-token/main/"
+  verify: "GET /users/me"
 detect:
   deps: ["@okta/"]
   env: ["OKTA_*"]

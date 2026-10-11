@@ -458,6 +458,22 @@ export interface ResourceAdapter {
    * docs (docs/plan-format.md). Built-in adapters must set it; plugins should.
    */
   about?: AdapterAbout;
+  /**
+   * Check the adapter's credential with one read-only request (`sponson init --setup`): the cheapest read that proves
+   * the token is accepted and, when the provider block names a project or site, that it reaches it. Resolve with what
+   * was checked; throw the HTTP client's PROVIDER_AUTH (401: rejected; 403: lacks a permission) or PROVIDER_NOT_FOUND
+   * (the token does not reach the named project) otherwise. `actx.provider` is the plan's provider block with
+   * placeholders removed, so check the account alone when the project is not known yet. Never writes.
+   */
+  verifyCredential?(actx: AdapterContext): Promise<CredentialCheck>;
+}
+
+/** What `ResourceAdapter.verifyCredential` checked, for the setup report. Never carries the credential. */
+export interface CredentialCheck {
+  /** The request sent, as `METHOD /path` (no query values that could hold a secret). */
+  request: string;
+  /** What the request proved the token reaches: `account`, or the project or site it named. */
+  reaches: string;
 }
 
 /** The environment an adapter reads: its credential, and the variable that overrides its API base URL. */
@@ -477,6 +493,13 @@ export interface AdapterAbout {
    * variable is listed as the credential.
    */
   credentialCommand?: readonly string[];
+  /**
+   * Where a person creates the credential: the provider's token page (a dashboard deep link when it has a stable one,
+   * else the docs page that explains it). `sponson init --setup` shows it, and docs/providers.md lists it.
+   */
+  credentialUrl?: string;
+  /** The least the credential needs, in the provider's own words (which scope, role or permission to pick). */
+  credentialScope?: string;
   /** The provider as people write it (Vercel, Cloudflare Pages): `sponson init`'s summary and the provider catalog. */
   title?: string;
   /** The id of the docs/coverage.yaml category the adapter belongs to (deploy, databases, auth, …). */

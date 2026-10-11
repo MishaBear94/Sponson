@@ -14,13 +14,13 @@
  * Secret values are write-only (CF3): a `secret_text` variable is compared by presence and type, never by value.
  * See `secretHash` and docs/plan-format.md (`cloudflare.pages_env`).
  */
-import { SponsonError, canonicalJson, markerKind, sha256, type AdapterContext, type Ctx, type DiffSide, type OpSpec, type ResolvedParams, type ResourceAdapter, type ResourceDiff, type ResourceRecord } from "@sponson/core";
-import { ABSENT, SENSITIVE, assertNoPending, clientFor, desiredSide, optionalEnv, paramError, requireEnv, requireProvider, stringParam } from "./common.js";
+import { SponsonError, canonicalJson, markerKind, sha256, type AdapterContext, type Ctx, type DiffSide, type OpSpec, type ResolvedParams, type ResourceAdapter, type ResourceDiff, type ResourceRecord, type CredentialCheck } from "@sponson/core";
+import { ABSENT, SENSITIVE, assertNoPending, clientFor, desiredSide, optionalEnv, paramError, requireEnv, requireProvider, stringParam, verifyByGet, optionalProvider } from "./common.js";
 import { ShapeError, isObject, isProviderError, obj, type ApiClient } from "./http.js";
 
 const ADAPTER = "cloudflare";
 /** The environment Cloudflare reads; declared once, used by the code below and by the generated docs (`about`). */
-const ABOUT = { credentialEnv: "CLOUDFLARE_API_TOKEN", baseUrlEnv: "CLOUDFLARE_API_URL", title: "Cloudflare Pages", category: "deploy", detect: { deps: ["wrangler", "@cloudflare/next-on-pages"], env: ["CLOUDFLARE_*"], files: ["wrangler.json", "wrangler.jsonc", "wrangler.toml"] } } as const;
+const ABOUT = { credentialEnv: "CLOUDFLARE_API_TOKEN", credentialUrl: "https://dash.cloudflare.com/profile/api-tokens", credentialScope: "A custom token with Account > Cloudflare Pages > Edit, limited to the one account.", baseUrlEnv: "CLOUDFLARE_API_URL", title: "Cloudflare Pages", category: "deploy", detect: { deps: ["wrangler", "@cloudflare/next-on-pages"], env: ["CLOUDFLARE_*"], files: ["wrangler.json", "wrangler.jsonc", "wrangler.toml"] } } as const;
 
 /** Cloudflare's API base URL (CF1). `CLOUDFLARE_API_URL` overrides it; tests and scenarios point that at the sim. */
 export const CLOUDFLARE_DEFAULT_API_URL = "https://api.cloudflare.com/client/v4";
@@ -338,9 +338,18 @@ const pagesEnv: OpSpec = {
   },
 };
 
+/** One read-only request that proves the credential works, and reaches the project when the plan names it (`sponson init --setup`). */
+async function verifyCredential(actx: AdapterContext): Promise<CredentialCheck> {
+  const api = clientFor(actx, ADAPTER, { baseUrl: optionalEnv(actx.env, ABOUT.baseUrlEnv) ?? CLOUDFLARE_DEFAULT_API_URL, token: requireEnv(actx.env, ABOUT.credentialEnv, ADAPTER) });
+  const account = optionalProvider(actx, "account");
+  const project = optionalProvider(actx, "project");
+  if (!account || !project) return verifyByGet(api, "/user/tokens/verify", "account");
+  return verifyByGet(api, `/accounts/${encodeURIComponent(account)}/pages/projects/${encodeURIComponent(project)}`, `Pages project ${project}`);
+}
+
 /**
  * The Cloudflare adapter (`adapter: cloudflare` in a plan): op `pages_env` manages a Pages project's preview or
  * production variables. Needs `CLOUDFLARE_API_TOKEN` (account permission "Cloudflare Pages Edit") and
  * `providers.cloudflare.{account,project}`.
  */
-export const cloudflareAdapter: ResourceAdapter = { name: ADAPTER, ops: { pages_env: pagesEnv }, about: ABOUT };
+export const cloudflareAdapter: ResourceAdapter = { name: ADAPTER, ops: { pages_env: pagesEnv }, about: ABOUT, verifyCredential };

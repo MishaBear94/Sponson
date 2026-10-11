@@ -22,6 +22,11 @@ api:
   base_url: https://management.stytch.com
   base_url_env: STYTCH_MANAGEMENT_API_URL
   auth: { basic: { user_env: STYTCH_WORKSPACE_KEY_ID, password_env: STYTCH_WORKSPACE_KEY_SECRET } }
+credential:
+  url: "https://stytch.com/dashboard/settings/management-api"
+  scope: "A Workspace Management API key (Workspace settings > Management API); its key ID and secret, no finer scopes."
+  source: "https://stytch.com/docs/workspace-management/pwa/overview"
+  verify: "GET /pwa/v3/projects"
 detect:
   deps: [stytch, "@stytch/"]
   env: ["STYTCH_*"]
