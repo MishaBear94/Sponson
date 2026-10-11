@@ -1,5 +1,53 @@
 # sponson
 
+## 0.9.0
+
+### Minor Changes
+
+- ce0c21f: `sponson init` and `init --setup`, from a newcomer's walkthrough:
+  
+  - `init --setup` lists the TODOs the plan still has (a `providers.neon.project` still `proj_xxx`) before asking for
+    any token, and does not offer the workflow while there are any: it would run a plan that cannot work yet (it says
+    so, and what to do; `--json` reports `workflow.result: "todo"`). `ready` is false while a TODO is left, and the run
+    ends with what to do next (fill in the TODOs, fix the credentials, then `sponson init --setup` and `sponson plan`)
+    and the command that starts the zero-account demo. `--json` carries it as `setup.next`.
+  - On a re-run with `--setup` the plan is detected again, so `--json` reports `detected` the same way every time (it was
+    `null` on an existing plan), with `todo` the TODOs the plan still has: every line with a `# TODO:` comment (a value
+    counts as filled in once its comment is gone).
+  - Text output names the plan relative to the working directory (`Wrote release.plan.yaml`); JSON keeps it absolute.
+    `Added .sponson/ to .gitignore` follows it, and the receipts note is one line, printed when a starter is written.
+  - The Stripe starter line writes the webhook `path` (the recipe's documented default, `/api/webhooks/stripe`) with a
+    TODO to check it against the app, and, when an `.env*` file names `STRIPE_WEBHOOK_SECRET` (only the name is read),
+    a line of the deploy target's preview variables (Vercel or Netlify) that passes the endpoint's once-only signing
+    `secret` to it by reference in the same run.
+  
+  Recipes: a `detect.starter` entry takes `check` (params written with their `default` and a TODO to check it) and
+  `env` (outputs passed to the deploy target's variables under the name the app's `.env*` files use).
+- ce0c21f: Plan and apply output, drift and destroy:
+  
+  - A blocked line (and a line skipped because one it depends on is blocked) is shown as `x`, never `-`, which means a
+    delete. `plan` exits 1 when a line is blocked or in error; `plan --help` and the README say so.
+  - A diff no longer repeats a value its label already ends in (`Neon branch sponson/preview/pr-42`, once), and a change
+    between two hidden values says what it is (`changed outside Sponson (value hidden)`) instead of `(secret) → (secret)`.
+  - Drift remedies are said once. The engine's `DRIFT_CHANGED` message and drift message state what happened; the remedy
+    is the code's CLI hint ("Keep that change by updating the plan to match, or re-run with --reconcile to overwrite
+    it"), or, in the PR comment, one fix sentence on the refused line.
+  - `apply --destroy` still deletes a resource Sponson created that someone edited since the last apply (the pull request
+    is closing), but no longer silently: it re-reads the line first, warns (`DATABASE_URL (preview, feat/x) was changed
+    outside Sponson since the last apply; deleted anyway`), and records the labels under the receipt line's
+    `notes.changedOutside`. There is no flag to keep it (docs/adr/0006).
+  - The PR comment: a plan's headline says what the preview already has and what applying adds (not "Applying this plan
+    gives…" for a branch that exists); lines held back by a refused line are counted apart from the refused ones and
+    have no fix of their own; identifiers in engine and provider text stay code spans instead of `&#96;` entities
+    (a span holding a tag, a pipe or an entity is still escaped).
+
+### Patch Changes
+
+- Updated dependencies [ce0c21f]
+- Updated dependencies [ce0c21f]
+  - @sponson/adapters@0.9.0
+  - @sponson/core@0.9.0
+
 ## 0.8.0
 
 ### Minor Changes
