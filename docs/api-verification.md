@@ -537,3 +537,4 @@ published specifications and documentation only.
 | Date | What ran | Result |
 |---|---|---|
 | 2026-10-11 | `recipe:github.repo_webhook` against `api.github.com` (a public repository; the hook pointed at a reserved `example.com` name): create, re-apply, destroy | passed: re-apply wrote nothing (GH8 verified), destroy left no hook |
+| 2026-10-11 | Release 0.6.1 through `scripts/publish-release.sh` | passed: all four packages carry SLSA v1 provenance (Sigstore transparency log), all four tags on origin; the first release with both |

@@ -93,10 +93,14 @@ jobs:
       - name: Check what was published
         if: ${{ !inputs.dry-run }}
         run: |
-          # Fail loudly instead of shipping silently without tags or provenance again.
-          sleep 30
+          # Fail loudly instead of shipping silently without tags or provenance again. The registry can take minutes to
+          # serve a new version (0.6.1 was a 404 thirty seconds after publishing), so each package is polled.
           for dir in packages/*/; do
             name=$(node -p "require('./${dir}package.json').name"); version=$(node -p "require('./${dir}package.json').version")
             git ls-remote --exit-code --tags origin "refs/tags/${name}@${version}" > /dev/null || { echo "::error::tag ${name}@${version} is not on origin"; exit 1; }
-            npm view "${name}@${version}" dist.attestations.provenance.predicateType | grep -q slsa || { echo "::error::${name}@${version} has no provenance attestation"; exit 1; }
+            for attempt in $(seq 1 20); do
+              if npm view "${name}@${version}" dist.attestations.provenance.predicateType 2> /dev/null | grep -q slsa; then continue 2; fi
+              sleep 15
+            done
+            echo "::error::${name}@${version} has no provenance attestation after 5 minutes"; exit 1
           done
