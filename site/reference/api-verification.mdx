@@ -533,3 +533,12 @@ server and the generic REST sim (assumption R7's exact headers and fixed tokens)
   (the examples run against sims, not the live APIs).
 
 Run them with `pnpm test:live`; see the header of `scenarios/contract.test.ts`.
+
+## Live runs
+
+Runs of `pnpm test:live` (or a part of it) against real accounts. Every other check in this document is against
+published specifications and documentation only.
+
+| Date | What ran | Result |
+|---|---|---|
+| 2026-10-11 | `recipe:github.repo_webhook` against `api.github.com` (a public repository; the hook pointed at a reserved `example.com` name): create, re-apply, destroy | passed: re-apply wrote nothing (GH8 verified), destroy left no hook |
