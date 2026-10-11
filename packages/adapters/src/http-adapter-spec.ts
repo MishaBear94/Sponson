@@ -178,9 +178,14 @@ export interface ApiConfig {
   encoding: "json" | "form";
   /** The API is a production system: lines through it need Sponson's approval (`writesEnvironment`). */
   production: boolean;
+  /**
+   * Credentials this API refuses: a value starting with one of `prefixes` (Stripe's `sk_live_`) is PROVIDER_AUTH
+   * before any request, unless the variable `unlessEnv` is `1` or `true`.
+   */
+  refuse?: { prefixes: string[]; unlessEnv: string };
 }
 
-const API_KEYS = ["base_url", "base_url_env", "auth", "headers", "encoding", "production"];
+const API_KEYS = ["base_url", "base_url_env", "auth", "headers", "encoding", "production", "refuse_credential"];
 
 /**
  * Variable names the engine masks everywhere (packages/core/src/engine/run-context.ts, CREDENTIAL_NAME). A
@@ -261,7 +266,18 @@ export function parseApi(block: Record<string, unknown>, where: string, opts: { 
     production: parseProduction(block.production, `${where}.production`),
   };
   if (block.base_url_env !== undefined) cfg.baseUrlEnv = envName(block.base_url_env, `${where}.base_url_env`, false);
+  if (block.refuse_credential !== undefined) cfg.refuse = parseRefuse(block.refuse_credential, `${where}.refuse_credential`);
   return cfg;
+}
+
+function parseRefuse(v: unknown, where: string): { prefixes: string[]; unlessEnv: string } {
+  const prefixes = isObject(v) ? v.prefixes : undefined;
+  if (!isObject(v) || !Array.isArray(prefixes) || prefixes.length === 0 || !prefixes.every((p) => typeof p === "string" && p.length >= 3)) {
+    throw planError("must be `{ prefixes: [sk_live_, …], unless_env: NAME }`: credential prefixes to refuse, and the variable that allows them", where);
+  }
+  const extra = Object.keys(v).find((k) => k !== "prefixes" && k !== "unless_env");
+  if (extra) throw planError(`unknown key \`${extra}\` (known: prefixes, unless_env)`, where);
+  return { prefixes: prefixes as string[], unlessEnv: envName(v.unless_env, `${where}.unless_env`, false) };
 }
 
 /**
@@ -281,6 +297,10 @@ export function apiBlock(block: Record<string, unknown>, params: Record<string, 
   }
   const cfg = resolveRecipeApi(raw, where);
   if (raw.recipe !== undefined && recipe !== undefined && recipe !== raw.recipe) throw planError(`uses recipe \`${String(raw.recipe)}\`, but the line's recipe is \`${String(params.recipe)}\``, where);
+  if (raw.recipe !== undefined && raw.refuse_credential !== undefined) {
+    // A recipe's refusal is a safety rule (Stripe: never live keys from a preview), not a default to tune per plan.
+    throw planError("`refuse_credential` comes from the recipe and cannot be overridden; its `unless_env` variable is the opt-out", `${where}.refuse_credential`);
+  }
   if (raw.recipe !== undefined && cfg.base_url === undefined) throw planError(`recipe \`${String(raw.recipe)}\` has no default \`base_url\` (each account has its own): set \`base_url\` in this block`, where);
   parseApi(cfg, where);
   return cfg;
@@ -369,7 +389,11 @@ export interface ResourceSpec {
   read?: { path: string };
   find?: FindSpec;
   update?: RequestSpec;
-  delete: { method: string; path: string };
+  /**
+   * How the object is removed. A `POST` with a `body` archives instead of deleting (Stripe prices cannot be deleted,
+   * only set `active: false`); the body is part of the record id, so destroy needs nothing but the ledger.
+   */
+  delete: { method: string; path: string; body?: Record<string, unknown> };
   destroy: DestroyMode;
   itemPath: string;
   idPath: string;
@@ -456,10 +480,14 @@ function parseRead(v: unknown, vars: Record<string, unknown>, find: FindSpec | u
 }
 
 /** Update and delete go to the read path by default: the object's own URL. */
-function parseDelete(v: unknown, vars: Record<string, unknown>, read: { path: string } | undefined): { method: string; path: string } {
+function parseDelete(v: unknown, vars: Record<string, unknown>, read: { path: string } | undefined): ResourceSpec["delete"] {
   if (v === undefined && read === undefined) throw fail("`delete` is required: `{ path: /things/{id} }` (no `read.path` to default to)", "delete");
   const r = parseRequest(v ?? {}, "delete", ["DELETE", "POST"], "DELETE", vars, true, read?.path);
-  return { method: r.method, path: r.path };
+  if (Object.keys(r.body).length === 0) return { method: r.method, path: r.path };
+  if (r.method !== "POST") throw fail("`delete.body` needs `method: POST` (an archive request such as `{ active: false }`)", "delete.body");
+  // The body travels in the record id, which the ledger keeps: plain values only, never a reference or a secret.
+  if (firstMarker(r.body) !== undefined || JSON.stringify(r.body).includes("${")) throw fail("`delete.body` must hold literal values only", "delete.body");
+  return { method: r.method, path: r.path, body: r.body };
 }
 
 function parseOutputs(v: unknown): Record<string, OutputDecl> {

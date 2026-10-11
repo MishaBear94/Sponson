@@ -247,6 +247,96 @@
     "key": "/gates/new_checkout/rules[name=preview pr-42]",
     "id": "DELETE /gates/new_checkout/rules/ID"
   },
+  "stripe.webhook_endpoint": {
+    "provider": {
+      "base_url": "https://api.stripe.com/v1",
+      "base_url_env": "STRIPE_API_URL",
+      "auth": {
+        "bearer_env": "STRIPE_SECRET_KEY"
+      },
+      "encoding": "form",
+      "refuse_credential": {
+        "prefixes": [
+          "sk_live_",
+          "rk_live_"
+        ],
+        "unless_env": "SPONSON_STRIPE_ALLOW_LIVE"
+      }
+    },
+    "key": "/webhook_endpoints?limit=100[/metadata/sponson_endpoint=preview-pr-42]",
+    "id": "DELETE /webhook_endpoints/ID"
+  },
+  "stripe.product": {
+    "provider": {
+      "base_url": "https://api.stripe.com/v1",
+      "base_url_env": "STRIPE_API_URL",
+      "auth": {
+        "bearer_env": "STRIPE_SECRET_KEY"
+      },
+      "encoding": "form",
+      "refuse_credential": {
+        "prefixes": [
+          "sk_live_",
+          "rk_live_"
+        ],
+        "unless_env": "SPONSON_STRIPE_ALLOW_LIVE"
+      }
+    },
+    "key": "/products/pro-pr-42",
+    "id": "POST /products/pro-pr-42 body={\"active\":false}"
+  },
+  "stripe.price": {
+    "provider": {
+      "base_url": "https://api.stripe.com/v1",
+      "base_url_env": "STRIPE_API_URL",
+      "auth": {
+        "bearer_env": "STRIPE_SECRET_KEY"
+      },
+      "encoding": "form",
+      "refuse_credential": {
+        "prefixes": [
+          "sk_live_",
+          "rk_live_"
+        ],
+        "unless_env": "SPONSON_STRIPE_ALLOW_LIVE"
+      }
+    },
+    "key": "/prices?lookup_keys[]=pro-monthly-pr-42&active=true&limit=10[/recurring/interval=month,active=true,currency=usd,lookup_key=pro-monthly-pr-42,product=pro-pr-42,unit_amount=1500]",
+    "id": "POST /prices/ID body={\"active\":false}"
+  },
+  "stripe.coupon": {
+    "provider": {
+      "base_url": "https://api.stripe.com/v1",
+      "base_url_env": "STRIPE_API_URL",
+      "auth": {
+        "bearer_env": "STRIPE_SECRET_KEY"
+      },
+      "encoding": "form",
+      "refuse_credential": {
+        "prefixes": [
+          "sk_live_",
+          "rk_live_"
+        ],
+        "unless_env": "SPONSON_STRIPE_ALLOW_LIVE"
+      }
+    },
+    "key": "/coupons/preview-pr-42",
+    "id": "DELETE /coupons/preview-pr-42"
+  },
+  "stytch.redirect_url": {
+    "provider": {
+      "base_url": "https://management.stytch.com",
+      "base_url_env": "STYTCH_MANAGEMENT_API_URL",
+      "auth": {
+        "basic": {
+          "user_env": "STYTCH_WORKSPACE_KEY_ID",
+          "password_env": "STYTCH_WORKSPACE_KEY_SECRET"
+        }
+      }
+    },
+    "key": "/pwa/v3/projects/my-app/environments/test/redirect_urls/all[url=https://pr-42.preview.example.com/authenticate]",
+    "id": "DELETE /pwa/v3/projects/my-app/environments/test/redirect_urls?url=ID&do_not_promote_defaults=true"
+  },
   "svix.endpoint": {
     "provider": {
       "base_url": "https://api.us.svix.com",
@@ -305,5 +395,16 @@
     },
     "key": "/v9/projects/prj_12HKQaOmR5t5Uy6vdcQsNIiZgHGB/domains/pr-42.preview.example.com?teamId=team_1a2b3c4d5e6f7g8h9i0j1k2l",
     "id": "DELETE /v9/projects/prj_12HKQaOmR5t5Uy6vdcQsNIiZgHGB/domains/pr-42.preview.example.com?teamId=team_1a2b3c4d5e6f7g8h9i0j1k2l"
+  },
+  "workos.redirect_uri": {
+    "provider": {
+      "base_url": "https://api.workos.com",
+      "base_url_env": "WORKOS_API_URL",
+      "auth": {
+        "bearer_env": "WORKOS_API_KEY"
+      }
+    },
+    "key": "/user_management/redirect_uris?limit=100[uri=https://pr-42.preview.example.com/callback]",
+    "id": "DELETE /user_management/redirect_uris/ID"
   }
 }

@@ -201,17 +201,17 @@ categories:
       - id: workos-redirect
         provider: WorkOS
         side_effect: Redirect URI for AuthKit
-        api_shape: "`POST /user_management/redirect_uris`, list via `GET`; bearer; object. Delete endpoint not confirmed **(unverified)**"
+        api_shape: "`POST /user_management/redirect_uris`, list via `GET` (cursor `list_metadata.after`), `DELETE /user_management/redirect_uris/{id}`; bearer; object"
         generic: Y
         priority: P1
-        covered_by: null
+        covered_by: recipe:workos.redirect_uri
       - id: stytch-redirect
         provider: Stytch
         side_effect: Redirect URL per environment
-        api_shape: PWA `POST /pwa/v3/projects/{p}/environments/{e}/redirect_urls` (+ get/delete by URL), Basic workspace key; object
+        api_shape: PWA `POST /pwa/v3/projects/{p}/environments/{e}/redirect_urls`, `GET …/redirect_urls/all`, get/update/delete by `?url=`; Basic workspace key; object keyed by its URL
         generic: Y
         priority: P2
-        covered_by: null
+        covered_by: recipe:stytch.redirect_url
       - id: okta-redirect
         provider: Okta
         side_effect: "`redirect_uris` on an OIDC app; trusted origin for CORS"
@@ -308,9 +308,9 @@ categories:
         provider: Stripe
         side_effect: Test-mode webhook endpoint pointing at the preview URL; its signing secret into the app's env
         api_shape: "`POST /v1/webhook_endpoints` (form-encoded), `DELETE /v1/webhook_endpoints/{id}`; bearer; object; `Idempotency-Key`; **`secret` returned only on create**"
-        generic: P (once-only secret must flow into an env line in the same run)
+        generic: Y (the secret is a `once` output, flowing into an env line in the same run; ADR 0018)
         priority: P0
-        covered_by: null
+        covered_by: recipe:stripe.webhook_endpoint
       - id: github-webhook
         provider: GitHub
         side_effect: Repository webhook to the preview URL
@@ -473,7 +473,10 @@ categories:
         api_shape: "`POST /v1/products`, `/v1/prices` (form-encoded, `lookup_key` as identity, `Idempotency-Key`); prices cannot be deleted, only `active=false`"
         generic: Y (destroy = archive)
         priority: P2
-        covered_by: null
+        covered_by:
+          - recipe:stripe.product
+          - recipe:stripe.price
+          - recipe:stripe.coupon
       - id: stripe-sandbox
         provider: Stripe sandboxes
         side_effect: A sandbox per PR

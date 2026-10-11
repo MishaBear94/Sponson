@@ -39,11 +39,15 @@ function label(spec: ResourceSpec, key: string): string {
   return `${spec.api} ${key}`;
 }
 
-/** The record id: the request that removes the object (or `KEEP`), and the statuses that mean it is gone. */
+/**
+ * The record id: the request that removes the object (or `KEEP`), the statuses that mean it is gone, and the body
+ * of an archiving `POST` (canonical JSON, last).
+ */
 function locator(spec: ResourceSpec, id: string): string {
   const method = spec.destroy === "keep" ? "KEEP" : spec.delete.method;
   const gone = spec.goneStatus.length ? ` gone=${spec.goneStatus.join(",")}` : "";
-  return `${method} ${fillPath(spec.delete.path, spec.vars, id)}${gone}`;
+  const body = spec.delete.body ? ` body=${canonicalJson(spec.delete.body)}` : "";
+  return `${method} ${fillPath(spec.delete.path, spec.vars, id)}${gone}${body}`;
 }
 
 /**
@@ -55,9 +59,16 @@ export function resourceIdentity(spec: ResourceSpec, id: string): { key: string 
 }
 
 /** The request a record id names. */
-function parseLocator(id: string): { method: string; path: string; gone: number[] } | null {
-  const m = /^(DELETE|POST|KEEP) (\/\S*)(?: gone=([\d,]+))?$/.exec(id);
-  return m ? { method: m[1]!, path: m[2]!, gone: m[3] ? m[3].split(",").map(Number) : [] } : null;
+function parseLocator(id: string): { method: string; path: string; gone: number[]; body: Record<string, unknown> } | null {
+  const m = /^(DELETE|POST|KEEP) (\/\S*)(?: gone=([\d,]+))?(?: body=(\{.*\}))?$/.exec(id);
+  if (!m) return null;
+  let body: unknown = {};
+  try {
+    body = m[4] ? JSON.parse(m[4]) : {};
+  } catch {
+    return null;
+  }
+  return isObject(body) ? { method: m[1]!, path: m[2]!, gone: m[3] ? m[3].split(",").map(Number) : [], body } : null;
 }
 
 function fieldNames(spec: ResourceSpec): string[] {
@@ -296,7 +307,7 @@ export const resource: OpSpec = {
       if (!req) throw new SponsonError("INTERNAL", `${ADAPTER}: ${r.key}: record id \`${r.id}\` is not a delete request`, { adapter: ADAPTER, key: r.key });
       if (req.method === "KEEP") continue; // `destroy: keep`: left in place on purpose
       try {
-        await write(api, req.method, req.path, req.method === "POST" ? {} : undefined, true);
+        await write(api, req.method, req.path, req.method === "POST" ? req.body : undefined, true);
       } catch (e) {
         if (!failedWith(e, "PROVIDER_NOT_FOUND", req.gone) && !acceptedWithoutJson(e)) throw e;
       }

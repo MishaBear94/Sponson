@@ -1,0 +1,105 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Stytch Programmatic Workspace Actions (management API v3) recipes. Format and checklist: docs/adr/0020-recipes.md,
+# CONTRIBUTING.md "Adding a recipe".
+provider: stytch
+title: Stytch
+category: auth
+verified_on: "2026-10-11"
+docs:
+  - title: Create redirect URL (PWA v3)
+    url: https://stytch.com/docs/api-reference/pwa/api/v3/redirect-urls/create-redirect-url
+  - title: Get all redirect URLs (PWA v3)
+    url: https://stytch.com/docs/api-reference/pwa/api/v3/redirect-urls/get-all-redirect-urls
+  - title: Get redirect URL (PWA v3)
+    url: https://stytch.com/docs/api-reference/pwa/api/v3/redirect-urls/get-redirect-url
+  - title: Update redirect URL (PWA v3)
+    url: https://stytch.com/docs/workspace-management/pwa/update-redirect-url
+  - title: Delete redirect URL (PWA v3)
+    url: https://stytch.com/docs/api-reference/pwa/api/v3/redirect-urls/delete-redirect-url
+  - title: Limits
+    url: https://stytch.com/docs/workspace-management/pwa/limits
+api:
+  base_url: https://management.stytch.com
+  base_url_env: STYTCH_MANAGEMENT_API_URL
+  auth: { basic: { user_env: STYTCH_WORKSPACE_KEY_ID, password_env: STYTCH_WORKSPACE_KEY_SECRET } }
+assumptions:
+  - id: SY1
+    verified: true
+    text: "The management API authenticates with HTTP Basic: a workspace management key's id as the user and its secret as the password."
+    source: https://stytch.com/docs/api-reference/pwa/api/v3/redirect-urls/create-redirect-url
+  - id: SY2
+    verified: true
+    text: "`POST /pwa/v3/projects/{project_slug}/environments/{environment_slug}/redirect_urls` takes `url`, `valid_types` (`{ type, is_default }`, type one of LOGIN, INVITE, SIGNUP, RESET_PASSWORD, DISCOVERY) and `do_not_promote_defaults`, and answers `{ request_id, redirect_url: { url, valid_types }, status_code }`."
+    source: https://stytch.com/docs/api-reference/pwa/api/v3/redirect-urls/create-redirect-url
+  - id: SY3
+    verified: true
+    text: "`GET …/redirect_urls/all` answers `{ redirect_urls: [{ url, valid_types }], … }`: every redirect URL of the environment, unpaged."
+    source: https://stytch.com/docs/api-reference/pwa/api/v3/redirect-urls/get-all-redirect-urls
+  - id: SY4
+    verified: true
+    text: "A redirect URL has no id of its own: `GET`, `PUT` (to change `valid_types`) and `DELETE` on `…/redirect_urls?url=<url>` address it by its URL."
+    source: https://stytch.com/docs/api-reference/pwa/api/v3/redirect-urls/delete-redirect-url
+  - id: SY5
+    verified: true
+    text: "A project has at most 100 redirect URLs."
+    source: https://stytch.com/docs/workspace-management/pwa/limits
+  - id: SY6
+    verified: false
+    text: "`do_not_promote_defaults: true` on create and delete keeps a preview URL from becoming, or a deletion from changing, the environment's default for a type."
+  - id: SY7
+    verified: false
+    text: "A `PUT` body that also carries `url` (the adapter sends the identifying field back on PUT) is accepted, and `valid_types` read back in the order and form they were written, so an unchanged URL hashes the same on every plan."
+  - id: SY8
+    verified: false
+    text: "Each redirect URL is its own object (no shared list to rewrite), so concurrent previews need no lock."
+ops:
+  redirect_url:
+    kind: resource
+    title: Redirect URL
+    summary: "One redirect URL of a Stytch project environment, such as the preview's `/authenticate`, with the redirect types it is valid for (by default login and sign-up, never the default). Found by its URL; a console edit of its types is drift and is put back with a `PUT`. Destroy deletes it without promoting another URL to default."
+    covers: [stytch-redirect]
+    params:
+      project_slug:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9_-]+$"
+        description: The project's slug.
+        example: my-app
+      environment_slug:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9_-]+$"
+        description: The environment's slug within the project (its test environment, or a custom one).
+        example: test
+      url:
+        type: string
+        required: true
+        pattern: "^https?://\\S+$"
+        description: "The redirect URL, exactly as Stytch will receive it (`https://pr-42.preview.example.com/authenticate`)."
+        example: "https://${ctx.scope}.preview.example.com/authenticate"
+      valid_types:
+        type: list
+        default: [{ type: LOGIN, is_default: false }, { type: SIGNUP, is_default: false }]
+        description: "The redirect types the URL is valid for: `{ type, is_default }` with type LOGIN, INVITE, SIGNUP, RESET_PASSWORD or DISCOVERY."
+    http:
+      find:
+        path: "/pwa/v3/projects/{project_slug}/environments/{environment_slug}/redirect_urls/all"
+        list_path: /redirect_urls
+        match: { url: { param: url } }
+      create:
+        path: "/pwa/v3/projects/{project_slug}/environments/{environment_slug}/redirect_urls"
+        body: { do_not_promote_defaults: true }
+      update:
+        method: PUT
+        path: "/pwa/v3/projects/{project_slug}/environments/{environment_slug}/redirect_urls?url={id}"
+        body: { do_not_promote_defaults: true }
+      delete:
+        path: "/pwa/v3/projects/{project_slug}/environments/{environment_slug}/redirect_urls?url={id}&do_not_promote_defaults=true"
+      item_path: /redirect_url
+      id_path: /url
+      fields:
+        valid_types: { param: valid_types }
+    sim:
+      item_query: url
+    live:
+      params: { project_slug: SPONSON_LIVE_STYTCH_PROJECT_SLUG, environment_slug: SPONSON_LIVE_STYTCH_ENVIRONMENT_SLUG }

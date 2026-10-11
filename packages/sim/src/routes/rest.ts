@@ -25,18 +25,24 @@
  *       unknown path is 404. A create may choose the id (the id field, or the style's `id_from` field, in the
  *       body, like a flag key or a database name); otherwise the sim assigns `it_<n>` (the next integer with
  *       `numeric_ids`). A create whose `name` (or chosen id) already exists in the collection answers 409. Query
- *       parameters other than `cursor` are ignored: a filtered list answers the whole collection. With the style's
- *       `header_fields`, a create also stores those request headers as fields; with its `suffix_field`, a POST to
- *       `<collection>/<suffix>` creates the object with the suffix in that field, or updates the one whose id the
- *       request chooses (QStash's schedule upsert). A PUT to `<collection>/<id>` that does not exist creates the
- *       object with that id (an upsert at a client-chosen key, such as an environment variable by name), answering
- *       200. A trailing slash is ignored (`/releases/` is `/releases`). An alias (R2) names its collection for every method, so it also
- *       serves a provider that lists at another URL than it creates at (`GET /settings/all` lists `/settings`); an alias of
- *       a collection also addresses its objects (`/databases/<id>` when `/databases` aliases `/projects/p/databases`).
- *   R4. PATCH (and POST to an object) is a JSON merge patch (RFC 7396: maps merge recursively, `null` deletes a
- *       field, lists are replaced whole); PUT replaces everything but a collection object's id. Bodies may be JSON
- *       or form-encoded (`a[b]=c`, every value a string). No write has a precondition (no ETag): the last write
- *       wins.
+ *       parameters other than `cursor` are ignored: a filtered list answers the whole collection. A trailing slash
+ *       is ignored (`/releases/` is `/releases`). An alias (R2) names its collection for every method, so it also
+ *       serves a provider that lists at another URL than it creates at (`GET /settings/all` lists `/settings`).
+ *       An alias of a collection also addresses its objects (`/databases/<id>` when `/databases` aliases
+ *       `/projects/p/databases`). With the style's `header_fields`, a create also stores those request headers as
+ *       fields; with its `suffix_field`, a POST to `<collection>/<suffix>` creates the object with the suffix in that
+ *       field, or updates the one whose id the request chooses (QStash's schedule upsert). A PUT to
+ *       `<collection>/<id>` that does not exist creates the object with that id (an upsert at a client-chosen key,
+ *       such as an environment variable by name), answering 200.
+ *       A style's `item_query` names an object by a query parameter (`<collection>?url=<id>` is the object whose
+ *       id is `<id>`, for APIs that key objects by a value such as a URL).
+ *   R4. PATCH (and POST to an object, or to an object of a collection, as Stripe updates) is a JSON merge patch
+ *       (RFC 7396: maps merge recursively, `null` deletes a field, lists are replaced whole); PUT replaces
+ *       everything but a collection object's id. Bodies may be JSON or form-encoded (`a[b]=c`, every value a
+ *       string; with the style's `form_types`, `true`/`false` and numbers are read as such, as an API with a typed
+ *       schema does). No write has a precondition (no ETag): the last write wins.
+ *   R6. A style's `once_fields` are generated on create (`<field>_sim_<n>`) and appear only in the create's answer,
+ *       never stored or listed: a webhook endpoint's signing secret.
  *   R5. DELETE answers `{ id, deleted: true }`; anything unknown is 404 `{ error }`.
  */
 import type { IncomingHttpHeaders } from "node:http";
@@ -62,6 +68,12 @@ export interface RestStyle {
   id_from?: string;
   /** Assign integer ids instead of `it_<n>`. */
   numeric_ids?: boolean;
+  /** Read form-encoded `true`/`false` and numbers as booleans and numbers (assumption R4). */
+  form_types?: boolean;
+  /** Fields generated on create and shown only in its answer (assumption R6). */
+  once_fields?: string[];
+  /** A query parameter that names an object of the collection by id (`url`), assumption R3. */
+  item_query?: string;
   /**
    * Request headers (lower-case names) whose values a create or update stores as fields, for an API that takes an
    * object's settings in headers (QStash: `upstash-cron` → `cron`, `upstash-schedule-id` → `scheduleId`).
@@ -151,7 +163,7 @@ function authorized(headers: IncomingHttpHeaders, declared: string[]): boolean {
   return Object.entries(headers).some(([name, v]) => carries(name) && typeof v === "string" && v.trim() !== "");
 }
 
-type FullStyle = Required<Omit<RestStyle, "next_path" | "header_fields" | "suffix_field">> & { next_path: string | null };
+type FullStyle = Required<Omit<RestStyle, "next_path" | "item_query" | "header_fields" | "suffix_field">> & Pick<RestStyle, "item_query"> & { next_path: string | null };
 
 /** The style of the collection at `path`, every default filled in. */
 function styleOf(state: RestState, path: string): FullStyle {
@@ -164,7 +176,24 @@ function styleOf(state: RestState, path: string): FullStyle {
     id_field: id,
     id_from: s.id_from ?? id,
     numeric_ids: s.numeric_ids ?? false,
+    form_types: s.form_types ?? false,
+    once_fields: s.once_fields ?? [],
+    ...(s.item_query ? { item_query: s.item_query } : {}),
   };
+}
+
+/** A form body's values typed (assumption R4): `true`/`false` and numerals become booleans and numbers. */
+function typedForm(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(typedForm);
+  if (isRecord(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, typedForm(x)]));
+  if (v === "true" || v === "false") return v === "true";
+  return typeof v === "string" && /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v;
+}
+
+/** The body as the collection at `path` reads it. */
+function bodyFor(state: RestState, path: string, body: unknown, headers: Record<string, string>): unknown {
+  const form = (headers["content-type"] ?? "").startsWith("application/x-www-form-urlencoded");
+  return form && styleOf(state, path).form_types ? typedForm(body) : body;
 }
 
 function isId(v: unknown): v is string | number {
@@ -258,18 +287,28 @@ function collectionAt(state: RestState, path: string): string | undefined {
   return alias !== undefined && state.collections[alias] ? alias : undefined;
 }
 
-function resolve(state: RestState, raw: string): Target {
+function resolve(state: RestState, raw: string, query?: URLSearchParams): Target {
   const path = state.aliases[normPath(raw)] ?? normPath(raw);
   const object = state.objects[path];
   if (object) return { kind: "object", path, object };
-  const at = collectionAt(state, path);
-  if (at) return { kind: "collection", path: at, items: state.collections[at]! };
+  const items = state.collections[path];
+  if (items) return queriedItem(state, path, query) ?? { kind: "collection", path, items };
   const cut = path.lastIndexOf("/");
   const collection = collectionAt(state, path.slice(0, cut)) ?? path.slice(0, cut);
-  const id = decodeURIComponent(path.slice(cut + 1));
+  return itemTarget(state, collection, decodeURIComponent(path.slice(cut + 1)));
+}
+
+function itemTarget(state: RestState, collection: string, id: string): Target {
   const idf = styleOf(state, collection).id_field;
   const index = (state.collections[collection] ?? []).findIndex((i) => String(i[idf]) === id);
   return index >= 0 ? { kind: "item", collection, index, item: state.collections[collection]![index]! } : { kind: "none" };
+}
+
+/** `<collection>?<item_query>=<id>`: the object it names, when the collection's style has `item_query`. */
+function queriedItem(state: RestState, path: string, query: URLSearchParams | undefined): Target | undefined {
+  const param = styleOf(state, path).item_query;
+  const id = param ? query?.get(param) : null;
+  return id === null || id === undefined ? undefined : itemTarget(state, path, id);
 }
 
 const notFound = (): Reply => error(404, "not found");
@@ -310,7 +349,9 @@ function create(core: SimCore, state: RestState, path: string, raw: unknown, hea
   if (clash) return error(409, `already exists: ${String(clash[style.id_field])}`);
   const item: RestItem = { ...structuredClone(body), [style.id_field]: chosen ?? newId(core, state, path) };
   list.push(item);
-  return new Reply(201, envelope(style.item_path, item));
+  // Fields shown once (assumption R6): in this answer only, never stored.
+  const shown = Object.fromEntries(style.once_fields.map((f) => [f, `${f}_sim_${core.nextId("")}`]));
+  return new Reply(201, envelope(style.item_path, { ...item, ...shown }));
 }
 
 function patch(state: RestState, t: Target, body: unknown): Reply {
@@ -329,15 +370,14 @@ function patch(state: RestState, t: Target, body: unknown): Reply {
 
 /** A PUT to `<collection>/<id>` that names no item: an upsert at a client-chosen key creates it (R3). */
 function putNew(state: RestState, raw: string, body: Record<string, unknown>): Reply {
-  const path = raw.length > 1 && raw.endsWith("/") ? raw.slice(0, -1) : raw;
+  const path = normPath(raw);
   const cut = path.lastIndexOf("/");
   const at = cut < 0 ? undefined : collectionAt(state, path.slice(0, cut));
   if (!at) return notFound();
-  const list = state.collections[at]!;
   const style = styleOf(state, at);
   const id = decodeURIComponent(path.slice(cut + 1));
   const item: RestItem = { ...structuredClone(body), [style.id_field]: style.numeric_ids && /^\d+$/.test(id) ? Number(id) : id };
-  list.push(item);
+  state.collections[at]!.push(item);
   return new Reply(200, envelope(style.item_path, item));
 }
 
@@ -364,7 +404,7 @@ function list(core: SimCore, state: RestState, t: Extract<Target, { kind: "colle
 const routes = router<RestState>(
   [
     route("GET", "/*path", ({ core, state, params, url }) => {
-      const t = resolve(state, `/${params.path}`);
+      const t = resolve(state, `/${params.path}`, url.searchParams);
       if (t.kind === "object") return new Reply(200, envelope(state.styles[t.path]?.item_path ?? "", t.object));
       if (t.kind === "item") return new Reply(200, envelope(styleOf(state, t.collection).item_path, t.item));
       if (t.kind === "none") return notFound();
@@ -376,17 +416,24 @@ const routes = router<RestState>(
       if (suffix) return upsertAt(core, state, suffix, body, headers);
       const t = resolve(state, `/${params.path}`);
       if (t.kind === "object") return patch(state, t, body);
-      if (t.kind === "item") return error(405, "cannot POST to an object of a collection");
-      const path = normPath(`/${params.path}`);
-      return create(core, state, t.kind === "collection" ? t.path : (state.aliases[path] ?? path), body, headers);
+      if (t.kind === "item") return patch(state, t, bodyFor(state, t.collection, body, headers));
+      const raw = normPath(`/${params.path}`);
+      const path = t.kind === "collection" ? t.path : (state.aliases[raw] ?? raw);
+      return create(core, state, path, bodyFor(state, path, body, headers), headers);
     }),
 
-    route("PATCH", "/*path", ({ state, params, body }) => patch(state, resolve(state, `/${params.path}`), body)),
+    route("PATCH", "/*path", ({ state, params, body, headers, url }) => {
+      const t = resolve(state, `/${params.path}`, url.searchParams);
+      return patch(state, t, t.kind === "item" ? bodyFor(state, t.collection, body, headers) : body);
+    }),
 
-    route("PUT", "/*path", ({ state, params, body }) => put(state, resolve(state, `/${params.path}`), body, `/${params.path}`)),
+    route("PUT", "/*path", ({ state, params, body, headers, url }) => {
+      const t = resolve(state, `/${params.path}`, url.searchParams);
+      return put(state, t, t.kind === "item" ? bodyFor(state, t.collection, body, headers) : body, `/${params.path}`);
+    }),
 
-    route("DELETE", "/*path", ({ state, params }) => {
-      const t = resolve(state, `/${params.path}`);
+    route("DELETE", "/*path", ({ state, params, url }) => {
+      const t = resolve(state, `/${params.path}`, url.searchParams);
       if (t.kind === "item") {
         state.collections[t.collection]!.splice(t.index, 1);
         return new Reply(200, { id: t.item[styleOf(state, t.collection).id_field], deleted: true });

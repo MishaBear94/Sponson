@@ -210,7 +210,36 @@ Still out of reach for recipes, and recorded on the coverage rows that need them
 every request, a list request sent as a POST, a delete that names the object in its body, and a credential that is
 itself an output of another line (a per-environment server's token).
 
-## Amendment 3 (2026-10-11): headers, URLs in paths, and polling stays out
+## Amendment 3 (2026-10-11): `{ join }`, refused credentials, archiving destroys, and the Stripe webhook
+
+The Stripe webhook endpoint row (P0) uses Amendment 2's once-only outputs for its signing secret. It also needed a URL
+made of the preview URL plus a path, since `{ from: web.preview_url }` is a whole value in a plan; the Stripe catalog
+rows needed a destroy that archives; and a preview must never use a live Stripe key. None of these names a provider
+in the code.
+
+- **`{ join: [<part>, …] }`** is a second template form: literal strings and numbers and `{ param: <name> }` parts,
+  concatenated into one string. It is not interpolation (no parsing of strings, no expressions): a part that is not
+  known yet (a pending reference) makes the whole value that part, so the line shows as pending; a part without a
+  value removes the value. This keeps recipes data, as ADR 0001 wants, while letting a recipe take `url` and `path`
+  as two params.
+- **`api.refuse_credential: { prefixes, unless_env }`** (an API block key, [ADR 0017](/contributing/adr/0017-generic-http-adapter),
+  amendment): a credential starting with one of the prefixes is `PROVIDER_AUTH` before any request, in plan, apply and
+  destroy, unless the named variable is `1` or `true`. A recipe may declare it (Stripe: `sk_live_`, `rk_live_`, opt-out
+  `SPONSON_STRIPE_ALLOW_LIVE`); a plan's block cannot override a recipe's. It complements `production: true`, which
+  asks for approval for an API that is production: this refuses a credential a preview must never use.
+- **`delete.body`** with `method: POST` (`http.resource`): archive instead of delete (Stripe never deletes prices, or
+  products that have prices). The body, literals only, joins the record id as ` body=<canonical JSON>`, so destroy
+  needs only the ledger; record ids without a body are unchanged.
+- **Sim**: a collection style may name objects by a query parameter (`sim.item_query`: `…/redirect_urls?url=…`, as
+  Stytch does; its list at `…/all` is Amendment 2's alias), read form values typed (`form_types`, derived from
+  `encoding: form`), show once-only fields only in the create's answer (`once_fields`, derived from `once` outputs),
+  and take a POST update to an object of a collection. The harness checks an archiving destroy by the archive fields
+  instead of absence.
+
+"Stripe's webhook endpoint was not chosen" (under *First recipes*) is superseded: `stripe.webhook_endpoint` ships with
+the catalog ops `stripe.product`, `stripe.price` and `stripe.coupon`.
+
+## Amendment 4 (2026-10-11): headers, URLs in paths, and polling stays out
 
 The deploy, database and queue recipes (Render, Heroku, Vercel domains, Upstash, Prisma Postgres, QStash) needed:
 

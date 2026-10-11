@@ -3,7 +3,7 @@
  * block (`actx.provider` is `providers.http.<api>`, narrowed by `OpSpec.providerFor`), its credential from the
  * environment variable(s) the block names, and writes with the idempotency each method has.
  */
-import { canonicalJson, type AdapterContext, type Literal } from "@sponson/core";
+import { SponsonError, canonicalJson, type AdapterContext, type Literal } from "@sponson/core";
 import { clientFor, optionalEnv, requireEnv } from "./common.js";
 import { isObject, isProviderError, type ApiClient } from "./http.js";
 import { ADAPTER, at, pointerTokens, parseApi, type ApiConfig } from "./http-adapter-spec.js";
@@ -17,11 +17,27 @@ export interface RequestOptions {
 /** The header value to send and how to send it. Basic credentials are joined and encoded here, never stored. */
 function credential(cfg: ApiConfig, env: NodeJS.ProcessEnv): { token: string; authHeader: "bearer" | "none" | `header:${string}`; masks: string[] } {
   const auth = cfg.auth;
+  const read = (name: string) => refuseCredential(cfg, env, name, requireEnv(env, name, ADAPTER));
   if (auth.kind === "none") return { token: "", authHeader: "none", masks: [] };
-  if (auth.kind === "bearer") return { token: requireEnv(env, auth.env, ADAPTER), authHeader: "bearer", masks: [] };
-  if (auth.kind === "header") return { token: requireEnv(env, auth.env, ADAPTER), authHeader: `header:${auth.header}`, masks: [] };
-  const encoded = Buffer.from(`${requireEnv(env, auth.userEnv, ADAPTER)}:${requireEnv(env, auth.passwordEnv, ADAPTER)}`).toString("base64");
+  if (auth.kind === "bearer") return { token: read(auth.env), authHeader: "bearer", masks: [] };
+  if (auth.kind === "header") return { token: read(auth.env), authHeader: `header:${auth.header}`, masks: [] };
+  const encoded = Buffer.from(`${requireEnv(env, auth.userEnv, ADAPTER)}:${read(auth.passwordEnv)}`).toString("base64");
   return { token: `Basic ${encoded}`, authHeader: "header:authorization", masks: [encoded] };
+}
+
+/**
+ * `value` (of variable `name`), unless the API refuses it (`refuse_credential`): PROVIDER_AUTH naming the variable
+ * and the prefix, never the value, before any request is sent.
+ */
+function refuseCredential(cfg: ApiConfig, env: NodeJS.ProcessEnv, name: string, value: string): string {
+  const prefix = cfg.refuse?.prefixes.find((p) => value.startsWith(p));
+  if (!prefix || /^(1|true)$/i.test(env[cfg.refuse!.unlessEnv] ?? "")) return value;
+  throw new SponsonError(
+    "PROVIDER_AUTH",
+    `${ADAPTER}: ${name} holds a \`${prefix}…\` credential, which this API refuses (refuse_credential): a preview environment must not write with it. ` +
+      `Use a test-mode credential, or set ${cfg.refuse!.unlessEnv}=1 if this run really is meant to use it.`,
+    { adapter: ADAPTER, env: name },
+  );
 }
 
 /**

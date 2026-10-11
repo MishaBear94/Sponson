@@ -103,6 +103,8 @@ function simSeed(r: Recipe, op: RecipeOp, spec: Record<string, unknown>) {
       const p = req?.path?.split("?")[0];
       if (p && /\/\{[A-Za-z_]\w*\}$/.test(p) && fill(p.slice(0, p.lastIndexOf("/")), vars) !== coll) aliases[fill(p.slice(0, p.lastIndexOf("/")), vars)] = coll;
     }
+    // Outputs the provider shows only in the create's answer (a signing secret): the sim generates them there only.
+    const once = Object.values((spec.outputs as Record<string, unknown> | undefined) ?? {}).flatMap((d) => (typeof d === "object" && d !== null && (d as { once?: boolean }).once ? [token((d as { path: string }).path, "")] : []));
     collections[coll] = [];
     styles[coll] = {
       list_path: find?.list_path ?? "",
@@ -113,6 +115,9 @@ function simSeed(r: Recipe, op: RecipeOp, spec: Record<string, unknown>) {
       ...(op.sim?.numeric_ids ? { numeric_ids: true } : {}),
       ...(op.sim?.header_fields ? { header_fields: op.sim.header_fields } : {}),
       ...(op.sim?.suffix_field ? { suffix_field: op.sim.suffix_field } : {}),
+      ...(op.sim?.item_query ? { item_query: op.sim.item_query } : {}),
+      ...(r.api.encoding === "form" ? { form_types: true } : {}),
+      ...(once.length ? { once_fields: once } : {}),
     };
   }
   // A provider that lists at another URL than its objects' collection (`GET /settings/all`): the same collection.
@@ -223,12 +228,20 @@ async function lifecycleInSim(r: Recipe, name: string, op: RecipeOp): Promise<vo
     expect(lineOf(res).status).toBe("destroyed");
     // An op the recipe keeps on destroy (shared history, or no delete API) is left in place, and nothing is sent.
     if (op.kind === "resource" && spec.destroy === "keep") expect({ items: simItems(sim, op, spec).length, writes: res.writes }).toEqual({ items: 1, writes: 0 });
-    else if (op.kind === "resource") expect(simItems(sim, op, spec)).toEqual([]);
+    else if (op.kind === "resource") expectDestroyed(sim, op, spec);
     else expect(sim.state.rest.objects, "destroy left every other item as seeded").toEqual(seededObjects);
   } finally {
     await sim.close();
     await ws.cleanup();
   }
+}
+
+/** Gone, or for a recipe whose destroy archives (a POST with a body), still there with the archive fields set. */
+function expectDestroyed(sim: SimHandle, op: RecipeOp, spec: Record<string, unknown>): void {
+  const archive = (spec.delete as { body?: Record<string, unknown> } | undefined)?.body;
+  if (!archive) return void expect(simItems(sim, op, spec)).toEqual([]);
+  expect(simItems(sim, op, spec).length, "the archived object stays").toBeGreaterThan(0);
+  for (const item of simItems(sim, op, spec)) expect(item, "every object Sponson made is archived").toMatchObject(archive);
 }
 
 async function resourceDrift(run: Run, sim: SimHandle, op: RecipeOp, spec: Record<string, unknown>): Promise<void> {

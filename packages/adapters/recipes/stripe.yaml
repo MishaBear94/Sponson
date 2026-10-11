@@ -1,0 +1,303 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Stripe API v1 recipes: a test-mode webhook endpoint per preview, and the catalog objects (products, prices,
+# coupons) a preview's code expects. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: stripe
+title: Stripe
+category: webhooks
+verified_on: "2026-10-11"
+docs:
+  - title: Authentication
+    url: https://docs.stripe.com/api/authentication
+  - title: API keys
+    url: https://docs.stripe.com/keys
+  - title: Idempotent requests
+    url: https://docs.stripe.com/api/idempotent_requests
+  - title: Create a webhook endpoint
+    url: https://docs.stripe.com/api/webhook_endpoints/create
+  - title: List all webhook endpoints
+    url: https://docs.stripe.com/api/webhook_endpoints/list
+  - title: Update a webhook endpoint
+    url: https://docs.stripe.com/api/webhook_endpoints/update
+  - title: Delete a webhook endpoint
+    url: https://docs.stripe.com/api/webhook_endpoints/delete
+  - title: Webhooks in the Dashboard (endpoint limit)
+    url: https://docs.stripe.com/development/dashboard/webhooks
+  - title: Create a product
+    url: https://docs.stripe.com/api/products/create
+  - title: Retrieve a product
+    url: https://docs.stripe.com/api/products/retrieve
+  - title: Delete a product
+    url: https://docs.stripe.com/api/products/delete
+  - title: Create a price
+    url: https://docs.stripe.com/api/prices/create
+  - title: List all prices
+    url: https://docs.stripe.com/api/prices/list
+  - title: Update a price
+    url: https://docs.stripe.com/api/prices/update
+  - title: Create a coupon
+    url: https://docs.stripe.com/api/coupons/create
+api:
+  base_url: https://api.stripe.com/v1
+  base_url_env: STRIPE_API_URL
+  auth: { bearer_env: STRIPE_SECRET_KEY }
+  encoding: form
+  # A preview must never create live-mode objects (ST2): live keys are refused unless this variable says otherwise.
+  refuse_credential: { prefixes: [sk_live_, rk_live_], unless_env: SPONSON_STRIPE_ALLOW_LIVE }
+assumptions:
+  - id: ST1
+    verified: true
+    text: "The API takes a secret or restricted key as `Authorization: Bearer` (besides Basic), and request bodies form-encoded with bracketed nesting (`metadata[k]=v`, `enabled_events[0]=x`)."
+    source: https://docs.stripe.com/api/authentication
+  - id: ST2
+    verified: true
+    text: "Test-mode keys start with `sk_test_` / `rk_test_`, live-mode keys with `sk_live_` / `rk_live_`; objects of one mode are invisible to the other. The recipe refuses the live prefixes (`refuse_credential`) unless `SPONSON_STRIPE_ALLOW_LIVE=1`."
+    source: https://docs.stripe.com/keys
+  - id: ST3
+    verified: false
+    text: "Organization keys (`sk_org_…`) and platform-managed keys do not carry the mode in their prefix, so they are not refused: use a test-mode secret or restricted key for previews."
+  - id: ST4
+    verified: true
+    text: "Every v1 `POST` accepts an `Idempotency-Key` (up to 255 characters, kept at least 24 hours); a retry with the same key returns the saved answer, and different parameters under one key are an error."
+    source: https://docs.stripe.com/api/idempotent_requests
+  - id: ST5
+    verified: true
+    text: "`POST /v1/webhook_endpoints` takes `url`, `enabled_events` (`['*']` for all), `description`, `metadata` and `api_version`, and answers the endpoint with its signing `secret` populated."
+    source: https://docs.stripe.com/api/webhook_endpoints/create
+  - id: ST6
+    verified: true
+    text: "`GET /v1/webhook_endpoints` (`limit` 1–100) answers `{ data: [...], has_more }` whose endpoints carry `url`, `enabled_events`, `description` and `metadata` but no `secret`: the secret exists only in the create's answer, hence the `once` output."
+    source: https://docs.stripe.com/api/webhook_endpoints/list
+  - id: ST7
+    verified: true
+    text: "An account has at most 16 webhook endpoints, so one list page of 100 holds them all, and at most 16 previews (minus the account's own endpoints) can have one at a time."
+    source: https://docs.stripe.com/development/dashboard/webhooks
+  - id: ST8
+    verified: true
+    text: "`POST /v1/webhook_endpoints/{id}` updates `url`, `enabled_events`, `description`, `metadata` and `disabled` in place (the secret is not rotated); `DELETE` on the same path removes the endpoint."
+    source: https://docs.stripe.com/api/webhook_endpoints/update
+  - id: ST9
+    verified: false
+    text: "The API returns `url`, `enabled_events` and `description` as they were written, `enabled_events` in the order sent, so an unchanged endpoint hashes the same on every plan."
+  - id: ST10
+    verified: true
+    text: "`POST /v1/products` takes a client-chosen `id` (unique among the account's products), `name`, `description` and `active`; `GET /v1/products/{id}` retrieves it; `POST /v1/products/{id}` updates it."
+    source: https://docs.stripe.com/api/products/create
+  - id: ST11
+    verified: true
+    text: "A product can be deleted only while it has no prices, and prices are never deleted, so the recipe archives a product (`active: false`) instead of deleting it."
+    source: https://docs.stripe.com/api/products/delete
+  - id: ST12
+    verified: false
+    text: "An archived product is still returned by `GET /v1/products/{id}`, and its id stays taken: re-applying a destroyed scope finds it and reactivates it as an adopted object, which a later destroy leaves active."
+  - id: ST13
+    verified: true
+    text: "`POST /v1/prices` takes `product`, `currency`, `unit_amount`, `recurring[interval]`, `nickname`, `lookup_key` and `transfer_lookup_key` (which moves the lookup key from the price holding it to the new one)."
+    source: https://docs.stripe.com/api/prices/create
+  - id: ST14
+    verified: true
+    text: "`GET /v1/prices` lists active prices by default, filters by up to 10 `lookup_keys` and by `active`, and answers `{ data: [...] }`."
+    source: https://docs.stripe.com/api/prices/list
+  - id: ST15
+    verified: true
+    text: "A price's amount, currency and interval cannot change after creation; `POST /v1/prices/{id}` updates `active`, `nickname`, `lookup_key` and `metadata`. There is no delete: the recipe archives (`active: false`)."
+    source: https://docs.stripe.com/api/prices/update
+  - id: ST16
+    verified: true
+    text: "`POST /v1/coupons` takes a client-chosen `id`, `name`, `percent_off` or `amount_off` with `currency`, `duration` (`once`, `repeating`, `forever`) and `duration_in_months`."
+    source: https://docs.stripe.com/api/coupons/create
+  - id: ST17
+    verified: false
+    text: "`GET /v1/coupons/{id}` retrieves a coupon, `POST /v1/coupons/{id}` updates its `name` and `metadata` only (the discount is fixed), and `DELETE /v1/coupons/{id}` deletes it, after which its id may be used again."
+    source: https://docs.stripe.com/api/coupons/create
+  - id: ST18
+    verified: false
+    text: "Stripe must reach the endpoint's URL over public HTTPS: a preview behind deployment protection (Vercel Authentication) receives no events unless it lets Stripe's requests through."
+ops:
+  webhook_endpoint:
+    kind: resource
+    title: Webhook endpoint
+    summary: "A test-mode webhook endpoint that sends the preview's events to its own URL, `url` + `path` (usually `{ from: web.preview_url }`). Identified by `name` in its metadata, so a new preview URL updates the endpoint in place. Its signing `secret` exists only in the answer that creates the endpoint: it is a once-only output, passed in the same run to the line that writes it (`STRIPE_WEBHOOK_SECRET` in a `vercel.env` or `netlify.env` line); later runs keep what that line holds, and `apply --recreate <line>` rotates it. Writing the secret rebuilds the preview, and a preview URL output follows the newest deploy, so the next run moves the endpoint to the rebuilt deploy's URL (in place: the secret is kept); a URL that does not change per deploy (`https://deploy-preview-${ctx.pr.number}--<site>.netlify.app`, a custom preview domain) avoids that update. A console edit of its URL, events or description is drift."
+    covers: [stripe-webhook]
+    params:
+      name:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9_.:/-]{1,200}$"
+        description: "The endpoint's identity, kept in its metadata (`sponson_endpoint`): unique per preview, such as `preview-${ctx.scope}`."
+        example: "preview-${ctx.scope}"
+      url:
+        type: string
+        required: true
+        pattern: "^https://\\S*[^/]$"
+        description: "The preview's base URL, without a trailing slash: usually `{ from: <vercel.env or netlify.env line>.preview_url }`."
+        example: https://pr-42.preview.example.com
+      path:
+        type: string
+        default: /api/webhooks/stripe
+        pattern: "^/\\S*$"
+        description: The path of the app's webhook handler, appended to `url`.
+      enabled_events:
+        type: list
+        default: ["*"]
+        description: "The event types sent to the endpoint (`['*']`: all that need no explicit selection)."
+        example: [checkout.session.completed, customer.subscription.updated]
+      description:
+        type: string
+        description: A note shown in the Dashboard.
+        example: Preview webhook managed by Sponson
+      api_version:
+        type: string
+        description: The Stripe API version events are rendered with (the account's default when left out); sent on create only.
+    http:
+      find:
+        path: /webhook_endpoints?limit=100
+        list_path: /data
+        match: { /metadata/sponson_endpoint: { param: name } }
+      create:
+        path: /webhook_endpoints
+        idempotency_key: true
+        body: { api_version: { param: api_version } }
+      update: { method: POST, path: "/webhook_endpoints/{id}" }
+      delete: { path: "/webhook_endpoints/{id}" }
+      fields:
+        url: { join: [{ param: url }, { param: path }] }
+        enabled_events: { param: enabled_events }
+        description: { param: description }
+      outputs:
+        secret: { path: /secret, sensitive: true, once: true }
+    live:
+      params: { url: SPONSON_LIVE_STRIPE_WEBHOOK_URL }
+  product:
+    kind: resource
+    title: Product
+    summary: "A test-mode product with an id of the plan's choosing, such as `pro-pr-42`, for the prices a preview sells. Destroy archives it (`active: false`): Stripe never deletes a product that has prices. A console edit of its name, description or active flag is drift."
+    covers: [stripe-test-objects]
+    params:
+      product_id:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9_-]{1,100}$"
+        description: The product's id, unique in the account, such as `pro-${ctx.scope}`.
+        example: "pro-${ctx.scope}"
+      name:
+        type: string
+        required: true
+        description: The product's name, shown to customers.
+        example: Pro (preview)
+      description:
+        type: string
+        description: The product's description, shown to customers.
+    http:
+      read: { path: "/products/{product_id}" }
+      create: { path: /products, idempotency_key: true, body: { id: { param: product_id } } }
+      update: { method: POST }
+      delete: { method: POST, body: { active: false } }
+      fields:
+        name: { param: name }
+        description: { param: description }
+        active: true
+  price:
+    kind: resource
+    title: Price
+    summary: "A test-mode price found by its lookup key (`lookup`, such as `pro-monthly-pr-42`, which the preview's code looks the price up by), product, currency, amount and interval. Amount, currency and interval cannot change on a Stripe price, so changing them in the plan makes a new price that takes over the lookup key, and the old one stays until the scope is destroyed. Destroy archives it (`active: false`): Stripe never deletes a price. A console edit of its nickname is drift."
+    covers: [stripe-test-objects]
+    params:
+      lookup:
+        type: string
+        required: true
+        pattern: "^\\S{1,200}$"
+        description: "The price's `lookup_key`: what the preview's code looks it up by, unique among active prices. (Named `lookup` because a plan key ending in `_key` must hold a secret reference.)"
+        example: "pro-monthly-${ctx.scope}"
+      product:
+        type: string
+        required: true
+        description: "The product's id: usually `{ from: <stripe.product line>.id }`."
+        example: pro-pr-42
+      currency:
+        type: string
+        required: true
+        pattern: "^[a-z]{3}$"
+        description: Three-letter ISO currency code, lower-case.
+        example: usd
+      unit_amount:
+        type: integer
+        required: true
+        description: The amount in the currency's smallest unit (1500 is 15.00 USD).
+        example: 1500
+      interval:
+        type: string
+        enum: [day, week, month, year]
+        description: The billing interval of a recurring price; left out, the price is one-time.
+        example: month
+      nickname:
+        type: string
+        description: A note on the price, hidden from customers.
+        example: Pro monthly (preview)
+    http:
+      find:
+        path: "/prices?lookup_keys[]={lookup}&active=true&limit=10"
+        list_path: /data
+        match:
+          lookup_key: { param: lookup }
+          active: true
+          product: { param: product }
+          currency: { param: currency }
+          unit_amount: { param: unit_amount }
+          /recurring/interval: { param: interval }
+      create: { path: /prices, idempotency_key: true, body: { transfer_lookup_key: true } }
+      update: { method: POST, path: "/prices/{id}" }
+      delete: { method: POST, path: "/prices/{id}", body: { active: false } }
+      fields:
+        nickname: { param: nickname }
+    live:
+      params: { product: SPONSON_LIVE_STRIPE_PRODUCT }
+  coupon:
+    kind: resource
+    title: Coupon
+    summary: "A test-mode coupon with an id of the plan's choosing, such as `preview-pr-42`, for the discount codes a preview accepts. Its discount (percent or amount, duration) is set on create and fixed after; give the line a new `coupon_id` to change it. Destroy deletes it. A console edit of its name is drift."
+    covers: [stripe-test-objects]
+    params:
+      coupon_id:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9_-]{1,100}$"
+        description: The coupon's id (the code applied to a customer), unique in the account.
+        example: "preview-${ctx.scope}"
+      percent_off:
+        type: number
+        description: The discount in percent (0–100); or set `amount_off` and `currency`.
+        example: 25
+      amount_off:
+        type: integer
+        description: The discount in the currency's smallest unit, with `currency`.
+      currency:
+        type: string
+        pattern: "^[a-z]{3}$"
+        description: The currency of `amount_off`.
+      duration:
+        type: string
+        enum: [once, repeating, forever]
+        default: once
+        description: How long the discount applies to a subscription.
+      duration_in_months:
+        type: integer
+        description: "For `duration: repeating`, the number of months."
+      name:
+        type: string
+        description: The name shown to customers (the id when left out).
+        example: Preview discount
+    http:
+      read: { path: "/coupons/{coupon_id}" }
+      create:
+        path: /coupons
+        idempotency_key: true
+        body:
+          id: { param: coupon_id }
+          percent_off: { param: percent_off }
+          amount_off: { param: amount_off }
+          currency: { param: currency }
+          duration: { param: duration }
+          duration_in_months: { param: duration_in_months }
+      update: { method: POST }
+      fields:
+        name: { param: name }
