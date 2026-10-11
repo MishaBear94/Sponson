@@ -20,7 +20,7 @@ import { ShapeError, isObject, isProviderError, obj, type ApiClient } from "./ht
 
 const ADAPTER = "cloudflare";
 /** The environment Cloudflare reads; declared once, used by the code below and by the generated docs (`about`). */
-const ABOUT = { credentialEnv: "CLOUDFLARE_API_TOKEN", baseUrlEnv: "CLOUDFLARE_API_URL" } as const;
+const ABOUT = { credentialEnv: "CLOUDFLARE_API_TOKEN", baseUrlEnv: "CLOUDFLARE_API_URL", title: "Cloudflare Pages", category: "deploy", detect: { deps: ["wrangler", "@cloudflare/next-on-pages"], env: ["CLOUDFLARE_*"], files: ["wrangler.json", "wrangler.jsonc", "wrangler.toml"] } } as const;
 
 /** Cloudflare's API base URL (CF1). `CLOUDFLARE_API_URL` overrides it; tests and scenarios point that at the sim. */
 export const CLOUDFLARE_DEFAULT_API_URL = "https://api.cloudflare.com/client/v4";

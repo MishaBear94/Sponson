@@ -13,7 +13,7 @@ const ADAPTER = "planetscale";
  * The environment PlanetScale reads; declared once, used by the code below and by the generated docs. A service
  * token is two values, sent as `Authorization: <id>:<token>` (PS1).
  */
-const ABOUT = { credentialEnv: "PLANETSCALE_SERVICE_TOKEN", extraCredentialEnv: ["PLANETSCALE_SERVICE_TOKEN_ID"], baseUrlEnv: "PLANETSCALE_API_URL" } as const;
+const ABOUT = { credentialEnv: "PLANETSCALE_SERVICE_TOKEN", extraCredentialEnv: ["PLANETSCALE_SERVICE_TOKEN_ID"], baseUrlEnv: "PLANETSCALE_API_URL", title: "PlanetScale", category: "databases", detect: { deps: ["@planetscale/"], env: ["PLANETSCALE_*"], dbHosts: [".psdb.cloud"] } } as const;
 
 /** PlanetScale's API base URL; `PLANETSCALE_API_URL` overrides it (the sim and tests use that). */
 export const PLANETSCALE_DEFAULT_API_URL = "https://api.planetscale.com/v1";

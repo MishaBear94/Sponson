@@ -18,6 +18,13 @@ api:
   base_url: https://api.fly.io/graphql
   base_url_env: FLY_API_URL
   auth: { bearer_env: FLY_API_TOKEN }
+detect:
+  env: ["FLY_*"]
+  files: [fly.toml]
+  starter:
+    - op: secret
+  where:
+    app: "the preview's Fly app: `app` in fly.toml, or the app per pull request a `fly_machines.app` line creates"
 assumptions:
   - id: FS1
     verified: true

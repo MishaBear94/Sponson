@@ -34,7 +34,8 @@ first, then the adapter.
 Every adapter is one file, one sim routes file and one scenario; `pnpm new:adapter <name>` generates all three
 and registers them. The checklist is in CONTRIBUTING.md.
 
-[docs/coverage.md](docs/coverage.md) measures which providers' per-environment state is covered today and ranks what to build next.
+[docs/coverage.md](docs/coverage.md) measures which providers' per-environment state is covered today and ranks what to build next;
+[docs/providers.md](docs/providers.md) lists what is supported (generated, so this file keeps no list of its own).
 
 Many rows need no adapter at all: the generic `http` adapter ([ADR 0017](docs/adr/0017-generic-http-adapter.md),
 [plan format](docs/plan-format.md#the-generic-http-adapter)) manages plain CRUD objects and list entries of any JSON
@@ -46,11 +47,8 @@ polling until ready, an OAuth2 client-credentials token, and pagination by page 
 | Item | Notes | Label |
 |------|-------|-------|
 | Feature flags: LaunchDarkly rules — serve a variation to contexts whose `url` matches (an `addRule` clause), beside the individual targets `launchdarkly.flag_target` manages ([#15](https://github.com/MishaBear94/Sponson/issues/15)) | Rules are ordered and have no client-chosen identity; needs a rule `ref` or description to find ours | adapter |
-| Feature flags: a second provider (Statsig, Unleash, PostHog or GrowthBook) | Reuse `launchdarkly.flag_target`'s shape: key `target:<flag>:<context kind>:<key>` under a provider block naming the project and environment; the hash covers the variation | adapter |
-| Identity callbacks beyond Clerk and Supabase Auth: Auth0 (allowed callback URLs on an application) ([#16](https://github.com/MishaBear94/Sponson/issues/16)) | Small, close to `clerk.ts` | adapter, **good first issue** |
 | PlanetScale: deploy requests on merge, and PlanetScale Postgres (roles instead of passwords) | `packages/adapters/src/planetscale.ts`; a password-like credential is a [once-only output](docs/adr/0018-once-only-outputs.md) | adapter |
 | Supabase follow-ups: a branch's API keys (`GET /v1/projects/{ref}/api-keys`) and pooler connection string (`/config/database/pooler`, IPv4) as outputs; `git_branch` and `with_data` on create | `supabase.branch` outputs only the direct (IPv6) connection string and the API URL today | adapter, **good first issue** |
-| Deploy-target env vars: Railway, Fly.io secrets | Close to `vercel.ts`'s and `netlify.ts`'s `env` ops, without the deploy barrier at first | adapter |
 | Cloudflare, after `pages_env`: Workers secrets per script, a Pages deployment op (redeploy after a variable write, and the branch alias URL from the deployment's `aliases` as an output), DNS records for preview hostnames | Pages variables shipped as `cloudflare.pages_env`; the alias URL is not computed from the branch name because Cloudflare does not document how long names are shortened | adapter |
 
 ## 3. More secret sources

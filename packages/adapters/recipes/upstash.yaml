@@ -26,6 +26,12 @@ api:
   base_url: https://api.upstash.com/v2
   base_url_env: UPSTASH_API_URL
   auth: { basic: { user_env: UPSTASH_EMAIL, password_env: UPSTASH_API_KEY } }
+detect:
+  deps: ["@upstash/redis"]
+  env: ["UPSTASH_REDIS_*"]
+  starter:
+    - op: redis_database
+      values: { name: "app-${ctx.scope}" }
 assumptions:
   - id: UR1
     verified: true

@@ -1,18 +1,25 @@
 /**
  * Stack detection for `sponson init`: what a repository uses, read from its files alone. No network, no
- * credentials, no command spawned. Everything here is a pure function over a `RepoReader`, so the unit tests
- * feed it in-memory fixtures.
+ * credentials, no command spawned. Everything here is a pure function over a `RepoReader` and the list of
+ * detectable providers, so the unit tests feed it in-memory fixtures.
+ *
+ * Which providers exist and what they are detected by is data, not code here: every first-class adapter declares
+ * it in its `about.detect`, every recipe in its file's `detect` block (`detectableProviders` in @sponson/adapters).
+ * Adding either makes `init` detect the provider with no change to this file. Frameworks and ORMs, which name
+ * variables rather than being managed, are the only rules kept here.
  *
  * Secret values never leave this module, and most are never even looked at: from `.env*` files only variable
- * names are kept. The one exception is a database URL, whose host is classified against known provider domains
- * (`*.neon.tech`, `*.supabase.co`, …) inside `dbHostProvider`; the URL itself, its credentials and the host are
- * dropped there and only the provider's id comes out. Ids that are not secrets (`.vercel/project.json`, `.neon`,
- * `supabase/.temp/project-ref`, `.netlify/state.json`, the `name` and `account_id` of a Wrangler configuration,
- * `VERCEL_PROJECT_ID` / `VERCEL_ORG_ID` / `NEON_PROJECT_ID` / `NETLIFY_SITE_ID` / `CLOUDFLARE_ACCOUNT_ID` in the
- * process environment) are read as values.
+ * names are kept. The one exception is a database URL, whose host is classified against the providers' declared
+ * host suffixes (`.neon.tech`, `.supabase.co`, …) inside `dbHostProvider`; the URL itself, its credentials and the
+ * host are dropped there and only the provider's id comes out. Ids that are not secrets (`.vercel/project.json`,
+ * `.neon`, `supabase/.temp/project-ref`, `.netlify/state.json`, the `name` and `account_id` of a Wrangler
+ * configuration, `VERCEL_PROJECT_ID` / `VERCEL_ORG_ID` / `NEON_PROJECT_ID` / `NETLIFY_SITE_ID` / `CLOUDFLARE_ACCOUNT_ID`
+ * in the process environment) are read as values.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { DetectableProvider, Recipe } from "@sponson/adapters";
+import type { ProviderDetect } from "@sponson/core";
 
 /** Reads a file of the repository by relative path; `null` when it does not exist or cannot be read. */
 export interface RepoReader {
@@ -24,6 +31,12 @@ export function fsReader(cwd: string): RepoReader {
   return { read: (path) => readFile(join(cwd, path), "utf8").catch(() => null) };
 }
 
+/** Every built-in adapter and shipped recipe that declares how to detect its provider. */
+export async function builtinProviders(): Promise<DetectableProvider[]> {
+  const adapters = await import("@sponson/adapters");
+  return adapters.detectableProviders(adapters.createRegistry());
+}
+
 export type FindingKind = "provider" | "framework" | "orm" | "service";
 
 /** One thing the repository uses, and why Sponson thinks so (file names, dependency and variable names only). */
@@ -32,6 +45,8 @@ export interface Finding {
   name: string;
   kind: FindingKind;
   evidence: string[];
+  /** For a provider: managed by a first-class adapter (`adapter`) or by recipes of the http adapter (`recipe`). */
+  via?: "adapter" | "recipe";
 }
 
 /** Something detected that no built-in adapter manages yet, with where to follow or ask for it. */
@@ -40,10 +55,17 @@ export interface UnsupportedFinding extends Finding {
 }
 
 export interface StackDetection {
-  /** What Sponson can use, in a fixed order: providers (vercel, neon, planetscale, clerk, launchdarkly, supabase, netlify), then frameworks, then ORMs. */
+  /**
+   * What Sponson can use, in a fixed order: providers by category (deploy targets, databases, auth, flags, …), then
+   * frameworks, then ORMs.
+   */
   found: Finding[];
-  /** Detected but not managed by any built-in adapter. Never silently dropped. */
+  /** Detected but not managed by any built-in adapter or recipe. Never silently dropped. */
   unsupported: UnsupportedFinding[];
+  /** The recipes of the providers found `via: "recipe"`, in the order of `found`. */
+  recipes: Recipe[];
+  /** Each provider found: the variables its credential is read from when Sponson runs. */
+  credentials: Record<string, string[]>;
   ids: {
     vercelProject?: string;
     vercelTeam?: string;
@@ -82,13 +104,24 @@ export interface StackDetection {
 /** `.env*` files whose variable names (never values) are read. Examples first: they list what the app needs. */
 export const ENV_FILES = [".env.example", ".env.sample", ".env.template", ".env.local", ".env", ".env.development", ".env.development.local"];
 
-/** Files whose mere presence is a signal. */
-const MARKER_FILES = [
-  "vercel.json", ".vercel/project.json", ".neon", "supabase/config.toml", "supabase/.temp/project-ref", "netlify.toml", ".netlify/state.json",
-  "wrangler.toml", "wrangler.json", "wrangler.jsonc", "fly.toml", "railway.json", "railway.toml", "firebase.json",
-  "sentry.client.config.ts", "sentry.client.config.js", "sentry.server.config.ts", "sentry.server.config.js",
-  "prisma/schema.prisma", "schema.prisma", "drizzle.config.ts", "drizzle.config.js", "drizzle.config.mjs", "drizzle.config.cjs",
-];
+/** Wrangler's configuration files, in the order Wrangler prefers them. */
+const WRANGLER_FILES = ["wrangler.json", "wrangler.jsonc", "wrangler.toml"];
+const PRISMA_SCHEMAS = ["prisma/schema.prisma", "schema.prisma"];
+const DRIZZLE_CONFIGS = ["drizzle.config.ts", "drizzle.config.js", "drizzle.config.mjs", "drizzle.config.cjs"];
+
+/** Files read for their content (ids, the database variable), besides the ones providers name as signals. */
+const ID_FILES = ["package.json", "vercel.json", ".vercel/project.json", ".neon", "supabase/.temp/project-ref", ".netlify/state.json", ...WRANGLER_FILES, ...PRISMA_SCHEMAS, ...DRIZZLE_CONFIGS];
+
+/** A database URL host suffix and the provider it belongs to. */
+export interface HostRule {
+  provider: string;
+  suffix: string;
+}
+
+/** The database URL hosts the providers declare (`detect.dbHosts`). */
+export function hostRules(providers: DetectableProvider[]): HostRule[] {
+  return providers.flatMap((p) => (p.detect.dbHosts ?? []).map((suffix) => ({ provider: p.id, suffix })));
+}
 
 interface Signals {
   deps: Set<string>;
@@ -99,23 +132,30 @@ interface Signals {
   files: Map<string, string>;
 }
 
-async function gatherSignals(reader: RepoReader): Promise<Signals> {
+async function gatherSignals(reader: RepoReader, providers: DetectableProvider[]): Promise<Signals> {
   const files = new Map<string, string>();
-  for (const f of [...MARKER_FILES, "package.json"]) {
+  const markers = new Set([...ID_FILES, ...providers.flatMap((p) => p.detect.files ?? []), ...UNSUPPORTED.flatMap((r) => r.files ?? [])]);
+  for (const f of markers) {
     const text = await reader.read(f);
     if (text !== null) files.set(f, text);
   }
+  const hosts = hostRules(providers);
   const envNames = new Map<string, string[]>();
   const dbHosts = new Map<string, string[]>();
   for (const f of ENV_FILES) {
     const text = await reader.read(f);
     if (text === null) continue;
-    for (const { name, provider } of scanEnvFile(text)) {
+    for (const { name, provider } of scanEnvFile(text, hosts)) {
       envNames.set(name, [...(envNames.get(name) ?? []), f]);
-      if (provider) dbHosts.set(provider, [...(dbHosts.get(provider) ?? []), `${name} in ${f} points at ${HOST_RULES.find((h) => h.provider === provider)!.label}`]);
+      if (provider) dbHosts.set(provider, [...(dbHosts.get(provider) ?? []), `${name} in ${f} points at ${hostLabel(hosts, provider)}`]);
     }
   }
   return { deps: dependencyNames(files.get("package.json")), envNames, dbHosts, files };
+}
+
+/** `*.neon.tech`: the provider's first declared host suffix. */
+function hostLabel(hosts: HostRule[], provider: string): string {
+  return `*${hosts.find((h) => h.provider === provider)!.suffix}`;
 }
 
 function dependencyNames(pkg: string | undefined): Set<string> {
@@ -133,106 +173,102 @@ function dependencyNames(pkg: string | undefined): Set<string> {
 }
 
 /**
- * The variables an `.env` file declares: their names, and for a database URL the provider its host belongs to.
- * The value is never returned.
+ * The variables an `.env` file declares: their names, and for a database URL the provider its host belongs to
+ * (by `hosts`). The value is never returned.
  */
-export function scanEnvFile(text: string): Array<{ name: string; provider?: string }> {
+export function scanEnvFile(text: string, hosts: HostRule[]): Array<{ name: string; provider?: string }> {
   const out: Array<{ name: string; provider?: string }> = [];
   for (const line of text.split(/\r?\n/)) {
     const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/.exec(line);
     if (!m) continue;
-    const provider = dbHostProvider(m[2]!);
+    const provider = dbHostProvider(m[2]!, hosts);
     out.push(provider ? { name: m[1]!, provider } : { name: m[1]! });
   }
   return out;
 }
 
-const HOST_RULES = [
-  { provider: "neon", suffix: /\.neon\.tech$/, label: "*.neon.tech" },
-  { provider: "supabase", suffix: /\.supabase\.(co|com)$/, label: "*.supabase.co" },
-  { provider: "planetscale", suffix: /\.psdb\.cloud$/, label: "*.psdb.cloud" },
-  { provider: "turso", suffix: /\.turso\.io$/, label: "*.turso.io" },
-];
-
 /** Which provider a database URL's host belongs to. Only the provider id leaves; the URL is dropped here. */
-function dbHostProvider(raw: string): string | undefined {
+function dbHostProvider(raw: string, hosts: HostRule[]): string | undefined {
   const value = raw.trim().replace(/^(['"])(.*)\1$/, "$2");
-  if (!/^(postgres(ql)?|mysql|libsql):\/\//i.test(value)) return undefined;
+  if (!/^(postgres(ql)?|mysql|libsql|mongodb(\+srv)?|prisma\+postgres):\/\//i.test(value)) return undefined;
   let host: string;
   try {
     host = new URL(value).hostname.toLowerCase();
   } catch {
     return undefined;
   }
-  return HOST_RULES.find((h) => h.suffix.test(host))?.provider;
+  return hosts.find((h) => host.endsWith(h.suffix))?.provider;
 }
 
 // ---------------------------------------------------------------------------
-// Rules: one table row per thing Sponson recognises
+// Rules
 // ---------------------------------------------------------------------------
 
-const ROADMAP_ADAPTERS = "ROADMAP.md, section 2 (https://github.com/MishaBear94/Sponson/blob/main/ROADMAP.md#2-more-adapters)";
 const NEW_ISSUE = "open or upvote an issue: https://github.com/MishaBear94/Sponson/issues";
 
-interface Rule {
+/** A framework, an ORM or an unsupported service: the rules that are not providers' own `detect`. */
+interface Rule extends ProviderDetect {
   id: string;
   name: string;
   kind: FindingKind;
-  /** Dependency names (exact) or prefixes ending in `/`. */
-  deps?: string[];
-  /** Variable names in `.env*` files. */
-  env?: RegExp;
-  files?: string[];
-  /** For unsupported services: where to follow it. Absent means Sponson supports it. */
+  /** For unsupported services: where to follow it. */
   pointer?: string;
 }
 
-/** Wrangler's configuration files, in the order Wrangler prefers them. */
-const WRANGLER_FILES = ["wrangler.json", "wrangler.jsonc", "wrangler.toml"];
-
-/** What Sponson manages (or uses to name variables). Order is the order of the summary. */
-const SUPPORTED: Rule[] = [
-  { id: "vercel", name: "Vercel", kind: "provider", deps: ["vercel", "@vercel/"], env: /^VERCEL_/, files: ["vercel.json", ".vercel/project.json"] },
-  { id: "neon", name: "Neon", kind: "provider", deps: ["@neondatabase/", "@prisma/adapter-neon", "neonctl"], env: /^NEON_/, files: [".neon"] },
-  { id: "planetscale", name: "PlanetScale", kind: "provider", deps: ["@planetscale/"], env: /^PLANETSCALE_/ },
-  { id: "clerk", name: "Clerk", kind: "provider", deps: ["@clerk/"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_|NUXT_PUBLIC_)?CLERK_/ },
-  { id: "launchdarkly", name: "LaunchDarkly", kind: "provider", deps: ["@launchdarkly/", "launchdarkly-node-server-sdk", "launchdarkly-js-client-sdk", "launchdarkly-react-client-sdk"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_)?LAUNCHDARKLY_/ },
-  { id: "supabase", name: "Supabase", kind: "provider", deps: ["@supabase/"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_|NUXT_PUBLIC_)?SUPABASE_/, files: ["supabase/config.toml", "supabase/.temp/project-ref"] },
-  { id: "netlify", name: "Netlify", kind: "provider", deps: ["@netlify/", "netlify-cli"], env: /^NETLIFY_/, files: ["netlify.toml", ".netlify/state.json"] },
-  { id: "cloudflare", name: "Cloudflare Pages", kind: "provider", deps: ["wrangler", "@cloudflare/next-on-pages"], env: /^CLOUDFLARE_/, files: WRANGLER_FILES },
+/** Frameworks (the public variable prefix) and ORMs (the database variable). Order is the order of the summary. */
+const STACK_RULES: Rule[] = [
   { id: "next", name: "Next.js", kind: "framework", deps: ["next"] },
   { id: "remix", name: "Remix", kind: "framework", deps: ["@remix-run/"] },
   { id: "sveltekit", name: "SvelteKit", kind: "framework", deps: ["@sveltejs/kit"] },
   { id: "astro", name: "Astro", kind: "framework", deps: ["astro"] },
   { id: "nuxt", name: "Nuxt", kind: "framework", deps: ["nuxt"] },
-  { id: "prisma", name: "Prisma", kind: "orm", deps: ["prisma", "@prisma/client"], files: ["prisma/schema.prisma", "schema.prisma"] },
-  { id: "drizzle", name: "Drizzle", kind: "orm", deps: ["drizzle-orm", "drizzle-kit"], files: ["drizzle.config.ts", "drizzle.config.js", "drizzle.config.mjs", "drizzle.config.cjs"] },
+  { id: "prisma", name: "Prisma", kind: "orm", deps: ["prisma", "@prisma/client"], files: PRISMA_SCHEMAS },
+  { id: "drizzle", name: "Drizzle", kind: "orm", deps: ["drizzle-orm", "drizzle-kit"], files: DRIZZLE_CONFIGS },
 ];
 
-/** Detected and reported, but not managed yet. Never silently ignored. */
-const UNSUPPORTED: Rule[] = [
-  { id: "turso", name: "Turso", kind: "service", deps: ["@libsql/client"], env: /^TURSO_/, pointer: NEW_ISSUE },
-  { id: "auth0", name: "Auth0", kind: "service", deps: ["auth0", "@auth0/"], env: /^AUTH0_/, pointer: "allowed callback URLs: issue #16 (https://github.com/MishaBear94/Sponson/issues/16)" },
-  { id: "railway", name: "Railway", kind: "service", env: /^RAILWAY_/, files: ["railway.json", "railway.toml"], pointer: `deploy-target env vars: ${ROADMAP_ADAPTERS}` },
-  { id: "fly", name: "Fly.io", kind: "service", files: ["fly.toml"], env: /^FLY_/, pointer: `deploy-target env vars: ${ROADMAP_ADAPTERS}` },
-  { id: "firebase", name: "Firebase", kind: "service", deps: ["firebase", "firebase-admin"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_)?FIREBASE_/, files: ["firebase.json"], pointer: NEW_ISSUE },
-  { id: "posthog", name: "PostHog", kind: "service", deps: ["posthog-js", "posthog-node"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_)?POSTHOG_/, pointer: `feature flags, a second provider: ${ROADMAP_ADAPTERS}` },
-  { id: "stripe", name: "Stripe", kind: "service", deps: ["stripe", "@stripe/"], env: /^(NEXT_PUBLIC_|PUBLIC_|VITE_)?STRIPE_/, pointer: `${NEW_ISSUE} (its keys can already be passed as \`{ secret: "env://STRIPE_SECRET_KEY" }\`)` },
-  { id: "sentry", name: "Sentry", kind: "service", deps: ["@sentry/"], env: /^(NEXT_PUBLIC_)?SENTRY_/, files: ["sentry.client.config.ts", "sentry.client.config.js", "sentry.server.config.ts", "sentry.server.config.js"], pointer: `${NEW_ISSUE} (its DSN can already be passed as a Vercel variable)` },
+/**
+ * Services with per-environment state that no adapter or recipe manages yet: detected and reported, never silently
+ * ignored. A service gets support by a recipe or an adapter that declares `detect`; then it leaves this list (a test
+ * fails while it is in both).
+ */
+export const UNSUPPORTED: Rule[] = [
+  { id: "mailgun", name: "Mailgun", kind: "service", deps: ["mailgun.js", "mailgun-js"], env: ["MAILGUN_*"], pointer: NEW_ISSUE },
+  { id: "twilio", name: "Twilio", kind: "service", deps: ["twilio"], env: ["TWILIO_*"], pointer: NEW_ISSUE },
 ];
 
-function evidenceFor(rule: Rule, s: Signals): string[] {
+/** The order providers are summarised in, by category; categories not listed come after, in detection order. */
+const CATEGORY_ORDER = ["deploy", "databases", "auth", "flags", "webhooks", "email", "observability", "dns", "cors", "queues", "search-payments"];
+
+/** Prefixes frameworks put in front of a variable the browser may see; a provider's names match behind them. */
+const PUBLIC_PREFIXES = ["NEXT_PUBLIC_", "NUXT_PUBLIC_", "EXPO_PUBLIC_", "PUBLIC_", "VITE_", "REACT_APP_", "GATSBY_"];
+
+/** Whether a variable name matches a `detect.env` entry: exact, or a prefix ending in `*`, behind a public prefix or not. */
+export function envMatches(name: string, patterns: readonly string[]): boolean {
+  const bare = [name, ...PUBLIC_PREFIXES.filter((p) => name.startsWith(p)).map((p) => name.slice(p.length))];
+  return patterns.some((pat) => bare.some((n) => (pat.endsWith("*") ? n.startsWith(pat.slice(0, -1)) : n === pat)));
+}
+
+function depMatches(dep: string, patterns: readonly string[]): boolean {
+  return patterns.some((p) => (p.endsWith("/") ? dep.startsWith(p) : dep === p));
+}
+
+function evidenceFor(id: string, rule: ProviderDetect, s: Signals): string[] {
   const ev: string[] = [];
-  for (const d of s.deps) if (rule.deps?.some((p) => (p.endsWith("/") ? d.startsWith(p) : d === p))) ev.push(`package.json: ${d}`);
+  for (const d of s.deps) if (depMatches(d, rule.deps ?? [])) ev.push(`package.json: ${d}`);
   for (const f of rule.files ?? []) if (s.files.has(f)) ev.push(f);
-  const names = [...s.envNames.keys()].filter((n) => rule.env?.test(n));
+  const names = [...s.envNames.keys()].filter((n) => envMatches(n, rule.env ?? []));
   if (names.length > 0) ev.push(`${names.slice(0, 3).join(", ")}${names.length > 3 ? ", …" : ""} in ${unique(names.flatMap((n) => s.envNames.get(n)!)).join(", ")}`);
-  ev.push(...(s.dbHosts.get(rule.id) ?? []));
+  ev.push(...(s.dbHosts.get(id) ?? []));
   return ev;
 }
 
 function unique<T>(xs: T[]): T[] {
   return [...new Set(xs)];
+}
+
+function categoryRank(category: string): number {
+  const i = CATEGORY_ORDER.indexOf(category);
+  return i < 0 ? CATEGORY_ORDER.length : i;
 }
 
 // ---------------------------------------------------------------------------
@@ -244,26 +280,34 @@ export type IdEnv = Partial<Record<"VERCEL_PROJECT_ID" | "VERCEL_ORG_ID" | "NEON
 
 /**
  * Detect the stack of the repository `reader` reads. `env` is the process environment, from which only the
- * provider id variables of `IdEnv` are read (they win over the files, as `init` always did).
+ * provider id variables of `IdEnv` are read (they win over the files, as `init` always did). `providers` is what
+ * can be detected (default: every built-in adapter and shipped recipe that declares `detect`).
  */
-export async function detectStack(reader: RepoReader, env: IdEnv = {}): Promise<StackDetection> {
-  const s = await gatherSignals(reader);
+export async function detectStack(reader: RepoReader, env: IdEnv = {}, providers?: DetectableProvider[]): Promise<StackDetection> {
+  const known = providers ?? (await builtinProviders());
+  const s = await gatherSignals(reader, known);
   const wrangler = wranglerConfig(s);
   const ids = { ...providerIds(s, env), ...cloudflareIds(wrangler, env) };
-  const found: Finding[] = [];
-  for (const rule of SUPPORTED) {
-    const evidence = [...evidenceFor(rule, s), ...idEnvEvidence(rule.id, env)];
+  const detected = known
+    .map((p, i) => ({ p, i, evidence: [...evidenceFor(p.id, p.detect, s), ...idEnvEvidence(p.id, env)] }))
+    .filter((x) => x.evidence.length > 0)
+    .sort((a, b) => categoryRank(a.p.category) - categoryRank(b.p.category) || a.i - b.i);
+  const found: Finding[] = detected.map(({ p, evidence }) => ({ id: p.id, name: p.title, kind: "provider", evidence, via: p.via }));
+  for (const rule of STACK_RULES) {
+    const evidence = evidenceFor(rule.id, rule, s);
     if (evidence.length > 0) found.push({ id: rule.id, name: rule.name, kind: rule.kind, evidence });
   }
   const unsupported: UnsupportedFinding[] = [];
   for (const rule of UNSUPPORTED) {
-    const evidence = evidenceFor(rule, s);
+    const evidence = evidenceFor(rule.id, rule, s);
     if (evidence.length > 0) unsupported.push({ id: rule.id, name: rule.name, kind: rule.kind, evidence, pointer: rule.pointer! });
   }
   const framework = found.find((f) => f.kind === "framework")?.id;
   return {
     found,
     unsupported,
+    recipes: detected.flatMap(({ p }) => (p.recipe ? [p.recipe] : [])),
+    credentials: Object.fromEntries(detected.map(({ p }) => [p.id, p.credentials])),
     ids,
     ...databaseVar(s),
     publicPrefix: PUBLIC_PREFIX[framework ?? ""] ?? "",
@@ -272,11 +316,11 @@ export async function detectStack(reader: RepoReader, env: IdEnv = {}): Promise<
   };
 }
 
-/** The provider id variable in the environment that is evidence for a rule (it names a project or site). */
+/** The provider id variable in the environment that is evidence for a provider (it names a project or site). */
 const ID_ENV_EVIDENCE: Record<string, keyof IdEnv> = { vercel: "VERCEL_PROJECT_ID", neon: "NEON_PROJECT_ID", netlify: "NETLIFY_SITE_ID" };
 
-function idEnvEvidence(ruleId: string, env: IdEnv): string[] {
-  const name = ID_ENV_EVIDENCE[ruleId];
+function idEnvEvidence(id: string, env: IdEnv): string[] {
+  const name = ID_ENV_EVIDENCE[id];
   return name && env[name] ? [`${name} in the environment`] : [];
 }
 
@@ -391,11 +435,11 @@ function autoDeployOff(text: string | undefined): boolean {
  * `process.env.…_URL` in a Drizzle config), then the names in `.env*` files, then DATABASE_URL.
  */
 function databaseVar(s: Signals): { databaseVar: string; databaseVarFrom?: string } {
-  for (const f of ["prisma/schema.prisma", "schema.prisma"]) {
+  for (const f of PRISMA_SCHEMAS) {
     const m = /\burl\s*=\s*env\(\s*["']([A-Za-z_][A-Za-z0-9_]*)["']\s*\)/.exec(s.files.get(f) ?? "");
     if (m) return { databaseVar: m[1]!, databaseVarFrom: f };
   }
-  for (const f of ["drizzle.config.ts", "drizzle.config.js", "drizzle.config.mjs", "drizzle.config.cjs"]) {
+  for (const f of DRIZZLE_CONFIGS) {
     const m = /process\.env\.([A-Z0-9_]*URL[A-Z0-9_]*)/.exec(s.files.get(f) ?? "");
     if (m) return { databaseVar: m[1]!, databaseVarFrom: f };
   }
@@ -406,7 +450,10 @@ function databaseVar(s: Signals): { databaseVar: string; databaseVarFrom?: strin
   return { databaseVar: "DATABASE_URL" };
 }
 
-/** Whether `id` (vercel, neon, clerk, next, …) was detected. */
-export function has(d: StackDetection, id: string): boolean {
-  return d.found.some((f) => f.id === id);
+/**
+ * Whether `id` (vercel, neon, clerk, next, …) was detected, as a thing of `kind` when given (the Prisma ORM and the
+ * Prisma Postgres recipe share the id `prisma`).
+ */
+export function has(d: StackDetection, id: string, kind?: FindingKind): boolean {
+  return d.found.some((f) => f.id === id && (kind === undefined || f.kind === kind));
 }

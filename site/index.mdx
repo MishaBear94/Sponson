@@ -73,7 +73,7 @@ One release, one plan. Three commands.
 
 | Command | What it does | Writes anything? |
 |---|---|---|
-| `sponson init` | Detects your stack from the repository's files (Vercel, Netlify, Neon, PlanetScale, Supabase, Clerk, LaunchDarkly, the framework and ORM) and writes a plan for it, with the project ids it can find. Run again to adopt resources the plan does not know about. | the plan file only |
+| `sponson init` | Detects your stack from the repository's files (every [supported provider](/reference/providers), the framework and ORM) and writes a plan for it, with the project ids it can find and a `# TODO:` naming where to find each one it cannot. Run again to adopt resources the plan does not know about. | the plan file only |
 | `sponson plan` | Reads live state, prints the diff and any drift. | no |
 | `sponson apply` | Runs the plan in dependency order. Rolls back what this run created if a line fails. Writes a receipt. | yes |
 
@@ -85,3 +85,9 @@ One release, one plan. Three commands.
 - **Production needs a human.** `--env production` without `--approved-by` is refused before any adapter is touched, and so is any run with a line that writes to production (a Vercel `target: production`, a LaunchDarkly environment that is production). The default environment is always `preview`; nothing is inferred from a branch name.
 - **Destroy is symmetric.** `sponson apply --destroy` removes what Sponson created, in reverse order, and never touches resources it merely adopted.
 - **What no API can do is a step for a person.** A [`manual.step`](/reference/plan-format#manual-step) line (a Google OAuth redirect URI for the preview URL) shows its instructions as a todo, holds back the lines that depend on it until someone runs `apply --confirm <line>`, records who confirmed it and when, and asks for its undo on destroy. Agents show the step to a person; they never confirm it.
+
+## Supported providers
+
+Sponson manages per-environment state at **53 providers** in 11 categories, from deploy targets and databases to auth callbacks, feature flags, webhooks and DNS: 14 first-class ops and 57 recipe ops. `sponson init` detects 48 of them from a repository's files and writes their lines.
+
+[docs/providers.md](/reference/providers) lists every one: what Sponson manages there, the op or recipe, the credential, what `init` detects it by and a line to start from.

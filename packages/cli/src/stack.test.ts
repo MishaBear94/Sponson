@@ -8,7 +8,7 @@ import { Ajv2020 } from "ajv/dist/2020.js";
 import { parse as parseYaml } from "yaml";
 import { describe, expect, it } from "vitest";
 import { parsePlan } from "@sponson/core";
-import { detectStack, scanEnvFile, type RepoReader, type StackDetection } from "./stack.js";
+import { builtinProviders, detectStack, hostRules, scanEnvFile, type RepoReader, type StackDetection } from "./stack.js";
 import { composeStarter, credentialsFor } from "./starter.js";
 
 const schema = JSON.parse(await readFile(new URL("../../../schema/release.plan.schema.json", import.meta.url), "utf8")) as Record<string, unknown>;
@@ -133,7 +133,7 @@ describe("detectStack", () => {
     expect(s.assumed).toBe(true);
     expect(s.todos.map((t) => t.path)).toEqual(["providers.vercel.project", "providers.neon.project"]);
     const text = expectValidPlan(d, ["db", "env"]);
-    expect(text).toContain("Nothing Sponson manages (Vercel, Netlify, Cloudflare Pages, Neon, PlanetScale) was detected");
+    expect(text).toContain("No deploy target or database Sponson manages (Vercel, Netlify, Cloudflare Pages, Neon, PlanetScale, Supabase) was detected");
     expect(text).toContain("DATABASE_URL: { from: db.connection_string }");
   });
 
@@ -221,18 +221,27 @@ describe("detectStack", () => {
     expect(text).toContain("Clerk was detected, but a redirect line needs a preview URL");
   });
 
-  it("every unsupported service is reported, never silently ignored", async () => {
+  it("services managed by recipes are detected and get lines; only services nothing manages are reported as not supported", async () => {
     const d = await detectStack(
       repo({
-        "package.json": pkg({ "@auth0/nextjs-auth0": "3", "@launchdarkly/node-server-sdk": "9", "posthog-js": "1", stripe: "16", "@sentry/nextjs": "8", firebase: "10", "@libsql/client": "0.6" }),
+        "package.json": pkg({ "@auth0/nextjs-auth0": "3", "@launchdarkly/node-server-sdk": "9", "posthog-js": "1", stripe: "16", "@sentry/nextjs": "8", firebase: "10", "@libsql/client": "0.6", "mailgun.js": "10", twilio: "5" }),
         "fly.toml": "app = 'x'\n",
         "railway.json": "{}",
       }),
     );
-    expect(unsupportedIds(d)).toEqual(["turso", "auth0", "railway", "fly", "firebase", "posthog", "stripe", "sentry"]);
-    for (const u of d.unsupported) expect(u.pointer, u.id).toMatch(/ROADMAP\.md|issues/);
-    const text = expectValidPlan(d, ["db", "env"]);
+    expect(ids(d)).toEqual(["fly", "railway", "turso", "auth0", "firebase", "launchdarkly", "posthog", "stripe", "sentry"]);
+    expect(d.found.filter((f) => f.via === "recipe").map((f) => f.id)).toEqual(["fly", "railway", "turso", "auth0", "firebase", "posthog", "stripe", "sentry"]);
+    expect(unsupportedIds(d)).toEqual(["mailgun", "twilio"]);
+    for (const u of d.unsupported) expect(u.pointer, u.id).toMatch(/issues/);
+    // Railway and Turso are a deploy target and a database of their own: no Vercel + Neon template beside them.
+    const { text, todos } = composeStarter(d);
+    expect(parsePlan(text).plan.changes).toEqual([]);
+    expect(validate(parseYaml(text)), JSON.stringify(validate.errors)).toBe(true);
     for (const u of d.unsupported) expect(text).toContain(`# Not supported yet, so no line below manages it: ${u.name}`);
+    for (const id of ["fly_secret", "railway_variable", "turso_database_branch", "auth0_callback_url", "firebase_authorized_domain", "posthog_release_condition", "stripe_webhook_endpoint", "sentry_release"]) expect(text).toContain(`  # - id: ${id}\n`);
+    expect(text).not.toContain("adapter: vercel");
+    expect(todos.map((t) => t.path)).toContain("changes.stripe_webhook_endpoint.url");
+    expect(credentialsFor(d)).toEqual(["FLY_API_TOKEN", "RAILWAY_API_TOKEN", "TURSO_API_TOKEN", "AUTH0_CLIENT_ID", "AUTH0_CLIENT_SECRET", "POSTHOG_PERSONAL_API_KEY", "STRIPE_SECRET_KEY", "SENTRY_AUTH_TOKEN"]);
   });
 
   it("Cloudflare Pages: the project name from wrangler.toml, a shared preview-variables line, no Vercel template", async () => {
@@ -284,7 +293,7 @@ describe("detectStack", () => {
 
   it("Netlify + Neon + Clerk: the site id from .netlify/state.json, a branch-context line, the callback on the Deploy Preview URL", async () => {
     const d = await detectStack(repo({ "package.json": pkg({ "@clerk/clerk-js": "5", "@neondatabase/serverless": "1" }), "netlify.toml": "[build]\n", ".netlify/state.json": { siteId: "site-123" } }));
-    expect(ids(d)).toEqual(["neon", "clerk", "netlify"]);
+    expect(ids(d)).toEqual(["netlify", "neon", "clerk"]);
     expect(d.found.find((f) => f.id === "netlify")!.evidence).toEqual(["netlify.toml", ".netlify/state.json"]);
     expect(unsupportedIds(d)).toEqual([]);
     expect(d.ids).toMatchObject({ netlifySite: "site-123", netlifySiteFrom: ".netlify/state.json" });
@@ -362,7 +371,7 @@ describe("detectStack", () => {
 
   it("broken files are no signal rather than a crash", async () => {
     const d = await detectStack(repo({ "package.json": "{ not json", ".vercel/project.json": "[]", "vercel.json": "nope", ".neon": '{"projectId": 3}', ".netlify/state.json": "{" }));
-    expect(ids(d)).toEqual(["vercel", "neon", "netlify"]); // the files exist, but hold no ids
+    expect(ids(d)).toEqual(["vercel", "netlify", "neon"]); // the files exist, but hold no ids
     expect(d.ids).toEqual({});
     expect(d.vercelAutoDeployOff).toBe(false);
   });
@@ -379,7 +388,7 @@ function uncommentFlagLine(text: string): string {
 }
 
 describe("scanEnvFile", () => {
-  it("returns names, and for a database URL only the provider its host belongs to", () => {
+  it("returns names, and for a database URL only the provider its host belongs to", async () => {
     const text = [
       "# a comment",
       `DATABASE_URL="postgresql://u:${SECRET_PASSWORD}@ep-x.eu-central-1.aws.neon.tech/neondb"`,
@@ -390,7 +399,7 @@ describe("scanEnvFile", () => {
       `CLERK_SECRET_KEY=${SECRET_CLERK}`,
       "not a variable",
     ].join("\n");
-    const out = scanEnvFile(text);
+    const out = scanEnvFile(text, hostRules(await builtinProviders()));
     expect(out).toEqual([
       { name: "DATABASE_URL", provider: "neon" },
       { name: "DIRECT_URL", provider: "supabase" },

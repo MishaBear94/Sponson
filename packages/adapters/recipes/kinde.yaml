@@ -21,6 +21,17 @@ api:
       client_secret_env: KINDE_MANAGEMENT_CLIENT_SECRET
       audience: /api
 base_url_example: https://acme.kinde.com/api/v1
+detect:
+  deps: ["@kinde-oss/"]
+  env: ["KINDE_*"]
+  starter:
+    - op: callback_url
+    - op: logout_url
+      preview_url: url
+  where:
+    base_url: "`https://<business>.kinde.com/api/v1`: Kinde → Settings → Details → Domain"
+    app_id: "Kinde → Settings → Applications → your application → Details → Client ID"
+    url: "the exact callback URL the SDK sends on a preview: its URL plus the callback path (a `{ from }` reference cannot carry a path)"
 assumptions:
   - id: KI1
     verified: true

@@ -9,7 +9,7 @@ The code is the hull; the preview database, environment variables and callbacks 
 
 ## When to write a plan line
 
-Any side effect outside the repository that this change needs: a database branch, a variable in a deploy target, an OAuth redirect URL, a flag. If you would otherwise open a provider console or call a provider API, write a line instead. If it lives in the repo, it is not a plan line.
+Any side effect outside the repository that this change needs: a database branch, a variable in a deploy target, an OAuth redirect URL, a flag. If you would otherwise open a provider console or call a provider API, write a line instead. If it lives in the repo, it is not a plan line. Which providers have an op or a recipe, and a line to start from for each: [docs/providers.md](https://github.com/MishaBear94/Sponson/blob/main/docs/providers.md).
 
 ## The file
 
@@ -45,7 +45,7 @@ Dependencies come from `from:` references. Use `depends_on: [id]` only for order
 
 | command | meaning | side effects |
 |---|---|---|
-| `sponson init` | make the plan catch up with reality: write a starter for the stack it detects (`--json` lists it under `detected`, with the `todo` placeholders to fill in), or adopt unmanaged resources (`--adopt <key>`) | appends to the plan file only |
+| `sponson init` | make the plan catch up with reality: write a starter for the stack it detects (`--json` lists it under `detected`, with the `todo` placeholders to fill in; a line still missing a value is written commented out: ask the human for it, fill it in, uncomment), or adopt unmanaged resources (`--adopt <key>`) | appends to the plan file only |
 | `sponson plan` | read live state, print the diff and drift | none |
 | `sponson apply` | make reality catch up with the plan, roll back what this run created on failure, write a receipt | the ones in the file |
 

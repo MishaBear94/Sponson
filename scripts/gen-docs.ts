@@ -10,6 +10,9 @@
  *   docs/recipes.md         entirely, from the recipe files (packages/adapters/recipes/*.yaml)
  *   docs/coverage.md        the blocks coverage-matrix, coverage-secrets and coverage-numbers, from the matrix data
  *                           in docs/coverage.yaml: every table row and every coverage number
+ *   docs/providers.md       entirely: the provider catalog, from docs/coverage.yaml, the recipe files and the registry
+ *                           (scripts/render-providers.ts)
+ *   README.md               the block providers-summary: the catalog's numbers and a link to it
  *
  * These tables are the only place the docs enumerate adapters, ops or secret schemes; everything else (README,
  * SKILL.md, ARCHITECTURE.md, the schema, package descriptions) links here and gives at most one example.
@@ -30,6 +33,7 @@ import { ERROR_CODES, WARNING_CODES, type ErrorCodeSpec } from "../packages/core
 import { loadCoverage } from "./coverage-data.js";
 import { cell, slug } from "./md.js";
 import { renderMatrix, renderNumbers, renderSecretSources } from "./render-coverage.js";
+import { renderProviders, renderProvidersSummary } from "./render-providers.js";
 import { renderRecipes } from "./render-recipes.js";
 
 export { slug };
@@ -182,11 +186,15 @@ export async function generate(): Promise<GeneratedFile[]> {
     const { start, end } = markers(name);
     coverage = withBlock(coverage, start, end, body);
   }
+  const summary = markers("providers-summary");
+  const readme = withBlock(await readFile(join(REPO, "README.md"), "utf8"), summary.start, summary.end, renderProvidersSummary(data));
   return [
     { path: "docs/errors.md", content: renderErrors() },
     { path: planFormat, content: doc },
     { path: "docs/recipes.md", content: renderRecipes() },
     { path: coverageDoc, content: coverage },
+    { path: "docs/providers.md", content: renderProviders(data, REPO) },
+    { path: "README.md", content: readme },
   ];
 }
 

@@ -119,7 +119,48 @@ export interface Recipe {
   api?: Record<string, unknown>;
   /** For a per-account API (no default `base_url`): the base URL the docs' example block and the recipe tests use. */
   base_url_example?: string;
+  /** How `sponson init` detects the provider, and the lines it writes for it (schema/recipe.schema.json, `detect`). */
+  detect?: RecipeDetect;
   ops: Record<string, RecipeOp>;
+}
+
+/** A line `sponson init` writes for a detected recipe provider. */
+export interface RecipeStarter {
+  op: string;
+  /** The param that takes the preview's URL, as a whole value (`{ from: <deploy line>.preview_url }`). */
+  preview_url?: string;
+  /** Values written for these params (usually built from `${ctx.*}`). */
+  values?: Record<string, unknown>;
+}
+
+/** A recipe's `detect` block: the signals of the provider (names and files only), and init's lines for it. */
+export interface RecipeDetect {
+  deps?: string[];
+  env?: string[];
+  files?: string[];
+  db_hosts?: string[];
+  /** Default: one line for the first op. */
+  starter?: RecipeStarter[];
+  /** Where to find a param's value (`base_url` for a per-account API), by param name. */
+  where?: Record<string, string>;
+}
+
+/**
+ * The environment variables a recipe's API block reads its credential from, in the order the block names them.
+ * Empty for a recipe without an API block and for a token a command prints (`az`, `gcloud`: their own login).
+ */
+export function recipeCredentialEnv(recipe: Pick<Recipe, "api">): string[] {
+  const auth = recipe.api?.auth;
+  if (!isObject(auth)) return [];
+  const names = (o: unknown, keys: string[]): string[] => (isObject(o) ? keys.flatMap((k) => (typeof o[k] === "string" ? [o[k]] : [])) : []);
+  if (Array.isArray(auth.headers)) return auth.headers.flatMap((h) => names(h, ["value_env"]));
+  return [
+    ...names(auth, ["bearer_env", "value_env"]),
+    ...names(auth.oauth2_client_credentials, ["client_id_env", "client_secret_env"]),
+    ...names(auth.aws_sigv4, ["access_key_id_env", "secret_access_key_env"]),
+    ...names(auth.digest, ["user_env", "password_env"]),
+    ...names(auth.basic, ["user_env", "password_env"]),
+  ];
 }
 
 const ADAPTER = "http";

@@ -68,7 +68,7 @@ One release, one plan. Three commands.
 
 | Command | What it does | Writes anything? |
 |---|---|---|
-| `sponson init` | Detects your stack from the repository's files (Vercel, Netlify, Neon, PlanetScale, Supabase, Clerk, LaunchDarkly, the framework and ORM) and writes a plan for it, with the project ids it can find. Run again to adopt resources the plan does not know about. | the plan file only |
+| `sponson init` | Detects your stack from the repository's files (every [supported provider](docs/providers.md), the framework and ORM) and writes a plan for it, with the project ids it can find and a `# TODO:` naming where to find each one it cannot. Run again to adopt resources the plan does not know about. | the plan file only |
 | `sponson plan` | Reads live state, prints the diff and any drift. | no |
 | `sponson apply` | Runs the plan in dependency order. Rolls back what this run created if a line fails. Writes a receipt. | yes |
 
@@ -80,6 +80,14 @@ One release, one plan. Three commands.
 - **Production needs a human.** `--env production` without `--approved-by` is refused before any adapter is touched, and so is any run with a line that writes to production (a Vercel `target: production`, a LaunchDarkly environment that is production). The default environment is always `preview`; nothing is inferred from a branch name.
 - **Destroy is symmetric.** `sponson apply --destroy` removes what Sponson created, in reverse order, and never touches resources it merely adopted.
 - **What no API can do is a step for a person.** A [`manual.step`](docs/plan-format.md#manualstep) line (a Google OAuth redirect URI for the preview URL) shows its instructions as a todo, holds back the lines that depend on it until someone runs `apply --confirm <line>`, records who confirmed it and when, and asks for its undo on destroy. Agents show the step to a person; they never confirm it.
+
+## Supported providers
+
+<!-- generated:providers-summary:start (scripts/gen-docs.ts; run `pnpm docs:gen`) -->
+Sponson manages per-environment state at **53 providers** in 11 categories, from deploy targets and databases to auth callbacks, feature flags, webhooks and DNS: 14 first-class ops and 57 recipe ops. `sponson init` detects 48 of them from a repository's files and writes their lines.
+
+[docs/providers.md](docs/providers.md) lists every one: what Sponson manages there, the op or recipe, the credential, what `init` detects it by and a line to start from.
+<!-- generated:providers-summary:end -->
 
 ## Quick start
 
@@ -264,13 +272,14 @@ What the fake cannot prove is that the real APIs behave as assumed. The assumpti
 
 ## Status
 
-Format, engine, the [built-in adapters](docs/plan-format.md#built-in-ops) and [secret schemes](docs/plan-format.md#secret-schemes), local and git-branch receipt stores, CLI, MCP server, GitHub Action, [templates](integrations/README.md) for GitLab CI/CD, CircleCI and Bitbucket Pipelines (not yet run on those hosts). Not yet: feature-flag rules (LaunchDarkly individual targets are supported) and flag providers other than LaunchDarkly, social-login callbacks beyond Clerk and Supabase Auth, a hosted approval inbox, garbage collection of scopes whose PR closed without the action running.
+Format, engine, the [built-in adapters](docs/plan-format.md#built-in-ops) and [secret schemes](docs/plan-format.md#secret-schemes), local and git-branch receipt stores, CLI, MCP server, GitHub Action, [templates](integrations/README.md) for GitLab CI/CD, CircleCI and Bitbucket Pipelines (not yet run on those hosts). Which providers are supported, and how to start with each: [docs/providers.md](docs/providers.md). Not yet: LaunchDarkly rules (its individual targets are supported), a hosted approval inbox, garbage collection of scopes whose PR closed without the action running.
 
 ## Documentation
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): how a `plan` and an `apply` run through the code, the ledger, scopes, redaction.
 - [docs/plan-format.md](docs/plan-format.md): every key of `release.plan.yaml`, value forms, `${ctx.*}`, the built-in ops.
 - [docs/errors.md](docs/errors.md): every error code, its exit code and remedy (generated from the code).
+- [docs/providers.md](docs/providers.md): every supported provider by category, its ops, credential and a line to start from (generated).
 - [docs/recipes.md](docs/recipes.md): the shipped recipes, their params and sources (generated from the recipe files).
 - [docs/adr/](docs/adr/README.md): the design decisions and why they were made.
 - [examples/](examples/README.md): complete, tested plans to start from.

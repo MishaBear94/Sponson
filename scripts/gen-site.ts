@@ -10,7 +10,7 @@
  *                                                  stands
  *   site/reference/*.mdx                           docs/plan-format.md, docs/errors.md, examples/ (README and every
  *                                                  plan, embedded), docs/api-verification.md when it exists,
- *                                                  docs/recipes.md, docs/coverage.md, and
+ *                                                  docs/providers.md, docs/recipes.md, docs/coverage.md, and
  *                                                  the CLI reference from the CLI's own `--help`
  *   site/contributing/**                           CONTRIBUTING.md, ARCHITECTURE.md, docs/adr/, SECURITY.md,
  *                                                  ROADMAP.md, CHANGELOG.md
@@ -46,6 +46,7 @@ export const HAND_WRITTEN = ["guides/adopting", "guides/production-approvals"];
 const README_SECTIONS: Record<string, string | null> = {
   "Why this exists": "index",
   "What it does": "index",
+  "Supported providers": "index",
   "Quick start": "quickstart",
   "For agents": "guides/agents",
   "How it works": "concepts",
@@ -91,6 +92,7 @@ const FILE_PAGES: Record<string, string> = {
   "docs/api-verification.md": "reference/api-verification",
   "docs/coverage.md": "reference/coverage",
   "docs/recipes.md": "reference/recipes",
+  "docs/providers.md": "reference/providers",
   "examples/README.md": "reference/examples",
   examples: "reference/examples",
   "CONTRIBUTING.md": "contributing/contributing",
@@ -120,6 +122,7 @@ const META: Record<string, PageMeta> = {
   "reference/examples": { title: "Examples", description: "Complete, tested plans to start from." },
   "reference/api-verification": { title: "API verification", description: "How the fake cloud's assumptions are checked against the real provider APIs." },
   "reference/coverage": { title: "Provider coverage", description: "Which per-environment SaaS state Sponson covers today, and the plan to cover the rest." },
+  "reference/providers": { title: "Supported providers", description: "Every provider Sponson manages, by category: what it manages, the op or recipe, the credential and a line to start from." },
   "reference/recipes": { title: "Recipes", description: "Verified, tested building blocks for the generic http adapter: one line per provider operation." },
   "contributing/contributing": { title: "Contributing", description: "Set up, run the tests, add an adapter, a secret source or a scenario." },
   "contributing/architecture": { title: "Architecture", description: "How plan and apply run through the code: the ledger, scopes, references and redaction." },
@@ -522,6 +525,7 @@ async function adrPages(router: Router): Promise<GeneratedFile[]> {
 async function navigation(): Promise<unknown> {
   const adrs = (await adrFiles()).map((f) => `contributing/adr/${f.slice(0, -3)}`);
   const reference = ["reference/plan-format", "reference/errors", "reference/cli", "reference/examples"];
+  if (existsSync(join(REPO, "docs/providers.md"))) reference.unshift("reference/providers");
   if (existsSync(join(REPO, "docs/api-verification.md"))) reference.push("reference/api-verification");
   if (existsSync(join(REPO, "docs/recipes.md"))) reference.push("reference/recipes");
   if (existsSync(join(REPO, "docs/coverage.md"))) reference.push("reference/coverage");
@@ -585,6 +589,7 @@ export async function generate(): Promise<GeneratedFile[]> {
     ["docs/api-verification.md", "reference/api-verification"],
     ["docs/coverage.md", "reference/coverage"],
     ["docs/recipes.md", "reference/recipes"],
+    ["docs/providers.md", "reference/providers"],
     ["CONTRIBUTING.md", "contributing/contributing"],
     ["ARCHITECTURE.md", "contributing/architecture"],
     ["docs/adr/README.md", "contributing/decisions"],

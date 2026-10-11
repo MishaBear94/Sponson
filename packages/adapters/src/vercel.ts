@@ -4,7 +4,7 @@ import { ABSENT, assertNoPending, clientFor, deleteIgnoringNotFound, diffValue, 
 import { ShapeError, isTransient, listAll, obj, records, type ApiClient, type Page } from "./http.js";
 
 /** The environment vercel reads; declared once, used by the code below and by the generated docs. */
-const ABOUT = { credentialEnv: "VERCEL_TOKEN", baseUrlEnv: "VERCEL_API_URL" } as const;
+const ABOUT = { credentialEnv: "VERCEL_TOKEN", baseUrlEnv: "VERCEL_API_URL", title: "Vercel", category: "deploy", detect: { deps: ["vercel", "@vercel/"], env: ["VERCEL_*"], files: ["vercel.json", ".vercel/project.json"] } } as const;
 
 /** Vercel's API base URL; `VERCEL_API_URL` overrides it (the sim and tests use that). */
 export const VERCEL_DEFAULT_API_URL = "https://api.vercel.com";

@@ -17,6 +17,12 @@ api:
   base_url: https://api.honeycomb.io
   base_url_env: HONEYCOMB_API_URL
   auth: { header: X-Honeycomb-Team, value_env: HONEYCOMB_API_KEY }
+detect:
+  deps: ["@honeycombio/"]
+  env: ["HONEYCOMB_*"]
+  starter:
+    - op: marker
+      values: { dataset: __all__, message: "deploy ${ctx.scope} ${ctx.git.sha}" }
 assumptions:
   - id: HC1
     verified: true

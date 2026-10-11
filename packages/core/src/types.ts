@@ -471,6 +471,34 @@ export interface AdapterAbout {
   baseUrlEnv?: string;
   /** Further variables the credential needs, when one is not enough (PlanetScale: the service token's id). */
   extraCredentialEnv?: readonly string[];
+  /** The provider as people write it (Vercel, Cloudflare Pages): `sponson init`'s summary and the provider catalog. */
+  title?: string;
+  /** The id of the docs/coverage.yaml category the adapter belongs to (deploy, databases, auth, …). */
+  category?: string;
+  /**
+   * What in a repository's files says it uses this provider. `sponson init` reads it to detect the provider, so an
+   * adapter that declares it is detected with no change to the CLI. Absent for adapters no repository file names
+   * (the generic `http` adapter, `manual`).
+   */
+  detect?: ProviderDetect;
+}
+
+/**
+ * The signals `sponson init` detects a provider by: names and files only. The value of a variable is never read,
+ * except a database URL's host, which is classified against `dbHosts` and dropped.
+ */
+export interface ProviderDetect {
+  /** Dependency names in package.json: exact (`stripe`), or a scope or prefix ending in `/` (`@stripe/`). */
+  deps?: readonly string[];
+  /**
+   * Variable names in `.env*` files: exact (`AUTH0_DOMAIN`), or a prefix ending in `*` (`AUTH0_*`). A framework's
+   * public prefix (`NEXT_PUBLIC_`, `PUBLIC_`, `VITE_`, …) in front of the name matches too.
+   */
+  env?: readonly string[];
+  /** Files whose presence is a signal (`fly.toml`), relative to the repository root. */
+  files?: readonly string[];
+  /** Host suffixes (`.neon.tech`) of a database URL in an `.env*` file that point at this provider. */
+  dbHosts?: readonly string[];
 }
 
 /**

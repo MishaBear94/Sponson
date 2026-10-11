@@ -17,6 +17,15 @@ api:
   base_url: https://api.growthbook.io/api
   base_url_env: GROWTHBOOK_API_URL
   auth: { bearer_env: GROWTHBOOK_API_KEY }
+detect:
+  deps: ["@growthbook/"]
+  env: ["GROWTHBOOK_*"]
+  starter:
+    - op: force_rule
+      values: { description: "Sponson preview ${ctx.scope}", condition: "{\"preview\": \"${ctx.scope}\"}" }
+  where:
+    feature_id: "GrowthBook → Features: the feature's key"
+    environment: "GrowthBook → Settings → Environments: the one previews evaluate in"
 assumptions:
   - id: GB1
     verified: true

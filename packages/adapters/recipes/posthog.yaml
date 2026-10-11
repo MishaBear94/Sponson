@@ -19,6 +19,16 @@ api:
   base_url: https://us.posthog.com
   base_url_env: POSTHOG_API_URL
   auth: { bearer_env: POSTHOG_PERSONAL_API_KEY }
+detect:
+  deps: [posthog-js, posthog-node, posthog-react-native]
+  env: ["POSTHOG_*"]
+  starter:
+    - op: release_condition
+      values: { property: $host }
+  where:
+    project_id: "PostHog → Settings → Project → Project ID"
+    flag_id: "PostHog → Feature flags → your flag: the number in its URL"
+    value: "the preview's host name (with `property: $host`)"
 assumptions:
   - id: PH1
     verified: true

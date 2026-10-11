@@ -20,6 +20,8 @@ const validate = new Ajv2020({ allErrors: true, strict: true, strictTypes: false
 const SECRET_PASSWORD = "n30n-pa55word-do-not-leak";
 const SECRET_CLERK = "sk_test_clerk-value-do-not-leak";
 const SECRET_SUPABASE = "supabase-service-role-do-not-leak";
+const SECRET_STRIPE = "sk_test_stripe-value-do-not-leak";
+const SECRET_AUTH0 = "auth0-session-secret-do-not-leak";
 
 type Files = Record<string, string | object>;
 
@@ -54,6 +56,21 @@ const SVELTEKIT_NEON_NETLIFY: Files = {
   "drizzle.config.ts": "export default { dialect: 'postgresql', dbCredentials: { url: process.env.POSTGRES_URL! } };\n",
   "netlify.toml": "[build]\n  command = \"vite build\"\n",
   ".netlify/state.json": { siteId: "site_demo" },
+};
+
+/** Next.js on Vercel (linked) with Neon, Stripe, Inngest, Sentry and Auth0: recipe providers beside first-class ones. */
+const NEXT_VERCEL_RECIPES: Files = {
+  "package.json": { dependencies: { next: "15.1.0", "@neondatabase/serverless": "^1.0.0", stripe: "^16.0.0", inngest: "^3.0.0", "@sentry/nextjs": "^8.0.0", "@auth0/nextjs-auth0": "^3.5.0" } },
+  ".vercel/project.json": { projectId: "prj_demo" },
+  ".neon": { projectId: "proj_demo" },
+  ".env.local": `STRIPE_SECRET_KEY=${SECRET_STRIPE}\nAUTH0_SECRET=${SECRET_AUTH0}\nSENTRY_AUTH_TOKEN=sntrys_do-not-leak\n`,
+};
+
+/** A Fly.io app with Turso, PostHog and Mailgun: no first-class provider at all, so no Vercel + Neon template. */
+const FLY_TURSO_POSTHOG: Files = {
+  "package.json": { dependencies: { "@libsql/client": "^0.14.0", "posthog-node": "^4.0.0", "mailgun.js": "^10.0.0" } },
+  "fly.toml": "app = 'web'\n",
+  ".env.example": "TURSO_DATABASE_URL=\nTURSO_AUTH_TOKEN=\nPOSTHOG_KEY=\n",
 };
 
 let ws: Workspace | undefined;
@@ -146,7 +163,7 @@ describe("sponson init detects the stack", () => {
     const r = await init(cwd, "--json");
     expect(r.code, r.stderr).toBe(0);
     expect(r.json.detected).toMatchObject({ assumed: false, todo: [] });
-    expect(r.json.detected.found.map((f: any) => f.id)).toEqual(["neon", "netlify", "sveltekit", "drizzle"]);
+    expect(r.json.detected.found.map((f: any) => f.id)).toEqual(["netlify", "neon", "sveltekit", "drizzle"]);
     expect(r.json.detected.unsupported).toEqual([]);
     const { text, ids } = await writtenPlan(cwd);
     expect(ids).toEqual(["db", "env"]);
@@ -183,6 +200,47 @@ describe("sponson init detects the stack", () => {
     expect(p.json.lines.map((l: any) => [l.id, l.status])).toEqual([["db", "create"], ["dbpw", "pending"], ["env", "pending"]]);
   });
 
+  it("Next.js + Vercel + Neon + Stripe + Inngest + Sentry + Auth0: recipe lines beside the first-class ones, ready where init knows every param", async () => {
+    const cwd = await repoWith(NEXT_VERCEL_RECIPES);
+    const r = await init(cwd);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^Detected: Vercel \(\.vercel\/project\.json\), Neon \(package\.json: @neondatabase\/serverless\), Auth0 \(package\.json: @auth0\/nextjs-auth0\), Stripe \(package\.json: stripe\), Sentry \(package\.json: @sentry\/nextjs\), Inngest \(package\.json: inngest\), Next\.js/m);
+    expect(r.stdout).not.toContain("Not supported yet");
+    expect(r.stdout).toMatch(/To fill in:\n {2}changes\.auth0_callback_url\.client_id \(now "<client_id>"\): Auth0 Dashboard/);
+    expect(r.stdout).toContain('  changes.sentry_release.organization (now "<organization>"): Sentry → Settings → Organization Settings → Organization Slug');
+    expect(r.stdout).toContain("Next: set VERCEL_TOKEN, NEON_API_KEY, AUTH0_CLIENT_ID, AUTH0_CLIENT_SECRET, STRIPE_SECRET_KEY, SENTRY_AUTH_TOKEN in your environment, then run `sponson plan`");
+    const { text, ids } = await writtenPlan(cwd);
+    expect(ids).toEqual(["db", "env", "stripe_webhook_endpoint", "inngest_sync"]);
+    expect(text).toContain('    recipe: stripe.webhook_endpoint\n    name: "preview-${ctx.scope}"\n    url: { from: env.preview_url }');
+    expect(text).toContain("  # - id: auth0_callback_url\n");
+    expect(text).toContain("  # - id: sentry_release\n");
+    for (const secret of [SECRET_STRIPE, SECRET_AUTH0, "sntrys_do-not-leak"]) {
+      expect(text).not.toContain(secret);
+      expect(r.stdout + r.stderr).not.toContain(secret);
+    }
+
+    await rm(join(cwd, "release.plan.yaml"));
+    const j = await init(cwd, "--json");
+    expect(j.json.detected.found.filter((f: any) => f.via === "recipe").map((f: any) => f.id)).toEqual(["auth0", "stripe", "sentry", "inngest"]);
+    expect(j.json.detected.unsupported).toEqual([]);
+  });
+
+  it("Fly.io + Turso + PostHog, and Mailgun: recipe lines commented until their ids are filled in, no template; only Mailgun is not supported", async () => {
+    const cwd = await repoWith(FLY_TURSO_POSTHOG);
+    const r = await init(cwd, "--json");
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.json.detected.found.map((f: any) => f.id)).toEqual(["fly", "turso", "posthog"]);
+    expect(r.json.detected.assumed).toBe(false);
+    expect(r.json.detected.unsupported).toEqual([expect.objectContaining({ id: "mailgun", name: "Mailgun", pointer: expect.stringMatching(/issues/) })]);
+    expect(r.json.detected.todo.map((t: any) => t.path)).toEqual(expect.arrayContaining(["changes.fly_secret.app", "changes.turso_database_branch.organization", "changes.posthog_release_condition.flag_id"]));
+    const { text, ids } = await writtenPlan(cwd);
+    expect(ids).toEqual([]);
+    expect(text).toMatch(/^changes: \[\]/m);
+    expect(text).toContain('  #   name: "app-${ctx.scope}"');
+    expect(text).toContain("# Not supported yet, so no line below manages it: Mailgun");
+    expect(text).not.toMatch(/vercel|neon/);
+  });
+
   it("a bare repository: the Vercel + Neon template, explained, with both ids to fill in", async () => {
     const cwd = await repoWith({});
     const r = await init(cwd);
@@ -198,13 +256,13 @@ describe("sponson init detects the stack", () => {
   });
 
   it("a secret value in .env.local never appears in the written plan or in any output", async () => {
-    for (const files of [NEXT_VERCEL_NEON_CLERK, NEXT_VERCEL_SUPABASE, NEXT_VERCEL_PLANETSCALE]) {
+    for (const files of [NEXT_VERCEL_NEON_CLERK, NEXT_VERCEL_SUPABASE, NEXT_VERCEL_PLANETSCALE, NEXT_VERCEL_RECIPES]) {
       for (const args of [[], ["--json"]]) {
         const cwd = await repoWith(files);
         const r = await init(cwd, ...args);
         expect(r.code).toBe(0);
         const plan = await readFile(join(cwd, "release.plan.yaml"), "utf8");
-        for (const secret of [SECRET_PASSWORD, SECRET_CLERK, SECRET_SUPABASE, "neondb_owner", "ep-quiet-sky"]) {
+        for (const secret of [SECRET_PASSWORD, SECRET_CLERK, SECRET_SUPABASE, SECRET_STRIPE, SECRET_AUTH0, "neondb_owner", "ep-quiet-sky"]) {
           expect(plan, `${secret} leaked into the plan`).not.toContain(secret);
           expect(r.stdout + r.stderr, `${secret} leaked into the output`).not.toContain(secret);
         }

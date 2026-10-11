@@ -10,7 +10,7 @@ import { ShapeError, isObject, isProviderError, obj, records, type ApiClient } f
 
 const ADAPTER = "launchdarkly";
 /** The environment LaunchDarkly reads; declared once, used by the code below and by the generated docs (`about`). */
-const ABOUT = { credentialEnv: "LAUNCHDARKLY_ACCESS_TOKEN", baseUrlEnv: "LAUNCHDARKLY_API_URL" } as const;
+const ABOUT = { credentialEnv: "LAUNCHDARKLY_ACCESS_TOKEN", baseUrlEnv: "LAUNCHDARKLY_API_URL", title: "LaunchDarkly", category: "flags", detect: { deps: ["@launchdarkly/", "launchdarkly-node-server-sdk", "launchdarkly-js-client-sdk", "launchdarkly-react-client-sdk"], env: ["LAUNCHDARKLY_*"] } } as const;
 
 /** LaunchDarkly's REST API base URL (LD1). `LAUNCHDARKLY_API_URL` overrides it: the sim, or a federal or EU instance. */
 export const LAUNCHDARKLY_DEFAULT_API_URL = "https://app.launchdarkly.com/api/v2";

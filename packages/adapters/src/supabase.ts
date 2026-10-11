@@ -18,7 +18,7 @@ import { ShapeError, isProviderError, isTransient, obj, records, type ApiClient 
 
 const ADAPTER = "supabase";
 /** The environment Supabase reads; declared once, used by the code below and by the generated docs (`about`). */
-const ABOUT = { credentialEnv: "SUPABASE_ACCESS_TOKEN", baseUrlEnv: "SUPABASE_API_URL" } as const;
+const ABOUT = { credentialEnv: "SUPABASE_ACCESS_TOKEN", baseUrlEnv: "SUPABASE_API_URL", title: "Supabase", category: "databases", detect: { deps: ["@supabase/"], env: ["SUPABASE_*"], files: ["supabase/config.toml", "supabase/.temp/project-ref"], dbHosts: [".supabase.co", ".supabase.com"] } } as const;
 
 /** The Supabase Management API's base URL. `SUPABASE_API_URL` overrides it; tests and scenarios point that at the sim. */
 export const SUPABASE_DEFAULT_API_URL = "https://api.supabase.com/v1";

@@ -65,6 +65,7 @@
           {
             "group": "Reference",
             "pages": [
+              "reference/providers",
               "reference/plan-format",
               "reference/errors",
               "reference/cli",

@@ -14,6 +14,12 @@ api:
   base_url: https://api.postmarkapp.com
   base_url_env: POSTMARK_API_URL
   auth: { header: X-Postmark-Account-Token, value_env: POSTMARK_ACCOUNT_TOKEN }
+detect:
+  deps: [postmark]
+  env: ["POSTMARK_*"]
+  starter:
+    - op: server
+      values: { name: "sponson-${ctx.env}-${ctx.scope}" }
 assumptions:
   - id: PM1
     verified: true

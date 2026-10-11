@@ -21,6 +21,16 @@ api:
   base_url: https://management.azure.com
   base_url_env: AZURE_SWA_API_URL
   auth: { command: [az, account, get-access-token, --query, accessToken, -o, tsv] }
+detect:
+  files: [staticwebapp.config.json]
+  env: ["AZURE_STATIC_WEB_APPS_*"]
+  starter:
+    - op: build_app_setting
+      values: { environment: "${ctx.pr.number}" }
+  where:
+    subscription_id: "`az account show --query id -o tsv`"
+    resource_group: "`az staticwebapp show --name <site> --query resourceGroup -o tsv`"
+    site: "`az staticwebapp list --query '[].name'`"
 assumptions:
   - id: AZ1
     verified: true

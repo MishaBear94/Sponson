@@ -13,8 +13,8 @@ import { assertNoPending, clientFor, deleteIgnoringNotFound, diffValue, optional
 import { ShapeError, isObject, isProviderError, listAll, records, type ApiClient, type Page } from "./http.js";
 
 const ADAPTER = "__name__";
-/** The environment __Name__ reads; declared once, used by the code below and by the generated docs (`about`). */
-const ABOUT = { credentialEnv: "__NAME___TOKEN", baseUrlEnv: "__NAME___API_URL" } as const;
+/** The environment __Name__ reads, and what tells `sponson init` a repository uses __Name__ (`detect`: names, never values); declared once, used by the code below and by the generated docs (`about`). */
+const ABOUT = { credentialEnv: "__NAME___TOKEN", baseUrlEnv: "__NAME___API_URL", title: "__Name__", detect: { env: ["__NAME___*"] } } as const;
 
 // TODO: the real API's base URL.
 /** __Name__'s API base URL. `__NAME___API_URL` overrides it; tests and scenarios point that at the sim. */

@@ -19,6 +19,14 @@ api:
   base_url: https://backboard.railway.com/graphql/v2
   base_url_env: RAILWAY_API_URL
   auth: { bearer_env: RAILWAY_API_TOKEN }
+detect:
+  env: ["RAILWAY_*"]
+  files: [railway.json, railway.toml]
+  starter:
+    - op: variable
+  where:
+    project_id: "Railway → your project → Settings → Project ID, or `railway status --json`"
+    environment_id: "the pull request environment Railway created: its Settings, or `railway environment`"
 assumptions:
   - id: RY1
     verified: true

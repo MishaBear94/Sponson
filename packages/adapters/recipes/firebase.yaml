@@ -18,6 +18,15 @@ api:
   base_url: https://identitytoolkit.googleapis.com/admin/v2
   base_url_env: FIREBASE_API_URL
   auth: { command: [gcloud, auth, print-access-token] }
+detect:
+  deps: [firebase, firebase-admin]
+  env: ["FIREBASE_*"]
+  files: [firebase.json, .firebaserc]
+  starter:
+    - op: authorized_domain
+  where:
+    project: "`projects.default` in .firebaserc, or `firebase projects:list`"
+    domain: "the preview's host name without `https://` (Firebase takes a domain, so a `{ from }` URL cannot be used)"
 assumptions:
   - id: FB1
     verified: true

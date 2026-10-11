@@ -13,13 +13,13 @@ export interface InitOpts extends GlobalOpts {
 }
 
 export interface InitDetected {
-  /** What Sponson can use: providers (vercel, neon, planetscale, clerk, launchdarkly, supabase, netlify), frameworks and ORMs, each with its evidence. */
+  /** What Sponson can use: providers (first-class adapters and recipe providers, see docs/providers.md), frameworks and ORMs, each with its evidence. */
   found: Finding[];
-  /** Detected but not managed by any built-in adapter yet, each with a pointer to the roadmap or an issue. */
+  /** Detected but not managed by any built-in adapter or recipe yet, each with a pointer to an issue. */
   unsupported: UnsupportedFinding[];
   /** Placeholders left in the plan, with where to find the real value. */
   todo: Todo[];
-  /** True when nothing Sponson manages was detected and the plan is the Vercel + Neon template. */
+  /** True when no deploy target or database Sponson manages was detected and the plan starts from the Vercel + Neon template. */
   assumed: boolean;
 }
 
@@ -131,7 +131,7 @@ async function writeStarter(planPath: string, io: IO): Promise<{ detected: InitD
 export function initSummary(d: InitDetected, credentials: string[]): string[] {
   const out = [
     d.assumed
-      ? `Detected: ${d.found.length ? `${d.found.map((f) => f.name).join(", ")}, but ` : ""}nothing Sponson manages; wrote the Vercel + Neon template`
+      ? `Detected: ${d.found.length ? `${d.found.map((f) => f.name).join(", ")}, but no deploy target or database Sponson manages` : "nothing Sponson manages"}; wrote the Vercel + Neon template`
       : `Detected: ${d.found.map((f) => `${f.name} (${f.evidence[0]!})`).join(", ")}`,
   ];
   if (d.unsupported.length) out.push("Not supported yet (no line manages them):", ...d.unsupported.map((u) => `  ${u.name} (${u.evidence[0]!}): ${u.pointer}`));

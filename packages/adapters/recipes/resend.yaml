@@ -25,6 +25,12 @@ api:
   base_url: https://api.resend.com
   base_url_env: RESEND_API_URL
   auth: { bearer_env: RESEND_API_KEY }
+detect:
+  deps: [resend]
+  env: ["RESEND_*"]
+  starter:
+    - op: api_key
+      values: { name: "sponson-${ctx.env}-${ctx.scope}" }
 assumptions:
   - id: RS1
     verified: true

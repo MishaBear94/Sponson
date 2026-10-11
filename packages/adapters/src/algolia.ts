@@ -17,7 +17,7 @@ import { ShapeError, isObject, isProviderError, type ApiClient } from "./http.js
 
 const ADAPTER = "algolia";
 /** The environment Algolia reads; declared once, used by the code below and by the generated docs (`about`). */
-const ABOUT = { credentialEnv: "ALGOLIA_API_KEY", baseUrlEnv: "ALGOLIA_API_URL" } as const;
+const ABOUT = { credentialEnv: "ALGOLIA_API_KEY", baseUrlEnv: "ALGOLIA_API_URL", title: "Algolia", category: "search-payments", detect: { deps: ["algoliasearch", "@algolia/", "instantsearch.js", "react-instantsearch"], env: ["ALGOLIA_*"] } } as const;
 
 /** How often the copy task is polled, and for how long (milliseconds; overridable for tests). */
 const POLL_MS = { env: "SPONSON_ALGOLIA_POLL_MS", fallback: 1000 };

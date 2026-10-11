@@ -19,7 +19,7 @@ import { ShapeError, isObject, isProviderError, listAll, type ApiClient } from "
 
 const ADAPTER = "digitalocean";
 /** The environment DigitalOcean reads (doctl's variable); declared once, used here and by the generated docs. */
-const ABOUT = { credentialEnv: "DIGITALOCEAN_ACCESS_TOKEN", baseUrlEnv: "DIGITALOCEAN_API_URL" } as const;
+const ABOUT = { credentialEnv: "DIGITALOCEAN_ACCESS_TOKEN", baseUrlEnv: "DIGITALOCEAN_API_URL", title: "DigitalOcean App Platform", category: "deploy", detect: { env: ["DIGITALOCEAN_*"], files: [".do/app.yaml", ".do/deploy.template.yaml"] } } as const;
 
 /** DigitalOcean's API base URL (DO1). `DIGITALOCEAN_API_URL` overrides it; tests point that at the sim. */
 export const DIGITALOCEAN_DEFAULT_API_URL = "https://api.digitalocean.com";

@@ -17,6 +17,13 @@ docs:
     url: https://github.com/inngest/inngest-js/blob/main/packages/inngest/src/components/InngestCommHandler.ts
   - title: REST API v2 OpenAPI document (V2_SyncApp)
     url: https://api-docs.inngest.com/api-specs/v2.json
+detect:
+  deps: [inngest]
+  env: ["INNGEST_*"]
+  starter:
+    - op: sync
+      preview_url: url
+      values: { revision: "${ctx.git.sha}" }
 assumptions:
   - id: IN1
     verified: true

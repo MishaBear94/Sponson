@@ -15,6 +15,14 @@ api:
   base_url_env: COCKROACH_API_URL
   auth: { bearer_env: COCKROACH_API_KEY }
   headers: { Cc-Version: "2024-09-16" }
+detect:
+  env: ["COCKROACH_*"]
+  db_hosts: [.cockroachlabs.cloud]
+  starter:
+    - op: database
+      values: { name: "app_${ctx.scope}" }
+  where:
+    cluster_id: "CockroachDB Cloud Console → your cluster (the UUID in its URL), or `ccloud cluster list`"
 assumptions:
   - id: CR1
     verified: true

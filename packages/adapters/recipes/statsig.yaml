@@ -22,6 +22,14 @@ api:
   base_url_env: STATSIG_API_URL
   auth: { header: STATSIG-API-KEY, value_env: STATSIG_CONSOLE_API_KEY }
   headers: { STATSIG-API-VERSION: "20240601" }
+detect:
+  deps: [statsig-js, statsig-node, statsig-react, "@statsig/"]
+  env: ["STATSIG_*"]
+  starter:
+    - op: gate_rule
+      values: { name: "preview ${ctx.scope}", values: ["${ctx.scope}"] }
+  where:
+    gate_id: "Statsig console → Feature Gates → your gate: its name in the URL"
 assumptions:
   - id: SG1
     verified: true

@@ -148,6 +148,39 @@
       }
     },
     "base_url_example": { "type": "string", "pattern": "^https://\\S+$", "description": "For a per-account API (no `api.base_url`): an example base URL, used by the docs' example provider block and the recipe tests. Required then." },
+    "detect": {
+      "type": "object",
+      "additionalProperties": false,
+      "anyOf": [{ "properties": { "deps": true }, "required": ["deps"] }, { "properties": { "env": true }, "required": ["env"] }, { "properties": { "files": true }, "required": ["files"] }, { "properties": { "db_hosts": true }, "required": ["db_hosts"] }],
+      "description": "How `sponson init` detects that a repository uses the provider (names and files only, never a value), and the lines it writes for it. Adding this block is all it takes for init to detect the provider. Left out by a recipe whose provider another file or a first-class adapter already detects.",
+      "properties": {
+        "deps": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^(@[a-z0-9][a-z0-9._-]*/([a-z0-9][a-z0-9._-]*)?|[a-z0-9][a-z0-9._-]*)$" }, "description": "Dependency names in package.json: exact (`stripe`), or a scope or prefix ending in `/` (`@stripe/`)." },
+        "env": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*\\*?$" }, "description": "Variable names in `.env*` files: exact, or a prefix ending in `*` (`STRIPE_*`). A framework's public prefix (`NEXT_PUBLIC_`, `VITE_`, …) in front matches too." },
+        "files": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[A-Za-z0-9._-][A-Za-z0-9._/-]*$" }, "description": "Files whose presence is a signal, relative to the repository root." },
+        "db_hosts": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^\\.[a-z0-9.-]+$" }, "description": "Host suffixes (`.turso.io`) of a database URL in an `.env*` file that point at the provider; only the provider's name leaves the check." },
+        "starter": {
+          "type": "array",
+          "minItems": 1,
+          "description": "The lines `sponson init` writes when it detects the provider (default: one for the first op). A line whose required params are all known is written ready; otherwise it is written commented out, with a `# TODO:` naming where to find each missing param.",
+          "items": {
+            "type": "object",
+            "required": ["op"],
+            "additionalProperties": false,
+            "properties": {
+              "op": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$", "description": "One of the recipe's ops." },
+              "preview_url": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$", "description": "The param that takes the preview's URL, as a whole value: init writes `{ from: <deploy line>.preview_url }` when it writes a deploy target's line." },
+              "values": { "type": "object", "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" }, "description": "Values init writes for these params, typically built from `${ctx.*}` (`preview-${ctx.scope}`)." }
+            }
+          }
+        },
+        "where": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+          "additionalProperties": { "type": "string", "minLength": 5 },
+          "description": "Where to find a param's value, by param name (`base_url` for a per-account API's base URL): the `# TODO:` init writes beside it. A param without one gets its description."
+        }
+      }
+    },
     "assumptions": {
       "type": "array",
       "minItems": 1,

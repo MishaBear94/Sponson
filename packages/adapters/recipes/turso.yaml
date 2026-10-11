@@ -17,6 +17,16 @@ api:
   base_url: https://api.turso.tech/v1
   base_url_env: TURSO_API_URL
   auth: { bearer_env: TURSO_API_TOKEN }
+detect:
+  deps: ["@libsql/client", "@tursodatabase/"]
+  env: ["TURSO_*"]
+  db_hosts: [.turso.io]
+  starter:
+    - op: database_branch
+      values: { name: "app-${ctx.scope}" }
+  where:
+    organization: "`turso org list`"
+    parent: "the database to branch from: `turso db list`"
 assumptions:
   - id: TU1
     verified: true

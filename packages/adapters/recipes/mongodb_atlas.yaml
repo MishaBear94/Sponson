@@ -19,6 +19,15 @@ api:
   base_url_env: MONGODB_ATLAS_API_URL
   media_type: application/vnd.atlas.2023-01-01+json
   auth: { digest: { user_env: MONGODB_ATLAS_PUBLIC_API_KEY, password_env: MONGODB_ATLAS_PRIVATE_API_KEY } }
+detect:
+  env: ["MONGODB_ATLAS_*"]
+  db_hosts: [.mongodb.net]
+  starter:
+    - op: database_user
+      values: { username: "app-${ctx.scope}", roles: [{ databaseName: "app_${ctx.scope}", roleName: readWrite }] }
+  where:
+    group_id: "Atlas → Project Settings → Project ID, or `atlas projects list`"
+    password: "a reference, never a value: `{ secret: \"env://PREVIEW_DB_PASSWORD\" }`"
 assumptions:
   - id: MA1
     verified: true

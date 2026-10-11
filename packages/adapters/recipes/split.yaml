@@ -21,6 +21,14 @@ api:
   base_url: https://api.split.io/internal/api/v2
   base_url_env: SPLIT_API_URL
   auth: { bearer_env: SPLIT_ADMIN_API_KEY }
+detect:
+  deps: ["@splitsoftware/"]
+  env: ["SPLIT_*"]
+  starter:
+    - op: targeting_rule
+      values: { match: "${ctx.scope}" }
+  where:
+    workspace_id: "Split → Admin settings → Projects: the project's id"
 assumptions:
   - id: SP1
     verified: true

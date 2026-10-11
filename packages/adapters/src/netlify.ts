@@ -14,7 +14,7 @@ import { ShapeError, isProviderError, isTransient, obj, records, type ApiClient 
 
 const ADAPTER = "netlify";
 /** The environment Netlify reads; declared once, used by the code below and by the generated docs (`about`). */
-const ABOUT = { credentialEnv: "NETLIFY_AUTH_TOKEN", baseUrlEnv: "NETLIFY_API_URL" } as const;
+const ABOUT = { credentialEnv: "NETLIFY_AUTH_TOKEN", baseUrlEnv: "NETLIFY_API_URL", title: "Netlify", category: "deploy", detect: { deps: ["@netlify/", "netlify-cli"], env: ["NETLIFY_*"], files: ["netlify.toml", ".netlify/state.json"] } } as const;
 
 /** Netlify's API base URL (OpenAPI `host` + `basePath`); `NETLIFY_API_URL` overrides it (the sim and tests use that). */
 export const NETLIFY_DEFAULT_API_URL = "https://api.netlify.com/api/v1";

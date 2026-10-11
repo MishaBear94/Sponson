@@ -18,6 +18,13 @@ api:
   base_url_env: HEROKU_API_URL
   auth: { bearer_env: HEROKU_API_KEY }
   media_type: "application/vnd.heroku+json; version=3"
+detect:
+  env: ["HEROKU_*"]
+  files: [heroku.yml]
+  starter:
+    - op: config_var
+  where:
+    app: "the review app's name (`heroku apps`; by default `<pipeline>-pr-<n>`)"
 assumptions:
   - id: HK1
     verified: true

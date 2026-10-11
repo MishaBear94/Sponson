@@ -16,6 +16,14 @@ api:
   base_url: https://api.flagsmith.com/api/v1
   base_url_env: FLAGSMITH_API_URL
   auth: { header: Authorization, value_env: FLAGSMITH_MASTER_API_KEY, prefix: "Api-Key " }
+detect:
+  deps: [flagsmith, flagsmith-nodejs, react-native-flagsmith]
+  env: ["FLAGSMITH_*"]
+  starter:
+    - op: environment
+      values: { name: "preview-${ctx.scope}" }
+  where:
+    project_id: "Flagsmith → your project: the number in its URL (`/project/<id>/…`)"
 assumptions:
   - id: FS1
     verified: true

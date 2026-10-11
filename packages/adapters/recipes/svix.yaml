@@ -16,6 +16,15 @@ api:
   base_url: https://api.us.svix.com
   base_url_env: SVIX_API_URL
   auth: { bearer_env: SVIX_AUTH_TOKEN }
+detect:
+  deps: [svix]
+  env: ["SVIX_*"]
+  starter:
+    - op: endpoint
+      values: { uid: "sponson-${ctx.env}-${ctx.scope}" }
+  where:
+    app_id: "Svix dashboard → Applications: the application (customer) the previews receive as"
+    url: "the preview's webhook handler: its URL plus the handler's path (a `{ from }` reference cannot carry a path)"
 assumptions:
   - id: SV1
     verified: true

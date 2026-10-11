@@ -3,7 +3,7 @@ import { assertNoPending, clientFor, deleteIgnoringNotFound, diffValue, optional
 import { ShapeError, isObject, isProviderError, listAll, records, type ApiClient, type Page } from "./http.js";
 
 /** The environment clerk reads; declared once, used by the code below and by the generated docs. */
-const ABOUT = { credentialEnv: "CLERK_SECRET_KEY", baseUrlEnv: "CLERK_API_URL" } as const;
+const ABOUT = { credentialEnv: "CLERK_SECRET_KEY", baseUrlEnv: "CLERK_API_URL", title: "Clerk", category: "auth", detect: { deps: ["@clerk/"], env: ["CLERK_*"] } } as const;
 
 /** Clerk's API base URL; `CLERK_API_URL` overrides it (the sim and tests use that). */
 export const CLERK_DEFAULT_API_URL = "https://api.clerk.com/v1";

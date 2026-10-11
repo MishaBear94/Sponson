@@ -23,6 +23,16 @@ api:
   base_url: https://sentry.io/api/0
   base_url_env: SENTRY_API_URL
   auth: { bearer_env: SENTRY_AUTH_TOKEN }
+detect:
+  deps: ["@sentry/"]
+  env: ["SENTRY_*"]
+  files: [sentry.client.config.ts, sentry.client.config.js, sentry.server.config.ts, sentry.server.config.js, sentry.properties, .sentryclirc]
+  starter:
+    - op: release
+      values: { version: "app@${ctx.git.sha}" }
+  where:
+    organization: "Sentry → Settings → Organization Settings → Organization Slug"
+    project: "Sentry → Settings → Projects: the project's slug"
 assumptions:
   - id: SE1
     verified: true

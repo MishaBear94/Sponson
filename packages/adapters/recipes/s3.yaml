@@ -20,6 +20,14 @@ api:
   encoding: xml
   auth:
     aws_sigv4: { region: us-east-1, service: s3, access_key_id_env: AWS_ACCESS_KEY_ID, secret_access_key_env: AWS_SECRET_ACCESS_KEY }
+detect:
+  deps: ["@aws-sdk/client-s3"]
+  starter:
+    - op: bucket_cors
+      preview_url: origin
+      values: { rule_id: "sponson-${ctx.scope}" }
+  where:
+    base_url: "the bucket's endpoint: `https://<bucket>.s3.<region>.amazonaws.com`, or R2's `https://<account id>.r2.cloudflarestorage.com/<bucket>`"
 assumptions:
   - id: SS1
     verified: true

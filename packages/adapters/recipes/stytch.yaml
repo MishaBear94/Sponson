@@ -22,6 +22,14 @@ api:
   base_url: https://management.stytch.com
   base_url_env: STYTCH_MANAGEMENT_API_URL
   auth: { basic: { user_env: STYTCH_WORKSPACE_KEY_ID, password_env: STYTCH_WORKSPACE_KEY_SECRET } }
+detect:
+  deps: [stytch, "@stytch/"]
+  env: ["STYTCH_*"]
+  starter:
+    - op: redirect_url
+  where:
+    project_slug: "Stytch Dashboard → Project settings: the project's slug"
+    url: "the exact redirect URL Stytch receives on a preview: its URL plus the path (a `{ from }` reference cannot carry a path)"
 assumptions:
   - id: SY1
     verified: true

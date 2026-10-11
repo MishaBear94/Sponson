@@ -18,6 +18,13 @@ api:
   base_url: https://storage.googleapis.com/storage/v1
   base_url_env: GCS_API_URL
   auth: { command: [gcloud, auth, print-access-token] }
+detect:
+  deps: ["@google-cloud/storage"]
+  starter:
+    - op: bucket_cors
+      preview_url: origin
+  where:
+    bucket: "`gcloud storage buckets list`, or Firebase console → Storage (the bucket's name)"
 assumptions:
   - id: GC1
     verified: true

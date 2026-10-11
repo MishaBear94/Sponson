@@ -3,6 +3,8 @@
  * what the repository uses, real ids where the files hold them, and a TODO with the exact place to look where
  * they do not. Pure: text in, text out.
  */
+import { stringify } from "yaml";
+import type { Recipe, RecipeStarter } from "@sponson/adapters";
 import { has, type Finding, type StackDetection, type UnsupportedFinding } from "./stack.js";
 
 /** A placeholder left in the plan for the user to fill in. */
@@ -74,19 +76,29 @@ function shapeOf(d: StackDetection): Shape {
   // Cloudflare Pages is a third deploy target, but its preview variables are shared by every preview, so per-PR
   // values (a database branch's connection string) are never wired into it.
   const cloudflare = has(d, "cloudflare");
-  const assumed = !has(d, "vercel") && !netlify && !cloudflare && !has(d, "neon") && !has(d, "planetscale") && !has(d, "supabase");
+  const assumed = assumesTemplate(d);
   const vercel = has(d, "vercel") || assumed;
   const neon = has(d, "neon") || assumed;
   const planetscale = has(d, "planetscale") && !neon;
   const supabaseDb = has(d, "supabase") && !neon && !planetscale;
   const supabaseAuth = has(d, "supabase") && (vercel || netlify);
-  return { vercel, netlify, cloudflare, neon, planetscale, clerk: has(d, "clerk"), launchdarkly: has(d, "launchdarkly"), supabaseDb, supabaseAuth, supabase: supabaseDb || supabaseAuth, deploy: vercel && d.vercelAutoDeployOff, assumed, prisma: has(d, "prisma") };
+  return { vercel, netlify, cloudflare, neon, planetscale, clerk: has(d, "clerk"), launchdarkly: has(d, "launchdarkly"), supabaseDb, supabaseAuth, supabase: supabaseDb || supabaseAuth, deploy: vercel && d.vercelAutoDeployOff, assumed, prisma: has(d, "prisma", "orm") };
+}
+
+/**
+ * No deploy target or database Sponson manages was detected, so the plan starts from the Vercel + Neon template. A
+ * deploy target or database managed by recipes (Railway, Turso, …) is a stack of its own: no template beside it.
+ */
+function assumesTemplate(d: StackDetection): boolean {
+  if (d.recipes.some((r) => r.category === "deploy" || r.category === "databases")) return false;
+  return !["vercel", "netlify", "cloudflare", "neon", "planetscale", "supabase"].some((id) => has(d, id));
 }
 
 /** The adapters the starter's lines use, for the "set these credentials" hint. */
 export function credentialsFor(d: StackDetection): string[] {
   const s = shapeOf(d);
-  return (["vercel", "netlify", "cloudflare", "neon", "planetscale", "clerk", "supabase"] as const).filter((a) => s[a] && (a !== "clerk" || s.vercel || s.netlify)).flatMap((a) => CREDENTIALS[a]!);
+  const adapters = (["vercel", "netlify", "cloudflare", "neon", "planetscale", "clerk", "supabase"] as const).filter((a) => s[a] && (a !== "clerk" || s.vercel || s.netlify)).flatMap((a) => CREDENTIALS[a]!);
+  return [...new Set([...adapters, ...d.recipes.flatMap((r) => d.credentials[r.provider] ?? [])])];
 }
 
 export function composeStarter(d: StackDetection): Starter {
@@ -94,7 +106,10 @@ export function composeStarter(d: StackDetection): Starter {
   const todos: Todo[] = [];
   const out = [...header(d, s), "version: 1", "environments: [preview, production]", ...providers(d, s, todos), "", "changes:"];
   // Never empty: without Vercel, Netlify, Cloudflare Pages, Neon, PlanetScale or Supabase the template assumes Vercel and Neon.
-  out.push(...dbLine(s), ...supabaseBranchLine(s), ...envLine(d, s), ...netlifyEnvLine(d, s), ...pagesLine(d, s), ...deployLine(s), ...clerkLine(s), ...supabaseAuthLine(s), ...flagLine(s), ...orphanNotes(s));
+  out.push(...dbLine(s), ...supabaseBranchLine(s), ...envLine(d, s), ...netlifyEnvLine(d, s), ...pagesLine(d, s), ...deployLine(s), ...clerkLine(s), ...supabaseAuthLine(s), ...flagLine(s));
+  out.push(...adapterNotes(d), ...recipeLines(d, s, todos, lineIds(out)), ...orphanNotes(s));
+  // Every line commented out (recipe lines waiting on TODOs): the list is empty until one is uncommented.
+  if (lineIds(out).size === 0) out[out.indexOf("changes:")] = "changes: []   # every line below waits on its TODOs: uncomment them, then delete this `[]`";
   const text = out.join("\n").replace(/\n+$/, "") + "\n";
   return { text, todos, assumed: s.assumed };
 }
@@ -104,7 +119,7 @@ function header(d: StackDetection, s: Shape): string[] {
   if (s.assumed) {
     out.push(
       "#",
-      "# Nothing Sponson manages (Vercel, Netlify, Cloudflare Pages, Neon, PlanetScale) was detected in this repository's files, so this is the template",
+      "# No deploy target or database Sponson manages (Vercel, Netlify, Cloudflare Pages, Neon, PlanetScale, Supabase) was detected in this repository's files, so this is the template",
       "# for the most common stack: a Vercel app with a Neon database. Fill in the TODOs, or delete what you do not use.",
     );
   }
@@ -381,18 +396,123 @@ function orphanNotes(s: Shape): string[] {
 function databaseOrphanNotes(s: Shape): string[] {
   const out: string[] = [];
   if (s.supabaseDb) {
-    out.push("  # The branch's outputs (`{ from: db.connection_string }`, `db.api_url`) have no deploy target Sponson manages yet;", "  # pass them to yours by hand, or follow ROADMAP.md section 2 for Railway and Fly.io.");
+    out.push("  # The branch's outputs (`{ from: db.connection_string }`, `db.api_url`) have no deploy target Sponson manages yet;", "  # pass them to yours by hand, or with your deploy target's recipe line (docs/providers.md).");
   }
   if (s.neon) {
-    out.push("  # The branch's connection string (`{ from: db.connection_string }`) has no deploy target Sponson manages yet;", "  # pass it to yours by hand, or follow ROADMAP.md section 2 for Railway and Fly.io.");
+    out.push("  # The branch's connection string (`{ from: db.connection_string }`) has no deploy target Sponson manages yet;", "  # pass it to yours by hand, or with your deploy target's recipe line (docs/providers.md).");
   }
   if (s.planetscale) {
     out.push(
       "  # The password's connection string (`{ from: dbpw.connection_string }`) has no deploy target Sponson manages yet,",
-      "  # and PlanetScale shows it only once: follow ROADMAP.md section 2 for Railway and Fly.io.",
+      "  # and PlanetScale shows it only once: pass it with your deploy target's recipe line (docs/providers.md) in the same run.",
     );
   }
   return out;
+}
+
+const DOCS = "https://github.com/MishaBear94/Sponson/blob/main/docs";
+
+/** The first-class providers this file composes lines for; any other detected adapter gets a pointer (`adapterNotes`). */
+const COMPOSED = new Set(["vercel", "netlify", "cloudflare", "neon", "planetscale", "clerk", "launchdarkly", "supabase"]);
+
+/** The ids of the lines written so far, so recipe lines never take one. */
+function lineIds(out: string[]): Set<string> {
+  return new Set(out.flatMap((l) => /^ {2}- id: (\S+)$/.exec(l)?.[1] ?? []));
+}
+
+/**
+ * A first-class adapter detected that the starter has no composed line for (its lines name things only the user
+ * knows): where its ops are described, said in the plan instead of silently dropped.
+ */
+function adapterNotes(d: StackDetection): string[] {
+  const out: string[] = [];
+  for (const f of d.found) {
+    if (f.via !== "adapter" || COMPOSED.has(f.id)) continue;
+    const vars = (d.credentials[f.id] ?? []).join(", ");
+    out.push(`  # ${f.name} was detected: its ops are in ${DOCS}/providers.md (${vars} is read from the environment).`, "");
+  }
+  return out;
+}
+
+/** The lines a recipe's `detect.starter` asks for: one for its first op when it names none. */
+function starters(r: Recipe): RecipeStarter[] {
+  return r.detect?.starter ?? [{ op: Object.keys(r.ops)[0]! }];
+}
+
+/** Every detected recipe provider's lines (ready, or commented out until their TODOs are filled in). */
+function recipeLines(d: StackDetection, s: Shape, todos: Todo[], taken: Set<string>): string[] {
+  const preview = s.vercel || s.netlify ? previewUrlFrom(s) : undefined;
+  return d.recipes.flatMap((r) => starters(r).flatMap((st) => recipeLine(r, st, { preview, todos, taken, credentials: d.credentials[r.provider] ?? [] })));
+}
+
+interface RecipeLineCtx {
+  /** Where the preview URL comes from, and the note beside it; undefined without a deploy target's line. */
+  preview: [string, string] | undefined;
+  todos: Todo[];
+  taken: Set<string>;
+  credentials: string[];
+}
+
+/** A param written into a recipe line: its value as YAML, and the comment beside it. */
+interface ParamText {
+  name: string;
+  value: string;
+  note?: string;
+  missing: boolean;
+}
+
+function recipeLine(r: Recipe, st: RecipeStarter, c: RecipeLineCtx): string[] {
+  const op = r.ops[st.op]!;
+  const id = freshId(`${r.provider}_${st.op}`, c.taken);
+  const params = Object.entries(op.params)
+    .filter(([name, p]) => p.required === true || name === st.preview_url || st.values?.[name] !== undefined)
+    .map(([name, p]) => recipeParam(r, st, name, p.description, c.preview));
+  for (const p of params) if (p.missing) c.todos.push({ path: `changes.${id}.${p.name}`, placeholder: `<${p.name}>`, hint: p.note! });
+  const block = perAccountBlock(r, c.todos);
+  const ready = params.every((p) => !p.missing) && block.length === 0;
+  const body = [
+    `- id: ${id}`,
+    "  adapter: http",
+    `  op: ${op.kind}`,
+    `  recipe: ${r.provider}.${st.op}`,
+    ...params.map((p) => `  ${p.name}: ${p.value}${p.note ? `   # ${p.missing ? "TODO: " : ""}${p.note}` : ""}`),
+    "  environments: [preview]",
+  ];
+  const credential = c.credentials.length ? `; ${c.credentials.join(", ")} ${c.credentials.length === 1 ? "is" : "are"} read from the environment` : "";
+  const head = `  # ${r.title}: ${op.title.charAt(0).toLowerCase()}${op.title.slice(1)} (recipe ${r.provider}.${st.op}, ${DOCS}/recipes.md#${r.provider}${st.op}${credential}).`;
+  if (ready) return [head, ...body.map((l) => `  ${l}`), ""];
+  return [head, ...block, "  # Fill in the TODOs, then uncomment:", ...body.map((l) => `  # ${l}`), ""];
+}
+
+function recipeParam(r: Recipe, st: RecipeStarter, name: string, description: string, preview: [string, string] | undefined): ParamText {
+  if (name === st.preview_url && preview) return { name, value: `{ from: ${preview[0]} }`, note: preview[1], missing: false };
+  const given = st.values?.[name];
+  if (given !== undefined) return { name, value: yamlValue(given), missing: false };
+  const where = r.detect?.where?.[name] ?? description;
+  const hint = name === st.preview_url ? `the preview's URL (no deploy target Sponson manages was detected to take it from): ${where}` : where;
+  return { name, value: q(`<${name}>`), note: hint, missing: true };
+}
+
+/** For a per-account API (no default base URL), the provider block to add, as comments; empty otherwise. */
+function perAccountBlock(r: Recipe, todos: Todo[]): string[] {
+  if (!r.api || typeof r.api.base_url === "string") return [];
+  const hint = r.detect?.where?.base_url ?? `your account's API URL, such as ${r.base_url_example}`;
+  const path = `providers.http.${r.provider}.base_url`;
+  if (todos.some((t) => t.path === path)) return [`  # Needs the \`providers.http.${r.provider}\` block above.`];
+  todos.push({ path, placeholder: "<base_url>", hint });
+  return ["  # Add under `providers:` (the account's own API URL):", `  #   http: { ${r.provider}: { recipe: ${r.provider}, base_url: "<base_url>" } }   # TODO: ${hint}`];
+}
+
+function freshId(base: string, taken: Set<string>): string {
+  let id = base;
+  for (let n = 2; taken.has(id); n++) id = `${base}_${n}`;
+  taken.add(id);
+  return id;
+}
+
+/** A value on one line of YAML: strings and numbers as scalars, lists and maps in flow style. */
+function yamlValue(v: unknown): string {
+  return typeof v === "string" ? q(v) : stringify(v, { collectionStyle: "flow", lineWidth: 0 }).trimEnd();
 }
 
 function q(s: string): string {

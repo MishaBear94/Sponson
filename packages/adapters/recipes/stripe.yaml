@@ -43,6 +43,13 @@ api:
   encoding: form
   # A preview must never create live-mode objects (ST2): live keys are refused unless this variable says otherwise.
   refuse_credential: { prefixes: [sk_live_, rk_live_], unless_env: SPONSON_STRIPE_ALLOW_LIVE }
+detect:
+  deps: [stripe, "@stripe/"]
+  env: ["STRIPE_*"]
+  starter:
+    - op: webhook_endpoint
+      preview_url: url
+      values: { name: "preview-${ctx.scope}" }
 assumptions:
   - id: ST1
     verified: true

@@ -15,6 +15,14 @@ api:
   base_url: https://api.prisma.io/v1
   base_url_env: PRISMA_API_URL
   auth: { bearer_env: PRISMA_SERVICE_TOKEN }
+detect:
+  deps: ["@prisma/ppg"]
+  db_hosts: [.prisma.io, .prisma-data.net]
+  starter:
+    - op: database
+      values: { name: "app-${ctx.scope}" }
+  where:
+    project_id: "Prisma Console → your project → Settings → Project ID"
 assumptions:
   - id: PP1
     verified: true

@@ -13,6 +13,13 @@ api:
   base_url: https://api.workos.com
   base_url_env: WORKOS_API_URL
   auth: { bearer_env: WORKOS_API_KEY }
+detect:
+  deps: ["@workos-inc/"]
+  env: ["WORKOS_*"]
+  starter:
+    - op: redirect_uri
+  where:
+    uri: "the exact redirect URI AuthKit receives on a preview: its URL plus the callback path (a `{ from }` reference cannot carry a path)"
 assumptions:
   - id: WO1
     verified: true

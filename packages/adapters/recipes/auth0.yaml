@@ -23,6 +23,17 @@ api:
       client_secret_env: AUTH0_CLIENT_SECRET
       audience: /api/v2/
 base_url_example: https://acme.eu.auth0.com/api/v2
+detect:
+  deps: [auth0, "@auth0/"]
+  env: ["AUTH0_*"]
+  starter:
+    - op: callback_url
+    - op: logout_url
+      preview_url: url
+  where:
+    base_url: "`https://<tenant>.<region>.auth0.com/api/v2`: Auth0 Dashboard → Settings → General → Domain (the canonical domain, not a custom one)"
+    client_id: "Auth0 Dashboard → Applications → your application → Settings → Client ID"
+    url: "the exact callback URL the app sends as `redirect_uri` on a preview: its URL plus the callback path (a `{ from }` reference cannot carry a path)"
 assumptions:
   - id: AU1
     verified: true

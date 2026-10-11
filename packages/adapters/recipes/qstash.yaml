@@ -22,6 +22,14 @@ api:
   base_url: https://qstash.upstash.io
   base_url_env: QSTASH_API_URL
   auth: { bearer_env: QSTASH_TOKEN }
+detect:
+  deps: ["@upstash/qstash"]
+  env: ["QSTASH_*"]
+  starter:
+    - op: schedule
+      values: { schedule_id: "cron-${ctx.scope}" }
+  where:
+    destination: "the preview's endpoint the schedule calls: its URL plus the path (a `{ from }` reference cannot carry a path)"
 assumptions:
   - id: QS1
     verified: true

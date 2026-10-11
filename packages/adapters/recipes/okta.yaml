@@ -17,6 +17,18 @@ api:
   base_url_env: OKTA_API_URL
   auth: { header: Authorization, value_env: OKTA_API_TOKEN, prefix: "SSWS " }
 base_url_example: https://acme.okta.com/api/v1
+detect:
+  deps: ["@okta/"]
+  env: ["OKTA_*"]
+  starter:
+    - op: redirect_uri
+    - op: trusted_origin
+      preview_url: origin
+      values: { name: "sponson-${ctx.scope}" }
+  where:
+    base_url: "`https://<org>.okta.com/api/v1`: your Okta org's domain"
+    app_id: "Okta Admin Console → Applications → your application: the `0oa…` id in its URL"
+    url: "the exact redirect URI the app sends on a preview: its URL plus the callback path (a `{ from }` reference cannot carry a path)"
 assumptions:
   - id: OK1
     verified: true

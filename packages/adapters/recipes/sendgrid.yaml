@@ -27,6 +27,13 @@ api:
   base_url: https://api.sendgrid.com
   base_url_env: SENDGRID_API_URL
   auth: { bearer_env: SENDGRID_API_KEY }
+detect:
+  deps: ["@sendgrid/"]
+  env: ["SENDGRID_*"]
+  starter:
+    - op: event_webhook
+  where:
+    url: "the preview's event handler: its URL plus the handler's path (a `{ from }` reference cannot carry a path)"
 assumptions:
   - id: SG1
     verified: true

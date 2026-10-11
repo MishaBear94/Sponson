@@ -19,6 +19,13 @@ api:
     headers:
       - { header: DD-API-KEY, value_env: DD_API_KEY }
       - { header: DD-APPLICATION-KEY, value_env: DD_APP_KEY }
+detect:
+  deps: [dd-trace, "@datadog/"]
+  env: ["DD_*", "DATADOG_*"]
+  starter:
+    - op: synthetic_api_test
+      preview_url: url
+      values: { name: "preview ${ctx.scope}", locations: ["aws:us-east-2"] }
 assumptions:
   - id: DD1
     verified: true

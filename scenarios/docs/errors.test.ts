@@ -1,13 +1,14 @@
 /**
  * Generated documentation must match its sources: docs/errors.md (ERROR_CODES) and the generated blocks of
- * docs/plan-format.md (built-in adapters and ops, secret schemes, outputs: all from `createRegistry()`). On failure,
- * run `pnpm docs:gen` and commit the result.
+ * docs/plan-format.md (built-in adapters and ops, secret schemes, outputs: all from `createRegistry()`), the recipe
+ * docs, the coverage tables, docs/providers.md and the README's providers-summary block (the provider catalog). On failure, run `pnpm docs:gen`
+ * and commit the result.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ERROR_CODES } from "@sponson/core";
-import { createRegistry } from "@sponson/adapters";
+import { createRegistry, detectableProviders, loadRecipes } from "@sponson/adapters";
 import { generate, markers, REPO } from "../../scripts/gen-docs.js";
 
 describe("generated docs", async () => {
@@ -36,5 +37,19 @@ describe("generated docs", async () => {
       for (const op of Object.keys(registry.adapter(name).ops)) expect(block("adapters")).toContain(`\`${name}.${op}\``);
     }
     for (const scheme of registry.secretSchemes()) expect(block("secret-schemes")).toContain(`| \`${scheme}\` |`);
+  });
+
+  it("docs/providers.md lists every recipe op and every provider op, with each detectable provider's signals; README links it", async () => {
+    const doc = await readFile(join(REPO, "docs/providers.md"), "utf8");
+    for (const r of loadRecipes()) for (const op of Object.keys(r.ops)) expect(doc).toContain(`[\`${r.provider}.${op}\`](recipes.md#`);
+    const registry = createRegistry();
+    for (const name of registry.adapterNames()) {
+      if (name === "http") continue; // the generic adapter: every recipe op above is one of its lines
+      for (const op of Object.keys(registry.adapter(name).ops)) expect(doc).toContain(`[\`${name}.${op}\`](plan-format.md#`);
+    }
+    for (const p of detectableProviders(registry)) expect(doc, p.id).toContain(`\`${(p.detect.deps ?? p.detect.files ?? p.detect.env ?? [])[0]?.replace(/\/$/, "/*")}\``);
+    const readme = await readFile(join(REPO, "README.md"), "utf8");
+    const { start, end } = markers("providers-summary");
+    expect(readme.slice(readme.indexOf(start), readme.indexOf(end))).toContain("[docs/providers.md](docs/providers.md)");
   });
 });

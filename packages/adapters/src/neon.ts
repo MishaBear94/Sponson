@@ -3,7 +3,7 @@ import { ABSENT, assertNoPending, clientFor, deleteIgnoringNotFound, desiredSide
 import { ShapeError, isProviderError, listAll, obj, records, type ApiClient, type Page } from "./http.js";
 
 /** The environment neon reads; declared once, used by the code below and by the generated docs. */
-const ABOUT = { credentialEnv: "NEON_API_KEY", baseUrlEnv: "NEON_API_URL" } as const;
+const ABOUT = { credentialEnv: "NEON_API_KEY", baseUrlEnv: "NEON_API_URL", title: "Neon", category: "databases", detect: { deps: ["@neondatabase/", "@prisma/adapter-neon", "neonctl"], env: ["NEON_*"], files: [".neon"], dbHosts: [".neon.tech"] } } as const;
 
 /** Neon's API base URL; `NEON_API_URL` overrides it (the sim and tests use that). */
 export const NEON_DEFAULT_API_URL = "https://console.neon.tech/api/v2";

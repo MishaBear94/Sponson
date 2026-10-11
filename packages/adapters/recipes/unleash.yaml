@@ -23,6 +23,14 @@ base_url_example: https://unleash.example.com
 api:
   base_url_env: UNLEASH_API_URL
   auth: { header: Authorization, value_env: UNLEASH_AUTH_TOKEN }
+detect:
+  deps: [unleash-client, unleash-proxy-client, "@unleash/"]
+  env: ["UNLEASH_*"]
+  starter:
+    - op: flag_strategy
+      values: { title: "preview ${ctx.scope}", values: ["${ctx.scope}"] }
+  where:
+    base_url: "your Unleash instance's URL (`https://<instance>`)"
 assumptions:
   - id: UN1
     verified: true

@@ -15,6 +15,15 @@ api:
   base_url: https://api.configcat.com
   base_url_env: CONFIGCAT_API_URL
   auth: { basic: { user_env: CONFIGCAT_BASIC_AUTH_USERNAME, password_env: CONFIGCAT_BASIC_AUTH_PASSWORD } }
+detect:
+  deps: [configcat-js, configcat-js-ssr, configcat-js-full, configcat-node, configcat-react]
+  env: ["CONFIGCAT_*"]
+  starter:
+    - op: targeting_rule
+      values: { match: "${ctx.scope}" }
+  where:
+    environment_id: "ConfigCat Dashboard → your product → Environments → the preview environment's ID"
+    setting_id: "ConfigCat Public Management API `GET /v1/configs/{configId}/settings`: the flag's `settingId`"
 assumptions:
   - id: CC1
     verified: true

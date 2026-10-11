@@ -16,6 +16,13 @@ api:
   base_url_env: GITHUB_API_URL
   auth: { bearer_env: GITHUB_TOKEN }
   headers: { X-GitHub-Api-Version: "2022-11-28", User-Agent: sponson }
+detect:
+  deps: ["@octokit/webhooks", probot]
+  env: [GITHUB_WEBHOOK_SECRET]
+  starter:
+    - op: repo_webhook
+  where:
+    url: "the preview's webhook handler: its URL plus the handler's path (a `{ from }` reference cannot carry a path)"
 assumptions:
   - id: GH1
     verified: true

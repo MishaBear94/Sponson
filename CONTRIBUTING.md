@@ -117,6 +117,12 @@ existing file in `packages/adapters/recipes/` and:
    assumption whether sending it twice is harmless (an action is sent at least once) or use `idempotency_key`. An
    action sent to the app's own `url` gets no credential, and a recipe whose ops are all such actions has no `api`;
    give it `live.params` for the URL so a live run never calls the example host.
+   Add a `detect` block so `sponson init` finds the provider with no change to the CLI: its SDK's package names
+   (`deps`), config files (`files`), variable names (`env`, `PROVIDER_*` for a prefix) and database URL hosts
+   (`db_hosts`), never anything that would need a value read; the `starter` lines init writes (`preview_url` names
+   the param that takes the preview's URL, `values` gives `${ctx.*}` values such as `preview-${ctx.scope}`), and
+   `where` to find each other required param (`base_url` for a per-account API). Leave it out only when another
+   recipe file or a first-class adapter already detects the provider.
 3. **Mark the row covered** in `docs/coverage.yaml` (`covered_by: recipe:<provider>.<op>`) and list its id in the
    op's `covers`.
 4. **Run `SPONSON_UPDATE_RECIPE_LOCK=1 pnpm vitest run packages/adapters/src/recipes.test.ts`** to pin the new op's

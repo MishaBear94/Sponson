@@ -17,7 +17,7 @@ export function recipeLink(provider: string, op: string): string {
   return `[\`${provider}.${op}\`](recipes.md#${slug(recipeHeading(provider, op).slice(4))})`;
 }
 
-function credential(api: Record<string, unknown> | undefined): string {
+export function credential(api: Record<string, unknown> | undefined): string {
   if (!api) return "none (calls the app's own URL)";
   const auth = api.auth as Record<string, unknown>;
   if (typeof auth.bearer_env === "string") return `\`${auth.bearer_env}\` (bearer)`;
@@ -58,7 +58,7 @@ export function exampleParams(op: RecipeOp): Record<string, unknown> {
   return Object.fromEntries(Object.entries(op.params).flatMap(([n, p]) => (p.example === undefined ? [] : [[n, p.example]])));
 }
 
-function exampleLine(r: Recipe, name: string, op: RecipeOp): string {
+export function exampleLine(r: Recipe, name: string, op: RecipeOp): string {
   const line = { id: name, adapter: "http", op: op.kind, recipe: `${r.provider}.${name}`, ...exampleParams(op) };
   if (!r.api || typeof r.api.base_url === "string") return `# under changes: (no provider block needed)\n${stringify([line], { lineWidth: 0 }).trimEnd()}`;
   // A per-account API: the block names the account's base URL.

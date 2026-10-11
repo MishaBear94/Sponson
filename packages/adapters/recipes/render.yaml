@@ -23,6 +23,13 @@ api:
   base_url: https://api.render.com/v1
   base_url_env: RENDER_API_URL
   auth: { bearer_env: RENDER_API_KEY }
+detect:
+  env: ["RENDER_*"]
+  files: [render.yaml]
+  starter:
+    - op: env_var
+  where:
+    service_id: "Render Dashboard → the preview service: the `srv-…` id in its URL"
 assumptions:
   - id: RE1
     verified: true

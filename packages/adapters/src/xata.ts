@@ -19,7 +19,7 @@ import { ShapeError, isObject, records, type ApiClient } from "./http.js";
 
 const ADAPTER = "xata";
 /** The environment Xata reads; declared once, used by the code below and by the generated docs (`about`). */
-const ABOUT = { credentialEnv: "XATA_API_KEY", baseUrlEnv: "XATA_API_URL" } as const;
+const ABOUT = { credentialEnv: "XATA_API_KEY", baseUrlEnv: "XATA_API_URL", title: "Xata", category: "databases", detect: { deps: ["@xata.io/"], env: ["XATA_*"], files: [".xatarc"] } } as const;
 
 /** Xata's API base URL (XA1). `XATA_API_URL` overrides it; tests and scenarios point that at the sim. */
 export const XATA_DEFAULT_API_URL = "https://api.xata.tech";

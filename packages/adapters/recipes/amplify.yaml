@@ -22,6 +22,13 @@ api:
   base_url_env: AMPLIFY_API_URL
   auth:
     aws_sigv4: { region: us-east-1, service: amplify, access_key_id_env: AWS_ACCESS_KEY_ID, secret_access_key_env: AWS_SECRET_ACCESS_KEY }
+detect:
+  files: [amplify.yml]
+  starter:
+    - op: branch_variable
+      values: { branch_name: "${ctx.git.branch}" }
+  where:
+    app_id: "Amplify console → your app → App settings → General → App ID (`d…`), or `aws amplify list-apps --query 'apps[].appId'`"
 assumptions:
   - id: AM1
     verified: true

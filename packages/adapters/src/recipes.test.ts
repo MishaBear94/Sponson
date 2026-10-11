@@ -91,7 +91,30 @@ describe.each(recipeNames())("recipes/%s.yaml", (name) => {
     const block = apiBlock(blocksFor(r), { recipe: `${name}.${Object.keys(r.ops)[0]!}` });
     expect(block).toEqual(resolvedApi(r));
   });
+
+  it("its `detect` block (when it has one) names its own ops and params, and init's values pass the params' checks", () => {
+    const d = loadRecipe(name).detect;
+    if (!d) return;
+    const r = loadRecipe(name);
+    const starters = d.starter ?? [{ op: Object.keys(r.ops)[0]! }];
+    const params = new Set<string>(r.api && typeof r.api.base_url !== "string" ? ["base_url"] : []);
+    for (const st of starters) {
+      const op = r.ops[st.op];
+      expect(op, `starter op ${st.op}`).toBeDefined();
+      for (const p of Object.keys(op!.params)) params.add(p);
+      if (st.preview_url) expect(op!.params[st.preview_url]?.type, `preview_url ${st.preview_url}`).toBe("string");
+      for (const p of Object.keys(st.values ?? {})) expect(Object.keys(op!.params), `value for ${p}`).toContain(p);
+      const line = { recipe: `${name}.${st.op}`, ...exampleParams(op!), ...st.values };
+      expect(() => expandRecipe(line, op!.kind), st.op).not.toThrow();
+    }
+    for (const p of Object.keys(d.where ?? {})) expect([...params], `where.${p}`).toContain(p);
+  });
 });
+
+/** Every param with an example, as a docs example line sets them. */
+function exampleParams(op: RecipeOp): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(op.params).flatMap(([n, p]) => (p.example === undefined ? [] : [[n, p.example]])));
+}
 
 describe.each(cases)("recipe %s", (_ref, r, name, op) => {
   const line = exampleLine(r, name, op);
