@@ -79,20 +79,17 @@ jobs:
             exit 1
           fi
       - name: What would be published
-        run: pnpm changeset publish-plan
-      - name: Publish
-        if: ${{ !inputs.dry-run }}
-        run: |
-          pnpm changeset publish
-          # Tag what was published explicitly (`changeset publish` reported tags it never left in this clone), then
-          # push them by name: they are lightweight, which `--follow-tags` skips.
-          pnpm changeset git-tag
-          git push origin --tags
+        run: DRY_RUN=1 bash scripts/publish-release.sh
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          # Lower case: pnpm reads only this form (npm reads it too), and Actions env names are case-insensitive, so
-          # the upper-case form beside it would be a duplicate key. 0.4.0 and 0.5.0 shipped without provenance.
-          npm_config_provenance: "true"
+      - name: Publish
+        if: ${{ !inputs.dry-run }}
+        # Our own script, not `changeset publish`: pnpm publish never attached provenance and the tags it reported
+        # never reached origin (0.4.0–0.6.0). It packs with pnpm, publishes the tarballs with `npm --provenance`,
+        # and pushes and confirms each tag.
+        run: bash scripts/publish-release.sh
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Check what was published
         if: ${{ !inputs.dry-run }}
         run: |

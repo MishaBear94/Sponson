@@ -1,0 +1,56 @@
+name: live
+
+# The contract suite and every recipe against real provider APIs (`pnpm test:live`), weekly and on demand, so a
+# provider changing its API shows up within a week instead of in a user's apply. It uses throwaway projects only
+# (see the header of scenarios/contract.test.ts) and runs only in this repository, never on forks.
+#
+# Secrets: VERCEL_TOKEN, SPONSON_LIVE_VERCEL_PROJECT, SPONSON_LIVE_VERCEL_TEAM, NEON_API_KEY,
+# SPONSON_LIVE_NEON_PROJECT, CLERK_SECRET_KEY (all required for the run), plus any optional provider's variables
+# (its tests run when they are present). docs/api-verification.md "Live runs" records results.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: github.repository == 'MishaBear94/Sponson'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      SPONSON_LIVE_VERCEL_PROJECT: ${{ secrets.SPONSON_LIVE_VERCEL_PROJECT }}
+      SPONSON_LIVE_VERCEL_TEAM: ${{ secrets.SPONSON_LIVE_VERCEL_TEAM }}
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      SPONSON_LIVE_NEON_PROJECT: ${{ secrets.SPONSON_LIVE_NEON_PROJECT }}
+      CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+    steps:
+      - name: Skip unless the required secrets are set
+        id: gate
+        run: |
+          missing=""
+          for v in VERCEL_TOKEN SPONSON_LIVE_VERCEL_PROJECT NEON_API_KEY SPONSON_LIVE_NEON_PROJECT CLERK_SECRET_KEY; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then echo "::notice::live suite skipped; missing:$missing"; echo "run=false" >> "$GITHUB_OUTPUT"; else echo "run=true" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - if: steps.gate.outputs.run == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - if: steps.gate.outputs.run == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: steps.gate.outputs.run == 'true'
+        run: pnpm test:live
