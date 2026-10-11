@@ -1,6 +1,6 @@
 {
   "name": "@sponson/core",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Plan model, planner, execution engine, receipt stores and adapter interfaces for Sponson.",
   "keywords": [
     "sponson",
