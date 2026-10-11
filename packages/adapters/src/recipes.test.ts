@@ -34,6 +34,19 @@ function exampleLine(r: Recipe, name: string, op: RecipeOp): Record<string, unkn
   return { recipe: `${r.provider}.${name}`, ...(JSON.parse(text) as Record<string, unknown>) };
 }
 
+/**
+ * The `providers.http` blocks an example line needs: none, or for a per-account API (no default `base_url`) one
+ * that sets the recipe's `base_url_example`.
+ */
+function blocksFor(r: Recipe): Record<string, unknown> {
+  return r.api.base_url === undefined ? { [r.provider]: { recipe: r.provider, base_url: r.base_url_example } } : {};
+}
+
+/** The API block an example line resolves to. */
+function resolvedApi(r: Recipe): Record<string, unknown> {
+  return r.api.base_url === undefined ? { ...r.api, base_url: r.base_url_example } : r.api;
+}
+
 function codeOf(f: () => unknown): string {
   try {
     f();
@@ -61,8 +74,8 @@ describe.each(recipeNames())("recipes/%s.yaml", (name) => {
     const r = loadRecipe(name);
     expect(coverage.categories.map((c) => c.id), "category is a docs/coverage.yaml category").toContain(r.category);
     expect(new Set(r.assumptions.map((a) => a.id)).size, "assumption ids are unique").toBe(r.assumptions.length);
-    const block = apiBlock({}, { recipe: `${name}.${Object.keys(r.ops)[0]!}` });
-    expect(block).toEqual(r.api);
+    const block = apiBlock(blocksFor(r), { recipe: `${name}.${Object.keys(r.ops)[0]!}` });
+    expect(block).toEqual(resolvedApi(r));
   });
 });
 
@@ -97,7 +110,7 @@ describe.each(cases)("recipe %s", (_ref, r, name, op) => {
       expect(() => parseListItem(line)).not.toThrow();
       expect(listItem.outputsFor!(line)).toEqual({});
     }
-    expect(resource.providerFor!({}, line)).toEqual(r.api);
+    expect(resource.providerFor!(blocksFor(r), line)).toEqual(resolvedApi(r));
   });
 
   it("checks its params at plan time: missing, unknown and mistyped are PARAM_INVALID naming the param", () => {
@@ -170,7 +183,7 @@ const LOCK = fileURLToPath(new URL("./recipes-identity.json", import.meta.url));
 /** What the ledger would record for the op's example line: the resolved API block, the key and the record id. */
 function identityOf(r: Recipe, name: string, op: RecipeOp): unknown {
   const line = exampleLine(r, name, op);
-  const provider = resource.providerFor!({}, line);
+  const provider = resource.providerFor!(blocksFor(r), line);
   const ident = op.kind === "resource" ? resourceIdentity(parseResource(line), "ID") : listItemIdentity(parseListItem(line));
   return { provider, ...ident };
 }

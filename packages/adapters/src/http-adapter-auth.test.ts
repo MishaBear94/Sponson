@@ -259,10 +259,10 @@ describe("auth: aws_sigv4", () => {
     expect(await failure(listItem.read(run(s3env(), temp).actx, RULE("pr-42")))).toMatchObject({ code: "PROVIDER_AUTH", message: expect.stringContaining("AWS_SIM_SESSION_TOKEN is not set") });
   });
 
-  it("Amplify: a branch variable kept in the map UpdateBranch replaces whole (send: collection, body_list_path)", async () => {
+  it("Amplify: a branch variable kept in the map UpdateBranch replaces whole (send: collection, parent.item_path)", async () => {
     await start({ aws: { amplify: { d1demo: { branches: { "pr-42": { environmentVariables: { EXISTING: "keep-me" } } } } } } });
     const amplify = { base_url: "https://amplify.us-east-1.amazonaws.com", base_url_env: "AWS_AMPLIFY_URL", auth: SIGV4("amplify") };
-    const line = { api: "amplify", parent: { path: "/apps/d1demo/branches/pr-42", method: "POST", send: "collection", body_list_path: "/environmentVariables" }, list_path: "/branch/environmentVariables", shape: "map", item: "API_URL", value: "https://api-pr-42.example.app" };
+    const line = { api: "amplify", parent: { path: "/apps/d1demo/branches/pr-42", method: "POST", send: "collection", item_path: "/branch" }, list_path: "/environmentVariables", shape: "map", item: "API_URL", value: "https://api-pr-42.example.app" };
     const { actx } = run({ AWS_AMPLIFY_URL: `${h.sim.url}/aws/amplify` }, amplify);
     const r = await applyOnce(listItem, actx, line);
     expect(h.sim.state.aws.amplify.d1demo!.branches["pr-42"]!.environmentVariables).toEqual({ EXISTING: "keep-me", API_URL: "https://api-pr-42.example.app" });

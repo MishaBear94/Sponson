@@ -22,7 +22,7 @@ import { ABSENT, SENSITIVE, assertNoPending, desiredSide, paramError } from "./c
 import { isObject, type ApiClient } from "./http.js";
 import { failedWith, httpClient, write } from "./http-adapter-client.js";
 import { expandRecipe } from "./recipes.js";
-import { ADAPTER, apiBlock, apiEnvironment, at, fieldTokens, fillPath, firstMarker, isKeep, parseApi, parseListItem, pointerTokens, projection, setAt, stateHash, type ListItemSpec, type ListShape } from "./http-adapter-spec.js";
+import { ADAPTER, apiBlock, apiEnvironment, at, fieldTokens, fillPath, firstMarker, isKeep, parseApi, parseListItem, pointerTokens, projection, setAt, stateHash, type ListItemSpec, type ListShape, type ParentSend } from "./http-adapter-spec.js";
 
 /** Read-modify-write rounds before giving up on a collection that keeps changing under us. */
 export const MAX_ATTEMPTS = 3;
@@ -32,7 +32,9 @@ interface Locator {
   read: string;
   write: string;
   list: string;
-  send: "field" | "parent" | "collection";
+  send: ParentSend;
+  /** Where the parent object is in the read answer; absent: the whole body. */
+  item_path?: string;
   shape: ListShape;
   sep?: string;
   key_field?: string;
@@ -44,8 +46,6 @@ interface Locator {
   missing_empty?: true;
   /** `parent.when_empty: delete`: an empty collection is removed with `DELETE <write path>` instead of written. */
   delete_empty?: true;
-  /** `parent.body_list_path`: where the collection goes in the request body, when not where it is read (`list`). */
-  body_list?: string;
 }
 
 /** One item of the collection: what identifies it, and its value. */
@@ -78,6 +78,7 @@ function locatorOf(spec: ListItemSpec): Locator | undefined {
     write: `${spec.parent.method} ${path}`,
     list: spec.listPath,
     send: spec.parent.send,
+    ...(spec.parent.itemPath !== "" ? { item_path: spec.parent.itemPath } : {}),
     shape: spec.shape,
     ...(spec.shape === "delimited" ? { sep: spec.separator } : {}),
     ...(spec.keyField !== undefined ? { key_field: spec.keyField } : {}),
@@ -86,7 +87,6 @@ function locatorOf(spec: ListItemSpec): Locator | undefined {
     ...(spec.destroy === "keep" ? { keep: true as const } : {}),
     ...(spec.parent.ifMissing === "empty" ? { missing_empty: true as const } : {}),
     ...(spec.parent.whenEmpty === "delete" ? { delete_empty: true as const } : {}),
-    ...(spec.parent.bodyListPath !== undefined ? { body_list: spec.parent.bodyListPath } : {}),
   };
 }
 
@@ -211,14 +211,15 @@ interface Conn {
 
 /** The parent object and its collection; with `if_missing: empty`, a parent that is not there is empty. */
 async function readParent(conn: Conn, loc: Locator): Promise<{ doc: Record<string, unknown>; entries: Entry[] }> {
-  let doc: unknown;
+  let body: unknown;
   try {
-    doc = await conn.api.get(loc.read);
+    body = await conn.api.get(loc.read);
   } catch (e) {
     if (loc.missing_empty && failedWith(e, "PROVIDER_NOT_FOUND", [])) return { doc: {}, entries: [] };
     throw e;
   }
-  if (!isObject(doc)) throw badShape(loc, "an object");
+  const doc = loc.item_path ? at(body, pointerTokens(loc.item_path)) : body;
+  if (!isObject(doc)) throw loc.item_path ? new SponsonError("PROVIDER_RESPONSE", `${ADAPTER}: GET ${loc.read}: no object at \`parent.item_path\` ${loc.item_path}`, { adapter: ADAPTER, param: "parent.item_path" }) : badShape(loc, "an object");
   return { doc, entries: decode(at(doc, pointerTokens(loc.list)), loc, conn.xml) };
 }
 
@@ -226,12 +227,22 @@ function clientFor(actx: AdapterContext, loc: Locator): Conn {
   return { api: httpClient(actx, loc.content_type ? { contentType: loc.content_type } : {}), xml: parseApi(actx.provider, "providers.http.<api>").encoding === "xml" };
 }
 
+/** What a write sends besides the collection: nothing, the parent read just before, or the listed fields of it. */
+function sentAlong(send: ParentSend, doc: Record<string, unknown>): Record<string, unknown> {
+  if (send === "field" || send === "collection") return {};
+  if (send === "parent") return doc;
+  return send.reduce<Record<string, unknown>>((body, f) => {
+    const v = at(doc, fieldTokens(f));
+    return v === undefined ? body : setAt(body, fieldTokens(f), v);
+  }, {});
+}
+
 /**
  * Write the collection after one change (`value: null` removes `key`): a keyed map with `send: field` as a merge
  * patch of that entry, anything else as the whole collection, alone or in the parent read just before.
  */
 async function writeChange(api: ApiClient, loc: Locator, doc: Record<string, unknown>, entries: Entry[], change: Entry): Promise<void> {
-  const tokens = pointerTokens(loc.send === "parent" ? loc.list : (loc.body_list ?? loc.list));
+  const tokens = pointerTokens(loc.list);
   const space = loc.write.indexOf(" ");
   if (loc.delete_empty && entries.length === 0) {
     // An API that refuses an empty collection (S3 CORS needs at least one rule) removes it instead.
@@ -244,7 +255,7 @@ async function writeChange(api: ApiClient, loc: Locator, doc: Record<string, unk
   }
   let body: unknown;
   if (loc.shape === "map" && loc.send === "field") body = place({}, tokens, { [String(change.key as string)]: change.value });
-  else body = place(loc.send === "parent" ? doc : {}, tokens, encode(entries, loc));
+  else body = place(sentAlong(loc.send, doc), tokens, encode(entries, loc));
   await write(api, loc.write.slice(0, space), loc.write.slice(space + 1), body, true);
 }
 

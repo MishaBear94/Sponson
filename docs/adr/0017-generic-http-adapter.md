@@ -221,8 +221,8 @@ a 401.
 attributes as `@name`. No DTDs or entities beyond the predefined ones (no XXE, no expansion). Where `list_item`
 expects a list in an XML document, a lone element is a list of one. Two `list_item` parent options make S3 CORS
 expressible, and are not S3-specific: `if_missing: empty` (a 404 parent is an empty collection) and
-`when_empty: delete` (an API that refuses an empty collection has it removed instead). `send: collection` and
-`body_list_path` cover APIs that replace a map they are sent, read from one place and written to another (Amplify
+`when_empty: delete` (an API that refuses an empty collection has it removed instead). `send: collection`, with
+`parent.item_path` (from main), covers APIs that replace a map they are sent, read nested and written flat (Amplify
 `UpdateBranch`). A versioned JSON media type (`media_type`) covers Atlas.
 
 **GraphQL as a request kind of `http.resource`**: any of `find`, `read`, `create`, `update`, `delete` may be

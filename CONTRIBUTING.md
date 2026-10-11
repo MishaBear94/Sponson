@@ -98,7 +98,8 @@ existing file in `packages/adapters/recipes/` and:
    `# yaml-language-server` line gives editor checks): `api` with the provider's conventional credential variable
    and `<PROVIDER>_API_URL`; per op its `kind`, typed `params` with an `example` for each required one, and `http`
    using `{ param: <name> }` and `{<name>}` path placeholders. Add `sim` hints when the sim needs them (a parent
-   object to seed for a list item, the body field a client-chosen id comes from).
+   object to seed for a list item, the body field a client-chosen id comes from, the `collection` when the create
+   posts to another path than the list). A per-account API leaves `base_url` out and gives a `base_url_example`.
 3. **Mark the row covered** in `docs/coverage.yaml` (`covered_by: recipe:<provider>.<op>`) and list its id in the
    op's `covers`.
 4. **Run `SPONSON_UPDATE_RECIPE_LOCK=1 pnpm vitest run packages/adapters/src/recipes.test.ts`** to pin the new op's

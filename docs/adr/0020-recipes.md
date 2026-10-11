@@ -151,3 +151,27 @@ chosen: its signing secret exists only in the create response, which the `http` 
 - The rest sim's answers are shaped per collection; the default shape is unchanged.
 - The sim proves a recipe consistent with its own declarations, not with the provider: the verified assumptions and
   `pnpm test:live` are what tie a recipe to the real API.
+
+## Amendment 1 (2026-10-11): what the feature-flag recipes needed
+
+Writing the feature-flag recipes (Statsig, GrowthBook, Unleash, PostHog, ConfigCat, Split) found four shapes the
+framework could not express. Each was added as a general option, with no provider named in the code:
+
+- **`create.locate: true`** (`http.resource`): the create answers with something other than the object (Statsig's
+  add-rule answers with the whole gate, whose own `id` would be taken for the rule's). The new object is located with
+  `find`/`read` after the create, as for an empty answer. Identity is unchanged.
+- **`parent.item_path`** (`http.list_item`): the parent is read in an envelope (`{ feature: {...} }`) but written
+  bare. `list_path` and `send` are relative to it. It joins the locator only when set, so existing record ids are
+  unchanged.
+- **`parent.send: [fields]`** (`http.list_item`): a `PUT` that resets what it is not sent and is not documented to
+  take the read-only fields of its own GET (ConfigCat's value, Split's definition) gets those fields back and nothing
+  else.
+- **Per-account recipes in the tests and docs**: a recipe without a default `base_url` names a `base_url_example`
+  (required then, by the schema); the unit checks, the sim harness and docs/recipes.md write the provider block
+  with it. The sim harness also follows `sim.collection` (a create posted to another path than the list: the sim's
+  new `aliases`), list and key fields given as JSON pointers, and parent envelopes; the rest sim accepts a bare
+  token in `Authorization` (Unleash), and answers a styled object in its `item_path` envelope (assumptions R1, R2).
+
+Flagsmith was not written: its Admin API takes `Authorization: Api-Key <key>` (or `Token <key>`), a scheme prefix the
+three auth forms do not send, and Bearer only for short-lived OIDC-exchanged tokens. Adding a prefix form to `auth`
+was left for a decision of its own.

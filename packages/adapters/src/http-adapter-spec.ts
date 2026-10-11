@@ -332,7 +332,8 @@ export interface OutputDecl {
 export interface ResourceSpec {
   api: string;
   vars: Record<string, unknown>;
-  create: RequestSpec & { idempotencyKey: boolean };
+  /** `locate`: the create's answer is not the object (the parent, an acknowledgement); find it afterwards. */
+  create: RequestSpec & { idempotencyKey: boolean; locate: boolean };
   read?: { path: string; graphql?: GraphqlSpec };
   find?: FindSpec;
   update?: RequestSpec;
@@ -370,10 +371,11 @@ function parseRequest(v: unknown, param: string, methods: readonly string[], fal
 
 function parseCreate(v: unknown, vars: Record<string, unknown>): ResourceSpec["create"] {
   const r = parseRequest(v, "create", ["POST", "PUT", "PATCH"], "POST", vars, false);
-  if (r.graphql) return { ...r, idempotencyKey: false };
-  const key = (v as Record<string, unknown>).idempotency_key;
+  if (r.graphql) return { ...r, idempotencyKey: false, locate: false };
+  const { idempotency_key: key, locate } = v as Record<string, unknown>;
   if (key !== undefined && typeof key !== "boolean") throw fail("`create.idempotency_key` must be true or false", "create.idempotency_key");
-  return { ...r, idempotencyKey: key === true };
+  if (locate !== undefined && typeof locate !== "boolean") throw fail("`create.locate` must be true or false", "create.locate");
+  return { ...r, idempotencyKey: key === true, locate: locate === true };
 }
 
 function parseFind(v: unknown, vars: Record<string, unknown>): FindSpec | undefined {
@@ -509,11 +511,24 @@ export function resourceOutputs(line: Record<string, unknown>): Record<string, {
  */
 export type ListShape = "array" | "delimited" | "map";
 
+/**
+ * What a write of the parent sends besides the collection: nothing (`field`; a keyed map's one entry, as a merge
+ * patch), nothing but the whole collection (`collection`; a keyed map too, for an API that replaces the map it is
+ * sent), the whole object read just before (`parent`), or the listed fields of it (names or pointers), for a
+ * replace that resets what it is not sent.
+ */
+export type ParentSend = "field" | "parent" | "collection" | string[];
+
 /** `http.list_item` params, checked. */
 export interface ListItemSpec {
   api: string;
   vars: Record<string, unknown>;
-  parent: { path: string; readPath: string; method: string; send: "field" | "parent" | "collection"; contentType?: string; ifMissing: "error" | "empty"; whenEmpty: "write" | "delete"; bodyListPath?: string };
+  /**
+   * `itemPath`: where the parent object is in the read answer (`/feature` for `{ feature: {...} }`); default the whole
+   * body. `ifMissing: empty`: a 404 parent reads as an empty collection; `whenEmpty: delete`: an empty collection is
+   * removed with DELETE instead of written.
+   */
+  parent: { path: string; readPath: string; method: string; send: ParentSend; itemPath: string; contentType?: string; ifMissing: "error" | "empty"; whenEmpty: "write" | "delete" };
   listPath: string;
   shape: ListShape;
   separator: string;
@@ -534,13 +549,19 @@ function parseParent(v: unknown, vars: Record<string, unknown>): ListItemSpec["p
   checkPlaceholders(path, "parent.path", vars, false);
   const readPath = o.read_path === undefined ? path : pathParam(o.read_path, "parent.read_path");
   checkPlaceholders(readPath, "parent.read_path", vars, false);
-  const send = oneOf(o.send, ["field", "parent", "collection"] as const, "parent.send", "`field` (the default: send only the list; a map entry as a merge patch), `collection` (send only the list, a map whole) or `parent` (send the whole object back)");
   const ifMissing = oneOf(o.if_missing, ["error", "empty"] as const, "parent.if_missing", "`error` (the default: a parent that is not there is an error) or `empty` (a 404 reads as an empty collection, S3 CORS)");
   const whenEmpty = oneOf(o.when_empty, ["write", "delete"] as const, "parent.when_empty", "`write` (the default: write the empty collection) or `delete` (DELETE `parent.path` instead, S3 CORS)");
   const contentType = contentTypeParam(o.content_type, "parent.content_type");
-  const bodyListPath = o.body_list_path === undefined ? undefined : pointerParam(o.body_list_path, "parent.body_list_path", "");
-  if (bodyListPath !== undefined && send === "parent") throw fail("`parent.body_list_path` does not apply to `send: parent` (the whole object goes back as it was read)", "parent.body_list_path");
-  return { path, readPath, method: methodParam(o.method, "parent.method", ["PATCH", "PUT", "POST"], "PATCH"), send, ifMissing, whenEmpty, ...(contentType ? { contentType } : {}), ...(bodyListPath !== undefined ? { bodyListPath } : {}) };
+  return {
+    path,
+    readPath,
+    method: methodParam(o.method, "parent.method", ["PATCH", "PUT", "POST"], "PATCH"),
+    send: parseSend(o.send),
+    itemPath: pointerParam(o.item_path, "parent.item_path", ""),
+    ifMissing,
+    whenEmpty,
+    ...(contentType ? { contentType } : {}),
+  };
 }
 
 /** One of `allowed` (the first when absent); PARAM_INVALID saying what each means otherwise. */
@@ -548,6 +569,12 @@ function oneOf<T extends string>(v: unknown, allowed: readonly T[], param: strin
   if (v === undefined) return allowed[0]!;
   if (typeof v === "string" && (allowed as readonly string[]).includes(v)) return v as T;
   throw fail(`\`${param}\` must be ${meaning}`, param);
+}
+
+function parseSend(v: unknown): ParentSend {
+  if (v === undefined || v === "field" || v === "parent" || v === "collection") return v ?? "field";
+  if (Array.isArray(v) && v.length > 0 && v.every((f) => typeof f === "string" && f !== "")) return v as string[];
+  throw fail("`parent.send` must be `field` (send only the list; a map entry as a merge patch), `collection` (send only the list, a map whole), `parent` (send the whole object back) or a list of the object's fields to send back with it", "parent.send");
 }
 
 function scalarItem(v: unknown, what: string): unknown {

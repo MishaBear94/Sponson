@@ -31,8 +31,8 @@ plan: |
       adapter: http
       op: list_item
       api: amplify
-      parent: { path: "/apps/d1demo/branches/${ctx.scope}", method: POST, send: collection, body_list_path: /environmentVariables }
-      list_path: /branch/environmentVariables
+      parent: { path: "/apps/d1demo/branches/${ctx.scope}", method: POST, send: collection, item_path: /branch }
+      list_path: /environmentVariables
       shape: map
       item: API_URL
       value: "https://api-${ctx.scope}.example.app"

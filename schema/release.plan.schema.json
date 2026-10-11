@@ -620,11 +620,14 @@
             "path": { "$ref": "#/$defs/httpPath", "description": "The parent object: read with GET, written with `method`." },
             "read_path": { "$ref": "#/$defs/httpPath", "description": "GET this instead when reading differs from writing." },
             "method": { "enum": ["PATCH", "PUT", "POST"], "description": "Default: PATCH." },
-            "send": { "enum": ["field", "parent", "collection"], "description": "field (default): send only the collection (a map entry as a merge patch); collection: only the collection, a map whole; parent: the whole object back." },
+            "send": {
+              "anyOf": [{ "enum": ["field", "parent", "collection"] }, { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }],
+              "description": "field (default): send only the collection (a map entry as a merge patch); collection: only the collection, a map whole; parent: the whole object back; a list: those fields of the object with the collection."
+            },
+            "item_path": { "$ref": "#/$defs/jsonPointer", "description": "Where the parent object is in the read answer (`/branch` for `{ branch: {…} }`). Default: the whole body." },
             "content_type": { "type": "string" },
             "if_missing": { "enum": ["error", "empty"], "description": "error (default); empty: a 404 on the parent reads as an empty collection (S3 CORS)." },
-            "when_empty": { "enum": ["write", "delete"], "description": "write (default); delete: an empty collection is removed with DELETE path instead (S3 CORS)." },
-            "body_list_path": { "$ref": "#/$defs/jsonPointer", "description": "Where the collection goes in the request body, when not at list_path (Amplify UpdateBranch)." }
+            "when_empty": { "enum": ["write", "delete"], "description": "write (default); delete: an empty collection is removed with DELETE path instead (S3 CORS)." }
           }
         },
         "list_path": { "$ref": "#/$defs/jsonPointer", "description": "Where the collection is in the parent." },

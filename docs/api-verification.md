@@ -198,8 +198,8 @@ They describe a conventional JSON REST API, not one provider; the adapter's test
 
 | Id | Assumption | Status |
 |---|---|---|
-| R1 | credentials as `Authorization: Bearer`, `Authorization: Basic` or a header ending in `-Api-Key`, `-Key` or `-Token` | convention |
-| R2 | `{ data }` envelopes for collection objects and lists, cursor in `next_cursor`; other objects bare; a collection's style changes the envelopes, cursor and id field | convention (the plan line names its own envelope with `item_path`, `list_path`, `find.next`; the recipe tests shape the style from the recipe) |
+| R1 | credentials as `Authorization: Bearer`, `Authorization: Basic`, a bare token in `Authorization` (Unleash) or a header ending in `-Api-Key`, `-Key` or `-Token` | convention |
+| R2 | `{ data }` envelopes for collection objects and lists, cursor in `next_cursor`; other objects bare; a collection's style changes the envelopes, cursor and id field; an object's style may give its reads an `item_path` envelope; a create may be posted to an alias of its collection | convention (the plan line names its own envelope with `item_path`, `list_path`, `find.next`; the recipe tests shape the style from the recipe) |
 | R3 | unknown paths are 404 until seeded or created; client-chosen ids; duplicate `name` → 409 | convention (`exists_status` covers providers that answer otherwise) |
 | R4 | PATCH is a JSON merge patch (RFC 7396); PUT replaces; JSON or form bodies; no preconditions | RFC 7396 for PATCH; the rest convention |
 | R5 | DELETE answers `{ id, deleted }`; unknown is 404 | convention (`gone_status` covers providers that answer otherwise) |

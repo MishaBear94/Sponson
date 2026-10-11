@@ -44,7 +44,10 @@ export function exampleParams(op: RecipeOp): Record<string, unknown> {
 
 function exampleLine(r: Recipe, name: string, op: RecipeOp): string {
   const line = { id: name, adapter: "http", op: op.kind, recipe: `${r.provider}.${name}`, ...exampleParams(op) };
-  return `# under changes: (no provider block needed)\n${stringify([line], { lineWidth: 0 }).trimEnd()}`;
+  if (typeof r.api.base_url === "string") return `# under changes: (no provider block needed)\n${stringify([line], { lineWidth: 0 }).trimEnd()}`;
+  // A per-account API: the block names the account's base URL.
+  const block = stringify({ providers: { http: { [r.provider]: { recipe: r.provider, base_url: r.base_url_example } } } }, { lineWidth: 0 }).trimEnd();
+  return `${block}\nchanges:\n${stringify([line], { lineWidth: 0 }).trimEnd().replace(/^/gm, "  ")}`;
 }
 
 function paramsTable(op: RecipeOp): string[] {
