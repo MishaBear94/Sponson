@@ -31,7 +31,7 @@
  *         notes: { id: { k: v } }
  *     - chaos: { ... }           POST /_chaos
  *     - plan: |                  replace the plan file
- *     - env: { ... }             set/unset process env
+ *     - env: { ... }             set/unset process env (`${SIM_URL}` as in `env:` above)
  *     - sim:                     assertions on sim state
  *         state:                 any provider, by dotted path into the sim's state (GET /_state):
  *           "<provider>.<path>": exists | absent | { includes: <partial> } | { excludes: <partial> }
@@ -188,7 +188,7 @@ class Harness {
     if ("env" in step) {
       for (const [k, v] of Object.entries(step.env)) {
         if (v === null) delete this.env[k];
-        else this.env[k] = v;
+        else this.env[k] = v.replaceAll("${SIM_URL}", this.sim.url);
       }
       return;
     }

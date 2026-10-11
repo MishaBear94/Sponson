@@ -29,6 +29,11 @@ All fetched on 2026-10-10 (LaunchDarkly, PlanetScale, Supabase, Netlify: 2026-10
 | Algolia | Search API reference https://www.algolia.com/doc/rest-api/search/, generated from https://github.com/algolia/api-clients-automation (`specs/search`: `spec.yml`, `operationIndex.yml`, `getTask.yml`, `settings.yml`, `listIndices.yml`); copy guide https://www.algolia.com/doc/guides/sending-and-managing-data/manage-indices-and-apps/manage-indices/how-to/copy-indices; CLI authentication https://www.algolia.com/doc/tools/cli/authentication | fetched 2026-10-11 |
 | Xata | OpenAPI document https://api.xata.tech/openapi.json; docs https://xata.io/docs/cli, https://xata.io/docs/cli/branch, https://xata.io/docs/platform/branch | fetched 2026-10-11 |
 | DigitalOcean | OpenAPI document https://github.com/digitalocean/openapi (`specification/resources/apps`: `apps_create.yml`, `apps_get.yml`, `apps_update.yml`, `apps_delete.yml`, `apps_list.yml`, `apps_get_deployment.yml`, `models/app.yml`, `models/app_spec.yml`, `models/app_variable_definition.yml`, `models/apps_deployment_phase.yml`), rendered at https://docs.digitalocean.com/reference/api/digitalocean/#tag/Apps; app spec reference https://docs.digitalocean.com/products/app-platform/reference/app-spec/ | fetched 2026-10-11 |
+| HashiCorp Vault | KV v2 API https://developer.hashicorp.com/vault/api-docs/secret/kv/kv-v2 ("Read secret version"); HTTP API overview (token header, namespaces, status codes, error format) https://developer.hashicorp.com/vault/api-docs | fetched 2026-10-11 |
+| Infisical | CLI reference https://infisical.com/docs/cli/commands/secrets; CLI source https://github.com/Infisical/cli/blob/main/packages/cmd/secrets.go (`getSecretsByNames`), https://github.com/Infisical/cli/blob/main/packages/cmd/root.go, https://github.com/Infisical/cli/blob/main/packages/util/common.go (`FormatOutput`) | `main` on 2026-10-11 |
+| Azure Key Vault | CLI reference https://learn.microsoft.com/en-us/cli/azure/keyvault/secret#az-keyvault-secret-show; naming rules https://learn.microsoft.com/en-us/azure/key-vault/general/about-keys-secrets-certificates | fetched 2026-10-11 |
+| 1Password Connect | Connect API reference https://www.1password.dev/connect/api-reference/ (formerly developer.1password.com/docs/connect/api-reference); Connect with the CLI https://developer.1password.com/docs/connect/connect-cli; Go SDK README https://github.com/1Password/connect-sdk-go | fetched 2026-10-11 |
+| Bitwarden Secrets Manager | CLI docs https://bitwarden.com/help/secrets-manager-cli/; CLI source https://github.com/bitwarden/sdk-sm (`crates/bws/src/cli.rs`, `command/secret.rs`, `render.rs`) and https://github.com/bitwarden/sdk-internal (`crates/bitwarden-cli/src/color.rs`) | `main` on 2026-10-11 |
 
 Vercel, Neon and Clerk use bearer authentication (`securitySchemes`), which is what the shared HTTP client sends
 by default: ✅. LaunchDarkly takes the access token as the whole `Authorization` value, without `Bearer`; the adapter
@@ -440,6 +445,20 @@ Deploy Previews cannot be rebuilt through any documented call (the docs describe
 | DO7 | `SECRET` values read back encrypted (`EV[…]`) | encryption ✅; read-back form ❓ |
 | DO8 | `DELETE` removes the app | ✅ verified |
 
+## Secret sources
+
+What each built-in secret source sends and reads (`packages/adapters/src/secrets.ts`). The CLI-backed ones are
+tested with injected output and fake executables shaped like the documented output; the HTTP ones against a local
+server and the generic REST sim (assumption R7's exact headers and fixed tokens) serving the documented answers.
+
+| Source | Call | Verified | Notes |
+|---|---|---|---|
+| HashiCorp Vault | `GET $VAULT_ADDR/v1/{mount}/data/{path}`, `X-Vault-Token`, `X-Vault-Namespace` when `VAULT_NAMESPACE` is set; reads `data.data[key]` | ✅ | KV v2 "Read secret version"; without `?version=` the latest is returned. The token header and the namespace header are in the API overview. A 404 means "invalid path", which "can both mean that the path truly doesn't exist" or that the token may not see it, so the message says both. A 503 is a sealed or overloaded Vault (retried by the HTTP client as any GET). Errors are `{ "errors": [...] }` for any status ≥ 400 and carry no values. What a soft-deleted latest version answers (404 with metadata, or 200 with `data: null`) ❓; both are refused. The mount is the first segment: a mount whose path has a `/` cannot be named. |
+| Infisical | `infisical secrets get NAME --projectId P --env E --path /F --output json --silent` | ✅ | Flags and `INFISICAL_TOKEN` / `INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN` from the CLI reference; `--silent` and `--domain` (`INFISICAL_DOMAIN`) are root flags (root.go). An unknown name: the CLI fetches the folder and, for a name it lacks, prints `*not found*` as its value and exits 0 (`getSecretsByNames`); with `--plain` it prints nothing. Hence JSON (`[{ secretKey, secretValue }]`) and `*not found*` refused. A secret whose real value is the literal `*not found*` cannot be told apart and is refused too. |
+| Azure Key Vault | `az keyvault secret show --vault-name V --name N [--version X] --query value --output json` | ✅ | Parameters from the CLI reference (`--version`: "If omitted, uses the latest version"). Names checked against the documented rules: vault 3–24 of `0-9a-zA-Z` and non-consecutive `-`, secret 1–127 of `0-9a-zA-Z-`, version 32 characters. The CLI rather than REST: no Entra ID token step, and the CLI picks the vault DNS suffix of the signed-in cloud. A missing secret's exit status and text (`SecretNotFound`) ❓; any non-zero exit is `SECRET_UNRESOLVED` with the CLI's text. |
+| 1Password Connect | `GET $OP_CONNECT_HOST/v1/vaults/{vault}/items/{item}`, `Authorization: Bearer $OP_CONNECT_TOKEN`; by name, first `GET /v1/vaults?filter=name eq "…"` and `GET /v1/vaults/{vault}/items?filter=title eq "…"` | ✅ | Paths, bearer header, filters (vaults by `name`, items by `title`), item `fields[]` (`id`, `label`, `value`, `section.id`) and `sections[]` (`id`, `label`) from the API reference; 401 invalid token, 403 no access, 404 not found. The reference calls ids UUIDs while its examples show 26-character lowercase strings; the source treats a 26-character `[a-z0-9]` segment as an id and anything else as a name, and compares names exactly itself, so a server that ignored `filter` would not change the result. `OP_CONNECT_HOST` (a URL such as `http://localhost:8080`) and `OP_CONNECT_TOKEN` are the variables 1Password's Connect SDKs, `op` and the Kubernetes operator read: ✅ ([connect-cli](https://developer.1password.com/docs/connect/connect-cli), [connect-sdk-go](https://github.com/1Password/connect-sdk-go)). |
+| Bitwarden Secrets Manager | `bws secret get ID --output json --color no` | ✅ | Syntax, `json` as the default output, the `object, id, organizationId, projectId, key, value, note, creationDate, revisionDate` fields and `BWS_ACCESS_TOKEN` from the CLI docs; `BWS_SERVER_URL` and the UUID-typed id from `cli.rs`; one object, pretty-printed with a trailing newline, from `render.rs`. `--color no` because `auto` colours JSON whenever `supports_color` says so (`FORCE_COLOR` in CI). A missing id's exit status ❓; any non-zero exit is `SECRET_UNRESOLVED`. |
+
 ## What still needs a live account
 
 - Vercel: V1 (propagation of env writes), the deployment list's order, whether `decrypt=true` still decrypts,
@@ -469,6 +488,8 @@ Deploy Previews cannot be rebuilt through any documented call (the docs describe
 - DigitalOcean: DO3 (status of a duplicate name), DO6 (that the stored spec keeps every sent field in order), DO7
   (what a secret reads back as).
 
+- Secret sources: Vault's answer for a soft-deleted latest version; the exact failure texts of `az`, `bws` and
+  `infisical` for a missing secret.
 - The generic adapter's authentication forms and GraphQL examples: every ❓ above, and each provider end to end
   (the examples run against sims, not the live APIs).
 

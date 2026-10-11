@@ -51,18 +51,7 @@ polling until ready, an OAuth2 client-credentials token, and pagination by page 
 | Supabase follow-ups: a branch's API keys (`GET /v1/projects/{ref}/api-keys`) and pooler connection string (`/config/database/pooler`, IPv4) as outputs; `git_branch` and `with_data` on create | `supabase.branch` outputs only the direct (IPv6) connection string and the API URL today | adapter, **good first issue** |
 | Cloudflare, after `pages_env`: Workers secrets per script, a Pages deployment op (redeploy after a variable write, and the branch alias URL from the deployment's `aliases` as an output), DNS records for preview hostnames | Pages variables shipped as `cloudflare.pages_env`; the alias URL is not computed from the branch name because Cloudflare does not document how long names are shortened | adapter |
 
-## 3. More secret sources
-
-A secret source is an object with a `scheme`, `resolve(ref, env)`, and the `form` and `resolvedBy` the generated docs read (`packages/adapters/src/secrets.ts`).
-The CLI-backed sources (e.g. `aws-sm://`) show how to call a CLI through the injectable `Exec` so tests need no binary.
-
-| Item | Label |
-|------|-------|
-| `vault://` — HashiCorp Vault KV v2 over HTTP (`VAULT_ADDR`, `VAULT_TOKEN`) ([#17](https://github.com/MishaBear94/Sponson/issues/17)) | **good first issue** |
-| `infisical://` — Infisical via its CLI ([#18](https://github.com/MishaBear94/Sponson/issues/18)) | **good first issue** |
-| A scenario per new source under `scenarios/e-secrets/` proving the value never reaches any output (invariant 1) | part of each item above |
-
-## 4. Lifecycle and operations
+## 3. Lifecycle and operations
 
 | Item | Notes | Label |
 |------|-------|-------|
@@ -72,7 +61,7 @@ The CLI-backed sources (e.g. `aws-sm://`) show how to call a CLI through the inj
 | An S3 / R2 receipt store for teams that cannot push to the repository | Same store contract; conditional writes for fencing | **ADR**, help wanted |
 | `sponson plan --json` diff for Vercel `sensitive`-type variables (see V3) | Today they would always diff as `update` against the real API | help wanted |
 
-## 5. Contributor experience
+## 4. Contributor experience
 
 | Item | Label |
 |------|-------|

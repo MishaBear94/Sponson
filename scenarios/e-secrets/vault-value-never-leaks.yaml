@@ -1,0 +1,50 @@
+name: "vault:// against a KV v2 endpoint: plan resolves the value only to mask it, apply sends it, and neither the value nor the token appears in any output or receipt"
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values: { STRIPE_KEY: { secret: "vault://secret/shop/stripe#STRIPE_KEY" } }
+# The generic REST sim stands in for Vault: the KV v2 answer of `GET /v1/secret/data/shop/stripe`, served only to a
+# request carrying both the token (X-Vault-Token) and the namespace (X-Vault-Namespace).
+seed:
+  rest:
+    objects:
+      /v1/secret/data/shop/stripe:
+        data:
+          data: { STRIPE_KEY: fake_ts_vault_9k2m4p, OTHER: fake_ts_vault_other_31 }
+          metadata: { version: 2, destroyed: false, deletion_time: "" }
+    auth:
+      headers:
+        - { x-vault-token: hvs.fake_scenario_token_77, x-vault-namespace: admin }
+env:
+  VAULT_ADDR: "${SIM_URL}/rest"
+  VAULT_TOKEN: hvs.fake_scenario_token_77
+  VAULT_NAMESPACE: admin
+secrets: [fake_ts_vault_9k2m4p, fake_ts_vault_other_31, hvs.fake_scenario_token_77, hvs.fake_wrong_token_00]
+chaos: { fail_on: "POST /vercel/*", fail_next: 1, status: 500 }
+steps:
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { env: create } }
+  - run: plan
+    expect: { exit: 0, stdout: ["(secret)"] }
+  - run: apply --json
+    expect: { exit: 1, status: failed }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { env: applied } }
+  - sim:
+      vercel_env: { preview: { STRIPE_KEY: "fake_ts_vault_9k2m4p" } }
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { env: unchanged } }
+  # A token Vault refuses: the line is blocked with Vault's status, and neither token reaches any output.
+  - env: { VAULT_TOKEN: hvs.fake_wrong_token_00 }
+  - run: plan --json
+    expect:
+      exit: 1
+      plan_lines: { env: blocked }
+      errors: { env: "^vault://secret/shop/stripe#STRIPE_KEY: vault: GET /v1/secret/data/shop/stripe → 40[13]" }

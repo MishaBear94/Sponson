@@ -1,0 +1,42 @@
+name: "vault:// without VAULT_ADDR, or with a path Vault does not hold: the line is blocked naming the reference, nothing is written"
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values: { STRIPE_KEY: { secret: "vault://secret/shop/stripe#STRIPE_KEY" } }
+seed:
+  rest:
+    auth:
+      headers:
+        - { x-vault-token: hvs.fake_scenario_token_77 }
+env:
+  VAULT_TOKEN: hvs.fake_scenario_token_77
+secrets: [hvs.fake_scenario_token_77]
+steps:
+  - run: plan --json
+    expect:
+      exit: 1
+      plan_lines: { env: blocked }
+      errors: { env: "^vault://secret/shop/stripe#STRIPE_KEY: VAULT_ADDR is not set$" }
+  - run: apply --json
+    expect:
+      exit: 1
+      status: failed
+      lines: { env: blocked }
+      errors: { env: "VAULT_ADDR is not set" }
+      writes: 0
+  # Vault reachable, the path absent (404): blocked, not an empty value.
+  - env: { VAULT_ADDR: "${SIM_URL}/rest" }
+  - run: apply --json
+    expect:
+      exit: 1
+      status: failed
+      lines: { env: blocked }
+      errors: { env: "^vault://secret/shop/stripe#STRIPE_KEY: no secret at secret/shop/stripe" }
+      writes: 0

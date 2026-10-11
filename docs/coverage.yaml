@@ -532,26 +532,24 @@ secret_sources:
     provider: HashiCorp Vault
     read_api: KV v2 `GET /v1/{mount}/data/{path}`, `X-Vault-Token`
     priority: P1
-    covered_by: null
-    issue: https://github.com/MishaBear94/Sponson/issues/17
+    covered_by: secret:vault
   - id: infisical
     provider: Infisical
     read_api: CLI or `GET /api/v3/secrets/raw/{name}`, machine identity
     priority: P1
-    covered_by: null
-    issue: https://github.com/MishaBear94/Sponson/issues/18
+    covered_by: secret:infisical
   - id: azure-key-vault
     provider: Azure Key Vault
     read_api: "`GET {vault}/secrets/{name}?api-version=7.4`, AAD token, or `az keyvault secret show`"
     priority: P2
-    covered_by: null
+    covered_by: secret:azure-kv
   - id: 1password-connect
     provider: 1Password Connect
     read_api: "`GET /v1/vaults/{v}/items/{i}`, bearer"
     priority: P2
-    covered_by: null
+    covered_by: secret:op-connect
   - id: bitwarden-secrets-manager
     provider: Bitwarden Secrets Manager
     read_api: "`bws secret get`, `BWS_ACCESS_TOKEN`"
     priority: P2
-    covered_by: null
+    covered_by: secret:bws

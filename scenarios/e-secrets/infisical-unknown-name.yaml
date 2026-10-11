@@ -1,0 +1,30 @@
+name: "infisical:// naming a secret the folder does not hold: the CLI exits 0 printing `*not found*` as the value, and the line is blocked instead of sending it"
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values: { STRIPE_KEY: { secret: "infisical://6f1c2d3e-proj/prod/MISSING_KEY" } }
+# What the real CLI prints for an unknown name with `--output json` (packages/cmd/secrets.go, getSecretsByNames).
+bins:
+  infisical: |
+    echo '[{"secretKey":"MISSING_KEY","secretValue":"*not found*"}]'
+steps:
+  - run: plan --json
+    expect:
+      exit: 1
+      plan_lines: { env: blocked }
+      errors: { env: "^infisical://6f1c2d3e-proj/prod/MISSING_KEY: no secret MISSING_KEY in environment prod at /$" }
+  - run: apply --json
+    expect:
+      exit: 1
+      status: failed
+      lines: { env: blocked }
+      writes: 0
+  - sim:
+      vercel_env: { preview: { STRIPE_KEY: absent } }

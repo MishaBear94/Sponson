@@ -2,7 +2,7 @@ import { Registry } from "@sponson/core";
 import { clerkAdapter } from "./clerk.js";
 import { httpAdapter } from "./http-adapter.js";
 import { neonAdapter } from "./neon.js";
-import { awsSecretsManagerSource, dopplerSecretSource, envSecretSource, gcpSecretManagerSource, opSecretSource } from "./secrets.js";
+import { awsSecretsManagerSource, azureKeyVaultSource, bitwardenSecretsManagerSource, dopplerSecretSource, envSecretSource, gcpSecretManagerSource, infisicalSecretSource, opConnectSecretSource, opSecretSource, vaultSecretSource } from "./secrets.js";
 import { vercelAdapter } from "./vercel.js";
 import { netlifyAdapter } from "./netlify.js";
 import { planetscaleAdapter } from "./planetscale.js";
@@ -42,5 +42,5 @@ export * from "./digitalocean.js";
 
 /** Every built-in adapter and secret source. The CLI uses this; tests build narrower registries. */
 export function createRegistry(): Registry {
-  return new Registry().addAdapter(neonAdapter).addAdapter(vercelAdapter).addAdapter(clerkAdapter).addAdapter(planetscaleAdapter).addAdapter(launchdarklyAdapter).addAdapter(httpAdapter).addAdapter(supabaseAdapter).addAdapter(netlifyAdapter).addAdapter(cloudflareAdapter).addAdapter(manualAdapter).addAdapter(algoliaAdapter).addAdapter(xataAdapter).addAdapter(digitaloceanAdapter).addSecretSource(envSecretSource).addSecretSource(dopplerSecretSource()).addSecretSource(opSecretSource()).addSecretSource(awsSecretsManagerSource()).addSecretSource(gcpSecretManagerSource());
+  return new Registry().addAdapter(neonAdapter).addAdapter(vercelAdapter).addAdapter(clerkAdapter).addAdapter(planetscaleAdapter).addAdapter(launchdarklyAdapter).addAdapter(httpAdapter).addAdapter(supabaseAdapter).addAdapter(netlifyAdapter).addAdapter(cloudflareAdapter).addAdapter(manualAdapter).addAdapter(algoliaAdapter).addAdapter(xataAdapter).addAdapter(digitaloceanAdapter).addSecretSource(envSecretSource).addSecretSource(dopplerSecretSource()).addSecretSource(opSecretSource()).addSecretSource(awsSecretsManagerSource()).addSecretSource(gcpSecretManagerSource()).addSecretSource(vaultSecretSource).addSecretSource(infisicalSecretSource()).addSecretSource(azureKeyVaultSource()).addSecretSource(opConnectSecretSource).addSecretSource(bitwardenSecretsManagerSource());
 }

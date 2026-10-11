@@ -1,0 +1,32 @@
+name: "azure-kv:// through a fake az CLI: plan resolves the value only to mask it, apply sends it, and it never appears in any output or receipt"
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values: { STRIPE_KEY: { secret: "azure-kv://shop-prod-kv/stripe-key/4387e9f3d6e14c459867679a90fd0f79" } }
+# The fake `az` checks it was asked the right question, then answers like `--query value --output json` does.
+bins:
+  az: |
+    [ "$*" = "keyvault secret show --vault-name shop-prod-kv --name stripe-key --version 4387e9f3d6e14c459867679a90fd0f79 --query value --output json" ] || { echo "unexpected: az $*" >&2; exit 1; }
+    echo '"fake_ts_azurekv_3n6b1v"'
+secrets: ["fake_ts_azurekv_3n6b1v"]
+chaos: { fail_on: "POST /vercel/*", fail_next: 1, status: 500 }
+steps:
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { env: create } }
+  - run: plan
+    expect: { exit: 0, stdout: ["(secret)"] }
+  - run: apply --json
+    expect: { exit: 1, status: failed }
+  - run: apply --json
+    expect: { exit: 0, status: complete, lines: { env: applied } }
+  - sim:
+      vercel_env: { preview: { STRIPE_KEY: "fake_ts_azurekv_3n6b1v" } }
+  - run: plan --json
+    expect: { exit: 0, plan_lines: { env: unchanged } }

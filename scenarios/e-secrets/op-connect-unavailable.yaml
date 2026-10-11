@@ -1,0 +1,33 @@
+name: "op-connect:// without OP_CONNECT_HOST, or with a token Connect refuses: the line is blocked naming the reference, nothing is written, the token never leaks"
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values: { STRIPE_KEY: { secret: "op-connect://ytrfte14kw1uex5txaore1emkz/wepiqdxdzncjtnvmv5fegud4qy/password" } }
+seed:
+  rest:
+    auth:
+      tokens: [eyJ_fake_scenario_connect_token]
+env:
+  OP_CONNECT_TOKEN: eyJ_fake_wrong_connect_token
+secrets: [eyJ_fake_wrong_connect_token, eyJ_fake_scenario_connect_token]
+steps:
+  - run: plan --json
+    expect:
+      exit: 1
+      plan_lines: { env: blocked }
+      errors: { env: "^op-connect://ytrfte14kw1uex5txaore1emkz/wepiqdxdzncjtnvmv5fegud4qy/password: OP_CONNECT_HOST is not set$" }
+  - env: { OP_CONNECT_HOST: "${SIM_URL}/rest" }
+  - run: apply --json
+    expect:
+      exit: 1
+      status: failed
+      lines: { env: blocked }
+      errors: { env: "^op-connect://ytrfte14kw1uex5txaore1emkz/wepiqdxdzncjtnvmv5fegud4qy/password: 1password-connect: GET /v1/vaults/ytrfte14kw1uex5txaore1emkz/items/wepiqdxdzncjtnvmv5fegud4qy → 401" }
+      writes: 0

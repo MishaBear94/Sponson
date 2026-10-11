@@ -1,0 +1,26 @@
+name: "infisical:// without the infisical CLI: the line is blocked naming the reference, nothing is written"
+plan: |
+  version: 1
+  providers:
+    vercel: { project: prj_demo }
+    neon: { project: proj_demo }
+  changes:
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values: { STRIPE_KEY: { secret: "infisical://6f1c2d3e-proj/prod/STRIPE_KEY" } }
+env: { PATH: "/sponson-scenario-no-such-dir" }
+steps:
+  - run: plan --json
+    expect:
+      exit: 1
+      plan_lines: { env: blocked }
+      errors: { env: "^infisical://6f1c2d3e-proj/prod/STRIPE_KEY: the `infisical` CLI is not installed or not on PATH$" }
+  - run: apply --json
+    expect:
+      exit: 1
+      status: failed
+      lines: { env: blocked }
+      errors: { env: "infisical://6f1c2d3e-proj/prod/STRIPE_KEY" }
+      writes: 0
