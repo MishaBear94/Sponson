@@ -3,7 +3,7 @@
  * block (`actx.provider` is `providers.http.<api>`, narrowed by `OpSpec.providerFor`), its credential from the
  * environment variable(s) the block names, and writes with the idempotency each method has.
  */
-import { SponsonError, canonicalJson, type AdapterContext, type Literal, type OpSpec } from "@sponson/core";
+import { SponsonError, canonicalJson, markerKind, type AdapterContext, type Literal, type OpSpec } from "@sponson/core";
 import { clientFor, optionalEnv } from "./common.js";
 import { isObject, isProviderError, type ApiClient } from "./http.js";
 import { DEFAULT_AUTH_DEPS, credentialFor, type Auth, type AuthDeps } from "./http-adapter-auth.js";
@@ -39,6 +39,27 @@ export function withDeps(op: OpSpec, deps: AuthDeps): OpSpec {
   };
 }
 
+/** A line's own credential value (`credential`), by the adapter context its calls use (see `withLineCredential`). */
+const LINE_CREDENTIAL = new WeakMap<AdapterContext, string>();
+
+/**
+ * `actx` for a line with `credential` (ADR 0017, "Line credentials"): its clients send that value instead of the
+ * API block's variable. The value is registered as a secret before any request carries it (the engine masks
+ * sensitive outputs and secrets already; this covers an engine without the hook). Without one, `actx` itself.
+ */
+export function withLineCredential(actx: AdapterContext, value: unknown): AdapterContext {
+  if (value === undefined) return actx;
+  if (typeof value !== "string" || value === "" || markerKind(value) !== null) {
+    throw new SponsonError("PARAM_INVALID", `${ADAPTER}: \`credential\` has no value to authenticate with (a reference not resolved yet, or a once-only output kept from an earlier run)`, { adapter: ADAPTER, param: "credential" });
+  }
+  actx.secret?.(value);
+  const bound = { ...actx };
+  const deps = DEPS.get(actx);
+  if (deps) DEPS.set(bound, deps);
+  LINE_CREDENTIAL.set(bound, value);
+  return bound;
+}
+
 /** The variables holding a credential's secret part, for `refuse_credential`. */
 function secretEnvs(auth: Auth): string[] {
   switch (auth.kind) {
@@ -64,10 +85,11 @@ function secretEnvs(auth: Auth): string[] {
  * Refuse a credential the API refuses (`refuse_credential`): PROVIDER_AUTH naming the variable and the prefix,
  * never the value, before any request is sent.
  */
-function refuseCredentials(cfg: ApiConfig, env: NodeJS.ProcessEnv): void {
+function refuseCredentials(cfg: ApiConfig, env: NodeJS.ProcessEnv, line?: string): void {
   if (!cfg.refuse || /^(1|true)$/i.test(env[cfg.refuse.unlessEnv] ?? "")) return;
-  for (const name of secretEnvs(cfg.auth)) {
-    const value = env[name] ?? "";
+  // A line's own credential is checked like the variable it replaces, and named as `credential`.
+  const values = line === undefined ? secretEnvs(cfg.auth).map((name) => [name, env[name] ?? ""] as const) : [["credential", line] as const];
+  for (const [name, value] of values) {
     const prefix = cfg.refuse.prefixes.find((p) => value.startsWith(p));
     if (!prefix) continue;
     throw new SponsonError(
@@ -90,8 +112,9 @@ export function httpClient(actx: AdapterContext, req: RequestOptions = {}, opts:
   const baseUrl = (cfg.baseUrlEnv ? optionalEnv(actx.env, cfg.baseUrlEnv) : undefined) ?? cfg.baseUrl;
   let hidden: () => string[] = () => [];
   const redact = (t: string) => hidden().reduce((s, h) => (h.length >= 4 ? s.split(h).join("****") : s), actx.redact(t));
-  refuseCredentials(cfg, actx.env);
-  const cred = credentialFor(actx, cfg.auth, DEPS.get(actx) ?? DEFAULT_AUTH_DEPS, redact);
+  const line = LINE_CREDENTIAL.get(actx);
+  refuseCredentials(cfg, actx.env, line);
+  const cred = credentialFor(actx, cfg.auth, DEPS.get(actx) ?? DEFAULT_AUTH_DEPS, redact, line);
   hidden = () => [cred.token, ...cred.masks()];
   const contentType = req.contentType ?? cfg.mediaType;
   return clientFor({ ...actx, redact }, opts.adapter ?? ADAPTER, {

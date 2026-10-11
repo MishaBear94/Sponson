@@ -20,9 +20,9 @@
 import { SponsonError, canonicalJson, type AdapterContext, type DiffSide, type LiveState, type OpSpec, type ResolvedParams, type ResourceDiff, type ResourceRecord } from "@sponson/core";
 import { ABSENT, SENSITIVE, assertNoPending, desiredSide, paramError } from "./common.js";
 import { isObject, type ApiClient } from "./http.js";
-import { failedWith, httpClient, write } from "./http-adapter-client.js";
+import { failedWith, httpClient, withLineCredential, write } from "./http-adapter-client.js";
 import { expandRecipe } from "./recipes.js";
-import { ADAPTER, apiBlock, apiEnvironment, at, fieldTokens, fillPath, firstMarker, isKeep, parseApi, parseListItem, pointerTokens, projection, setAt, stateHash, type ListItemSpec, type ListShape, type ParentSend } from "./http-adapter-spec.js";
+import { ADAPTER, apiBlock, apiEnvironment, at, credentialInputs, fieldTokens, fillPath, firstMarker, isKeep, parseApi, parseListItem, pointerTokens, projection, setAt, stateHash, type ListItemSpec, type ListShape, type ParentSend } from "./http-adapter-spec.js";
 
 /** Read-modify-write rounds before giving up on a collection that keeps changing under us. */
 export const MAX_ATTEMPTS = 3;
@@ -209,8 +209,22 @@ interface Conn {
   xml: boolean;
 }
 
+/**
+ * In an XML document a field of one element reads as that element alone. Where the line's map item declares a field
+ * as a list (S3's `AllowedMethod: [GET]`), a lone value is that list of one, so a one-element list compares equal.
+ */
+function xmlLists(spec: ListItemSpec, value: unknown): unknown {
+  if (!isObject(spec.item) || !isObject(value)) return value;
+  let out = value;
+  for (const [f, declared] of Object.entries(spec.item)) {
+    const live = at(out, fieldTokens(f));
+    if (Array.isArray(declared) && live !== undefined && live !== null && !Array.isArray(live)) out = setAt(out, fieldTokens(f), [live]);
+  }
+  return out;
+}
+
 /** The parent object and its collection; with `if_missing: empty`, a parent that is not there is empty. */
-async function readParent(conn: Conn, loc: Locator): Promise<{ doc: Record<string, unknown>; entries: Entry[] }> {
+async function readParent(conn: Conn, loc: Locator, spec?: ListItemSpec): Promise<{ doc: Record<string, unknown>; entries: Entry[] }> {
   let body: unknown;
   try {
     body = await conn.api.get(loc.read);
@@ -220,7 +234,8 @@ async function readParent(conn: Conn, loc: Locator): Promise<{ doc: Record<strin
   }
   const doc = loc.item_path ? at(body, pointerTokens(loc.item_path)) : body;
   if (!isObject(doc)) throw loc.item_path ? new SponsonError("PROVIDER_RESPONSE", `${ADAPTER}: GET ${loc.read}: no object at \`parent.item_path\` ${loc.item_path}`, { adapter: ADAPTER, param: "parent.item_path" }) : badShape(loc, "an object");
-  return { doc, entries: decode(at(doc, pointerTokens(loc.list)), loc, conn.xml) };
+  const entries = decode(at(doc, pointerTokens(loc.list)), loc, conn.xml);
+  return { doc, entries: conn.xml && spec?.shape === "array" ? entries.map((e) => ({ key: e.key, value: xmlLists(spec, e.value) })) : entries };
 }
 
 function clientFor(actx: AdapterContext, loc: Locator): Conn {
@@ -279,7 +294,7 @@ async function ensure(actx: AdapterContext, spec: ListItemSpec, loc: Locator, la
   const conn = clientFor(actx, loc);
   let added = false;
   for (let attempt = 0; attempt <= MAX_ATTEMPTS; attempt++) {
-    const { doc, entries } = await readParent(conn, loc);
+    const { doc, entries } = await readParent(conn, loc, spec);
     const idx = entries.findIndex((e) => sameKey(e.key, loc.item));
     if (isPlanned(spec, entries[idx])) return added;
     if (attempt === MAX_ATTEMPTS) break;
@@ -365,14 +380,16 @@ export const listItem: OpSpec = {
   // A recipe line's params are checked before any request (PARAM_INVALID naming the param); it declares no outputs.
   outputsFor: (params) => (params.recipe === undefined ? {} : (expandRecipe(params, "list_item"), {})),
   providerFor: apiBlock,
+  credentialInputs: credentialInputs("list_item"),
   lockOn: parentLock,
   writesEnvironment: apiEnvironment,
 
   async read(actx, params) {
     const spec = parseListItem(params);
     const loc = locatorOf(spec);
-    if (!loc) return null;
-    const { entries } = await readParent(clientFor(actx, loc), loc);
+    // Nothing can be in a list read with a credential that does not exist yet (its line is still to be created).
+    if (!loc || firstMarker(spec.credential) !== undefined) return null;
+    const { entries } = await readParent(clientFor(withLineCredential(actx, spec.credential), loc), loc, spec);
     const entry = entries.find((e) => sameKey(e.key, loc.item));
     if (entry === undefined) return null;
     const state: LiveState = { resources: [recordOf(loc, spec, entry, labelOf(spec, loc))], outputs: {} };
@@ -401,7 +418,7 @@ export const listItem: OpSpec = {
     const current = live?.resources.find((r) => r.key === key);
     const entry = live ? found.get(live) : undefined;
     if (current && isPlanned(spec, entry)) return { resources: [current], outputs: {}, created: [] };
-    const added = await ensure(actx, spec, loc, label);
+    const added = await ensure(withLineCredential(actx, spec.credential), spec, loc, label);
     const hash = stateHash(desiredState(spec, entry));
     return { resources: [{ key, id: canonicalJson(loc), hash, label }], outputs: {}, created: added ? [key] : [] };
   },
@@ -419,8 +436,8 @@ export const listItem: OpSpec = {
   async listScope(actx, params) {
     const spec = parseListItem(params);
     const loc = locatorOf(spec);
-    if (!loc) return [];
-    const { entries } = await readParent(clientFor(actx, loc), loc);
+    if (!loc || firstMarker(spec.credential) !== undefined) return [];
+    const { entries } = await readParent(clientFor(withLineCredential(actx, spec.credential), loc), loc, spec);
     return entries.flatMap((e) => {
       if (e.key === undefined || isObject(e.key) || Array.isArray(e.key)) return [];
       const l = { ...loc, item: e.key };

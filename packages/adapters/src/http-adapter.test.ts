@@ -733,3 +733,102 @@ describe("http.list_item", () => {
     expect(listItem.diff({ ...live }, ORIGIN)[0]!.kind).toBe("unchanged");
   });
 });
+
+describe("http: line credentials (ADR 0017, Line credentials)", () => {
+  const PREFIXED = { ...API, auth: { header: "Authorization", value_env: "REST_API_TOKEN", prefix: "Api-Key " } };
+  const LINE = { ...GATE, credential: "line-token-0042", destroy: "keep" };
+  const ORIGIN_LINE = { api: "demo", parent: { path: "/apps/demo" }, list_path: "/allowed_origins", item: "https://pr-42.example.app" };
+
+  it("replaces the block's variable for this line only, prefix kept, registered as a secret before it is sent", async () => {
+    const h = await harness({ rest: { collections: { "/gates": [] }, auth: { headers: [{ authorization: "Api-Key line-token-0042" }] } } });
+    try {
+      const secrets: string[] = [];
+      const actx = h.actx("http", PREFIXED, { secret: (v) => void secrets.push(v) });
+      const r = await resource.apply(actx, LINE, null);
+      expect(r.created).toEqual([GATE_KEY]);
+      expect(secrets).toContain("line-token-0042");
+      // Not part of identity: the record id and key are those of the same line without it, kept on destroy.
+      expect(r.resources[0]!.id).toMatch(/^KEEP \/gates\/it_\d+$/);
+      expect((await resource.read(actx, LINE))!.resources[0]!.key).toBe(GATE_KEY);
+      // The block's own variable is not the credential the sim accepts.
+      await expect(resource.read(actx, GATE)).rejects.toMatchObject({ code: "PROVIDER_AUTH" });
+      expect(resource.credentialInputs!(LINE)).toEqual(["credential"]);
+      expect(resource.credentialInputs!(GATE)).toEqual([]);
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("a pending credential reads nothing and shows the line as to be created; apply refuses it", async () => {
+    const h = await harness();
+    try {
+      const params = resolved({ ...LINE, credential: { from: "server.server_token" } });
+      const actx = h.actx("http", API);
+      expect(await resource.read(actx, params)).toBeNull();
+      expect(resource.diff(null, params)[0]!.kind).toBe("create");
+      await expect(resource.apply(actx, params, null)).rejects.toMatchObject({ code: "INTERNAL" });
+      expect(await listItem.read(actx, resolved({ ...ORIGIN_LINE, credential: { from: "server.server_token" }, destroy: "keep" }))).toBeNull();
+      expect(h.sim.state.writes).toEqual([]);
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("needs `destroy: keep`, a reference (or its value), and a block with a single static credential", () => {
+    expect(() => resource.credentialInputs!({ ...GATE, credential: "x" })).toThrow(/must say `destroy: keep`/);
+    expect(() => listItem.credentialInputs!({ ...ORIGIN_LINE, credential: { secret: "env://X_TOKEN" } })).toThrow(/must say `destroy: keep`/);
+    expect(() => resource.credentialInputs!({ ...LINE, credential: 42 })).toThrow(/`credential` must be/);
+    expect(() => resource.credentialInputs!({ ...LINE, credential: { keep: true } })).toThrow(/`credential` must be/);
+    const digest = { ...API, auth: { digest: { user_env: "U", password_env: "P_KEY" } } };
+    expect(() => resource.providerFor!({ demo: digest }, LINE)).toThrow(/replaces the value of a single static credential/);
+    expect(resource.providerFor!({ demo: API }, LINE)).toEqual(API);
+  });
+
+  it("refuse_credential applies to a line's credential too, named as `credential`", async () => {
+    const h = await harness();
+    try {
+      const guarded = { ...API, refuse_credential: { prefixes: ["sk_live_"], unless_env: "SPONSON_ALLOW_LIVE" } };
+      const err = await resource.read(h.actx("http", guarded), { ...LINE, credential: "sk_live_from_an_output_0042" }).catch((e: unknown) => e);
+      expect(err).toMatchObject({ code: "PROVIDER_AUTH", message: expect.stringMatching(/credential holds a `sk_live_…` credential/) });
+      expect(String((err as Error).message)).not.toContain("from_an_output");
+    } finally {
+      await h.close();
+    }
+  });
+});
+
+describe("http: a delete that names the object in its body", () => {
+  it("fills `{id}` in the body; the filled body is the record id, sent by destroy from the ledger alone", async () => {
+    const h = await harness({ rest: { collections: { "/gates": [] }, deletes: { "/gates/delete": { collection: "/gates", ids: "/ids" } } } });
+    try {
+      const actx = h.actx("http", API);
+      const line = { ...GATE, delete: { method: "POST", path: "/gates/delete", body: { ids: ["{id}"], force: false } } };
+      const r = await resource.apply(actx, line, null);
+      const id = String(r.outputs.id);
+      expect(r.resources[0]!.id).toBe(`POST /gates/delete body={"force":false,"ids":["${id}"]}`);
+      await resource.destroy(actx, r.resources);
+      expect(h.sim.state.rest.collections["/gates"]).toEqual([]);
+      await resource.destroy(actx, r.resources); // the sim answers 404 once it is gone: success
+    } finally {
+      await h.close();
+    }
+  });
+});
+
+describe("http.list_item over XML", () => {
+  it("a field the item declares as a list compares equal when the document holds one element", async () => {
+    const h = await harness();
+    try {
+      const s3 = { base_url: "https://assets.s3.us-east-1.amazonaws.com", base_url_env: "AWS_S3_URL", encoding: "xml", auth: { aws_sigv4: { region: "us-east-1", service: "s3", access_key_id_env: "AWS_SIM_ACCESS_KEY_ID", secret_access_key_env: "AWS_SIM_SECRET_ACCESS_KEY" } } };
+      h.env.AWS_S3_URL = `${h.sim.url}/aws/s3/assets`;
+      const rule = { api: "s3", parent: { path: "/?cors", method: "PUT", if_missing: "empty", when_empty: "delete" }, list_path: "/CORSConfiguration/CORSRule", key_field: "ID", item: { ID: "sponson-pr-42", AllowedOrigin: "https://pr-42.example.app", AllowedMethod: ["GET"] } };
+      const first = await readApply(h, listItem, rule, s3);
+      expect(first.result.created).toEqual(["/?cors#/CORSConfiguration/CORSRule=sponson-pr-42"]);
+      const again = await readApply(h, listItem, rule, s3);
+      expect(again.diffs.map((d) => d.kind)).toEqual(["unchanged"]);
+      expect(again.result.created).toEqual([]);
+    } finally {
+      await h.close();
+    }
+  });
+});

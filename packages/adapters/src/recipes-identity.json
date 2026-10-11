@@ -10,6 +10,34 @@
     "key": "/zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records?type=CNAME&name.exact=pr-42.preview.example.com[name=pr-42.preview.example.com,type=CNAME]",
     "id": "DELETE /zones/023e105f4ecef8ad9ca31a8372d0c353/dns_records/ID"
   },
+  "cockroachdb.database": {
+    "provider": {
+      "base_url": "https://cockroachlabs.cloud/api/v1",
+      "base_url_env": "COCKROACH_API_URL",
+      "auth": {
+        "bearer_env": "COCKROACH_API_KEY"
+      },
+      "headers": {
+        "Cc-Version": "2024-09-16"
+      }
+    },
+    "key": "/clusters/9e3f1a52-63d1-4a4c-9b8f-2c8b7a0e5d11/databases[name=app_pr-42]",
+    "id": "DELETE /clusters/9e3f1a52-63d1-4a4c-9b8f-2c8b7a0e5d11/databases/ID"
+  },
+  "cockroachdb.sql_user": {
+    "provider": {
+      "base_url": "https://cockroachlabs.cloud/api/v1",
+      "base_url_env": "COCKROACH_API_URL",
+      "auth": {
+        "bearer_env": "COCKROACH_API_KEY"
+      },
+      "headers": {
+        "Cc-Version": "2024-09-16"
+      }
+    },
+    "key": "/clusters/9e3f1a52-63d1-4a4c-9b8f-2c8b7a0e5d11/sql-users[name=app_pr-42]",
+    "id": "DELETE /clusters/9e3f1a52-63d1-4a4c-9b8f-2c8b7a0e5d11/sql-users/ID"
+  },
   "configcat.targeting_rule": {
     "provider": {
       "base_url": "https://api.configcat.com",
@@ -23,6 +51,54 @@
     },
     "key": "/v2/environments/08d8becf-d4d9-4c66-8b48-6ac74cd95fba/settings/12345/value#/targetingRules=pr-42",
     "id": "{\"item\":\"pr-42\",\"key_field\":\"/conditions/0/userCondition/comparisonValue/listValue/0/value\",\"list\":\"/targetingRules\",\"read\":\"/v2/environments/08d8becf-d4d9-4c66-8b48-6ac74cd95fba/settings/12345/value\",\"send\":[\"defaultValue\",\"percentageEvaluationAttribute\"],\"shape\":\"array\",\"write\":\"PUT /v2/environments/08d8becf-d4d9-4c66-8b48-6ac74cd95fba/settings/12345/value\"}"
+  },
+  "datadog.synthetic_api_test": {
+    "provider": {
+      "base_url": "https://api.datadoghq.com/api/v1",
+      "base_url_env": "DATADOG_API_URL",
+      "auth": {
+        "headers": [
+          {
+            "header": "DD-API-KEY",
+            "value_env": "DD_API_KEY"
+          },
+          {
+            "header": "DD-APPLICATION-KEY",
+            "value_env": "DD_APP_KEY"
+          }
+        ]
+      }
+    },
+    "key": "/synthetics/tests[name=preview pr-42]",
+    "id": "POST /synthetics/tests/delete body={\"public_ids\":[\"ID\"]}"
+  },
+  "flagsmith.environment": {
+    "provider": {
+      "base_url": "https://api.flagsmith.com/api/v1",
+      "base_url_env": "FLAGSMITH_API_URL",
+      "auth": {
+        "header": "Authorization",
+        "value_env": "FLAGSMITH_MASTER_API_KEY",
+        "prefix": "Api-Key "
+      }
+    },
+    "key": "/environments/?project=1234[name=preview-pr-42]",
+    "id": "DELETE /environments/ID/"
+  },
+  "gcs.bucket_cors": {
+    "provider": {
+      "base_url": "https://storage.googleapis.com/storage/v1",
+      "base_url_env": "GCS_API_URL",
+      "auth": {
+        "command": [
+          "gcloud",
+          "auth",
+          "print-access-token"
+        ]
+      }
+    },
+    "key": "/b/my-app.appspot.com?fields=cors#/cors=https://pr-42.preview.example.app",
+    "id": "{\"item\":\"https://pr-42.preview.example.app\",\"key_field\":\"/origin/0\",\"list\":\"/cors\",\"read\":\"/b/my-app.appspot.com?fields=cors\",\"send\":\"field\",\"shape\":\"array\",\"write\":\"PATCH /b/my-app.appspot.com?fields=cors\"}"
   },
   "github.repo_webhook": {
     "provider": {
@@ -73,6 +149,21 @@
     },
     "key": "/1/markers/__all__[message=deploy pr-42 0123456789abcdef0123456789abcdef01234567,type=deploy]",
     "id": "DELETE /1/markers/__all__/ID"
+  },
+  "mongodb_atlas.database_user": {
+    "provider": {
+      "base_url": "https://cloud.mongodb.com/api/atlas/v2",
+      "base_url_env": "MONGODB_ATLAS_API_URL",
+      "media_type": "application/vnd.atlas.2023-01-01+json",
+      "auth": {
+        "digest": {
+          "user_env": "MONGODB_ATLAS_PUBLIC_API_KEY",
+          "password_env": "MONGODB_ATLAS_PRIVATE_API_KEY"
+        }
+      }
+    },
+    "key": "/groups/32b6e34b3d91647abb20e7b8/databaseUsers/admin/app-pr-42",
+    "id": "DELETE /groups/32b6e34b3d91647abb20e7b8/databaseUsers/admin/app-pr-42"
   },
   "posthog.release_condition": {
     "provider": {
@@ -174,6 +265,23 @@
     },
     "key": "/webhooks[endpoint=https://pr-42.preview.example.com/api/resend]",
     "id": "DELETE /webhooks/ID"
+  },
+  "s3.bucket_cors": {
+    "provider": {
+      "base_url_env": "S3_API_URL",
+      "encoding": "xml",
+      "auth": {
+        "aws_sigv4": {
+          "region": "us-east-1",
+          "service": "s3",
+          "access_key_id_env": "AWS_ACCESS_KEY_ID",
+          "secret_access_key_env": "AWS_SECRET_ACCESS_KEY"
+        }
+      },
+      "base_url": "https://assets.s3.us-east-1.amazonaws.com"
+    },
+    "key": "/?cors#/CORSConfiguration/CORSRule=sponson-pr-42",
+    "id": "{\"delete_empty\":true,\"item\":\"sponson-pr-42\",\"key_field\":\"ID\",\"list\":\"/CORSConfiguration/CORSRule\",\"missing_empty\":true,\"read\":\"/?cors\",\"send\":\"field\",\"shape\":\"array\",\"write\":\"PUT /?cors\"}"
   },
   "sendgrid.event_webhook": {
     "provider": {

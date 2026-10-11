@@ -36,17 +36,44 @@
           "description": "The credential, under the provider's conventional variable name (its CLI's or SDK's).",
           "oneOf": [
             { "type": "object", "required": ["bearer_env"], "additionalProperties": false, "properties": { "bearer_env": { "$ref": "#/$defs/credentialEnv" } } },
-            { "type": "object", "required": ["header", "value_env"], "additionalProperties": false, "properties": { "header": { "type": "string", "minLength": 1 }, "value_env": { "$ref": "#/$defs/credentialEnv" } } },
+            { "$ref": "#/$defs/headerCredential" },
+            { "type": "object", "required": ["headers"], "additionalProperties": false, "properties": { "headers": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/headerCredential" }, "description": "Several credential headers sent together (an API key and an application key)." } } },
             {
               "type": "object",
               "required": ["basic"],
               "additionalProperties": false,
               "properties": { "basic": { "type": "object", "required": ["user_env", "password_env"], "additionalProperties": false, "properties": { "user_env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" }, "password_env": { "$ref": "#/$defs/credentialEnv" } } } }
-            }
+            },
+            {
+              "type": "object",
+              "required": ["digest"],
+              "additionalProperties": false,
+              "properties": { "digest": { "type": "object", "required": ["user_env", "password_env"], "additionalProperties": false, "properties": { "user_env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" }, "password_env": { "$ref": "#/$defs/credentialEnv" } } } }
+            },
+            {
+              "type": "object",
+              "required": ["aws_sigv4"],
+              "additionalProperties": false,
+              "properties": {
+                "aws_sigv4": {
+                  "type": "object",
+                  "required": ["region", "service", "access_key_id_env", "secret_access_key_env"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "region": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+                    "service": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+                    "access_key_id_env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+                    "secret_access_key_env": { "$ref": "#/$defs/credentialEnv" },
+                    "session_token_env": { "$ref": "#/$defs/credentialEnv" }
+                  }
+                }
+              }
+            },
+            { "type": "object", "required": ["command"], "additionalProperties": false, "properties": { "command": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "description": "A CLI that prints a bearer token, as literal arguments (run without a shell)." } } }
           ]
         },
         "headers": { "type": "object", "additionalProperties": { "type": "string" } },
-        "encoding": { "enum": ["json", "form"] },
+        "encoding": { "enum": ["json", "form", "xml"] },
         "media_type": { "type": "string", "pattern": "^[\\w.+-]+/[\\w.+-]+(\\s*;.*)?$", "description": "A versioned JSON media type sent as `Accept` and as the `Content-Type` of bodies (Heroku: `application/vnd.heroku+json; version=3`)." },
         "refuse_credential": {
           "type": "object",
@@ -88,6 +115,16 @@
   },
   "$defs": {
     "credentialEnv": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|_KEY|APIKEY)$" },
+    "headerCredential": {
+      "type": "object",
+      "required": ["header", "value_env"],
+      "additionalProperties": false,
+      "properties": {
+        "header": { "type": "string", "minLength": 1 },
+        "value_env": { "$ref": "#/$defs/credentialEnv" },
+        "prefix": { "type": "string", "minLength": 1, "maxLength": 64, "description": "Literal text sent before the value (`Api-Key `, `Token `)." }
+      }
+    },
     "param": {
       "type": "object",
       "required": ["type", "description"],
@@ -116,7 +153,7 @@
         "params": {
           "type": "object",
           "minProperties": 1,
-          "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$", "not": { "enum": ["api", "recipe", "destroy", "id", "adapter", "op", "environments", "depends_on"] } },
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$", "not": { "enum": ["api", "recipe", "destroy", "credential", "id", "adapter", "op", "environments", "depends_on"] } },
           "additionalProperties": { "$ref": "#/$defs/param" }
         },
         "http": {
@@ -139,6 +176,18 @@
             "objects": { "type": "object", "additionalProperties": { "type": "object" }, "description": "Objects to seed, by path (placeholders filled from the examples)." },
             "header_fields": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Request headers a create or update stores as fields (header → field), for an API that takes settings in headers." },
             "suffix_field": { "type": "string", "description": "For a create at `<collection>/{+param}`: the field the sim stores that path suffix in; the POST is an upsert by the chosen id." },
+            "provider_sim": {
+              "type": "object",
+              "required": ["name", "path", "seed", "list"],
+              "additionalProperties": false,
+              "description": "For an API another fake-cloud provider simulates instead of the generic REST sim (S3's XML and SigV4: `aws`): the provider, the path under it the base URL stands for, its seed, and the JSON pointer in its state where a list item's collection is.",
+              "properties": {
+                "name": { "type": "string", "pattern": "^[a-z][a-z0-9]*$" },
+                "path": { "type": "string", "pattern": "^/" },
+                "seed": { "type": "object" },
+                "list": { "type": "string", "pattern": "^/" }
+              }
+            },
             "collection": { "type": "string", "description": "The collection path (placeholders filled from the examples) a resource lives in, when its create is posted elsewhere. Default: the create's path." }
           }
         },

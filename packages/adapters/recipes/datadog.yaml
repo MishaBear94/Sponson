@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Datadog API recipes: every request carries the API key and the application key. Format and checklist:
+# docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: datadog
+title: Datadog
+category: observability
+verified_on: "2026-10-11"
+docs:
+  - title: Synthetics API reference
+    url: https://docs.datadoghq.com/api/latest/synthetics/
+  - title: API authentication (keys, sites)
+    url: https://docs.datadoghq.com/api/latest/authentication/
+  - title: Datadog API v1 OpenAPI document (datadog-api-client)
+    url: https://github.com/DataDog/datadog-api-client-typescript/blob/master/.generator/schemas/v1/openapi.yaml
+api:
+  base_url: https://api.datadoghq.com/api/v1
+  base_url_env: DATADOG_API_URL
+  auth:
+    headers:
+      - { header: DD-API-KEY, value_env: DD_API_KEY }
+      - { header: DD-APPLICATION-KEY, value_env: DD_APP_KEY }
+assumptions:
+  - id: DD1
+    verified: true
+    text: "Requests carry the API key in `DD-API-KEY` and the application key in `DD-APPLICATION-KEY`; Datadog's clients read them from `DD_API_KEY` and `DD_APP_KEY`. Reading needs the application key too."
+    source: https://github.com/DataDog/datadog-api-client-typescript/blob/master/.generator/schemas/v1/openapi.yaml
+  - id: DD2
+    verified: true
+    text: "Each Datadog site has its own API host (`https://api.datadoghq.eu`, `https://api.us3.datadoghq.com`, …): outside US1, set `base_url` in the provider block."
+    source: https://docs.datadoghq.com/api/latest/authentication/
+  - id: DD3
+    verified: true
+    text: "`POST /synthetics/tests/api` creates an API test from `name`, `type` (`api`), `config` (`request` with `method` and `url`, `assertions`), `locations`, `options` and `message` (all required), with `subtype` (`http`), `status` (`live` or `paused`) and `tags`, answering it with its `public_id`."
+    source: https://github.com/DataDog/datadog-api-client-typescript/blob/master/.generator/schemas/v1/openapi.yaml
+  - id: DD4
+    verified: true
+    text: "`GET /synthetics/tests/api/{public_id}` answers one API test; `PUT` on the same path replaces its configuration with a whole test definition."
+    source: https://github.com/DataDog/datadog-api-client-typescript/blob/master/.generator/schemas/v1/openapi.yaml
+  - id: DD5
+    verified: true
+    text: "`GET /synthetics/tests` lists every test as `{ tests: [...] }` (`page_size` and `page_number` are optional); `POST /synthetics/tests/delete` with `{ public_ids: [...] }` deletes tests."
+    source: https://github.com/DataDog/datadog-api-client-typescript/blob/master/.generator/schemas/v1/openapi.yaml
+  - id: DD6
+    verified: false
+    text: "Without `page_size` the list answers every test of the organisation, and a test name identifies one test (two with one name make `find` refuse with PARAM_INVALID)."
+  - id: DD7
+    verified: false
+    text: "The fields compared (`config.request`, `config.assertions`, `locations`, `options.tick_every`, `message`, `status`, `tags`) are answered as they were sent, in order."
+  - id: DD8
+    verified: false
+    text: "Deleting a test that is already gone answers 404 (destroy treats it as done)."
+  - id: DD9
+    verified: false
+    text: "Deployment events (`datadog-ci deployment mark`, the DORA deployments API) are not a recipe: they are listed with a POST over a time window and cannot be deleted, so a later run could not find the one it made."
+ops:
+  synthetic_api_test:
+    kind: resource
+    title: Synthetic API test against a preview
+    summary: "A Synthetic HTTP test per scope that checks the preview's URL from Datadog's locations, such as `preview pr-42` asserting status 200, with its own monitor. Located by its name; a console edit of its request, assertions, locations, frequency, message, status or tags is drift; destroy deletes the test (and its monitor)."
+    covers: [datadog-marker]
+    params:
+      name:
+        type: string
+        required: true
+        description: The test's name; its identity (DD6).
+        example: "preview ${ctx.scope}"
+      url:
+        type: string
+        required: true
+        pattern: "^https?://\\S+$"
+        description: The URL to request (the preview's URL, or a health path on it).
+        example: "https://${ctx.scope}.preview.example.app/api/health"
+      method:
+        type: string
+        default: GET
+        enum: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS]
+        description: The HTTP method.
+      assertions:
+        type: list
+        default: [{ type: statusCode, operator: is, target: 200 }]
+        description: "The assertions, each `{ type, operator, target }` (`statusCode`, `responseTime`, `body`, `header`)."
+      locations:
+        type: list
+        required: true
+        description: "The managed locations to run from, such as `aws:us-east-2` or `aws:eu-central-1`."
+        example: ["aws:us-east-2"]
+      tick_every:
+        type: integer
+        default: 300
+        description: How often the test runs, in seconds.
+      message:
+        type: string
+        default: Preview check managed by Sponson
+        description: The notification message of the test's monitor.
+      status:
+        type: string
+        default: live
+        enum: [live, paused]
+        description: "`paused` keeps the test without running it."
+      tags:
+        type: list
+        default: ["managed-by:sponson"]
+        description: The test's tags.
+    http:
+      find:
+        path: /synthetics/tests
+        list_path: /tests
+        match: { name: { param: name } }
+      read: { path: "/synthetics/tests/api/{id}" }
+      create:
+        path: /synthetics/tests/api
+        body: { type: api, subtype: http }
+      update:
+        method: PUT
+        body: { type: api, subtype: http }
+      delete:
+        method: POST
+        path: /synthetics/tests/delete
+        body: { public_ids: ["{id}"] }
+      id_path: /public_id
+      fields:
+        /config/request/method: { param: method }
+        /config/request/url: { param: url }
+        /config/assertions: { param: assertions }
+        locations: { param: locations }
+        /options/tick_every: { param: tick_every }
+        message: { param: message }
+        status: { param: status }
+        tags: { param: tags }

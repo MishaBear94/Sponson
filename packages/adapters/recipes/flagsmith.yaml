@@ -1,0 +1,90 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Flagsmith Admin (management) API recipes, authenticated by an organisation API key. Format and checklist:
+# docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: flagsmith
+title: Flagsmith
+category: flags
+verified_on: "2026-10-11"
+docs:
+  - title: Admin API authentication
+    url: https://docs.flagsmith.com/integrating-with-flagsmith/flagsmith-api-overview/admin-api/authentication
+  - title: Admin API overview
+    url: https://docs.flagsmith.com/integrating-with-flagsmith/flagsmith-api-overview/admin-api
+  - title: Flagsmith API OpenAPI document
+    url: https://api.flagsmith.com/api/v1/swagger.json
+api:
+  base_url: https://api.flagsmith.com/api/v1
+  base_url_env: FLAGSMITH_API_URL
+  auth: { header: Authorization, value_env: FLAGSMITH_MASTER_API_KEY, prefix: "Api-Key " }
+assumptions:
+  - id: FS1
+    verified: true
+    text: "The Admin API authenticates with an organisation API key as `Authorization: Api-Key <key>`; Bearer is only for short-lived OIDC-exchanged tokens."
+    source: https://docs.flagsmith.com/integrating-with-flagsmith/flagsmith-api-overview/admin-api/authentication
+  - id: FS2
+    verified: true
+    text: "`POST /environments/` creates an environment from `name` and `project` (both required) and optional `description`, answering it (201) with its integer `id` and its `api_key`, the client-side environment key SDKs use."
+    source: https://api.flagsmith.com/api/v1/swagger.json
+  - id: FS3
+    verified: true
+    text: "`GET /environments/?project=<id>` lists a project's environments as `{ count, next, previous, results: [...] }`."
+    source: https://api.flagsmith.com/api/v1/swagger.json
+  - id: FS4
+    verified: true
+    text: "`GET`, `PATCH` and `DELETE /environments/{api_key}/` read, update and delete one environment (DELETE answers 204)."
+    source: https://api.flagsmith.com/api/v1/swagger.json
+  - id: FS5
+    verified: false
+    text: "A project has fewer environments than one page of the list holds, so `find` sees them all (`next` is a URL, which the http adapter does not follow)."
+  - id: FS6
+    verified: false
+    text: "A new environment starts with every feature of the project at its default state, and environment names are unique in a project in practice (two with one name make `find` refuse with PARAM_INVALID)."
+  - id: FS7
+    verified: false
+    text: "`description` is answered as sent; `FLAGSMITH_MASTER_API_KEY` is the variable Flagsmith's Terraform provider reads the key from."
+  - id: FS8
+    verified: false
+    text: "Identity and segment overrides are not recipes: Edge projects (Flagsmith SaaS's default) address identities by UUID through `edge-identities`, and a segment override is two objects (a feature segment, then a feature state) created in order."
+  - id: FS9
+    verified: false
+    text: "The create takes the project id as a string of digits (`\"1234\"`) as well as a number, as Django REST Framework's primary-key fields do."
+ops:
+  environment:
+    kind: resource
+    title: Environment per preview
+    summary: "A Flagsmith environment per scope in a project, such as `preview-pr-42`, starting from the project's default flag states; its client-side environment key is the output `api_key` for the preview's SDK configuration. Located by name in the project; a console edit of its description is drift; destroy deletes the environment with its flag states and identities."
+    covers: [flagsmith-override]
+    params:
+      project_id:
+        type: string
+        required: true
+        pattern: "^[0-9]+$"
+        description: The project's id, digits as a string (FS9).
+        example: "1234"
+      name:
+        type: string
+        required: true
+        description: The environment's name; its identity in the project (FS6).
+        example: "preview-${ctx.scope}"
+      description:
+        type: string
+        default: Preview environment managed by Sponson
+        description: The environment's description.
+    http:
+      find:
+        path: "/environments/?project={project_id}"
+        list_path: /results
+        match: { name: { param: name } }
+      read: { path: "/environments/{id}/" }
+      create:
+        path: /environments/
+        body: { project: { param: project_id } }
+      update: { method: PATCH }
+      id_path: /api_key
+      fields:
+        description: { param: description }
+      outputs:
+        api_key: /api_key
+        environment_id: /id
+    live:
+      params: { project_id: SPONSON_LIVE_FLAGSMITH_PROJECT_ID }

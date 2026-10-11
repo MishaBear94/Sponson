@@ -64,7 +64,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "LAUNCHDARKLY_SEMANTIC_PATCH", "LaunchdarklyFlag", "LaunchdarklyFlagEnv", "LaunchdarklyProject", "LaunchdarklySeed", "LaunchdarklyState", "LaunchdarklyTarget", "LaunchdarklyVariation", "launchdarklySim",
     "SupabaseBranch", "SupabaseProject", "SupabaseAuth", "SupabaseState", "SupabaseSeed", "supabaseSim", "SUPABASE_DEMO_PROJECT", "newSupabaseBranch", "supabaseConnectionString", "supabaseAllowList",
     "NetlifyEnvValue", "NetlifyEnvVar", "NetlifyDeploy", "NetlifyPush", "NetlifySite", "NetlifyState", "NetlifySeed", "netlifySim",
-    "AuthRequest", "RestAuthSeed", "RestAuthState",
+    "AuthRequest", "RestAuthSeed", "RestAuthState", "RestBulkDelete",
     "AWS_SIM_ACCESS_KEY_ID", "AWS_SIM_SECRET_ACCESS_KEY", "AwsCorsRule", "AwsSeed", "AwsState", "awsSim",
     "RAILWAY_DEMO", "RailwayEnvironment", "RailwaySeed", "RailwayState", "railwaySim",
     "FlySecret", "FlySeed", "FlyState", "flySim",

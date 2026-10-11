@@ -52,6 +52,12 @@ export interface RecipeSimHints {
   header_fields?: Record<string, string>;
   /** For a create at `<collection>/{+param}`: the field the sim stores that path suffix in (an upsert by chosen id). */
   suffix_field?: string;
+  /**
+   * For an API another fake-cloud provider simulates instead of the generic REST sim (S3's XML and SigV4: `aws`):
+   * the provider, the path under it the base URL stands for, its seed, and the JSON pointer in its state where a list
+   * item's collection is.
+   */
+  provider_sim?: { name: string; path: string; seed: Record<string, unknown>; list: string };
   /** The query parameter the provider names one object with, when objects are keyed by a value (`url`). */
   item_query?: string;
   /**
@@ -173,7 +179,7 @@ export function lineApi(params: Record<string, unknown>): unknown {
 }
 
 /** Params of a recipe line that are the line's own, not the recipe's. */
-const LINE_PARAMS = ["api", "recipe", "destroy"];
+const LINE_PARAMS = ["api", "recipe", "destroy", "credential"];
 
 /** A value the engine fills in later or keeps as it is: a reference, a marker, an uninterpolated `${…}`. */
 function isDeferred(v: unknown): boolean {
@@ -276,7 +282,7 @@ export function expandRecipe(params: Record<string, unknown>, kind: RecipeOp["ki
   const values = recipeValues(params);
   const spec = substitute(op.http, values) as Record<string, unknown>;
   const destroy = recipeDestroy(`recipe ${recipe.provider}.${name}`, op, params.destroy);
-  return { ...spec, api: lineApi(params), vars: values, ...(destroy !== undefined ? { destroy } : {}) };
+  return { ...spec, api: lineApi(params), vars: values, ...(destroy !== undefined ? { destroy } : {}), ...(params.credential !== undefined ? { credential: params.credential } : {}) };
 }
 
 /** The line's `destroy`, or the op's default; `delete` of an op the provider cannot delete is PARAM_INVALID. */

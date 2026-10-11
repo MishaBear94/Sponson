@@ -414,11 +414,20 @@ function digestSigner(actx: AdapterContext, auth: Extract<Auth, { kind: "digest"
   };
 }
 
+/** A line's own credential in the place of a bearer or header form's variable (the header name and prefix stay). */
+function lineCredential(auth: Auth, line: string): Credential {
+  if (auth.kind === "bearer") return { token: line, authHeader: "bearer", masks: () => [] };
+  if (auth.kind === "header") return { token: `${auth.prefix ?? ""}${line}`, authHeader: `header:${auth.header}`, masks: () => [] };
+  throw authError(`a line's \`credential\` replaces a single static credential; this API authenticates with \`${auth.kind}\``);
+}
+
 /**
- * The credential of an API block for this call. Static forms read their variables now (PROVIDER_AUTH when one is
+ * The credential of an API block for this call; `line`, a line's own `credential`, replaces the variable of a bearer
+ * or header form (ADR 0017, "Line credentials"). Static forms read their variables now (PROVIDER_AUTH when one is
  * unset); dynamic ones fetch or sign per request, through the run's cache.
  */
-export function credentialFor(actx: AdapterContext, auth: Auth, deps: AuthDeps, redact: (t: string) => string): Credential {
+export function credentialFor(actx: AdapterContext, auth: Auth, deps: AuthDeps, redact: (t: string) => string, line?: string): Credential {
+  if (line !== undefined) return lineCredential(auth, line);
   const env = actx.env;
   switch (auth.kind) {
     case "bearer":

@@ -41,12 +41,15 @@ assumptions:
   - id: PS7
     verified: false
     text: "`PostFirstOpenOnly` and `IncludeContent` are left at Postmark's defaults; only which events are delivered is compared."
+  - id: PS8
+    verified: false
+    text: "A server's webhooks belong to it: deleting the server (`DELETE /servers/{id}`, Account API) removes them, so a webhook line authenticated with the server's own token can leave its destroy to the server's line."
 ops:
   webhook:
     kind: resource
     title: Webhook of a server
-    summary: "A webhook of one Postmark server delivering to an environment's URL, such as the preview's `/api/postmark` handler, with the events it enables. Located by its URL; a console edit of an event's `Enabled` is drift. It works with a server whose token is in `POSTMARK_SERVER_TOKEN` (a shared staging server, say): a server the same plan creates per environment has its token only as an output, which cannot be a credential."
-    covers: []
+    summary: "A webhook of one Postmark server delivering to an environment's URL, such as the preview's `/api/postmark` handler, with the events it enables. Located by its URL; a console edit of an event's `Enabled` is drift. The server is the one whose token is in `POSTMARK_SERVER_TOKEN` (a shared staging server), or, for a server the same plan creates per environment (`postmark.server`), the line says `credential: { from: <server line>.server_token }` and `destroy: keep`: deleting the server removes its webhooks (PS8)."
+    covers: [postmark-server-webhook]
     params:
       url:
         type: string

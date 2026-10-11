@@ -283,8 +283,14 @@ export function apiBlock(block: Record<string, unknown>, params: Record<string, 
     throw planError("`refuse_credential` comes from the recipe and cannot be overridden; its `unless_env` variable is the opt-out", `${where}.refuse_credential`);
   }
   if (raw.recipe !== undefined && cfg.base_url === undefined) throw planError(`recipe \`${String(raw.recipe)}\` has no default \`base_url\` (each account has its own): set \`base_url\` in this block`, where);
-  parseApi(cfg, where);
+  lineCredentialFits(params, parseApi(cfg, where), where);
   return cfg;
+}
+
+/** A line's `credential` replaces a single static credential's variable: the block must have one. */
+function lineCredentialFits(params: Record<string, unknown>, api: ApiConfig, where: string): void {
+  if (params.credential === undefined || api.auth.kind === "bearer" || api.auth.kind === "header") return;
+  throw fail(`\`credential\` replaces the value of a single static credential (\`bearer_env\`, or \`header\` with \`value_env\`); ${where} authenticates with \`${api.auth.kind}\``, "credential");
 }
 
 
@@ -294,6 +300,32 @@ export function apiBlock(block: Record<string, unknown>, params: Record<string, 
 
 /** What `destroy` does with what Sponson created: remove it (the default), or leave it in place. */
 export type DestroyMode = "delete" | "keep";
+
+/** A `credential` as the plan may write it: a reference (as written), its resolved value, or a marker. */
+function credentialShape(v: unknown): boolean {
+  if (isKeep(v)) return false;
+  if (typeof v === "string" || markerKind(v) !== null) return true;
+  return isObject(v) && Object.keys(v).length === 1 && (typeof v.from === "string" || typeof v.secret === "string");
+}
+
+/**
+ * A line's `credential` (ADR 0017, "Line credentials"): the value that replaces the API block's credential variable
+ * for this line, as resolved (a string, or a marker while it is pending), or the reference as written. Never part
+ * of identity. Destroy works from the ledger alone, which cannot reach it, so the line must say `destroy: keep`.
+ */
+function parseCredential(params: Record<string, unknown>, destroy: DestroyMode): { credential?: unknown } {
+  const v = params.credential;
+  if (v === undefined) return {};
+  if (!credentialShape(v)) throw fail("`credential` must be `{ from: <line>.<output> }` (a sensitive output) or `{ secret: <reference> }`", "credential");
+  if (v === "") throw fail("`credential` resolved to an empty value", "credential");
+  if (destroy !== "keep") {
+    throw fail(
+      "a line with `credential` must say `destroy: keep`: destroy works from the ledger alone, which never holds the credential, so what the line makes goes away with the object the credential belongs to (a Postmark server takes its webhooks with it)",
+      "destroy",
+    );
+  }
+  return { credential: v };
+}
 
 function parseDestroy(v: unknown): DestroyMode {
   if (v === undefined || v === "delete" || v === "keep") return v ?? "delete";
@@ -369,6 +401,8 @@ export interface OutputDecl {
 export interface ResourceSpec {
   api: string;
   vars: Record<string, unknown>;
+  /** The line's own credential value (`credential`), replacing the API block's variable; a marker while pending. */
+  credential?: unknown;
   /** `locate`: the create's answer is not the object (the parent, an acknowledgement); find it afterwards. */
   create: RequestSpec & { idempotencyKey: boolean; locate: boolean };
   read?: { path: string; graphql?: GraphqlSpec };
@@ -391,7 +425,7 @@ export interface ResourceSpec {
   goneStatus: number[];
 }
 
-const RESOURCE_PARAMS = ["api", "vars", "create", "read", "find", "update", "delete", "destroy", "item_path", "id_path", "fields", "outputs", "exists_status", "gone_status"];
+const RESOURCE_PARAMS = ["api", "credential", "vars", "create", "read", "find", "update", "delete", "destroy", "item_path", "id_path", "fields", "outputs", "exists_status", "gone_status"];
 
 /** Per-request headers: names Sponson does not set itself; values are checked once resolved (`requestHeaders`). */
 function requestHeadersParam(v: unknown, param: string): Record<string, unknown> {
@@ -540,14 +574,16 @@ export function parseResource(line: Record<string, unknown>): ResourceSpec {
   const vars = optionalObject(params.vars, "vars") ?? {};
   const find = parseFind(params.find, vars);
   const read = parseRead(params.read, vars, find);
+  const destroy = parseDestroy(params.destroy);
   const spec: ResourceSpec = {
     api,
     vars,
+    ...parseCredential(params, destroy),
     create: parseCreate(params.create, vars),
     ...(find ? { find } : {}),
     ...(read ? { read } : {}),
     delete: parseDelete(params.delete, vars, read),
-    destroy: parseDestroy(params.destroy),
+    destroy,
     itemPath: pointerParam(params.item_path, "item_path", ""),
     idPath: pointerParam(params.id_path, "id_path", "/id"),
     fields: parseFields(params.fields, "fields"),
@@ -574,6 +610,19 @@ function firstSecret(v: unknown): boolean {
   if (markerKind(v) === "secret") return true;
   if (Array.isArray(v)) return v.some(firstSecret);
   return isObject(v) && Object.values(v).some(firstSecret);
+}
+
+/**
+ * `OpSpec.credentialInputs` for both ops: the line's `credential`, which the engine checks is a masked reference.
+ * Its own rules (its form, `destroy: keep`) are checked here too, so a wrong line fails before any request.
+ */
+export function credentialInputs(kind: "resource" | "list_item"): (params: Record<string, unknown>) => string[] {
+  return (line) => {
+    if (line.credential === undefined) return [];
+    const params = expandRecipe(line, kind);
+    parseCredential(params, parseDestroy(params.destroy));
+    return ["credential"];
+  };
 }
 
 /** The outputs one `http.resource` line declares: always `id`, plus its `outputs` (`once` ones as in ADR 0018). */
@@ -607,6 +656,8 @@ export type ParentSend = "field" | "parent" | "collection" | string[];
 export interface ListItemSpec {
   api: string;
   vars: Record<string, unknown>;
+  /** The line's own credential value (`credential`), replacing the API block's variable; a marker while pending. */
+  credential?: unknown;
   /**
    * `itemPath`: where the parent object is in the read answer (`/feature` for `{ feature: {...} }`); default the whole
    * body. `ifMissing: empty`: a 404 parent reads as an empty collection; `whenEmpty: delete`: an empty collection is
@@ -625,7 +676,7 @@ export interface ListItemSpec {
   destroy: DestroyMode;
 }
 
-const LIST_PARAMS = ["api", "vars", "parent", "list_path", "shape", "separator", "item", "key_field", "value", "destroy"];
+const LIST_PARAMS = ["api", "credential", "vars", "parent", "list_path", "shape", "separator", "item", "key_field", "value", "destroy"];
 
 function parseParent(v: unknown, vars: Record<string, unknown>): ListItemSpec["parent"] {
   const o = requiredObject(v, "parent");
@@ -709,5 +760,6 @@ export function parseListItem(line: Record<string, unknown>): ListItemSpec {
   const shape = parseShape(params.shape);
   const listPath = pointerParam(params.list_path, "list_path", "");
   if (listPath === "" && shape !== "map") throw fail("`list_path` is required: the JSON pointer to the list in the parent, e.g. /allowed_origins", "list_path");
-  return { api, vars, parent: parseParent(params.parent, vars), listPath, shape, ...parseShaped(params, shape), destroy: parseDestroy(params.destroy) };
+  const destroy = parseDestroy(params.destroy);
+  return { api, vars, ...parseCredential(params, destroy), parent: parseParent(params.parent, vars), listPath, shape, ...parseShaped(params, shape), destroy };
 }

@@ -1,0 +1,110 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# MongoDB Atlas Administration API v2 recipes (programmatic API keys, HTTP Digest). Format and checklist:
+# docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: mongodb_atlas
+title: MongoDB Atlas
+category: databases
+verified_on: "2026-10-11"
+docs:
+  - title: Atlas Administration API v2 (OpenAPI document)
+    url: https://www.mongodb.com/docs/api/doc/atlas-admin-api-v2.json
+  - title: Create One Database User in One Project
+    url: https://www.mongodb.com/docs/api/doc/atlas-admin-api-v2/operation/operation-creategroupdatabaseuser
+  - title: Configure Atlas API access (API keys use HTTP Digest)
+    url: https://www.mongodb.com/docs/atlas/configure-api-access/
+  - title: Atlas CLI environment variables
+    url: https://www.mongodb.com/docs/atlas/cli/current/atlas-cli-env-variables/
+api:
+  base_url: https://cloud.mongodb.com/api/atlas/v2
+  base_url_env: MONGODB_ATLAS_API_URL
+  media_type: application/vnd.atlas.2023-01-01+json
+  auth: { digest: { user_env: MONGODB_ATLAS_PUBLIC_API_KEY, password_env: MONGODB_ATLAS_PRIVATE_API_KEY } }
+assumptions:
+  - id: MA1
+    verified: true
+    text: "Programmatic API keys authenticate with HTTP Digest (the public key as the user name, the private key as the password); service accounts take an OAuth2 client-credentials token instead (`https://cloud.mongodb.com/api/oauth/token`)."
+    source: https://www.mongodb.com/docs/atlas/configure-api-access/
+  - id: MA2
+    verified: true
+    text: "The Atlas CLI keeps the key pair in `MONGODB_ATLAS_PUBLIC_API_KEY` and `MONGODB_ATLAS_PRIVATE_API_KEY`."
+    source: https://www.mongodb.com/docs/atlas/cli/current/atlas-cli-env-variables/
+  - id: MA3
+    verified: true
+    text: "Requests and answers use the versioned media type `application/vnd.atlas.2023-01-01+json` (in `Accept` and `Content-Type`); the database-user operations are published under that version."
+    source: https://www.mongodb.com/docs/api/doc/atlas-admin-api-v2.json
+  - id: MA4
+    verified: true
+    text: "`POST /groups/{groupId}/databaseUsers` creates a user from `databaseName`, `groupId`, `roles` and `username` (required), with `password` for SCRAM users (write-only, never answered), optional `scopes` (absent: every cluster of the project) and `deleteAfterDate` (Atlas deletes the user then; within one week of the request). It answers 201 with the user."
+    source: https://www.mongodb.com/docs/api/doc/atlas-admin-api-v2.json
+  - id: MA5
+    verified: true
+    text: "`GET`, `PATCH` and `DELETE /groups/{groupId}/databaseUsers/{databaseName}/{username}` read, update and delete one user; SCRAM users authenticate against `databaseName` `admin`."
+    source: https://www.mongodb.com/docs/api/doc/atlas-admin-api-v2.json
+  - id: MA6
+    verified: true
+    text: "A project supports 100 database users by default (900 at most)."
+    source: https://www.mongodb.com/docs/api/doc/atlas-admin-api-v2/operation/operation-creategroupdatabaseuser
+  - id: MA7
+    verified: false
+    text: "A GET of a user that does not exist answers 404; a second create of the same user answers 409."
+  - id: MA8
+    verified: false
+    text: "`roles` (each `{ databaseName, roleName, collectionName? }`) and `scopes` (each `{ name, type }`) are answered in the order they were sent, so they compare without drift."
+  - id: MA9
+    verified: false
+    text: "`PATCH` takes the user's identifying fields (`databaseName`, `groupId`, `username`) with the changed ones and keeps the password when none is sent."
+ops:
+  database_user:
+    kind: resource
+    title: Database user
+    summary: "A SCRAM database user per scope on a shared Atlas cluster, such as `app-pr-42` with `readWrite` on the database `app_pr_42`, instead of a cluster per preview. The password is an input: a `{ secret: … }` reference (a value per environment in a secret manager) or a sensitive output of another line, sent on create only and never compared. Located by its user name; a console edit of its roles or scopes is drift; destroy deletes the user (not the database's data)."
+    covers: [mongodb-atlas-user]
+    params:
+      group_id:
+        type: string
+        required: true
+        pattern: "^[0-9a-f]{24}$"
+        description: The project (group) id, 24 hexadecimal digits.
+        example: 32b6e34b3d91647abb20e7b8
+      username:
+        type: string
+        required: true
+        description: The user name, unique in the project; its identity.
+        example: "app-${ctx.scope}"
+      password:
+        type: string
+        required: true
+        description: "The user's password, as a reference (`{ secret: env://… }`, or `{ from: <line>.<output> }` of a sensitive output); sent on create only (MA4)."
+        example: { secret: "env://PREVIEW_DB_PASSWORD" }
+      roles:
+        type: list
+        required: true
+        description: "The roles, each `{ databaseName, roleName }` (`readWrite`, `read`, `dbAdmin`, …)."
+        example: [{ databaseName: "app_${ctx.scope}", roleName: readWrite }]
+      scopes:
+        type: list
+        description: "The clusters it may reach, each `{ name, type: CLUSTER }`; absent: every cluster of the project (not compared then)."
+      delete_after:
+        type: string
+        description: "An ISO 8601 time, within a week, at which Atlas deletes the user by itself (sent on create only)."
+    http:
+      read: { path: "/groups/{group_id}/databaseUsers/admin/{username}" }
+      create:
+        path: "/groups/{group_id}/databaseUsers"
+        body:
+          databaseName: admin
+          groupId: { param: group_id }
+          username: { param: username }
+          password: { param: password }
+          deleteAfterDate: { param: delete_after }
+      update:
+        method: PATCH
+        body: { databaseName: admin, groupId: { param: group_id }, username: { param: username } }
+      id_path: /username
+      fields:
+        roles: { param: roles }
+        scopes: { param: scopes }
+    sim:
+      id_from: username
+    live:
+      params: { group_id: SPONSON_LIVE_ATLAS_GROUP_ID }

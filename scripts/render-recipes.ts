@@ -17,12 +17,23 @@ export function recipeLink(provider: string, op: string): string {
   return `[\`${provider}.${op}\`](recipes.md#${slug(recipeHeading(provider, op).slice(4))})`;
 }
 
+/** One credential header, as the docs show it: the variable, the header and any literal prefix. */
+function header(h: Record<string, unknown>): string {
+  const prefix = typeof h.prefix === "string" ? `, sent as \`${h.prefix}<value>\`` : "";
+  return `\`${String(h.value_env)}\` (header \`${String(h.header)}\`${prefix})`;
+}
+
+/** The recipe's credential, by form: the variables it reads (never values), or the command that prints a token. */
 function credential(api: Record<string, unknown>): string {
   const auth = api.auth as Record<string, unknown>;
+  const pair = (form: string) => auth[form] as Record<string, string>;
   if (typeof auth.bearer_env === "string") return `\`${auth.bearer_env}\` (bearer)`;
-  if (typeof auth.value_env === "string") return `\`${String(auth.value_env)}\` (header \`${String(auth.header)}\`)`;
-  const basic = auth.basic as Record<string, string>;
-  return `\`${basic.user_env}\` / \`${basic.password_env}\` (basic)`;
+  if (typeof auth.value_env === "string") return header(auth);
+  if (Array.isArray(auth.headers)) return (auth.headers as Array<Record<string, unknown>>).map(header).join(" and ");
+  if (Array.isArray(auth.command)) return `the token \`${(auth.command as string[]).join(" ")}\` prints (bearer)`;
+  if (auth.aws_sigv4) return `\`${pair("aws_sigv4").access_key_id_env}\` / \`${pair("aws_sigv4").secret_access_key_env}\` (AWS SigV4, ${pair("aws_sigv4").service} in ${pair("aws_sigv4").region})`;
+  const form = auth.digest ? "digest" : "basic";
+  return `\`${pair(form).user_env}\` / \`${pair(form).password_env}\` (${form === "digest" ? "HTTP Digest" : "basic"})`;
 }
 
 /** A recipe's http spec as YAML, each `{ param: <name> }` on one line as the recipe file writes it. */

@@ -563,6 +563,14 @@
     "jsonPointer": { "type": "string", "pattern": "^(/.*)?$", "description": "A JSON pointer: \"\" for the whole body, \"/data/id\" for a field." },
     "httpStatuses": { "type": "array", "items": { "type": "integer", "minimum": 400, "maximum": 599 } },
     "httpDestroy": { "enum": ["delete", "keep"], "description": "What destroying the scope does: delete (default) or keep (leave it in place)." },
+    "httpCredential": {
+      "description": "This line's own credential, in place of its API block's variable (bearer or header forms): a `{ from: <line>.<output> }` naming a sensitive output that is not once-only, or a `{ secret }`. The line must say `destroy: keep` (docs/plan-format.md, Line credentials).",
+      "anyOf": [
+        { "type": "object", "required": ["from"], "additionalProperties": false, "properties": { "from": { "type": "string", "minLength": 3 } } },
+        { "type": "object", "required": ["secret"], "additionalProperties": false, "properties": { "secret": { "type": "string", "minLength": 1 } } },
+        { "type": "string", "description": "A literal parses, but `sponson plan` refuses it (PARAM_INVALID): a credential never sits in the plan file." }
+      ]
+    },
     "httpRequest": {
       "type": "object",
       "additionalProperties": false,
@@ -614,6 +622,7 @@
         "update": { "allOf": [{ "$ref": "#/$defs/httpRequest" }, { "properties": { "method": { "enum": ["PATCH", "PUT", "POST"] } } }] },
         "delete": { "allOf": [{ "$ref": "#/$defs/httpRequest" }, { "properties": { "method": { "enum": ["DELETE", "POST"] } } }] },
         "destroy": { "$ref": "#/$defs/httpDestroy" },
+        "credential": { "$ref": "#/$defs/httpCredential" },
         "item_path": { "$ref": "#/$defs/jsonPointer", "description": "Where the object is in read, create and update answers. Default: the whole body." },
         "id_path": { "$ref": "#/$defs/jsonPointer", "description": "Where the id is in the object. Default: /id." },
         "fields": { "type": "object", "description": "The desired state: field (or /pointer) → value. Compared for drift, sent on create and update." },
@@ -636,7 +645,8 @@
         "op": { "enum": ["resource", "list_item"] },
         "recipe": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*\\.[a-z0-9_]+$", "description": "The recipe op, `<provider>.<op>` (docs/recipes.md)." },
         "api": { "type": "string", "minLength": 1, "description": "The block under providers.http. Default: the recipe's provider (the block may then be left out)." },
-        "destroy": { "$ref": "#/$defs/httpDestroy" }
+        "destroy": { "$ref": "#/$defs/httpDestroy" },
+        "credential": { "$ref": "#/$defs/httpCredential" }
       }
     },
     "op_http_list_item": {
@@ -674,7 +684,8 @@
         "item": { "description": "The value (array), the string (delimited) or the entry's name (map)." },
         "key_field": { "type": "string", "description": "For map items of an array: the field that identifies the item." },
         "value": { "description": "For shape: map: the entry's value." },
-        "destroy": { "$ref": "#/$defs/httpDestroy" }
+        "destroy": { "$ref": "#/$defs/httpDestroy" },
+        "credential": { "$ref": "#/$defs/httpCredential" }
       },
       "additionalProperties": false
     },

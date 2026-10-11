@@ -151,14 +151,16 @@ categories:
         api_shape: Admin API v2 `POST /api/atlas/v2/groups/{g}/databaseUsers`, digest or service-account OAuth; object
         generic: Y (`digest` auth and `media_type`; tested against a Digest sim in scenarios/adapters/http-digest.yaml)
         priority: P2
-        covered_by: null
+        covered_by: recipe:mongodb_atlas.database_user
+        note: "the password is an input (`{ secret }`, or a sensitive output of another line), sent on create only and never compared"
       - id: cockroachdb-database
         provider: CockroachDB Cloud
         side_effect: No branching; per-PR database is SQL (`CREATE DATABASE`), a cluster per PR is infra
-        api_shape: Cloud API `/api/v1/clusters` (cluster level only), bearer
-        generic: N (needs SQL)
+        api_shape: Cloud API `POST /api/v1/clusters/{c}/databases` (`{ name }`), `DELETE …/databases/{name}`, listed with `pagination.page`; SQL users at `…/sql-users`; bearer; object
+        generic: Y (find by name in the list; no SQL needed)
         priority: P2
-        covered_by: null
+        covered_by: recipe:cockroachdb.database
+        note: "the Cloud API creates databases and SQL users (`cockroachdb.sql_user`, which gets the SQL `admin` role by default); grants narrower than that still need SQL"
       - id: prisma-postgres-database
         provider: Prisma Postgres
         side_effect: Database per PR in a project, connection string per database
@@ -281,10 +283,10 @@ categories:
         provider: Flagsmith
         side_effect: Segment override or a per-PR environment
         api_shape: "`POST /api/v1/environments/`, feature-state endpoints; `Authorization: Api-Key <key>` (organisation key) or `Token <key>`; object"
-        generic: P (credential needs an `Api-Key` scheme prefix)
+        generic: "Y (`Authorization: Api-Key <key>` through the header `prefix`)"
         priority: P2
-        covered_by: null
-        note: "not yet: the Admin API takes `Authorization: Api-Key <key>`, a scheme prefix the http adapter's auth forms do not send (Bearer only for short-lived OIDC-exchanged tokens)"
+        covered_by: recipe:flagsmith.environment
+        note: "a per-PR environment (its client-side key is an output); identity and segment overrides are not recipes: Edge identities are addressed by UUID, and a segment override is two objects created in order"
       - id: configcat-rule
         provider: ConfigCat
         side_effect: Targeting rule on a setting in an environment
@@ -349,10 +351,12 @@ categories:
         provider: Postmark
         side_effect: Server per environment, webhook per server
         api_shape: Account API `POST /servers` (`X-Postmark-Account-Token`), Server API `POST /webhooks` (`X-Postmark-Server-Token`); object
-        generic: P (the webhook API takes the server's own token, an output of the server line)
+        generic: "Y (the webhook line takes the server's token with `credential: { from: <server line>.server_token }`)"
         priority: P2
-        covered_by: null
-        note: "server: recipe `postmark.server`; webhook: recipe `postmark_server.webhook`, on a server whose token is configured. Not chained in one plan: a created server's token cannot be a credential"
+        covered_by:
+          - recipe:postmark.server
+          - recipe:postmark_server.webhook
+        note: "chained in one plan by a line credential (ADR 0017, Line credentials): the webhook line says `destroy: keep`, since its webhooks go with the server; scenarios/adapters/http-line-credential.yaml"
       - id: sendgrid-webhook
         provider: SendGrid
         side_effect: Event webhook or inbound-parse host per environment
@@ -378,10 +382,10 @@ categories:
         provider: Datadog
         side_effect: Deployment marker / synthetic test against the preview URL
         api_shape: "`datadog-ci deployment mark`; `POST /api/v1/synthetics/tests/api`; `DD-API-KEY` + `DD-APPLICATION-KEY` headers; object"
-        generic: P (two credential headers on every read; deployment events listed by POST)
+        generic: "Y for synthetic tests (`headers` auth; delete by `POST /synthetics/tests/delete` naming the test in its body); N for deployment events (listed by POST over a time window, never deleted)"
         priority: P2
-        covered_by: null
-        note: "blocked for recipes: reads need two credentials at once (`DD-API-KEY` + `DD-APPLICATION-KEY`); deployment events are listed by POST"
+        covered_by: recipe:datadog.synthetic_api_test
+        note: "covered by a Synthetic API test against the preview URL; deployment markers stay out of reach (a later run could not find the event it made)"
       - id: honeycomb-marker
         provider: Honeycomb
         side_effect: Marker per deploy in the environment's dataset
@@ -421,16 +425,16 @@ categories:
         provider: Firebase Storage (GCS bucket)
         side_effect: Preview origin in the bucket's `cors`
         api_shape: GCS JSON API `PATCH /storage/v1/b/{bucket}?fields=cors`, Google OAuth; **list** full replace; `ifMetagenerationMatch` precondition available
-        generic: Y (list mode with precondition)
+        generic: Y (list mode; the precondition is not sent, Sponson's writers are serialised by the parent lock)
         priority: P2
-        covered_by: null
+        covered_by: recipe:gcs.bucket_cors
       - id: s3-r2-cors
         provider: S3 / R2
         side_effect: Preview origin in the bucket CORS rules
         api_shape: S3 `PutBucketCors` (SigV4, full replace); R2 `PUT /accounts/{a}/r2/buckets/{b}/cors` (bearer, full replace); **list**
-        generic: "Y (R2 bearer; S3 with `aws_sigv4` and `encoding: xml`, tested example in scenarios/adapters/http-sigv4-aws.yaml)"
+        generic: "Y (S3 API with `aws_sigv4` and `encoding: xml`; R2 through its S3-compatible endpoint)"
         priority: P2
-        covered_by: null
+        covered_by: recipe:s3.bucket_cors
   - id: queues
     title: Queues, caches, background jobs
     rows:

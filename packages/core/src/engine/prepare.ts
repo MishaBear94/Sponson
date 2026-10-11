@@ -3,7 +3,7 @@ import { SponsonError } from "../errors.js";
 import { orderChanges, outputRefs } from "../graph.js";
 import { changesFor } from "../plan.js";
 import { secretRefs } from "../resolve.js";
-import type { Change, OpSpec } from "../types.js";
+import { isFromRef, isSecretRef, type Change, type OpSpec } from "../types.js";
 import { providerOf } from "./run-context.js";
 import type { RunOptions } from "./types.js";
 
@@ -46,18 +46,7 @@ export function prepare(opts: RunOptions): Prepared {
 
   for (const c of ordered) {
     const op = ops.get(c.id)!;
-    // Output names are static: a typo must fail at plan time, not after half an apply.
-    for (const ref of outputRefs(c)) {
-      const target = ordered.find((x) => x.id === ref.line)!;
-      const known = Object.keys(ops.get(target.id)!.outputs);
-      if (!known.includes(ref.output)) {
-        throw new SponsonError(
-          "REF_OUTPUT_UNKNOWN",
-          `Line \`${c.id}\` reads \`${ref.line}.${ref.output}\`, but ${target.adapter}.${target.op} has no output \`${ref.output}\`. Known: ${known.join(", ") || "(none)"}`,
-          { id: c.id, ref: `${ref.line}.${ref.output}`, known },
-        );
-      }
-    }
+    checkRefs(c, ordered, ops);
     let p = interpolate(c.params, ctx, `line \`${c.id}\``);
     if (op.defaults) p = op.defaults(p, ctx);
     params.set(c.id, p);
@@ -74,6 +63,41 @@ export function prepare(opts: RunOptions): Prepared {
     requiresApproval: ctx.env === "production" || productionLines.length > 0,
     productionLines,
   };
+}
+
+/** A line's references, before any provider call: every output it reads exists, every credential it takes is masked. */
+function checkRefs(c: Change, ordered: Change[], ops: Map<string, OpSpec>): void {
+  // Output names are static: a typo must fail at plan time, not after half an apply.
+  for (const ref of outputRefs(c)) {
+    const target = ordered.find((x) => x.id === ref.line)!;
+    const known = Object.keys(ops.get(target.id)!.outputs);
+    if (!known.includes(ref.output)) {
+      throw new SponsonError(
+        "REF_OUTPUT_UNKNOWN",
+        `Line \`${c.id}\` reads \`${ref.line}.${ref.output}\`, but ${target.adapter}.${target.op} has no output \`${ref.output}\`. Known: ${known.join(", ") || "(none)"}`,
+        { id: c.id, ref: `${ref.line}.${ref.output}`, known },
+      );
+    }
+  }
+  for (const name of ops.get(c.id)!.credentialInputs?.(c.params) ?? []) checkCredentialInput(c, name, ordered, ops);
+}
+
+/**
+ * A param that carries a credential (`OpSpec.credentialInputs`) must be a reference whose value Sponson masks: a
+ * `{ secret }`, or a `{ from }` naming a sensitive output that later runs can read again (not `once`, ADR 0018).
+ * A literal would put the credential in the plan file; a non-sensitive output would show it in receipts.
+ */
+function checkCredentialInput(c: Change, name: string, ordered: Change[], ops: Map<string, OpSpec>): void {
+  const v = c.params[name];
+  if (isSecretRef(v)) return;
+  const fail = (why: string) => new SponsonError("PARAM_INVALID", `${c.adapter}: line \`${c.id}\`: \`${name}\` ${why}`, { adapter: c.adapter, id: c.id, param: name });
+  if (!isFromRef(v) || Object.keys(v).length !== 1) throw fail("must be `{ secret: <reference> }` or `{ from: <line>.<output> }` naming a sensitive output, never a literal credential");
+  const [line, ...rest] = v.from.split(".");
+  const target = ordered.find((x) => x.id === line);
+  const spec = target ? ops.get(target.id)!.outputs[rest.join(".")] : undefined;
+  if (!spec) return; // an unknown line or output is reported as REF_UNKNOWN / REF_OUTPUT_UNKNOWN
+  if (spec.sensitive !== true) throw fail(`reads \`${v.from}\`, which is not a sensitive output: a credential must never reach receipts or output`);
+  if (spec.once === true) throw fail(`reads \`${v.from}\`, which the provider shows only when it is created (once): later runs could not authenticate with it`);
 }
 
 /**

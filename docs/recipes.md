@@ -39,11 +39,17 @@ names are set.
 | Recipe | Op | What it manages | Credential |
 |---|---|---|---|
 | [`cloudflare.dns_cname`](#cloudflaredns_cname) | `resource` | DNS CNAME record | `CLOUDFLARE_API_TOKEN` (bearer) |
+| [`cockroachdb.database`](#cockroachdbdatabase) | `resource` | Database in a cluster | `COCKROACH_API_KEY` (bearer) |
+| [`cockroachdb.sql_user`](#cockroachdbsql_user) | `resource` | SQL user in a cluster | `COCKROACH_API_KEY` (bearer) |
 | [`configcat.targeting_rule`](#configcattargeting_rule) | `list_item` | Feature flag targeting rule | `CONFIGCAT_BASIC_AUTH_USERNAME` / `CONFIGCAT_BASIC_AUTH_PASSWORD` (basic) |
+| [`datadog.synthetic_api_test`](#datadogsynthetic_api_test) | `resource` | Synthetic API test against a preview | `DD_API_KEY` (header `DD-API-KEY`) and `DD_APP_KEY` (header `DD-APPLICATION-KEY`) |
+| [`flagsmith.environment`](#flagsmithenvironment) | `resource` | Environment per preview | `FLAGSMITH_MASTER_API_KEY` (header `Authorization`, sent as `Api-Key <value>`) |
+| [`gcs.bucket_cors`](#gcsbucket_cors) | `list_item` | CORS entry of a bucket | the token `gcloud auth print-access-token` prints (bearer) |
 | [`github.repo_webhook`](#githubrepo_webhook) | `resource` | Repository webhook | `GITHUB_TOKEN` (bearer) |
 | [`growthbook.force_rule`](#growthbookforce_rule) | `list_item` | Feature force rule | `GROWTHBOOK_API_KEY` (bearer) |
 | [`heroku.config_var`](#herokuconfig_var) | `list_item` | App config var | `HEROKU_API_KEY` (bearer) |
 | [`honeycomb.marker`](#honeycombmarker) | `resource` | Deploy marker | `HONEYCOMB_API_KEY` (header `X-Honeycomb-Team`) |
+| [`mongodb_atlas.database_user`](#mongodb_atlasdatabase_user) | `resource` | Database user | `MONGODB_ATLAS_PUBLIC_API_KEY` / `MONGODB_ATLAS_PRIVATE_API_KEY` (HTTP Digest) |
 | [`posthog.release_condition`](#posthogrelease_condition) | `list_item` | Flag release condition | `POSTHOG_PERSONAL_API_KEY` (bearer) |
 | [`postmark.server`](#postmarkserver) | `resource` | Server | `POSTMARK_ACCOUNT_TOKEN` (header `X-Postmark-Account-Token`) |
 | [`postmark_server.webhook`](#postmark_serverwebhook) | `resource` | Webhook of a server | `POSTMARK_SERVER_TOKEN` (header `X-Postmark-Server-Token`) |
@@ -53,6 +59,7 @@ names are set.
 | [`render.env_var`](#renderenv_var) | `resource` | Service environment variable | `RENDER_API_KEY` (bearer) |
 | [`resend.api_key`](#resendapi_key) | `resource` | API key | `RESEND_API_KEY` (bearer) |
 | [`resend.webhook`](#resendwebhook) | `resource` | Webhook | `RESEND_API_KEY` (bearer) |
+| [`s3.bucket_cors`](#s3bucket_cors) | `list_item` | CORS rule of a bucket | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (AWS SigV4, s3 in us-east-1) |
 | [`sendgrid.event_webhook`](#sendgridevent_webhook) | `resource` | Event Webhook | `SENDGRID_API_KEY` (bearer) |
 | [`sendgrid.parse_setting`](#sendgridparse_setting) | `resource` | Inbound Parse setting | `SENDGRID_API_KEY` (bearer) |
 | [`sentry.release`](#sentryrelease) | `resource` | Release | `SENTRY_AUTH_TOKEN` (bearer) |
@@ -154,6 +161,114 @@ outputs:
   hostname: /name
 ```
 
+## CockroachDB Cloud
+
+Recipe file: [`packages/adapters/recipes/cockroachdb.yaml`](../packages/adapters/recipes/cockroachdb.yaml). Verified on 2026-10-11 against:
+
+- [Cloud API OpenAPI document (version 2026-09-15)](https://cockroachlabs.cloud/assets/docs/api/latest/openapi.json)
+- [Use the CockroachDB Cloud API](https://docs.cockroachlabs.com/docs/cockroachcloud/cloud-api)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://cockroachlabs.cloud/api/v1` |
+| `base_url_env` | `COCKROACH_API_URL` |
+| Credential | `COCKROACH_API_KEY` (bearer) |
+| `headers` | {"Cc-Version":"2024-09-16"} |
+
+Assumptions:
+
+- **CR1** (verified, [source](https://docs.cockroachlabs.com/docs/cockroachcloud/cloud-api)): The Cloud API authenticates with a service account's secret key as `Authorization: Bearer`; the key has the service account's roles.
+- **CR2** (verified, [source](https://docs.cockroachlabs.com/docs/cockroachcloud/cloud-api)): `Cc-Version` pins the API version (`YYYY-MM-DD`); without it the latest version answers, which may change under a client. The guide documents `2024-09-16`.
+- **CR3** (verified, [source](https://cockroachlabs.cloud/assets/docs/api/latest/openapi.json)): `POST /clusters/{cluster_id}/databases` with `{ name }` creates a database and answers `{ name, table_count }`; `GET` on the same path lists `{ databases: [{ name, table_count }], pagination: { next_page } }`, paged with `pagination.page`; `DELETE /clusters/{cluster_id}/databases/{name}` deletes one. There is no GET of a single database.
+- **CR4** (verified, [source](https://cockroachlabs.cloud/assets/docs/api/latest/openapi.json)): `POST /clusters/{cluster_id}/sql-users` with `{ name, password }` (both required) creates a SQL user; `GET` on the same path lists `{ users: [{ name }], pagination: { next_page } }`; `DELETE /clusters/{cluster_id}/sql-users/{name}` deletes one. The password cannot be read back; `PUT …/sql-users/{name}/password` changes it.
+- **CR5** (verified, [source](https://docs.cockroachlabs.com/docs/cockroachcloud/cloud-api)): A SQL user created through the API gets the SQL `admin` role by default, which the guide advises against for anything but administration.
+- **CR6** (verified, [source](https://cockroachlabs.cloud/assets/docs/api/latest/openapi.json)): Creating or deleting databases and SQL users needs a cluster-level role of the service account (Cluster Admin, Cluster Operator or Cluster Data Accessor for databases; Cluster Admin for SQL users).
+- **CR7** **(unverified)**: `COCKROACH_API_KEY` is the variable the CockroachDB Terraform provider and `ccloud` read the key from.
+- **CR8** **(unverified)**: A second create of an existing database or SQL user is refused with 409 (ALREADY_EXISTS), and deleting one that is gone answers 404.
+- **CR9** **(unverified)**: Deleting a database drops it with its tables (CASCADE); the API offers no way to refuse when it holds data.
+- **CR10** **(unverified)**: The API takes database and user names that need quoting in SQL (`app_pr-42`, from a scope with `-`) and quotes them itself.
+
+### `cockroachdb.database`
+
+**Database in a cluster** (`http.resource`). A database per scope in a shared CockroachDB Cloud cluster, such as `app_pr_42`, instead of a cluster per preview. Located by its name in the cluster's list; only its existence is compared (the API exposes nothing else to set); destroy drops it with its data (CR9).
+
+Covers: `cockroachdb-database` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `cluster_id` | string | yes | — | The cluster's id (a UUID, shown in the Cloud Console's URL). |
+| `name` | string | yes | — | The database's name; its identity. A name with `-` (a scope such as `pr-42`) needs quoting in SQL (CR10). Matches `^[A-Za-z_][A-Za-z0-9_.-]{0,62}$`. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: database
+  adapter: http
+  op: resource
+  recipe: cockroachdb.database
+  cluster_id: 9e3f1a52-63d1-4a4c-9b8f-2c8b7a0e5d11
+  name: app_${ctx.scope}
+```
+
+What the line expands into: the [`http.resource`](plan-format.md#httpresource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /clusters/{cluster_id}/databases
+  list_path: /databases
+  match:
+    name: { param: name }
+  next: /pagination/next_page
+  cursor_param: pagination.page
+create:
+  path: /clusters/{cluster_id}/databases
+delete:
+  path: /clusters/{cluster_id}/databases/{id}
+id_path: /name
+```
+
+### `cockroachdb.sql_user`
+
+**SQL user in a cluster** (`http.resource`). A SQL user per scope in a shared CockroachDB Cloud cluster, such as `app_pr_42`, with its password as an input (`{ secret: … }`, or a sensitive output of another line), sent on create only and never compared. It gets the SQL `admin` role (CR5): grant narrower privileges in SQL if previews must not administer the cluster. Located by its name; destroy deletes the user.
+
+Covers: — in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `cluster_id` | string | yes | — | The cluster's id (a UUID, shown in the Cloud Console's URL). |
+| `name` | string | yes | — | The user's name; its identity. Matches `^[A-Za-z_][A-Za-z0-9_.-]{0,62}$`. |
+| `password` | string | yes | — | The user's password, as a reference (`{ secret: env://… }`, or `{ from: <line>.<output> }` of a sensitive output); sent on create only (CR4). |
+
+```yaml
+# under changes: (no provider block needed)
+- id: sql_user
+  adapter: http
+  op: resource
+  recipe: cockroachdb.sql_user
+  cluster_id: 9e3f1a52-63d1-4a4c-9b8f-2c8b7a0e5d11
+  name: app_${ctx.scope}
+  password:
+    secret: env://PREVIEW_DB_PASSWORD
+```
+
+What the line expands into: the [`http.resource`](plan-format.md#httpresource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /clusters/{cluster_id}/sql-users
+  list_path: /users
+  match:
+    name: { param: name }
+  next: /pagination/next_page
+  cursor_param: pagination.page
+create:
+  path: /clusters/{cluster_id}/sql-users
+  body:
+    password: { param: password }
+delete:
+  path: /clusters/{cluster_id}/sql-users/{id}
+id_path: /name
+```
+
 ## ConfigCat
 
 Recipe file: [`packages/adapters/recipes/configcat.yaml`](../packages/adapters/recipes/configcat.yaml). Verified on 2026-10-11 against:
@@ -235,6 +350,238 @@ item:
     intValue: null
     doubleValue: null
     predefinedVariationId: null
+```
+
+## Datadog
+
+Recipe file: [`packages/adapters/recipes/datadog.yaml`](../packages/adapters/recipes/datadog.yaml). Verified on 2026-10-11 against:
+
+- [Synthetics API reference](https://docs.datadoghq.com/api/latest/synthetics/)
+- [API authentication (keys, sites)](https://docs.datadoghq.com/api/latest/authentication/)
+- [Datadog API v1 OpenAPI document (datadog-api-client)](https://github.com/DataDog/datadog-api-client-typescript/blob/master/.generator/schemas/v1/openapi.yaml)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.datadoghq.com/api/v1` |
+| `base_url_env` | `DATADOG_API_URL` |
+| Credential | `DD_API_KEY` (header `DD-API-KEY`) and `DD_APP_KEY` (header `DD-APPLICATION-KEY`) |
+
+Assumptions:
+
+- **DD1** (verified, [source](https://github.com/DataDog/datadog-api-client-typescript/blob/master/.generator/schemas/v1/openapi.yaml)): Requests carry the API key in `DD-API-KEY` and the application key in `DD-APPLICATION-KEY`; Datadog's clients read them from `DD_API_KEY` and `DD_APP_KEY`. Reading needs the application key too.
+- **DD2** (verified, [source](https://docs.datadoghq.com/api/latest/authentication/)): Each Datadog site has its own API host (`https://api.datadoghq.eu`, `https://api.us3.datadoghq.com`, …): outside US1, set `base_url` in the provider block.
+- **DD3** (verified, [source](https://github.com/DataDog/datadog-api-client-typescript/blob/master/.generator/schemas/v1/openapi.yaml)): `POST /synthetics/tests/api` creates an API test from `name`, `type` (`api`), `config` (`request` with `method` and `url`, `assertions`), `locations`, `options` and `message` (all required), with `subtype` (`http`), `status` (`live` or `paused`) and `tags`, answering it with its `public_id`.
+- **DD4** (verified, [source](https://github.com/DataDog/datadog-api-client-typescript/blob/master/.generator/schemas/v1/openapi.yaml)): `GET /synthetics/tests/api/{public_id}` answers one API test; `PUT` on the same path replaces its configuration with a whole test definition.
+- **DD5** (verified, [source](https://github.com/DataDog/datadog-api-client-typescript/blob/master/.generator/schemas/v1/openapi.yaml)): `GET /synthetics/tests` lists every test as `{ tests: [...] }` (`page_size` and `page_number` are optional); `POST /synthetics/tests/delete` with `{ public_ids: [...] }` deletes tests.
+- **DD6** **(unverified)**: Without `page_size` the list answers every test of the organisation, and a test name identifies one test (two with one name make `find` refuse with PARAM_INVALID).
+- **DD7** **(unverified)**: The fields compared (`config.request`, `config.assertions`, `locations`, `options.tick_every`, `message`, `status`, `tags`) are answered as they were sent, in order.
+- **DD8** **(unverified)**: Deleting a test that is already gone answers 404 (destroy treats it as done).
+- **DD9** **(unverified)**: Deployment events (`datadog-ci deployment mark`, the DORA deployments API) are not a recipe: they are listed with a POST over a time window and cannot be deleted, so a later run could not find the one it made.
+
+### `datadog.synthetic_api_test`
+
+**Synthetic API test against a preview** (`http.resource`). A Synthetic HTTP test per scope that checks the preview's URL from Datadog's locations, such as `preview pr-42` asserting status 200, with its own monitor. Located by its name; a console edit of its request, assertions, locations, frequency, message, status or tags is drift; destroy deletes the test (and its monitor).
+
+Covers: `datadog-marker` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `name` | string | yes | — | The test's name; its identity (DD6). |
+| `url` | string | yes | — | The URL to request (the preview's URL, or a health path on it). Matches `^https?://\\S+$`. |
+| `method` | string | no | `GET` | The HTTP method. One of `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`. |
+| `assertions` | list | no | `[{"type":"statusCode","operator":"is","target":200}]` | The assertions, each `{ type, operator, target }` (`statusCode`, `responseTime`, `body`, `header`). |
+| `locations` | list | yes | — | The managed locations to run from, such as `aws:us-east-2` or `aws:eu-central-1`. |
+| `tick_every` | integer | no | `300` | How often the test runs, in seconds. |
+| `message` | string | no | `Preview check managed by Sponson` | The notification message of the test's monitor. |
+| `status` | string | no | `live` | `paused` keeps the test without running it. One of `live`, `paused`. |
+| `tags` | list | no | `["managed-by:sponson"]` | The test's tags. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: synthetic_api_test
+  adapter: http
+  op: resource
+  recipe: datadog.synthetic_api_test
+  name: preview ${ctx.scope}
+  url: https://${ctx.scope}.preview.example.app/api/health
+  locations:
+    - aws:us-east-2
+```
+
+What the line expands into: the [`http.resource`](plan-format.md#httpresource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /synthetics/tests
+  list_path: /tests
+  match:
+    name: { param: name }
+read:
+  path: /synthetics/tests/api/{id}
+create:
+  path: /synthetics/tests/api
+  body:
+    type: api
+    subtype: http
+update:
+  method: PUT
+  body:
+    type: api
+    subtype: http
+delete:
+  method: POST
+  path: /synthetics/tests/delete
+  body:
+    public_ids:
+      - "{id}"
+id_path: /public_id
+fields:
+  /config/request/method: { param: method }
+  /config/request/url: { param: url }
+  /config/assertions: { param: assertions }
+  locations: { param: locations }
+  /options/tick_every: { param: tick_every }
+  message: { param: message }
+  status: { param: status }
+  tags: { param: tags }
+```
+
+## Flagsmith
+
+Recipe file: [`packages/adapters/recipes/flagsmith.yaml`](../packages/adapters/recipes/flagsmith.yaml). Verified on 2026-10-11 against:
+
+- [Admin API authentication](https://docs.flagsmith.com/integrating-with-flagsmith/flagsmith-api-overview/admin-api/authentication)
+- [Admin API overview](https://docs.flagsmith.com/integrating-with-flagsmith/flagsmith-api-overview/admin-api)
+- [Flagsmith API OpenAPI document](https://api.flagsmith.com/api/v1/swagger.json)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.flagsmith.com/api/v1` |
+| `base_url_env` | `FLAGSMITH_API_URL` |
+| Credential | `FLAGSMITH_MASTER_API_KEY` (header `Authorization`, sent as `Api-Key <value>`) |
+
+Assumptions:
+
+- **FS1** (verified, [source](https://docs.flagsmith.com/integrating-with-flagsmith/flagsmith-api-overview/admin-api/authentication)): The Admin API authenticates with an organisation API key as `Authorization: Api-Key <key>`; Bearer is only for short-lived OIDC-exchanged tokens.
+- **FS2** (verified, [source](https://api.flagsmith.com/api/v1/swagger.json)): `POST /environments/` creates an environment from `name` and `project` (both required) and optional `description`, answering it (201) with its integer `id` and its `api_key`, the client-side environment key SDKs use.
+- **FS3** (verified, [source](https://api.flagsmith.com/api/v1/swagger.json)): `GET /environments/?project=<id>` lists a project's environments as `{ count, next, previous, results: [...] }`.
+- **FS4** (verified, [source](https://api.flagsmith.com/api/v1/swagger.json)): `GET`, `PATCH` and `DELETE /environments/{api_key}/` read, update and delete one environment (DELETE answers 204).
+- **FS5** **(unverified)**: A project has fewer environments than one page of the list holds, so `find` sees them all (`next` is a URL, which the http adapter does not follow).
+- **FS6** **(unverified)**: A new environment starts with every feature of the project at its default state, and environment names are unique in a project in practice (two with one name make `find` refuse with PARAM_INVALID).
+- **FS7** **(unverified)**: `description` is answered as sent; `FLAGSMITH_MASTER_API_KEY` is the variable Flagsmith's Terraform provider reads the key from.
+- **FS8** **(unverified)**: Identity and segment overrides are not recipes: Edge projects (Flagsmith SaaS's default) address identities by UUID through `edge-identities`, and a segment override is two objects (a feature segment, then a feature state) created in order.
+- **FS9** **(unverified)**: The create takes the project id as a string of digits (`"1234"`) as well as a number, as Django REST Framework's primary-key fields do.
+
+### `flagsmith.environment`
+
+**Environment per preview** (`http.resource`). A Flagsmith environment per scope in a project, such as `preview-pr-42`, starting from the project's default flag states; its client-side environment key is the output `api_key` for the preview's SDK configuration. Located by name in the project; a console edit of its description is drift; destroy deletes the environment with its flag states and identities.
+
+Covers: `flagsmith-override` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`, `api_key`, `environment_id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `project_id` | string | yes | — | The project's id, digits as a string (FS9). Matches `^[0-9]+$`. |
+| `name` | string | yes | — | The environment's name; its identity in the project (FS6). |
+| `description` | string | no | `Preview environment managed by Sponson` | The environment's description. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: environment
+  adapter: http
+  op: resource
+  recipe: flagsmith.environment
+  project_id: "1234"
+  name: preview-${ctx.scope}
+```
+
+What the line expands into: the [`http.resource`](plan-format.md#httpresource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /environments/?project={project_id}
+  list_path: /results
+  match:
+    name: { param: name }
+read:
+  path: /environments/{id}/
+create:
+  path: /environments/
+  body:
+    project: { param: project_id }
+update:
+  method: PATCH
+id_path: /api_key
+fields:
+  description: { param: description }
+outputs:
+  api_key: /api_key
+  environment_id: /id
+```
+
+## Google Cloud Storage (Firebase Storage)
+
+Recipe file: [`packages/adapters/recipes/gcs.yaml`](../packages/adapters/recipes/gcs.yaml). Verified on 2026-10-11 against:
+
+- [Buckets: patch](https://docs.cloud.google.com/storage/docs/json_api/v1/buckets/patch)
+- [Buckets resource (cors)](https://docs.cloud.google.com/storage/docs/json_api/v1/buckets)
+- [Set up and view CORS configurations](https://docs.cloud.google.com/storage/docs/using-cors)
+- [Performance tips (patch semantics)](https://docs.cloud.google.com/storage/docs/json_api/v1/how-tos/performance)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://storage.googleapis.com/storage/v1` |
+| `base_url_env` | `GCS_API_URL` |
+| Credential | the token `gcloud auth print-access-token` prints (bearer) |
+
+Assumptions:
+
+- **GC1** (verified, [source](https://docs.cloud.google.com/storage/docs/using-cors)): The JSON API takes an OAuth access token as `Authorization: Bearer`; Google's own example gets it from `gcloud auth print-access-token`.
+- **GC2** (verified, [source](https://docs.cloud.google.com/storage/docs/using-cors)): `GET /b/{bucket}?fields=cors` answers the bucket's CORS configuration; `PATCH /b/{bucket}?fields=cors` with `{ cors: [...] }` sets it, and `{ cors: [] }` removes it.
+- **GC3** (verified, [source](https://docs.cloud.google.com/storage/docs/json_api/v1/how-tos/performance)): A patch that contains a list replaces the whole list: individual entries cannot be added or removed, so the whole `cors` list is written back.
+- **GC4** (verified, [source](https://docs.cloud.google.com/storage/docs/json_api/v1/buckets)): Each `cors` entry has `origin` (list), `method` (list), `responseHeader` (list) and `maxAgeSeconds` (integer).
+- **GC5** (verified, [source](https://docs.cloud.google.com/storage/docs/json_api/v1/buckets/patch)): `PATCH` takes `ifMetagenerationMatch`, a precondition on the bucket's metageneration. The recipe does not send it (the http adapter has no preconditions); Sponson's own writers are serialised by the parent lock, a writer outside Sponson can still race.
+- **GC6** (verified, [source](https://docs.cloud.google.com/storage/docs/json_api/v1/buckets/patch)): Changing a bucket's CORS needs the `storage.buckets.update` permission.
+- **GC7** **(unverified)**: A bucket without a CORS configuration answers `{}` (no `cors` field), read as an empty list, and entries are answered as written, in order.
+- **GC8** **(unverified)**: An entry is identified by its first origin: the recipe writes one origin per entry, and no other entry of the bucket starts with the same origin.
+
+### `gcs.bucket_cors`
+
+**CORS entry of a bucket** (`http.list_item`). An entry of a bucket's `cors` list allowing one origin, such as the preview's URL on the Firebase Storage bucket `my-app.appspot.com`, with its methods, response headers and max age. The rest of the list is left as it is; a console edit of the entry is drift, and destroy removes only this entry.
+
+Covers: `gcs-cors` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: none. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `bucket` | string | yes | — | The bucket's name (Firebase Storage's default bucket is `<project>.appspot.com` or `<project>.firebasestorage.app`). |
+| `origin` | string | yes | — | The origin allowed, without a path (the preview's URL); the entry's identity (GC8). Matches `^(https?://\\S+\|\\*)$`. |
+| `methods` | list | no | `["GET","HEAD"]` | The methods allowed. |
+| `response_headers` | list | no | `["Content-Type"]` | The response headers the browser may read. |
+| `max_age_seconds` | integer | no | `3600` | How long a preflight answer may be cached. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: bucket_cors
+  adapter: http
+  op: list_item
+  recipe: gcs.bucket_cors
+  bucket: my-app.appspot.com
+  origin: https://${ctx.scope}.preview.example.app
+```
+
+What the line expands into: the [`http.list_item`](plan-format.md#httplist_item) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+parent:
+  path: /b/{bucket}?fields=cors
+  method: PATCH
+list_path: /cors
+key_field: /origin/0
+item:
+  origin:
+    - { param: origin }
+  method: { param: methods }
+  responseHeader: { param: response_headers }
+  maxAgeSeconds: { param: max_age_seconds }
 ```
 
 ## GitHub
@@ -525,6 +872,88 @@ fields:
   url: { param: url }
 ```
 
+## MongoDB Atlas
+
+Recipe file: [`packages/adapters/recipes/mongodb_atlas.yaml`](../packages/adapters/recipes/mongodb_atlas.yaml). Verified on 2026-10-11 against:
+
+- [Atlas Administration API v2 (OpenAPI document)](https://www.mongodb.com/docs/api/doc/atlas-admin-api-v2.json)
+- [Create One Database User in One Project](https://www.mongodb.com/docs/api/doc/atlas-admin-api-v2/operation/operation-creategroupdatabaseuser)
+- [Configure Atlas API access (API keys use HTTP Digest)](https://www.mongodb.com/docs/atlas/configure-api-access/)
+- [Atlas CLI environment variables](https://www.mongodb.com/docs/atlas/cli/current/atlas-cli-env-variables/)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://cloud.mongodb.com/api/atlas/v2` |
+| `base_url_env` | `MONGODB_ATLAS_API_URL` |
+| Credential | `MONGODB_ATLAS_PUBLIC_API_KEY` / `MONGODB_ATLAS_PRIVATE_API_KEY` (HTTP Digest) |
+
+Assumptions:
+
+- **MA1** (verified, [source](https://www.mongodb.com/docs/atlas/configure-api-access/)): Programmatic API keys authenticate with HTTP Digest (the public key as the user name, the private key as the password); service accounts take an OAuth2 client-credentials token instead (`https://cloud.mongodb.com/api/oauth/token`).
+- **MA2** (verified, [source](https://www.mongodb.com/docs/atlas/cli/current/atlas-cli-env-variables/)): The Atlas CLI keeps the key pair in `MONGODB_ATLAS_PUBLIC_API_KEY` and `MONGODB_ATLAS_PRIVATE_API_KEY`.
+- **MA3** (verified, [source](https://www.mongodb.com/docs/api/doc/atlas-admin-api-v2.json)): Requests and answers use the versioned media type `application/vnd.atlas.2023-01-01+json` (in `Accept` and `Content-Type`); the database-user operations are published under that version.
+- **MA4** (verified, [source](https://www.mongodb.com/docs/api/doc/atlas-admin-api-v2.json)): `POST /groups/{groupId}/databaseUsers` creates a user from `databaseName`, `groupId`, `roles` and `username` (required), with `password` for SCRAM users (write-only, never answered), optional `scopes` (absent: every cluster of the project) and `deleteAfterDate` (Atlas deletes the user then; within one week of the request). It answers 201 with the user.
+- **MA5** (verified, [source](https://www.mongodb.com/docs/api/doc/atlas-admin-api-v2.json)): `GET`, `PATCH` and `DELETE /groups/{groupId}/databaseUsers/{databaseName}/{username}` read, update and delete one user; SCRAM users authenticate against `databaseName` `admin`.
+- **MA6** (verified, [source](https://www.mongodb.com/docs/api/doc/atlas-admin-api-v2/operation/operation-creategroupdatabaseuser)): A project supports 100 database users by default (900 at most).
+- **MA7** **(unverified)**: A GET of a user that does not exist answers 404; a second create of the same user answers 409.
+- **MA8** **(unverified)**: `roles` (each `{ databaseName, roleName, collectionName? }`) and `scopes` (each `{ name, type }`) are answered in the order they were sent, so they compare without drift.
+- **MA9** **(unverified)**: `PATCH` takes the user's identifying fields (`databaseName`, `groupId`, `username`) with the changed ones and keeps the password when none is sent.
+
+### `mongodb_atlas.database_user`
+
+**Database user** (`http.resource`). A SCRAM database user per scope on a shared Atlas cluster, such as `app-pr-42` with `readWrite` on the database `app_pr_42`, instead of a cluster per preview. The password is an input: a `{ secret: … }` reference (a value per environment in a secret manager) or a sensitive output of another line, sent on create only and never compared. Located by its user name; a console edit of its roles or scopes is drift; destroy deletes the user (not the database's data).
+
+Covers: `mongodb-atlas-user` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `group_id` | string | yes | — | The project (group) id, 24 hexadecimal digits. Matches `^[0-9a-f]{24}$`. |
+| `username` | string | yes | — | The user name, unique in the project; its identity. |
+| `password` | string | yes | — | The user's password, as a reference (`{ secret: env://… }`, or `{ from: <line>.<output> }` of a sensitive output); sent on create only (MA4). |
+| `roles` | list | yes | — | The roles, each `{ databaseName, roleName }` (`readWrite`, `read`, `dbAdmin`, …). |
+| `scopes` | list | no | — | The clusters it may reach, each `{ name, type: CLUSTER }`; absent: every cluster of the project (not compared then). |
+| `delete_after` | string | no | — | An ISO 8601 time, within a week, at which Atlas deletes the user by itself (sent on create only). |
+
+```yaml
+# under changes: (no provider block needed)
+- id: database_user
+  adapter: http
+  op: resource
+  recipe: mongodb_atlas.database_user
+  group_id: 32b6e34b3d91647abb20e7b8
+  username: app-${ctx.scope}
+  password:
+    secret: env://PREVIEW_DB_PASSWORD
+  roles:
+    - databaseName: app_${ctx.scope}
+      roleName: readWrite
+```
+
+What the line expands into: the [`http.resource`](plan-format.md#httpresource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+read:
+  path: /groups/{group_id}/databaseUsers/admin/{username}
+create:
+  path: /groups/{group_id}/databaseUsers
+  body:
+    databaseName: admin
+    groupId: { param: group_id }
+    username: { param: username }
+    password: { param: password }
+    deleteAfterDate: { param: delete_after }
+update:
+  method: PATCH
+  body:
+    databaseName: admin
+    groupId: { param: group_id }
+    username: { param: username }
+id_path: /username
+fields:
+  roles: { param: roles }
+  scopes: { param: scopes }
+```
+
 ## PostHog
 
 Recipe file: [`packages/adapters/recipes/posthog.yaml`](../packages/adapters/recipes/posthog.yaml). Verified on 2026-10-11 against:
@@ -624,9 +1053,9 @@ Assumptions:
 
 ### `postmark.server`
 
-**Server** (`http.resource`). A Postmark server per environment, such as `sponson-preview-pr-42`, with its inbound webhook URL and tracking settings. Its token is a sensitive output for the app's environment (`{ from: <line>.server_token }`). Located by its name; a console edit of its color, tracking or inbound hook URL is drift. Webhooks of the server's message streams need the server's own token: see `postmark_server.webhook`.
+**Server** (`http.resource`). A Postmark server per environment, such as `sponson-preview-pr-42`, with its inbound webhook URL and tracking settings. Its token is a sensitive output for the app's environment (`{ from: <line>.server_token }`). Located by its name; a console edit of its color, tracking or inbound hook URL is drift. Its webhooks: `postmark_server.webhook` with `credential: { from: <this line>.server_token }`.
 
-Covers: — in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`, `server_token` (sensitive). On destroy: deleted (`destroy: keep` on the line leaves it).
+Covers: `postmark-server-webhook` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`, `server_token` (sensitive). On destroy: deleted (`destroy: keep` on the line leaves it).
 
 | Param | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -698,12 +1127,13 @@ Assumptions:
 - **PS5** (verified, [source](https://postmarkapp.com/developer/api/webhooks-api)): Postmark tests the endpoint when a webhook is created; `Verify: false` saves it without the test (a preview that is not deployed yet would fail it).
 - **PS6** **(unverified)**: A URL identifies one webhook of the server (two webhooks with the same URL, on different streams, make `find` refuse with PARAM_INVALID), and every trigger's `Enabled` is answered as a boolean even when it was not sent.
 - **PS7** **(unverified)**: `PostFirstOpenOnly` and `IncludeContent` are left at Postmark's defaults; only which events are delivered is compared.
+- **PS8** **(unverified)**: A server's webhooks belong to it: deleting the server (`DELETE /servers/{id}`, Account API) removes them, so a webhook line authenticated with the server's own token can leave its destroy to the server's line.
 
 ### `postmark_server.webhook`
 
-**Webhook of a server** (`http.resource`). A webhook of one Postmark server delivering to an environment's URL, such as the preview's `/api/postmark` handler, with the events it enables. Located by its URL; a console edit of an event's `Enabled` is drift. It works with a server whose token is in `POSTMARK_SERVER_TOKEN` (a shared staging server, say): a server the same plan creates per environment has its token only as an output, which cannot be a credential.
+**Webhook of a server** (`http.resource`). A webhook of one Postmark server delivering to an environment's URL, such as the preview's `/api/postmark` handler, with the events it enables. Located by its URL; a console edit of an event's `Enabled` is drift. The server is the one whose token is in `POSTMARK_SERVER_TOKEN` (a shared staging server), or, for a server the same plan creates per environment (`postmark.server`), the line says `credential: { from: <server line>.server_token }` and `destroy: keep`: deleting the server removes its webhooks (PS8).
 
-Covers: — in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+Covers: `postmark-server-webhook` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
 
 | Param | Type | Required | Default | Meaning |
 |---|---|---|---|---|
@@ -1158,6 +1588,81 @@ outputs:
   signing_secret:
     path: /signing_secret
     sensitive: true
+```
+
+## Amazon S3 / Cloudflare R2 (S3 API)
+
+Recipe file: [`packages/adapters/recipes/s3.yaml`](../packages/adapters/recipes/s3.yaml). Verified on 2026-10-11 against:
+
+- [PutBucketCors](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketCors.html)
+- [GetBucketCors](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketCors.html)
+- [DeleteBucketCors](https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucketCors.html)
+- [R2 S3 API compatibility](https://developers.cloudflare.com/r2/api/s3/api/)
+
+| API default | Value |
+|---|---|
+| `base_url` | none: set it in the provider block |
+| `base_url_env` | `S3_API_URL` |
+| Credential | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (AWS SigV4, s3 in us-east-1) |
+| `encoding` | `xml` |
+
+Assumptions:
+
+- **SS1** (verified, [source](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketCors.html)): `PUT /?cors` on the bucket's endpoint replaces its whole CORS configuration with a `CORSConfiguration` document of up to 100 `CORSRule`s (each `ID`, `AllowedOrigin`s, `AllowedMethod`s, `AllowedHeader`s, `ExposeHeader`s, `MaxAgeSeconds`) and requires `Content-MD5`, which the SigV4 signer adds for `s3`.
+- **SS2** (verified, [source](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketCors.html)): `GET /?cors` answers the configuration as XML.
+- **SS3** (verified, [source](https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucketCors.html)): `DELETE /?cors` removes the configuration (the way to leave a bucket with no rule).
+- **SS4** (verified, [source](https://developers.cloudflare.com/r2/api/s3/api/)): R2 implements PutBucketCors, GetBucketCors and DeleteBucketCors at `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`; its SigV4 region is `auto`, and `us-east-1` is accepted as an alias, so the recipe's region works for R2 unchanged.
+- **SS5** **(unverified)**: A bucket without a CORS configuration answers 404 `NoSuchCORSConfiguration` (read as an empty list, `parent.if_missing: empty`), and an empty configuration is refused as `MalformedXML` (so the last rule is removed with DELETE, `parent.when_empty: delete`).
+- **SS6** **(unverified)**: R2 accepts path-style requests (`https://<ACCOUNT_ID>.r2.cloudflarestorage.com/<bucket>/?cors`), so its base URL names the bucket in the path.
+- **SS7** **(unverified)**: S3 answers a rule's elements as they were written; a rule's `ID` identifies it among the bucket's rules (IDs are not required to be unique by S3, so other writers must not reuse the recipe's).
+
+### `s3.bucket_cors`
+
+**CORS rule of a bucket** (`http.list_item`). A CORS rule of an S3 or R2 bucket allowing the preview's origin, identified by its `ID` (such as `sponson-pr-42`); every other rule is left as it is. The base URL names the bucket: `https://<bucket>.s3.<region>.amazonaws.com` (set `auth.aws_sigv4.region` to the bucket's region), or `https://<account>.r2.cloudflarestorage.com/<bucket>` for R2. A console edit of the rule is drift; destroy removes only this rule (the whole configuration when it was the last one).
+
+Covers: `s3-r2-cors` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: none. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `rule_id` | string | yes | — | The rule's `ID`, at most 255 characters; its identity (SS7). Matches `^.{1,255}$`. |
+| `origin` | string | yes | — | The origin allowed (the preview's URL, without a path). Matches `^(https?://\\S+\|\\*)$`. |
+| `methods` | list | no | `["GET"]` | The methods allowed: `GET`, `PUT`, `POST`, `DELETE`, `HEAD`. |
+| `allowed_headers` | list | no | — | Request headers a preflight may ask for (`*` for any); absent: none. |
+| `expose_headers` | list | no | — | Response headers the browser may read; absent, none. |
+| `max_age_seconds` | string | no | `3000` | How long a preflight answer may be cached, in seconds (a string, as XML carries it). Matches `^[0-9]+$`. |
+
+```yaml
+providers:
+  http:
+    s3:
+      recipe: s3
+      base_url: https://assets.s3.us-east-1.amazonaws.com
+changes:
+  - id: bucket_cors
+    adapter: http
+    op: list_item
+    recipe: s3.bucket_cors
+    rule_id: sponson-${ctx.scope}
+    origin: https://${ctx.scope}.preview.example.app
+```
+
+What the line expands into: the [`http.list_item`](plan-format.md#httplist_item) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+parent:
+  path: /?cors
+  method: PUT
+  if_missing: empty
+  when_empty: delete
+list_path: /CORSConfiguration/CORSRule
+key_field: ID
+item:
+  AllowedHeader: { param: allowed_headers }
+  AllowedMethod: { param: methods }
+  AllowedOrigin: { param: origin }
+  ExposeHeader: { param: expose_headers }
+  ID: { param: rule_id }
+  MaxAgeSeconds: { param: max_age_seconds }
 ```
 
 ## SendGrid

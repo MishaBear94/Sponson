@@ -292,6 +292,14 @@ export interface OpSpec {
    * configuration the block does not have. Without it the whole block is used.
    */
   providerFor?(block: Record<string, unknown>, params: Record<string, unknown>): Record<string, unknown>;
+  /**
+   * The names of the line's params that carry a credential the op authenticates with (the generic `http` adapter's
+   * line-level `credential`), given the params as written. The engine checks each before any provider call: it must
+   * be a `{ secret: … }` reference, or a `{ from: <line>.<output> }` naming an output declared `sensitive` and not
+   * `once` (a once-only value resolves to `{ keep: true }` in later runs, which cannot authenticate a request);
+   * anything else, a literal above all, is PARAM_INVALID. The resolved value is masked like any secret. Pure.
+   */
+  credentialInputs?(params: Record<string, unknown>): string[];
   /** Fill in defaults (e.g. a branch name) given the context. Returns a new params object. */
   defaults?(params: ResolvedParams, ctx: Ctx): ResolvedParams;
   /**

@@ -45,8 +45,8 @@ ops:
   server:
     kind: resource
     title: Server
-    summary: "A Postmark server per environment, such as `sponson-preview-pr-42`, with its inbound webhook URL and tracking settings. Its token is a sensitive output for the app's environment (`{ from: <line>.server_token }`). Located by its name; a console edit of its color, tracking or inbound hook URL is drift. Webhooks of the server's message streams need the server's own token: see `postmark_server.webhook`."
-    covers: []
+    summary: "A Postmark server per environment, such as `sponson-preview-pr-42`, with its inbound webhook URL and tracking settings. Its token is a sensitive output for the app's environment (`{ from: <line>.server_token }`). Located by its name; a console edit of its color, tracking or inbound hook URL is drift. Its webhooks: `postmark_server.webhook` with `credential: { from: <this line>.server_token }`."
+    covers: [postmark-server-webhook]
     params:
       name:
         type: string

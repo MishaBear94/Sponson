@@ -99,7 +99,9 @@ existing file in `packages/adapters/recipes/` and:
    and `<PROVIDER>_API_URL`; per op its `kind`, typed `params` with an `example` for each required one, and `http`
    using `{ param: <name> }` and `{<name>}` path placeholders. Add `sim` hints when the sim needs them (a parent
    object to seed for a list item, the body field a client-chosen id comes from, the `collection` when the create
-   posts to another path than the list). A per-account API leaves `base_url` out and gives a `base_url_example`. A
+   posts to another path than the list; `provider_sim` for an API another provider sim speaks, such as S3's XML and
+   SigV4). The harness checks the credential for real whatever its form (a prefix, several headers, Digest, a
+   command, SigV4). A per-account API leaves `base_url` out and gives a `base_url_example`. A
    value the provider shows only in the create answer (an API key's token) is an output
    `{ path, sensitive: true, once: true }`; a value it shows on every read is not `once`. When destroying a scope must
    not delete what the op made, say so on the op: `destroy: keep` (shared history; a line may still opt into

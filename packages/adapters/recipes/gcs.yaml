@@ -1,0 +1,95 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Google Cloud Storage JSON API recipes (Firebase Storage buckets too), authenticated by the token gcloud prints.
+# Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: gcs
+title: Google Cloud Storage (Firebase Storage)
+category: cors
+verified_on: "2026-10-11"
+docs:
+  - title: "Buckets: patch"
+    url: https://docs.cloud.google.com/storage/docs/json_api/v1/buckets/patch
+  - title: Buckets resource (cors)
+    url: https://docs.cloud.google.com/storage/docs/json_api/v1/buckets
+  - title: Set up and view CORS configurations
+    url: https://docs.cloud.google.com/storage/docs/using-cors
+  - title: Performance tips (patch semantics)
+    url: https://docs.cloud.google.com/storage/docs/json_api/v1/how-tos/performance
+api:
+  base_url: https://storage.googleapis.com/storage/v1
+  base_url_env: GCS_API_URL
+  auth: { command: [gcloud, auth, print-access-token] }
+assumptions:
+  - id: GC1
+    verified: true
+    text: "The JSON API takes an OAuth access token as `Authorization: Bearer`; Google's own example gets it from `gcloud auth print-access-token`."
+    source: https://docs.cloud.google.com/storage/docs/using-cors
+  - id: GC2
+    verified: true
+    text: "`GET /b/{bucket}?fields=cors` answers the bucket's CORS configuration; `PATCH /b/{bucket}?fields=cors` with `{ cors: [...] }` sets it, and `{ cors: [] }` removes it."
+    source: https://docs.cloud.google.com/storage/docs/using-cors
+  - id: GC3
+    verified: true
+    text: "A patch that contains a list replaces the whole list: individual entries cannot be added or removed, so the whole `cors` list is written back."
+    source: https://docs.cloud.google.com/storage/docs/json_api/v1/how-tos/performance
+  - id: GC4
+    verified: true
+    text: "Each `cors` entry has `origin` (list), `method` (list), `responseHeader` (list) and `maxAgeSeconds` (integer)."
+    source: https://docs.cloud.google.com/storage/docs/json_api/v1/buckets
+  - id: GC5
+    verified: true
+    text: "`PATCH` takes `ifMetagenerationMatch`, a precondition on the bucket's metageneration. The recipe does not send it (the http adapter has no preconditions); Sponson's own writers are serialised by the parent lock, a writer outside Sponson can still race."
+    source: https://docs.cloud.google.com/storage/docs/json_api/v1/buckets/patch
+  - id: GC6
+    verified: true
+    text: "Changing a bucket's CORS needs the `storage.buckets.update` permission."
+    source: https://docs.cloud.google.com/storage/docs/json_api/v1/buckets/patch
+  - id: GC7
+    verified: false
+    text: "A bucket without a CORS configuration answers `{}` (no `cors` field), read as an empty list, and entries are answered as written, in order."
+  - id: GC8
+    verified: false
+    text: "An entry is identified by its first origin: the recipe writes one origin per entry, and no other entry of the bucket starts with the same origin."
+ops:
+  bucket_cors:
+    kind: list_item
+    title: CORS entry of a bucket
+    summary: "An entry of a bucket's `cors` list allowing one origin, such as the preview's URL on the Firebase Storage bucket `my-app.appspot.com`, with its methods, response headers and max age. The rest of the list is left as it is; a console edit of the entry is drift, and destroy removes only this entry."
+    covers: [gcs-cors]
+    params:
+      bucket:
+        type: string
+        required: true
+        description: The bucket's name (Firebase Storage's default bucket is `<project>.appspot.com` or `<project>.firebasestorage.app`).
+        example: my-app.appspot.com
+      origin:
+        type: string
+        required: true
+        pattern: "^(https?://\\S+|\\*)$"
+        description: The origin allowed, without a path (the preview's URL); the entry's identity (GC8).
+        example: "https://${ctx.scope}.preview.example.app"
+      methods:
+        type: list
+        default: [GET, HEAD]
+        description: The methods allowed.
+      response_headers:
+        type: list
+        default: [Content-Type]
+        description: The response headers the browser may read.
+      max_age_seconds:
+        type: integer
+        default: 3600
+        description: How long a preflight answer may be cached.
+    http:
+      parent: { path: "/b/{bucket}?fields=cors", method: PATCH }
+      list_path: /cors
+      key_field: /origin/0
+      item:
+        origin: [{ param: origin }]
+        method: { param: methods }
+        responseHeader: { param: response_headers }
+        maxAgeSeconds: { param: max_age_seconds }
+    sim:
+      objects:
+        "/b/{bucket}": { cors: [{ origin: [https://app.example.com], method: [GET], responseHeader: [Content-Type], maxAgeSeconds: 3600 }] }
+    live:
+      params: { bucket: SPONSON_LIVE_GCS_BUCKET }

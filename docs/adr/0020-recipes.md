@@ -252,3 +252,28 @@ Rows whose lifecycle needs waiting (Algolia's copy task, a Xata branch coming up
 first-class adapters instead of a polling extension: each waits on a different signal, and polling in a request
 template would be a small language. Inngest's sync stays uncovered (a one-off action with nothing to read back or
 delete).
+
+## Amendment 5 (2026-10-11): every credential form in recipes, line credentials, and the sims that check them
+
+The database, CORS, flag, observability and email rows left (MongoDB Atlas users, CockroachDB databases, GCS and
+S3/R2 bucket CORS, Flagsmith, Datadog, Postmark webhooks) needed the request-level features ADR 0017's amendments had
+added to plan lines, in recipes:
+
+- **The recipe schema takes every static and run-time credential form** the adapter has, not only bearer, header and
+  Basic: a header `prefix` (`Authorization: Api-Key <key>`, Flagsmith), several `headers` (Datadog's API and
+  application keys), `digest` (Atlas), `aws_sigv4` (S3 and R2), `command` (`gcloud auth print-access-token`, GCS), and
+  `encoding: xml`. Identity is unchanged: the resolved block still holds names and URLs only.
+- **`credential` is a line key like `api` and `destroy`** (ADR 0017, "Amendment: line credentials"), so a recipe line
+  can take another line's sensitive output as its credential; a recipe param may not be named `credential`. Of
+  Amendment 2's "still out of reach", "two credentials on every request" is reached by `headers`, "a credential that
+  is itself an output of another line" by `credential` (with `destroy: keep`), and "a delete that names the object in
+  its body" by `{id}` in `delete.body`.
+  "A list request sent as a POST" stays out: Datadog's deployment events are listed so, over a time window, and can
+  never be deleted, so the row is covered by a Synthetic test instead and the marker is recorded as out of reach.
+- **The recipe harness checks those credentials for real**, deriving everything from the recipe: a prefix or several
+  headers become the REST sim's exact header sets (R7), Digest its challenge, a command a fake CLI on `PATH` that
+  prints a token the sim accepts, and `aws_sigv4` a provider sim (`sim.provider_sim`: the AWS sim, which verifies
+  SigV4 and speaks S3's XML) seeded with the test's key and the recipe's region. `env://` secrets in examples get
+  values the leak check covers. The sim gained stored generated fields with a header that accepts them (R8, a server's
+  token) and bulk deletes by body (R9); the harness derives both from the recipe (a sensitive output that is not
+  `once`; a delete body with `{id}`).

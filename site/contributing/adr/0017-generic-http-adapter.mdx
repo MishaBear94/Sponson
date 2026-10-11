@@ -298,3 +298,76 @@ the sim instead of being mirrored by it.
   `AdapterContext.secret` are new optional parts of the authoring API; nothing existing changes meaning.
 - `ProviderSim.authorized` receives the request (for signatures) and the provider's state, and may answer with a
   `Reply` (a challenge); `ProviderSim.isWrite` lets a sim keep non-mutating POSTs out of the write log.
+
+## Amendment: line credentials, deletes that name the object, XML lists
+
+Date: 2026-10-11
+
+### Context
+
+Three coverage rows stopped at the request level ([docs/coverage.md](/reference/coverage); ADR 0020, Amendment 2 listed
+them as out of reach):
+
+- **A credential that is another line's output.** Postmark's Server API authenticates with the token of one server,
+  and the plan creates that server per environment (`postmark.server`, whose `server_token` is a sensitive output shown
+  on every read). An API block names environment variables only, and must: it is the ledger identity of the API's
+  resources, and it is checked before any line has run.
+- **A delete that names the object in its body.** Datadog deletes Synthetic tests with `POST /synthetics/tests/delete`
+  and `{ public_ids: [...] }`; `delete.body` (the archive amendment above) took literals only.
+- **One-element lists in XML.** S3 answers a CORS rule with one `AllowedMethod` as that element alone, so a rule that
+  declares `AllowedMethod: [GET]` showed an update on every plan.
+
+### Decision
+
+**Line credentials.** A line of `http.resource` or `http.list_item` (hand-written or a recipe line) may say
+`credential: { from: <line>.<output> }` or `credential: { secret: <reference> }`. Its value replaces the value of the
+API block's variable for that line only; the block's header name and `prefix` stay. Rules:
+
+| Rule | Why | Where it is checked |
+|---|---|---|
+| Only a block whose `auth` is a single static credential (`bearer_env`, or `header` with `value_env`) | the other forms derive what they send from several values or exchanges | `providerFor`, before any request (PARAM_INVALID) |
+| A reference, never a literal | a literal would be a credential in the plan file | the engine, in `prepare` (PARAM_INVALID) |
+| A `from` names an output declared `sensitive` | a non-sensitive output is written to receipts, so the credential would be too | the engine, in `prepare`, from the producing line's output declarations |
+| A `from` does not name a `once` output | after the creating run, ADR 0018 resolves it to `{ keep: true }`: a dependent's fingerprint proves it *holds* the value, not that a request can be sent with it, so every later read would fail | the engine, in `prepare` |
+| The line says `destroy: keep` | destroy (and rollback) work from the ledger alone, which never holds a credential; what the line made goes away with the object the credential belongs to (a Postmark server takes its webhooks), or stays when that object is kept | `credentialInputs`, in `prepare` (PARAM_INVALID) |
+| Never part of identity | the provider block, key and record id are those of the same line without it, so rotating the producer's token (`--recreate`) re-identifies nothing | by construction |
+| Masked from the moment it exists | sensitive outputs and secrets are registered with the redactor by the engine; the adapter calls `actx.secret` before the value is first sent, and `refuse_credential` checks it like the variable it replaces | engine and adapter |
+
+The engine gains one optional, provider-neutral hook, `OpSpec.credentialInputs(params)`: the names of the params that
+carry a credential. `prepare` checks each as above. While the producing line is still to be created, the reference is
+pending: `read` returns null (nothing can exist under a credential that does not exist yet), `diff` shows a create,
+and the engine applies the line after its producer, as for any `from:`.
+
+**`delete.body` naming the object.** A string in a `POST` delete's body may hold `{id}`; it is filled with the
+object's id when the record id is made (` body=<canonical JSON>`, filled), so destroy still needs only the ledger.
+Bodies without `{id}` archive as before; record ids without a body are unchanged.
+
+**XML lists.** In `http.list_item` over `encoding: xml`, a field the map item declares as a list reads a lone value as
+that list of one, as the collection itself already did. JSON APIs are unaffected: there a scalar where a list is
+declared is real drift.
+
+### Alternatives considered
+
+- **The credential's reference (not value) in the provider block or the key.** It would let destroy find the
+  producing line in the ledger, but the producer is destroyed in the same run (dependents first, then producers), and
+  its output is not in the ledger either (sensitive outputs never are); it would also make a recipe line and a
+  hand-written line for the same object two resources.
+- **Writing the credential to the ledger, encrypted or not.** Breaks invariant 1's spirit (receipts hold no secret,
+  ADR 0009) for a convenience; and the scope key that would encrypt it is in the same repository.
+- **The engine reading the producer during destroy to hand the dependent its credential.** Destroy would then depend
+  on the plan (a line removed from it could no longer be destroyed) and on another line's live state; ADR 0005's
+  "destroy needs only the ledger" is worth more than the webhook a server deletion removes anyway.
+- **A first-class Postmark adapter.** It would hard-code one provider's chaining for a shape (a sub-API keyed by a
+  parent's token) that also fits other providers' per-project keys.
+
+### Consequences
+
+- The Postmark server-and-webhook row is covered by two recipe lines in one plan
+  (`scenarios/adapters/http-line-credential.yaml`, against a REST sim that accepts the server API only with a token it
+  generated for a server, assumption R8); Datadog's Synthetic tests are a recipe (R9: the sim's bulk delete), and S3's
+  one-method CORS rules compare equal.
+- A line with `credential` leaves what it made when the scope is destroyed and its credential's object is kept: an
+  explicit, per-line exception to invariant 8, like `destroy: keep`.
+- One plan must not manage the same key through two different credentials (two servers' webhooks with one URL): their
+  identity would be the same. Other scopes' resources with the same key are refused as foreign, never deleted.
+- `OpSpec.credentialInputs` is a new optional part of the adapter contract; ops that do not define it behave as before.

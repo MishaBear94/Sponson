@@ -1,0 +1,124 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# CockroachDB Cloud API recipes (service account API key, bearer). Format and checklist: docs/adr/0020-recipes.md,
+# CONTRIBUTING.md "Adding a recipe".
+provider: cockroachdb
+title: CockroachDB Cloud
+category: databases
+verified_on: "2026-10-11"
+docs:
+  - title: Cloud API OpenAPI document (version 2026-09-15)
+    url: https://cockroachlabs.cloud/assets/docs/api/latest/openapi.json
+  - title: Use the CockroachDB Cloud API
+    url: https://docs.cockroachlabs.com/docs/cockroachcloud/cloud-api
+api:
+  base_url: https://cockroachlabs.cloud/api/v1
+  base_url_env: COCKROACH_API_URL
+  auth: { bearer_env: COCKROACH_API_KEY }
+  headers: { Cc-Version: "2024-09-16" }
+assumptions:
+  - id: CR1
+    verified: true
+    text: "The Cloud API authenticates with a service account's secret key as `Authorization: Bearer`; the key has the service account's roles."
+    source: https://docs.cockroachlabs.com/docs/cockroachcloud/cloud-api
+  - id: CR2
+    verified: true
+    text: "`Cc-Version` pins the API version (`YYYY-MM-DD`); without it the latest version answers, which may change under a client. The guide documents `2024-09-16`."
+    source: https://docs.cockroachlabs.com/docs/cockroachcloud/cloud-api
+  - id: CR3
+    verified: true
+    text: "`POST /clusters/{cluster_id}/databases` with `{ name }` creates a database and answers `{ name, table_count }`; `GET` on the same path lists `{ databases: [{ name, table_count }], pagination: { next_page } }`, paged with `pagination.page`; `DELETE /clusters/{cluster_id}/databases/{name}` deletes one. There is no GET of a single database."
+    source: https://cockroachlabs.cloud/assets/docs/api/latest/openapi.json
+  - id: CR4
+    verified: true
+    text: "`POST /clusters/{cluster_id}/sql-users` with `{ name, password }` (both required) creates a SQL user; `GET` on the same path lists `{ users: [{ name }], pagination: { next_page } }`; `DELETE /clusters/{cluster_id}/sql-users/{name}` deletes one. The password cannot be read back; `PUT …/sql-users/{name}/password` changes it."
+    source: https://cockroachlabs.cloud/assets/docs/api/latest/openapi.json
+  - id: CR5
+    verified: true
+    text: "A SQL user created through the API gets the SQL `admin` role by default, which the guide advises against for anything but administration."
+    source: https://docs.cockroachlabs.com/docs/cockroachcloud/cloud-api
+  - id: CR6
+    verified: true
+    text: "Creating or deleting databases and SQL users needs a cluster-level role of the service account (Cluster Admin, Cluster Operator or Cluster Data Accessor for databases; Cluster Admin for SQL users)."
+    source: https://cockroachlabs.cloud/assets/docs/api/latest/openapi.json
+  - id: CR7
+    verified: false
+    text: "`COCKROACH_API_KEY` is the variable the CockroachDB Terraform provider and `ccloud` read the key from."
+  - id: CR8
+    verified: false
+    text: "A second create of an existing database or SQL user is refused with 409 (ALREADY_EXISTS), and deleting one that is gone answers 404."
+  - id: CR9
+    verified: false
+    text: "Deleting a database drops it with its tables (CASCADE); the API offers no way to refuse when it holds data."
+  - id: CR10
+    verified: false
+    text: "The API takes database and user names that need quoting in SQL (`app_pr-42`, from a scope with `-`) and quotes them itself."
+ops:
+  database:
+    kind: resource
+    title: Database in a cluster
+    summary: "A database per scope in a shared CockroachDB Cloud cluster, such as `app_pr_42`, instead of a cluster per preview. Located by its name in the cluster's list; only its existence is compared (the API exposes nothing else to set); destroy drops it with its data (CR9)."
+    covers: [cockroachdb-database]
+    params:
+      cluster_id:
+        type: string
+        required: true
+        description: The cluster's id (a UUID, shown in the Cloud Console's URL).
+        example: 9e3f1a52-63d1-4a4c-9b8f-2c8b7a0e5d11
+      name:
+        type: string
+        required: true
+        pattern: "^[A-Za-z_][A-Za-z0-9_.-]{0,62}$"
+        description: "The database's name; its identity. A name with `-` (a scope such as `pr-42`) needs quoting in SQL (CR10)."
+        example: "app_${ctx.scope}"
+    http:
+      find:
+        path: "/clusters/{cluster_id}/databases"
+        list_path: /databases
+        match: { name: { param: name } }
+        next: /pagination/next_page
+        cursor_param: pagination.page
+      create: { path: "/clusters/{cluster_id}/databases" }
+      delete: { path: "/clusters/{cluster_id}/databases/{id}" }
+      id_path: /name
+    sim:
+      id_from: name
+    live:
+      params: { cluster_id: SPONSON_LIVE_COCKROACH_CLUSTER_ID }
+  sql_user:
+    kind: resource
+    title: SQL user in a cluster
+    summary: "A SQL user per scope in a shared CockroachDB Cloud cluster, such as `app_pr_42`, with its password as an input (`{ secret: … }`, or a sensitive output of another line), sent on create only and never compared. It gets the SQL `admin` role (CR5): grant narrower privileges in SQL if previews must not administer the cluster. Located by its name; destroy deletes the user."
+    covers: []
+    params:
+      cluster_id:
+        type: string
+        required: true
+        description: The cluster's id (a UUID, shown in the Cloud Console's URL).
+        example: 9e3f1a52-63d1-4a4c-9b8f-2c8b7a0e5d11
+      name:
+        type: string
+        required: true
+        pattern: "^[A-Za-z_][A-Za-z0-9_.-]{0,62}$"
+        description: The user's name; its identity.
+        example: "app_${ctx.scope}"
+      password:
+        type: string
+        required: true
+        description: "The user's password, as a reference (`{ secret: env://… }`, or `{ from: <line>.<output> }` of a sensitive output); sent on create only (CR4)."
+        example: { secret: "env://PREVIEW_DB_PASSWORD" }
+    http:
+      find:
+        path: "/clusters/{cluster_id}/sql-users"
+        list_path: /users
+        match: { name: { param: name } }
+        next: /pagination/next_page
+        cursor_param: pagination.page
+      create:
+        path: "/clusters/{cluster_id}/sql-users"
+        body: { password: { param: password } }
+      delete: { path: "/clusters/{cluster_id}/sql-users/{id}" }
+      id_path: /name
+    sim:
+      id_from: name
+    live:
+      params: { cluster_id: SPONSON_LIVE_COCKROACH_CLUSTER_ID }

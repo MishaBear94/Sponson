@@ -1,0 +1,99 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# S3 API recipes (Amazon S3, and Cloudflare R2 through its S3-compatible endpoint): XML documents, every request
+# signed with AWS Signature Version 4. Format and checklist: docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: s3
+title: Amazon S3 / Cloudflare R2 (S3 API)
+category: cors
+verified_on: "2026-10-11"
+docs:
+  - title: PutBucketCors
+    url: https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketCors.html
+  - title: GetBucketCors
+    url: https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketCors.html
+  - title: DeleteBucketCors
+    url: https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucketCors.html
+  - title: R2 S3 API compatibility
+    url: https://developers.cloudflare.com/r2/api/s3/api/
+base_url_example: https://assets.s3.us-east-1.amazonaws.com
+api:
+  base_url_env: S3_API_URL
+  encoding: xml
+  auth:
+    aws_sigv4: { region: us-east-1, service: s3, access_key_id_env: AWS_ACCESS_KEY_ID, secret_access_key_env: AWS_SECRET_ACCESS_KEY }
+assumptions:
+  - id: SS1
+    verified: true
+    text: "`PUT /?cors` on the bucket's endpoint replaces its whole CORS configuration with a `CORSConfiguration` document of up to 100 `CORSRule`s (each `ID`, `AllowedOrigin`s, `AllowedMethod`s, `AllowedHeader`s, `ExposeHeader`s, `MaxAgeSeconds`) and requires `Content-MD5`, which the SigV4 signer adds for `s3`."
+    source: https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketCors.html
+  - id: SS2
+    verified: true
+    text: "`GET /?cors` answers the configuration as XML."
+    source: https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketCors.html
+  - id: SS3
+    verified: true
+    text: "`DELETE /?cors` removes the configuration (the way to leave a bucket with no rule)."
+    source: https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucketCors.html
+  - id: SS4
+    verified: true
+    text: "R2 implements PutBucketCors, GetBucketCors and DeleteBucketCors at `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`; its SigV4 region is `auto`, and `us-east-1` is accepted as an alias, so the recipe's region works for R2 unchanged."
+    source: https://developers.cloudflare.com/r2/api/s3/api/
+  - id: SS5
+    verified: false
+    text: "A bucket without a CORS configuration answers 404 `NoSuchCORSConfiguration` (read as an empty list, `parent.if_missing: empty`), and an empty configuration is refused as `MalformedXML` (so the last rule is removed with DELETE, `parent.when_empty: delete`)."
+  - id: SS6
+    verified: false
+    text: "R2 accepts path-style requests (`https://<ACCOUNT_ID>.r2.cloudflarestorage.com/<bucket>/?cors`), so its base URL names the bucket in the path."
+  - id: SS7
+    verified: false
+    text: "S3 answers a rule's elements as they were written; a rule's `ID` identifies it among the bucket's rules (IDs are not required to be unique by S3, so other writers must not reuse the recipe's)."
+ops:
+  bucket_cors:
+    kind: list_item
+    title: CORS rule of a bucket
+    summary: "A CORS rule of an S3 or R2 bucket allowing the preview's origin, identified by its `ID` (such as `sponson-pr-42`); every other rule is left as it is. The base URL names the bucket: `https://<bucket>.s3.<region>.amazonaws.com` (set `auth.aws_sigv4.region` to the bucket's region), or `https://<account>.r2.cloudflarestorage.com/<bucket>` for R2. A console edit of the rule is drift; destroy removes only this rule (the whole configuration when it was the last one)."
+    covers: [s3-r2-cors]
+    params:
+      rule_id:
+        type: string
+        required: true
+        pattern: "^.{1,255}$"
+        description: The rule's `ID`, at most 255 characters; its identity (SS7).
+        example: "sponson-${ctx.scope}"
+      origin:
+        type: string
+        required: true
+        pattern: "^(https?://\\S+|\\*)$"
+        description: The origin allowed (the preview's URL, without a path).
+        example: "https://${ctx.scope}.preview.example.app"
+      methods:
+        type: list
+        default: [GET]
+        description: "The methods allowed: `GET`, `PUT`, `POST`, `DELETE`, `HEAD`."
+      allowed_headers:
+        type: list
+        description: "Request headers a preflight may ask for (`*` for any); absent: none."
+      expose_headers:
+        type: list
+        description: Response headers the browser may read; absent, none.
+      max_age_seconds:
+        type: string
+        default: "3000"
+        pattern: "^[0-9]+$"
+        description: How long a preflight answer may be cached, in seconds (a string, as XML carries it).
+    http:
+      parent: { path: "/?cors", method: PUT, if_missing: empty, when_empty: delete }
+      list_path: /CORSConfiguration/CORSRule
+      key_field: ID
+      item:
+        AllowedHeader: { param: allowed_headers }
+        AllowedMethod: { param: methods }
+        AllowedOrigin: { param: origin }
+        ExposeHeader: { param: expose_headers }
+        ID: { param: rule_id }
+        MaxAgeSeconds: { param: max_age_seconds }
+    sim:
+      provider_sim:
+        name: aws
+        path: /s3/assets
+        seed: { buckets: { assets: { cors: null } } }
+        list: /buckets/assets/cors

@@ -16,8 +16,8 @@
 import { SponsonError, canonicalJson, sha256, type AdapterContext, type ApplyResult, type DiffSide, type Literal, type LiveState, type OpSpec, type ResourceDiff, type ResourceRecord } from "@sponson/core";
 import { ABSENT, SENSITIVE, assertNoPending, desiredSide, paramError } from "./common.js";
 import { isObject, isProviderError, listAll, type ApiClient } from "./http.js";
-import { failedWith, httpClient, idOf, itemOf, literalOf, write } from "./http-adapter-client.js";
-import { ADAPTER, apiBlock, apiEnvironment, at, bodyOf, deepMerge, fieldTokens, fillPath, firstMarker, isKeep, parseResource, pointerTokens, projection, requestHeaders, resourceOutputs, stateHash, type FindSpec, type ResourceSpec } from "./http-adapter-spec.js";
+import { failedWith, httpClient, idOf, itemOf, literalOf, withLineCredential, write } from "./http-adapter-client.js";
+import { ADAPTER, apiBlock, apiEnvironment, at, credentialInputs, bodyOf, deepMerge, fieldTokens, fillPath, firstMarker, isKeep, parseResource, pointerTokens, projection, requestHeaders, resourceOutputs, stateHash, type FindSpec, type ResourceSpec } from "./http-adapter-spec.js";
 import { fillVariables, graphqlRequest, requestName, usesId, variablesPending, type GraphqlSpec } from "./http-adapter-graphql.js";
 
 /** An object as found: its provider id and its body. */
@@ -69,8 +69,24 @@ function locator(spec: ResourceSpec, id: string): string {
   }
   const method = spec.destroy === "keep" ? "KEEP" : spec.delete.method;
   const gone = spec.goneStatus.length ? ` gone=${spec.goneStatus.join(",")}` : "";
-  const body = spec.delete.body ? ` body=${canonicalJson(spec.delete.body)}` : "";
+  const body = spec.delete.body ? ` body=${canonicalJson(bodyWithId(spec.delete.body, id))}` : "";
   return `${method} ${fillPath(spec.delete.path, spec.vars, id)}${gone}${body}`;
+}
+
+/**
+ * A delete body with every `{id}` in its strings replaced by the object's id: a delete that names the object in its
+ * body (`{ public_ids: ["{id}"] }`). The filled body is part of the record id, so destroy still needs only the ledger.
+ */
+function bodyWithId(body: unknown, id: string): unknown {
+  if (typeof body === "string") return body.split("{id}").join(id);
+  if (Array.isArray(body)) return body.map((v) => bodyWithId(v, id));
+  if (isObject(body)) return Object.fromEntries(Object.entries(body).map(([k, v]) => [k, bodyWithId(v, id)]));
+  return body;
+}
+
+/** `actx` for a line: its own `credential` when it has one (`withLineCredential`). */
+function lineContext(actx: AdapterContext, spec: ResourceSpec): AdapterContext {
+  return withLineCredential(actx, spec.credential);
 }
 
 /**
@@ -386,12 +402,15 @@ export const resource: OpSpec = {
   outputs: { id: { available: "immediate" } },
   outputsFor: resourceOutputs,
   providerFor: apiBlock,
+  credentialInputs: credentialInputs("resource"),
   writesEnvironment: apiEnvironment,
 
   async read(actx, params) {
     const spec = parseResource(params);
     const key = resourceKey(spec);
-    if (key === undefined) return null;
+    // Nothing can exist under a credential that does not exist yet (the line it comes from is still to be created).
+    if (key === undefined || firstMarker(spec.credential) !== undefined) return null;
+    actx = lineContext(actx, spec);
     const l = await locate(actx, clientOf(actx, spec), spec);
     if (!l) return null;
     const state: LiveState = { resources: [record(spec, key, l)], outputs: outputsOf(spec, l.item, l.id) };
@@ -413,6 +432,7 @@ export const resource: OpSpec = {
     assertNoPending(params, ADAPTER);
     const spec = parseResource(params);
     const key = resourceKey(spec)!;
+    actx = lineContext(actx, spec);
     const api = clientOf(actx, spec);
     const current = live?.resources.find((r) => r.key === key);
     return current && live ? update(actx, api, spec, key, current, live) : create(actx, api, spec, key);

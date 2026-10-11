@@ -612,8 +612,9 @@ With `encoding: xml`, bodies are written and answers read as XML mapped to the s
 an element with children is a map, a repeated child is a list, text is a string (XML has no numbers or booleans:
 write `MaxAgeSeconds: "3000"`), an attribute is an `@name` key and an element's own text next to attributes is
 `#text`. A body is a map with one key, the root element. A child that appears once reads back as a value, not a
-list of one; declare a single value as a value (`AllowedMethod: GET`), and `http.list_item` treats a lone element
-where it expects a list as a list of one. DTDs and entity declarations are refused. The S3 bucket CORS rule of a
+list of one. `http.list_item` treats a lone element where it expects a list as a list of one: the collection itself,
+and a field its map item declares as a list (`AllowedMethod: [GET]` compares equal to one `<AllowedMethod>`); in
+`http.resource`, declare a single value as a value. DTDs and entity declarations are refused. The S3 bucket CORS rule of a
 preview, kept with `http.list_item`:
 
 ```yaml
@@ -636,6 +637,42 @@ changes:
     item: { ID: "sponson-${ctx.scope}", AllowedOrigin: "https://${ctx.scope}.preview.example.app", AllowedMethod: [GET, HEAD], MaxAgeSeconds: "3000" }
 ```
 
+#### Line credentials
+
+Some APIs authenticate with a credential that another line makes: Postmark's Server API takes the token of the
+server a `postmark.server` line creates per environment. A line of either op may take `credential: { from:
+<line>.<output> }` (or `credential: { secret: … }`), which replaces the value of its API block's variable for that line
+only; the block's header name and `prefix` stay. Rules, all checked before any request
+([ADR 0017](/contributing/adr/0017-generic-http-adapter), "Amendment: line credentials"):
+
+- The block's `auth` must be a single static credential (`bearer_env`, or `header` with `value_env`).
+- A `from` must name an output declared `sensitive` (it would otherwise reach receipts) and not `once` (later runs
+  would only have `{ keep: true }`, which cannot authenticate a request). A literal is refused: it would be a
+  credential in the plan file. The value is masked like any secret.
+- The line must say `destroy: keep`. Destroy works from the ledger alone, which never holds the credential: what the
+  line made goes away with the object the credential belongs to (deleting a Postmark server removes its webhooks),
+  or stays when that object is kept.
+- It is not part of the line's identity (the API block, the key and the record id are those of the same line without
+  it), so one plan must not manage the same key through two different credentials.
+- While the producing line is still to be created, the credential is pending: nothing is read with it (nothing can
+  exist under a credential that does not exist yet), and the line is applied after its producer.
+
+```yaml
+changes:
+  - id: server
+    adapter: http
+    op: resource
+    recipe: postmark.server
+    name: "sponson-${ctx.env}-${ctx.scope}"
+  - id: hook
+    adapter: http
+    op: resource
+    recipe: postmark_server.webhook
+    url: "https://${ctx.scope}.preview.example.app/api/postmark"
+    credential: { from: server.server_token }
+    destroy: keep
+```
+
 ### `http.resource`
 
 One object per item: a feature flag, a webhook endpoint, a DNS record.
@@ -648,7 +685,8 @@ One object per item: a feature flag, a webhook endpoint, a DNS record.
 | `read` | `{ path }` | — | GET the object. With `find`, the path takes `{id}` and fetches the found object's detail; without `find`, it must be a path that names the object (a client-chosen id or key). One of `find` and `read` is required. 404 means it does not exist. |
 | `create` | `{ method?, path, body?, content_type?, idempotency_key?, locate?, headers?, send_fields? }` | (required) | `POST` (or `PUT`, `PATCH`) to create. The body is `match`, then `fields`, then `body` merged (`send_fields: false`: `body` alone, for an API that takes the declared fields in headers). `headers` are sent with this request only (values may be references; not `Authorization`, `Accept`, `Content-Type` or `Idempotency-Key`). `idempotency_key: true` sends an `Idempotency-Key` derived from the resource key, the commit and the body, and lets a create whose connection dropped be sent again. `locate: true` for an API whose create answers with something other than the object (the parent it was added to): the new object is then located with `find` (or `read`) instead. |
 | `update` | `{ method?, path?, body?, content_type?, headers?, send_fields? }` | none | `PATCH` (or `PUT`, `POST`) when `fields` differ from live; path defaults to `read.path`. `PATCH` and `POST` send the declared fields; `PUT` sends the whole declared state (`match`, `fields`, kept values); `send_fields: false` sends `body` alone. `headers` as for `create`. Without `update`, a difference is `PARAM_INVALID`. |
-| `delete` | `{ method?, path?, body? }` | `DELETE read.path` | How the object is removed (`DELETE` or `POST`). A `POST` with a `body` of literal values archives instead (`{ active: false }`, for objects a provider never deletes); the body is part of the record id. The answer is not read: any 2xx is success, JSON or not (`OK`). |
+| `delete` | `{ method?, path?, body? }` | `DELETE read.path` | How the object is removed (`DELETE` or `POST`). A `POST` with a `body` of literal values archives instead (`{ active: false }`, for objects a provider never deletes), or, when a string in it holds `{id}`, deletes the object the body names (Datadog's `{ public_ids: ["{id}"] }`); the body, `{id}` filled in, is part of the record id. The answer is not read: any 2xx is success, JSON or not (`OK`). |
+| `credential` | `{ from }` or `{ secret }` | — | This line's own credential, in place of the API block's variable: see [Line credentials](/reference/plan-format#line-credentials). |
 | `destroy` | `delete` \| `keep` | `delete` | `keep` leaves the object in place when the scope is destroyed. |
 | `item_path` | JSON pointer | `""` | Where the object is in read, create and update answers (`/data` for a `{ data: {...} }` envelope). |
 | `id_path` | JSON pointer | `/id` | Where the id is in the object. |
@@ -771,6 +809,7 @@ once the item is there as planned (written again, up to three times, if another 
 | `key_field` | field | — | Required when an array `item` is a map: the field that identifies it (`name`, `/match/host`). |
 | `value` | value | — | Required for `map`: the entry's value (a literal, `{ from }`, `{ secret }`, `{ keep: true }`). |
 | `destroy` | `delete` \| `keep` | `delete` | `keep` leaves the item in place when the scope is destroyed. |
+| `credential` | `{ from }` or `{ secret }` | — | This line's own credential, in place of the API block's variable: see [Line credentials](/reference/plan-format#line-credentials). |
 
 Key: `<parent.path>#<list_path>=<item>`. **Drift**: the item missing from the collection is `missing`; for map items
 and keyed entries, a declared field or value edited in the console is `changed`. Items no line declares are left
@@ -852,7 +891,7 @@ and what it was verified against: [docs/recipes.md](/reference/recipes).
 `api` defaults to the recipe's provider, and its block under `providers.http` to `{ recipe: <provider> }`: the
 recipe's base URL, credential variable, headers and encoding. Write the block to override any of them
 (`cloudflare: { recipe: cloudflare, auth: { bearer_env: MY_CLOUDFLARE_TOKEN } }`); a hand-written line may name such a
-block too. Every key of the line other than `api`, `recipe` and `destroy` is a recipe param; an unknown recipe, op or
+block too. Every key of the line other than `api`, `recipe`, `destroy` and `credential` is a recipe param; an unknown recipe, op or
 param, a missing required one or a wrong value is `PARAM_INVALID` naming it before any request. The ledger records
 the resolved block and the keys the expanded requests produce, never the recipe's text
 ([ADR 0020](/contributing/adr/0020-recipes)).
