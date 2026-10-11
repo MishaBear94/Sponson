@@ -196,13 +196,15 @@ export type DiffKind = "create" | "update" | "unchanged" | "run";
 
 /**
  * One side of a diff, as data. Renderers turn it into text; JSON carries it as-is.
- * `value` is present only for non-sensitive literal values; everything else is described by state.
+ * `value` is present only for non-sensitive literal values; everything else is described by state:
+ * `secret` is a `{ secret }` reference, `sensitive` a value that is known but never shown (a sensitive output a
+ * `{ from }` reference resolved to, or a live value the provider keeps hidden).
  */
 export interface DiffSide {
   state: "literal" | "sensitive" | "pending" | "secret" | "absent";
   /** Non-sensitive value only. */
   value?: string;
-  /** For pending/secret: the reference (`db.connection_string`, `env://KEY`). */
+  /** The reference the value comes from: for pending/secret, and for a sensitive `from:` output (`db.connection_string`, `env://KEY`). */
   ref?: string;
 }
 
@@ -216,6 +218,12 @@ export interface ResourceDiff {
   label: string;
   before?: DiffSide;
   after?: DiffSide;
+  /**
+   * The param path whose value this resource takes (`values.DATABASE_URL`), when it takes one param's value. The
+   * engine then describes `after` by what that param is in the plan (a literal, a `{ secret }`, a `{ from }`), which
+   * an adapter cannot tell from the resolved value it is given.
+   */
+  input?: string;
 }
 
 /** What `OpSpec.apply` returns: everything the line now manages, its outputs, and which keys it created. */

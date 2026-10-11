@@ -46,16 +46,38 @@ changes:
 
 ```
 $ sponson plan
-sponson plan · preview · pr-42 · plan 7aba4410
+sponson plan · preview · pr-42 · plan 0583f85b
 
-+ db        neon.branch           create     Neon branch sponson/preview/pr-42
-+ env       vercel.env            create
-    + DATABASE_URL (preview)  (pending ← db.connection_string)
-    + STRIPE_KEY (preview)    (secret ← env://STRIPE_KEY)
-? callback  clerk.redirect_allow  pending    waiting on `env` (deploy)
++ db        neon.branch           create   Neon branch sponson/preview/pr-42
+? env       vercel.env            pending  waiting on `db`
+    + DATABASE_URL (preview, feat/checkout)  (pending ← db.connection_string)
+    + STRIPE_KEY (preview, feat/checkout)  (secret ← env://STRIPE_KEY)
+? callback  clerk.redirect_allow  pending  waiting on `env` (deploy)
+    + Clerk redirect  (pending ← env.preview_url)
 
-2 to create, 1 pending
+1 to create, 2 pending
 ```
+
+The first `apply` creates the branch and writes both variables, then stops at the deploy barrier: the callback needs
+the preview URL, which exists once the deploy finishes. The next `apply` (the one the deploy triggers in CI) finishes
+it.
+
+```
+$ sponson apply
+sponson apply · preview · pr-42 · run run-1a2b3c4d
+
++ db        neon.branch           applied  Neon branch sponson/preview/pr-42
++ env       vercel.env            applied  DATABASE_URL (preview, feat/checkout), STRIPE_KEY (preview, feat/checkout)
+? callback  clerk.redirect_allow  waiting  waiting on deploy
+
+outputs
+  db.branch_id = br-11
+  db.host = br-11.sim.neon.tech
+
+apply partial: waiting on deploy for lines callback
+```
+
+Both are real output: `pnpm docs:gen` runs this plan against the fake cloud below and writes what the CLI prints here.
 
 ## Try it in 60 seconds
 

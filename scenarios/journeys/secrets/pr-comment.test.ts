@@ -11,7 +11,10 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { GITHUB_COMMENT_LIMIT, renderMarkdown } from "../../../packages/cli/src/markdown.js";
+import { renderApply, renderPlan } from "../../../packages/cli/src/render.js";
+import type { PlanResult } from "@sponson/core";
 import type { SimSeed } from "@sponson/sim";
+import { internalNames } from "../../support.js";
 import { World } from "./helpers.js";
 
 const STRIPE = "fake_lv_prComment_5150";
@@ -71,7 +74,17 @@ async function snapshot(name: string, w: World, args: string, opts: { command?: 
   for (const e of w.sim.state.vercel.projects.prj_demo?.envs ?? []) if (e.value.length >= 8) expect(md, `${name}: ${e.key}`).not.toContain(e.value);
   expect(md.startsWith("<!-- sponson:")).toBe(true);
   expect(md.split("<!-- sponson:").length - 1, `${name}: one marker`).toBe(1);
+  // No internal field name (`approvedBy`) in the comment, nor in the CLI's text for the same result.
+  expect(internalNames(md), `${name}: markdown`).toEqual([]);
+  expect(internalNames(cliText(r.json)), `${name}: text`).toEqual([]);
   return { md, json: r.json };
+}
+
+/** What the CLI prints for people from the same result: the text renderers on the envelope's data, or the error. */
+function cliText(json: any): string {
+  if (json.error && !json.receipt && json.command !== "plan") return `${String(json.error.message)} ${String(json.error.hint ?? "")}`;
+  if (json.command === "plan") return renderPlan(json as PlanResult, { color: false });
+  return renderApply({ receipt: json.receipt, drift: json.drift, warnings: json.warnings, ...(json.manual ? { manual: json.manual } : {}) }, { color: false });
 }
 
 describe("the PR comment, from real --json output", () => {
@@ -81,6 +94,7 @@ describe("the PR comment, from real --json output", () => {
     const plan = await snapshot("plan", w, "plan --json", { command: "plan" });
     expect(plan.md).toContain("Applying this plan gives this preview its own database branch, 2 variables and 1 auth callback.");
     expect(plan.md).toContain("`DATABASE_URL` ← `db.connection_string`");
+    expect(plan.md).toContain("`STRIPE_KEY` ← `env://STRIPE_KEY` (secret)");
 
     const partial = await snapshot("apply-partial", w, "apply --json");
     expect(partial.json.receipt.status).toBe("partial");
@@ -131,11 +145,20 @@ describe("the PR comment, from real --json output", () => {
     expect(plan.md).toMatch(/`callback` .* held back: depends on `env`/);
     // Engine text's identifiers stay code spans, never entity soup next to them.
     expect(plan.md).not.toContain("&#96;");
+    // The variable is named once, the drift said once (on it), the fix once (on its line): no Drift section repeating it.
+    expect(plan.md.match(/DATABASE\\?_URL/g)).toHaveLength(1);
+    expect(plan.md.match(/changed outside Sponson/g)).toHaveLength(1);
+    expect(plan.md).not.toContain("**Drift**");
+    // A connection string from `{ from }` is a hidden value, never a "secret"; only a `{ secret }` is.
+    expect(plan.md).toContain("`DATABASE_URL` ← `db.connection_string` (value hidden; changed outside Sponson)");
+    expect(plan.md).not.toMatch(/DATABASE_URL`[^,]*\(secret/);
 
     await w.writePlan(PLAN.replace("STRIPE_KEY: { secret: \"env://STRIPE_KEY\" }", "STRIPE_KEY: { secret: \"env://STRIPE_KEY\" }\n      MODE: preview"));
     const drift = await snapshot("apply-drift", w, "apply --json");
     expect(drift.json.receipt.lines.env.errorCode).toBe("DRIFT_CHANGED");
-    expect(drift.md).toContain("refused:");
+    expect(drift.md).toContain("refused (`DRIFT_CHANGED`)");
+    expect(drift.md.match(/DATABASE\\?_URL/g)).toHaveLength(1);
+    expect(drift.md.match(/changed outside Sponson/g)).toHaveLength(1);
     expect(drift.md).toContain("`sponson apply --reconcile`");
     expect(drift.md.match(/--reconcile/g)).toHaveLength(1);
     expect(drift.md).toContain("**1 line did not apply**, and 1 line that depends on it is held back");

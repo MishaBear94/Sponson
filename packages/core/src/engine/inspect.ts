@@ -1,6 +1,6 @@
 import { isSponsonError } from "../errors.js";
 import { resolveParams, type LineOutputs, type ResolveResult } from "../resolve.js";
-import type { Change, DiffSide, Drift, LiveState, OpSpec, ResourceDiff, ResourceRecord } from "../types.js";
+import type { Change, DiffSide, Drift, LiveState, OpSpec, ResolvedValue, ResourceDiff, ResourceRecord } from "../types.js";
 import { inspectAction, type ActionState } from "./action.js";
 import { inspectManual, type ManualState } from "./manual.js";
 import { holdsCurrentValue } from "./once.js";
@@ -42,7 +42,7 @@ export async function inspectLine(rc: RunContext, change: Change, op: OpSpec, pa
   const live = await op.read(rc.adapterContext(change.adapter, provider), resolved.params);
   if (live) rc.guardOutputs(live.outputs, op.outputs);
   const spent = diffOrSpent(change, op, live, resolved, changedOutside(rc, change, provider, live));
-  const diffs = spent.diffs.map((d) => scrubDiff(rc, d));
+  const diffs = spent.diffs.map((d) => scrubDiff(rc, describeInput(d, resolved.inputs)));
   const inspection: Inspection = { change, op, provider, resolved, live, diffs, drift: [], desired: new Set(diffs.map((d) => d.key)) };
   if (spent.refusal) inspection.refusal = spent.refusal;
   withSecretRefusal(rc, inspection);
@@ -140,7 +140,7 @@ function judge(rc: RunContext, change: Change, provider: Record<string, unknown>
   }
   if (e.id && live.id !== e.id) {
     return {
-      drift: { kind: "changed", replaced: true, ...at(live.id), message: `${label} was deleted and re-created outside Sponson since the last apply; the new one is not Sponson's (reconciling adopts it).` },
+      drift: { kind: "changed", replaced: true, ...at(live.id), message: `${label} was deleted and re-created outside Sponson since the last apply; the new one is not Sponson's, and reconciling adopts it: Sponson then keeps it and will not delete it.` },
       ...refuse(`${label} was deleted and re-created outside Sponson since the last apply.`),
     };
   }
@@ -155,6 +155,29 @@ function judge(rc: RunContext, change: Change, provider: Record<string, unknown>
 }
 
 /**
+ * What a diff's new value is, by what its param is in the plan (`ResourceDiff.input`): an adapter is given the
+ * resolved value only, so it cannot tell a `{ secret }` from a `{ from }` output or a literal, and an adapter that
+ * hides every value (Vercel's variables) would describe all three alike. A `{ secret }` is `secret` with its
+ * reference; a sensitive `{ from }` output is `sensitive` with its reference; a non-sensitive output or a literal is
+ * the plan's own value (a literal is in the repository already, and one that looks like a secret is refused at
+ * parse time; `scrubDiff` still hides anything matching a registered secret). Pending and kept values keep the
+ * adapter's side.
+ */
+export function describeInput(d: ResourceDiff, inputs: Record<string, ResolvedValue>): ResourceDiff {
+  const input = d.input === undefined ? undefined : inputs[d.input];
+  if (!input || !d.after || d.after.state === "pending" || d.after.state === "absent") return d;
+  const after = sideOf(input);
+  return after ? { ...d, after } : d;
+}
+
+function sideOf(input: ResolvedValue): DiffSide | undefined {
+  if (input.state === "secret") return { state: "secret", ...(input.ref ? { ref: input.ref } : {}) };
+  if (input.state === "resolved" && input.sensitive) return { state: "sensitive", ...(input.ref ? { ref: input.ref } : {}) };
+  if ((input.state === "resolved" || input.state === "literal") && input.value !== null) return { state: "literal", value: String(input.value) };
+  return undefined;
+}
+
+/**
  * Adapters only know which of their own fields are sensitive; a secret or sensitive output can
  * still arrive in a plain field through a reference. Whatever matches a registered secret is
  * described as sensitive instead of carried as a value.
@@ -164,7 +187,7 @@ function scrubDiff(rc: RunContext, d: ResourceDiff): ResourceDiff {
     side?.state === "literal" && side.value !== undefined && rc.redactor.leaks(side.value).length > 0 ? { state: "sensitive" } : side;
   const before = scrub(d.before);
   const after = scrub(d.after);
-  return { key: d.key, kind: d.kind, label: rc.redactor.redact(d.label), ...(before ? { before } : {}), ...(after ? { after } : {}) };
+  return { key: d.key, kind: d.kind, label: rc.redactor.redact(d.label), ...(before ? { before } : {}), ...(after ? { after } : {}), ...(d.input !== undefined ? { input: d.input } : {}) };
 }
 
 /** The first unresolved `from:` reference, with the external event it waits for when there is one. */

@@ -257,7 +257,7 @@ describe("sponson apply", () => {
     expect(r.code).toBe(1);
     expect(r.out).toMatch(/^- a  mem\.thing  rolled_back/m);
     expect(r.out).toMatch(/^! b  mem\.thing  failed\s+boom/m);
-    expect(r.out).toContain("apply failed: b: boom");
+    expect(r.out).toContain("apply failed: b (failed, above)");
     expect(h.state.things.has("alpha")).toBe(false);
   });
 

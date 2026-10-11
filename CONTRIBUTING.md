@@ -124,7 +124,7 @@ existing file in `packages/adapters/recipes/` and:
    (`deps`), config files (`files`), variable names (`env`, `PROVIDER_*` for a prefix) and database URL hosts
    (`db_hosts`), never anything that would need a value read; the `starter` lines init writes (`preview_url` names
    the param that takes the preview's URL, `values` gives `${ctx.*}` values such as `preview-${ctx.scope}`, `check`
-   names params written with their `default` and a TODO to check it against the app, such as a webhook handler's
+   names params written with their `default` and a `# CHECK:` note (advisory: nothing waits on it), such as a webhook handler's
    `path`, and `env` passes an output to the deploy target's variables under the name the app's `.env*` files use,
    such as `{ secret: STRIPE_WEBHOOK_SECRET }`), and `where` to find each other required param (`base_url` for a
    per-account API). Leave it out only when another

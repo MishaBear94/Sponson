@@ -197,21 +197,24 @@ const FIXTURE: Record<string, string | object> = {
   ".env.example": "DATABASE_URL=\nCLERK_SECRET_KEY=\nSTRIPE_SECRET_KEY=\nSTRIPE_WEBHOOK_SECRET=\n",
 };
 
-/** The one TODO the fixture's starter leaves: the Stripe webhook path, the recipe's default, to check against the app. */
-const PATH_TODO = /^( {4}path: "\/api\/webhooks\/stripe")\s+# TODO:.*$/m;
+/** The one note the fixture's starter leaves: the Stripe webhook path, the recipe's default, to check against the app. */
+const PATH_CHECK = /^ {4}path: "\/api\/webhooks\/stripe"\s+# CHECK: The path of the app's webhook handler.*$/m;
 
-/** The person checks the webhook path and deletes its TODO comment, as the comment asks. */
-async function fillInTodos(cwd: string): Promise<void> {
+/** The Neon project TODO a repository without `.neon` leaves: a placeholder the plan cannot run with. */
+const NEON_TODO = /^( {2}neon: \{ project: )"proj_xxx"( \}) +# TODO:.*$/m;
+
+/** The person looks up the Neon project id and writes it in place of the placeholder, deleting the TODO comment. */
+async function fillInNeonProject(cwd: string): Promise<void> {
   const plan = join(cwd, "release.plan.yaml");
   const text = await readFile(plan, "utf8");
-  expect(text).toMatch(PATH_TODO);
-  await writeFile(plan, text.replace(PATH_TODO, "$1"));
+  expect(text).toMatch(NEON_TODO);
+  await writeFile(plan, text.replace(NEON_TODO, '$1"proj_demo"$2'));
 }
 
-/** The fixture app's repository, with a GitHub origin. */
-async function appRepo(): Promise<string> {
+/** The fixture app's repository, with a GitHub origin; `without` leaves files out. */
+async function appRepo(without: string[] = []): Promise<string> {
   const dir = await tempDir("app");
-  for (const [path, content] of Object.entries(FIXTURE)) {
+  for (const [path, content] of Object.entries(FIXTURE).filter(([path]) => !without.includes(path))) {
     await mkdir(join(dir, path, ".."), { recursive: true });
     await writeFile(join(dir, path), typeof content === "string" ? content : JSON.stringify(content));
   }
@@ -271,9 +274,11 @@ describe("init --setup, end to end on a fixture repository", () => {
     const r = await setup(cwd, env, me);
 
     expect(r.code, r.stderr).toBe(0);
-    // What the plan still needs from a person comes first, before any token is asked for.
-    expect(r.stdout).toContain('To fill in first (1 TODO in release.plan.yaml):\n  changes.stripe_webhook_endpoint.path (now "/api/webhooks/stripe"): The path of the app\'s webhook handler');
-    expect(r.stdout.indexOf("To fill in first")).toBeLessThan(r.stdout.indexOf("Credentials for release.plan.yaml:"));
+    // A recipe default the plan runs with is a "please check", listed first, and blocks nothing: no TODO, no wait.
+    expect(await readFile(join(cwd, "release.plan.yaml"), "utf8")).toMatch(PATH_CHECK);
+    expect(r.stdout).toContain('Please check (release.plan.yaml runs with this default; nothing waits on it):\n  changes.stripe_webhook_endpoint.path (now "/api/webhooks/stripe"): The path of the app\'s webhook handler');
+    expect(r.stdout.indexOf("Please check")).toBeLessThan(r.stdout.indexOf("Credentials for release.plan.yaml:"));
+    expect(r.stdout).not.toContain("To fill in first");
     // The endpoint's once-only signing secret goes to the name .env.example uses, by reference.
     expect(await readFile(join(cwd, "release.plan.yaml"), "utf8")).toContain("      STRIPE_WEBHOOK_SECRET: { from: stripe_webhook_endpoint.secret }");
     // Where to create each token, before it is asked for.
@@ -299,26 +304,15 @@ describe("init --setup, end to end on a fixture repository", () => {
     }
     expect(r.stdout).toContain("VERCEL_TOKEN: stored");
 
-    // No workflow while a TODO is left: it would run a plan that cannot work yet. Said, with what to do.
-    expect(r.stdout).toContain("Workflow: not offered while release.plan.yaml has TODOs (listed at the top)");
-    expect(me.asked.some((q) => q.includes("Write .github/workflows/sponson.yml"))).toBe(false);
-    await expect(readFile(join(cwd, ".github/workflows/sponson.yml"), "utf8")).rejects.toThrow();
-    expect(r.stdout).toContain("Not ready yet: fill in the TODO in release.plan.yaml (and delete each `# TODO` comment), then run `sponson init --setup` again and `sponson plan`.");
-    expect(r.stdout).toContain("To try Sponson first without any account, against a local fake cloud: `npx --yes @sponson/sim --demo sponson-demo`");
-    await expectNoLeak(r, cwd);
-
-    // The person checks the path, deletes its TODO, and runs setup again with the tokens now in the environment.
-    await fillInTodos(cwd);
-    const again = await setup(cwd, { ...env, ...TOKENS }, person({}));
-    expect(again.code, again.stderr).toBe(0);
-    expect(again.stdout).not.toContain("To fill in first");
-
-    // The workflow: the action pinned to the commit of the installed version's tag, every variable from secrets.
+    // Nothing blocks, so the workflow is offered in the same run: the action pinned to the commit of the installed
+    // version's tag, every variable from secrets.
+    expect(me.asked.some((q) => q.includes("Write .github/workflows/sponson.yml"))).toBe(true);
     const workflow = await readFile(join(cwd, ".github/workflows/sponson.yml"), "utf8");
     expect(workflow).toContain(`uses: MishaBear94/Sponson/action@${action.commit} # sponson@${VERSION}`);
     for (const name of Object.keys(TOKENS)) expect(workflow).toContain(`${name}: \${{ secrets.${name} }}`);
-    expect(again.stdout).toContain("Ready: run `sponson plan`.");
-    await expectNoLeak(again, cwd, [workflow]);
+    expect(r.stdout).toContain("Ready: run `sponson plan`.");
+    expect(r.stdout).not.toContain("To try Sponson first");
+    await expectNoLeak(r, cwd, [workflow]);
 
     // The tokens work for the next command too: the same values, from the environment, plan the release.
     let out = "";
@@ -334,23 +328,26 @@ describe("init --setup, end to end on a fixture repository", () => {
     const cwd = await appRepo();
     const env = { ...simEnv(s, { tokens: false }), ...TOKENS, STRIPE_API_URL: `${s.url}/rest`, PATH: `${gh.bin}:${process.env.PATH}`, FAKE_GH_LOG: gh.log, SPONSON_ACTION_REPO: action.url };
 
-    const first = JSON.parse((await setup(cwd, env, undefined, "--json", "--yes")).stdout) as { created: boolean; detected: { todo: Array<{ path: string }> } | null; setup: { ready: boolean; next: string; workflow: { result: string } } };
+    const first = JSON.parse((await setup(cwd, env, undefined, "--json", "--yes")).stdout) as { created: boolean; detected: { todo: unknown[]; check: Array<{ path: string }> } | null; setup: { ready: boolean; next: { command: string | null; why: string }; workflow: { result: string; commit: string } } };
     expect(first.created).toBe(true);
-    expect(first.detected!.todo.map((t) => t.path)).toEqual(["changes.stripe_webhook_endpoint.path"]);
-    expect(first.setup).toMatchObject({ ready: false, workflow: { result: "todo" } });
-    expect(first.setup.next).toBe("fill in the TODO in release.plan.yaml (and delete each `# TODO` comment), then run `sponson init --setup` again and `sponson plan`.");
+    // The Stripe path is a default to check, not a TODO: it neither blocks readiness nor the workflow.
+    expect(first.detected!.todo).toEqual([]);
+    expect(first.detected!.check.map((t) => t.path)).toEqual(["changes.stripe_webhook_endpoint.path"]);
+    expect(first.setup).toMatchObject({ ready: true, workflow: { result: "written", commit: action.commit } });
+    // `next` is a command an agent can run, and why.
+    expect(first.setup.next).toEqual({ command: "sponson plan", why: expect.stringContaining("every credential") });
 
-    // The re-run, on the plan that now exists: detection is reported the same way, with the TODOs the plan still has.
-    await fillInTodos(cwd);
+    // The re-run, on the plan that now exists: detection is reported the same way, with the notes the plan still has.
     const r = await setup(cwd, env, undefined, "--json", "--yes");
 
     expect(r.code, r.stderr).toBe(0);
-    const report = JSON.parse(r.stdout) as { ok: boolean; created: boolean; detected: { found: Array<{ id: string }>; todo: unknown[] } | null; setup: { ready: boolean; next: string; repo: string; credentials: Array<{ provider: string; status: string; variables: Array<{ from: string }> }>; secrets: Array<{ name: string; result: string }>; workflow: { result: string; commit: string } } };
+    const report = JSON.parse(r.stdout) as { ok: boolean; created: boolean; detected: { found: Array<{ id: string }>; todo: unknown[]; check: Array<{ path: string }> } | null; setup: { ready: boolean; next: { command: string | null }; repo: string; credentials: Array<{ provider: string; status: string; variables: Array<{ from: string }> }>; secrets: Array<{ name: string; result: string }>; workflow: { result: string; commit: string } } };
     expect(report.ok).toBe(true);
     expect(report.created).toBe(false);
     expect(report.detected!.found.map((f) => f.id)).toEqual(expect.arrayContaining(["vercel", "neon", "clerk", "stripe"]));
     expect(report.detected!.todo).toEqual([]);
-    expect(report.setup.next).toBe("run `sponson plan`.");
+    expect(report.detected!.check.map((t) => t.path)).toEqual(["changes.stripe_webhook_endpoint.path"]);
+    expect(report.setup.next.command).toBe("sponson plan");
     expect(report.setup.repo).toBe("acme/web");
     expect(report.setup.ready).toBe(true);
     expect(report.setup.credentials.map((c) => [c.provider, c.status])).toEqual([
@@ -361,10 +358,33 @@ describe("init --setup, end to end on a fixture repository", () => {
     ]);
     expect(report.setup.credentials.flatMap((c) => c.variables.map((v) => v.from))).toEqual(["environment", "environment", "environment", "environment"]);
     expect(report.setup.secrets.every((x) => x.result === "stored")).toBe(true);
-    expect(report.setup.workflow).toMatchObject({ result: "written", commit: action.commit });
+    expect(report.setup.workflow).toMatchObject({ result: "exists" });
     // gh's environment: not the tokens this process was given.
     for (const c of await gh.calls()) for (const token of Object.values(TOKENS)) expect(JSON.stringify(c.env)).not.toContain(token);
     await expectNoLeak(r, cwd);
+  });
+
+  it("a placeholder the plan cannot run with (no Neon project id found) is a TODO: no workflow, and `next` has no command until it is filled in", async () => {
+    const s = await sim();
+    s.state.reset({ rest: { collections: { "/webhook_endpoints": [] } } });
+    const gh = await fakeGh();
+    const action = await actionRepo();
+    const cwd = await appRepo([".neon"]);
+    const env = { ...simEnv(s, { tokens: false }), ...TOKENS, STRIPE_API_URL: `${s.url}/rest`, PATH: `${gh.bin}:${process.env.PATH}`, FAKE_GH_LOG: gh.log, SPONSON_ACTION_REPO: action.url };
+
+    const text = await setup(cwd, env, person({}, () => true));
+    expect(text.stdout).toContain('To fill in first (1 TODO in release.plan.yaml):\n  providers.neon.project (now "proj_xxx")');
+    expect(text.stdout).toContain("Workflow: not offered while release.plan.yaml has TODOs (listed at the top)");
+    expect(text.stdout).toContain("Not ready yet: Fill in the TODO in release.plan.yaml (and delete each `# TODO` comment), then run `sponson init --setup` again and `sponson plan`.");
+    await expect(readFile(join(cwd, ".github/workflows/sponson.yml"), "utf8")).rejects.toThrow();
+
+    const blocked = JSON.parse((await setup(cwd, env, undefined, "--json", "--yes")).stdout) as { detected: { todo: Array<{ path: string }> }; setup: { ready: boolean; next: { command: string | null; why: string }; workflow: { result: string } } };
+    expect(blocked.detected.todo.map((t) => t.path)).toEqual(["providers.neon.project"]);
+    expect(blocked.setup).toMatchObject({ ready: false, workflow: { result: "todo" }, next: { command: null, why: expect.stringContaining("Fill in the TODO in release.plan.yaml") } });
+
+    await fillInNeonProject(cwd);
+    const ready = JSON.parse((await setup(cwd, env, undefined, "--json", "--yes")).stdout) as { setup: { ready: boolean; next: { command: string | null }; workflow: { result: string } } };
+    expect(ready.setup).toMatchObject({ ready: true, workflow: { result: "written" }, next: { command: "sponson plan" } });
   });
 
   it("a rejected token is unauthorized and never offered to gh; a declined secret is not stored; an existing workflow is left alone", async () => {
@@ -412,13 +432,15 @@ describe("init --setup, end to end on a fixture repository", () => {
 
     const r = await setup(cwd, env, undefined, "--json");
 
-    const report = JSON.parse(r.stdout) as { setup: { ready: boolean; credentials: Array<{ provider: string; status: string; url: string }>; secrets: Array<{ name: string; result: string }>; workflow: { result: string } } };
+    const report = JSON.parse(r.stdout) as { setup: { ready: boolean; next: { command: string | null; why: string }; credentials: Array<{ provider: string; status: string; url: string }>; secrets: Array<{ name: string; result: string }>; workflow: { result: string } } };
     expect(report.setup.ready).toBe(false);
     expect(report.setup.credentials.find((c) => c.provider === "vercel")).toMatchObject({ status: "missing", url: "https://vercel.com/account/tokens" });
     expect(report.setup.credentials.find((c) => c.provider === "neon")!.status).toBe("ok");
     expect(report.setup.secrets.find((x) => x.name === "NEON_API_KEY")!.result).toBe("not-asked");
-    expect(report.setup.workflow.result).toBe("todo");
-    expect(r.stderr).toContain("missing: VERCEL_TOKEN (export it, or run `sponson init --setup` in a terminal to type it)");
+    expect(report.setup.workflow.result).toBe("not-asked");
+    // Nobody can type a token here: the advice is to set it in the environment, or to run setup where someone can.
+    expect(r.stderr).toContain("missing: VERCEL_TOKEN (no terminal to ask in: set it in the environment this command runs with, or run `sponson init --setup` in an interactive terminal to type it)");
+    expect(report.setup.next).toEqual({ command: "sponson init --setup", why: expect.stringMatching(/^Set VERCEL_TOKEN, .* in the environment it runs with/) });
     expect(await gh.calls()).toEqual([]);
     await expectNoLeak(r, cwd);
   });

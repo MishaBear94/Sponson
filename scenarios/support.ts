@@ -83,3 +83,18 @@ export function mcpTransport(args: string[], opts: { cwd: string; env: NodeJS.Pr
   });
   return { transport, stderr: () => log };
 }
+
+/**
+ * Internal field names in text meant for people: every camelCase identifier (`approvedBy`, `changedOutside`) left
+ * after taking out what may hold one legitimately: URLs, HTML comments, and code spans of what a person types (a
+ * flag, a `sponson` command, an MCP tool argument). Human and markdown output say what a field means in words; the
+ * JSON carries the field.
+ */
+export function internalNames(text: string): string[] {
+  const userFacing = /^(-|sponson |sponson_)/;
+  const stripped = text
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/`([^`\n]+)`/g, (span, inner: string) => (userFacing.test(inner) ? " " : span));
+  return [...stripped.matchAll(/\b[a-z]+[A-Z][a-zA-Z]*\b/g)].map((m) => m[0]);
+}

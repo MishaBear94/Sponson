@@ -1,7 +1,7 @@
 <!-- sponson:production -->
 ### Sponson apply refused: `ENV_NOT_APPROVED`
 
-This run applies to production: approval is required (approvedBy).
+This run applies to production, and nobody approved it.
 
 **Fix:** Production needs a person's approval: run it with `--approved-by <who>` from your approval workflow, never from an agent.
 

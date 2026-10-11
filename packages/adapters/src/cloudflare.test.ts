@@ -28,8 +28,8 @@ describe("cloudflare pages_env", () => {
     expect(p.target).toBe("preview");
     expect(await op.read(actx, p)).toBeNull();
     expect(op.diff(null, p)).toEqual([
-      { key: "env:preview:API_URL", kind: "create", label: "API_URL (Pages preview)", before: { state: "absent" }, after: { state: "literal", value: "https://api.example.com" } },
-      { key: "env:preview:TOKEN", kind: "create", label: "TOKEN (Pages preview, secret)", before: { state: "absent" }, after: { state: "sensitive" } },
+      { key: "env:preview:API_URL", kind: "create", label: "API_URL (Pages preview)", before: { state: "absent" }, after: { state: "literal", value: "https://api.example.com" }, input: "vars.API_URL" },
+      { key: "env:preview:TOKEN", kind: "create", label: "TOKEN (Pages preview, secret)", before: { state: "absent" }, after: { state: "sensitive" }, input: "secrets.TOKEN" },
     ]);
 
     const r = await op.apply(actx, p, null);

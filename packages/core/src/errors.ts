@@ -35,7 +35,7 @@ export const ERROR_CODES = {
   ENV_UNKNOWN: { exit: 2, doc: "The environment is not declared by the plan." },
   ENV_NOT_APPROVED: {
     exit: 2,
-    doc: "The run writes to production and no approver was given (approvedBy).",
+    doc: "The run writes to production and nobody approved it: no `--approved-by`, `SPONSON_APPROVED_BY` or MCP `approved_by`.",
     cliHint: "Pass --approved-by <who> or set SPONSON_APPROVED_BY from an approval workflow.",
   },
   SECRET_LITERAL: { exit: 2, doc: "A parameter that looks like a secret is written as a literal." },
@@ -52,7 +52,7 @@ export const ERROR_CODES = {
   DRIFT_CHANGED: {
     exit: 1,
     doc: "A resource was changed or replaced outside Sponson; the line is refused unless the run reconciles.",
-    cliHint: "Keep that change by updating the plan to match, or re-run with --reconcile to overwrite it (a re-created one is adopted).",
+    cliHint: "Keep that change by updating the plan to match, or re-run with --reconcile to overwrite it. If it was deleted and re-created, reconciling adopts the new one instead: Sponson keeps it and will not delete it.",
   },
   LOCK_HELD: { exit: 3, doc: "Another run holds the scope's lock.", cliHint: "Wait for it, or pass --wait." },
   LOCK_LOST: { exit: 3, doc: "The run lost the scope's lock to another run and stopped." },

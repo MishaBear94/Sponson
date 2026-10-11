@@ -152,7 +152,7 @@ export interface RecipeStarter {
   /** Values written for these params (usually built from `${ctx.*}`). */
   values?: Record<string, unknown>;
   /**
-   * Params written with their documented `default` and a `# TODO:` to check it against the app (Stripe's `path`:
+   * Params written with their documented `default` and a `# CHECK:` note (advisory, never a TODO) to check it against the app (Stripe's `path`:
    * where the app's webhook handler is), so the line shows the whole value it uses instead of hiding the default.
    */
   check?: string[];

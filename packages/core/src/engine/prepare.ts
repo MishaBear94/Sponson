@@ -123,7 +123,7 @@ export function requireApproval(opts: RunOptions, prepared: Prepared): string | 
       opts.ctx.env === "production"
         ? "This run applies to production"
         : `Line${n > 1 ? "s" : ""} ${prepared.productionLines.map((l) => `\`${l}\``).join(", ")} write${n > 1 ? "" : "s"} to production although the environment is ${opts.ctx.env}`;
-    throw new SponsonError("ENV_NOT_APPROVED", `${why}: approval is required (approvedBy).`, {
+    throw new SponsonError("ENV_NOT_APPROVED", `${why}, and nobody approved it.`, {
       environment: opts.ctx.env,
       productionLines: prepared.productionLines,
     });

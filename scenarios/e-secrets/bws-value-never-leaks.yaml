@@ -25,7 +25,7 @@ steps:
   - run: plan --json
     expect: { exit: 0, plan_lines: { env: create } }
   - run: plan
-    expect: { exit: 0, stdout: ["(secret)"] }
+    expect: { exit: 0, stdout: ["(secret ← "] }
   - run: apply --json
     expect: { exit: 1, status: failed }
   - run: apply --json

@@ -256,7 +256,11 @@ provider or serializer may produce (raw, JSON-escaped, URL-encoded, base64, line
 Everything leaves through it: text streams are wrapped in `main.ts`; adapter logs and error messages go through
 `actx.redact` and `RunContext.errorText`; JSON is redacted field by field by `redactDeep` and only then serialized
 (`serialize()` in `packages/cli/src/output.ts`), skipping enum fields such as `status` so a secret can never corrupt the
-structure. Diffs that would display a registered value are turned into `sensitive` sides. Values shorter than four
+structure. Diffs that would display a registered value are turned into `sensitive` sides. Before that, a diff whose
+adapter names the param it comes from (`ResourceDiff.input`, such as `values.DATABASE_URL`) has its new side described
+by what that param is in the plan (`describeInput` in `inspect.ts`): `secret` for a `{ secret }`, `sensitive` with the
+reference for a sensitive `{ from }` output, the value for a literal. Adapters see resolved values only and cannot tell
+these apart, so renderers label a value `(secret)` only when it is one. Values shorter than four
 characters cannot be masked safely; the CLI warns about them.
 
 ## The output envelope

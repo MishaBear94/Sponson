@@ -68,10 +68,22 @@ export interface SetupReport {
   secrets: SetupSecret[];
   /** `todo`: not offered, because the plan still has TODOs (a workflow would run a plan that cannot work). */
   workflow: { path: string; result: "written" | "exists" | "declined" | "not-asked" | "todo"; tag: string; commit: string | null };
-  /** The plan has no TODO left, and every credential is ok, unchecked or a login (none missing): the plan can run. */
+  /**
+   * The plan has no TODO left, and every credential is ok, unchecked or a login (none missing): the plan can run.
+   * Defaults to check (`checks`) never count against it.
+   */
   ready: boolean;
-  /** What to do next, with the command: `sponson plan` when ready, otherwise what to fix first. */
-  next: string;
+  /**
+   * What to do next. `command`: the command to run, as a person or an agent types it (`sponson plan` when ready,
+   * `sponson init --setup` to type a missing token), or null when the next step is not a command (filling in the
+   * plan's TODOs, making a new token). `why`: one sentence on what to do and why.
+   */
+  next: SetupNext;
+}
+
+export interface SetupNext {
+  command: string | null;
+  why: string;
 }
 
 export interface SetupOpts {
@@ -103,6 +115,8 @@ export interface SetupContext {
   detected?: Array<{ id: string; via?: "adapter" | "recipe" }>;
   /** The TODOs the plan still has (`planTodos`): listed first, and no workflow is offered while there are any. */
   todos?: Todo[];
+  /** Defaults the plan runs with that a person should check (`planChecks`): listed as "please check", never blocking. */
+  checks?: Todo[];
 }
 
 /** Where setup's progress goes: each argument one line. */
@@ -121,6 +135,8 @@ export async function runSetup(c: SetupContext, say: Say): Promise<SetupReport> 
   const todos = c.todos ?? [];
   // What the plan still needs from a person comes first: a credential checked against a placeholder proves nothing.
   if (todos.length) say(`To fill in first (${todos.length} TODO${todos.length === 1 ? "" : "s"} in ${plan}):`, ...todoLines(todos), "");
+  const checks = c.checks ?? [];
+  if (checks.length) say(`Please check (${plan} runs with ${checks.length === 1 ? "this default" : "these defaults"}; nothing waits on ${checks.length === 1 ? "it" : "them"}):`, ...todoLines(checks), "");
   const needs = await gatherNeeds(c.planPath, registry, c.detected ?? []);
   say(needs.length ? `Credentials for ${plan}:` : "This plan needs no credentials.");
   const values = new Map<string, string>();
@@ -131,17 +147,28 @@ export async function runSetup(c: SetupContext, say: Say): Promise<SetupReport> 
   const workflow = await writeWorkflow(c, needs, todos.length, plan, say);
   const credentialsOk = credentials.every((x) => ["ok", "unchecked", "login"].includes(x.status));
   const ready = credentialsOk && todos.length === 0;
-  const next = nextStep(todos.length, credentialsOk, plan);
-  say("", ready ? `Ready: ${next}` : `Not ready yet: ${next}`);
+  const next = nextStep(todos.length, credentials, plan, c.terminal.interactive);
+  say("", ready ? `Ready: run \`${next.command!}\`.` : `Not ready yet: ${next.why}`);
   if (!ready) say(`To try Sponson first without any account, against a local fake cloud: \`${DEMO_COMMAND}\``);
   return { repo, credentials, secrets, workflow, ready, next };
 }
 
-/** What to do next, in order: the TODOs, then the credentials, then the first plan. */
-function nextStep(todos: number, credentialsOk: boolean, plan: string): string {
-  const fix = [todos ? `fill in the TODO${todos === 1 ? "" : "s"} in ${plan} (and delete each \`# TODO\` comment)` : "", credentialsOk ? "" : "fix the credentials above"].filter(Boolean);
-  if (fix.length === 0) return "run `sponson plan`.";
-  return `${fix.join(", and ")}, then run \`sponson init --setup\` again and \`sponson plan\`.`;
+/**
+ * What to do next, in order: the TODOs, then the credentials, then the first plan. A missing token can be typed
+ * at a terminal; without one (CI, an agent, a pipe) it is set in the environment instead.
+ */
+function nextStep(todos: number, credentials: SetupCredential[], plan: string, interactive: boolean): SetupNext {
+  const again = "then run `sponson init --setup` again";
+  if (todos) {
+    return { command: null, why: `Fill in the TODO${todos === 1 ? "" : "s"} in ${plan} (and delete each \`# TODO\` comment), ${again} and \`sponson plan\`.` };
+  }
+  const bad = credentials.filter((x) => !["ok", "unchecked", "login"].includes(x.status));
+  if (bad.length === 0) return { command: "sponson plan", why: "The plan has no TODO left and every credential it needs checked: see what applying it would do." };
+  const missing = bad.filter((x) => x.status === "missing").flatMap((x) => x.variables.filter((v) => v.from === "missing").map((v) => v.name));
+  if (missing.length === bad.length && missing.length > 0 && !interactive) {
+    return { command: "sponson init --setup", why: `Set ${missing.join(", ")} in the environment it runs with (nothing can prompt for ${missing.length === 1 ? "it" : "them"} here, without a terminal), or run it in an interactive terminal to type ${missing.length === 1 ? "it" : "them"}.` };
+  }
+  return { command: null, why: `Fix the credentials above (${bad.map((x) => `${x.title}: ${x.status.replace("_", " ")}`).join("; ")}), ${again} and \`sponson plan\`.` };
 }
 
 // ---------------------------------------------------------------------------
@@ -272,7 +299,8 @@ async function setUpOne(c: SetupContext, need: Need, values: Map<string, string>
   for (const name of need.variables) variables.push({ name, from: await readValue(c, name, values, say) });
   if (variables.some((v) => v.from === "missing")) {
     const missing = variables.filter((v) => v.from === "missing").map((v) => v.name);
-    say(`  missing: ${missing.join(", ")}${c.terminal.interactive ? "" : " (export it, or run `sponson init --setup` in a terminal to type it)"}`);
+    const them = missing.length === 1 ? "it" : "them";
+    say(`  missing: ${missing.join(", ")}${c.terminal.interactive ? "" : ` (no terminal to ask in: set ${them} in the environment this command runs with, or run \`sponson init --setup\` in an interactive terminal to type ${them})`}`);
     return { ...base, variables, status: "missing", message: `no value for ${missing.join(", ")}` };
   }
   const result = await check(c, need, values);

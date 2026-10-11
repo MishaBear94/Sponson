@@ -252,7 +252,7 @@ describe("sponson init detects the stack", () => {
     expect(text).toContain("so this is the template");
     await rm(join(cwd, "release.plan.yaml"));
     const j = await init(cwd, "--json");
-    expect(j.json.detected).toEqual({ found: [], unsupported: [], todo: [expect.objectContaining({ path: "providers.vercel.project" }), expect.objectContaining({ path: "providers.neon.project" })], assumed: true });
+    expect(j.json.detected).toEqual({ found: [], unsupported: [], todo: [expect.objectContaining({ path: "providers.vercel.project" }), expect.objectContaining({ path: "providers.neon.project" })], check: [], assumed: true });
   });
 
   it("a secret value in .env.local never appears in the written plan or in any output", async () => {

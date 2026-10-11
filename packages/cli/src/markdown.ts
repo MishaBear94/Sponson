@@ -69,6 +69,7 @@ interface Line {
 }
 
 interface Diff {
+  key: string;
   label: string;
   kind: string;
   after: Obj | undefined;
@@ -94,7 +95,7 @@ function toRes(v: unknown): Res | null {
 
 function toDiff(v: unknown): Diff | null {
   if (!isObj(v)) return null;
-  return { label: str(v.label ?? v.key), kind: str(v.kind), after: isObj(v.after) ? v.after : undefined };
+  return { key: str(v.key), label: str(v.label ?? v.key), kind: str(v.kind), after: isObj(v.after) ? v.after : undefined };
 }
 
 function toTodo(v: unknown): Todo | null {
@@ -312,9 +313,10 @@ function fixFor(errorCode: string | undefined): string {
   return FIX[errorCode] ?? cliHintFor(errorCode as ErrorCode) ?? "";
 }
 
-function problem(error: string | undefined, errorCode: string | undefined): string {
+/** What went wrong and the fix. `said`: the line already says what happened (a drifted name), so only the code. */
+function problem(error: string | undefined, errorCode: string | undefined, said = false): string {
   const fix = fixFor(errorCode);
-  const what = [error ? clip(error) : "", errorCode ? `(${code(errorCode)})` : ""].filter(Boolean).join(" ");
+  const what = [error && !said ? clip(error) : "", errorCode ? `(${code(errorCode)})` : ""].filter(Boolean).join(" ");
   return [what, fix ? `**Fix:** ${fix}` : ""].filter(Boolean).join(" ");
 }
 
@@ -338,13 +340,30 @@ const DRIFT: Record<string, string> = {
   orphan: "is no longer in the plan; it is left alone until this scope is destroyed.",
 };
 
-function driftSection(drift: unknown[]): string {
-  const items = drift.filter(isObj).map((d) => {
+/** What happened outside Sponson to a resource a line manages, said on that line: by `line\0resourceKey`. */
+type Marks = Map<string, string>;
+
+/** The drift each line says on its own resource, from the envelope's drift. */
+function driftMarks(drift: unknown[]): Marks {
+  const out: Marks = new Map();
+  for (const d of drift.filter(isObj)) {
     const r = isObj(d.resource) ? d.resource : {};
+    if (d.kind === "changed" && optStr(d.line)) out.set(`${str(d.line)}\u0000${str(r.key)}`, d.replaced === true ? "deleted and re-created outside Sponson" : "changed outside Sponson");
+  }
+  return out;
+}
+
+const markOf = (marks: Marks, l: Line, key: string): string | undefined => marks.get(`${l.id}\u0000${key}`);
+
+/** The drift no line of the comment says (`shown`: whether one does). */
+function driftSection(drift: unknown[], shown: (line: string, key: string) => boolean = () => false): string {
+  const items = drift.filter(isObj).flatMap((d) => {
+    const r = isObj(d.resource) ? d.resource : {};
+    if (d.kind === "changed" && shown(str(d.line), str(r.key))) return [];
     const name = str(r.label) || str(r.key) || str(d.adapter);
     const where = d.line ? ` (line ${code(d.line)})` : "";
     const kind = d.kind === "changed" && d.replaced === true ? "replaced" : str(d.kind);
-    return `- ${esc(name)}${where} ${DRIFT[kind] ?? clip(d.message)}`;
+    return [`- ${esc(name)}${where} ${DRIFT[kind] ?? clip(d.message)}`];
   });
   return items.length ? `**Drift**\n\n${items.join("\n")}` : "";
 }
@@ -431,37 +450,44 @@ const PLAN_PHRASE: Record<string, string> = {
   todo: "a person does this by hand (below)",
 };
 
-function sideText(after: Obj | undefined): string {
-  if (!after) return "";
-  const ref = optStr(after.ref);
-  if (after.state === "pending") return ref ? ` ← ${code(ref)}` : " (pending)";
-  if (after.state === "secret") return ref ? ` ← ${code(ref)} (secret)` : " (secret)";
-  if (after.state === "sensitive") return " (secret)";
-  return "";
+/**
+ * A new value as a reference and what it is, the same words as the CLI (render.ts `sideText`): `secret` only for a
+ * `{ secret }` reference, `value hidden` for another sensitive value (a `{ from }` output), nothing for a literal
+ * (values are never shown here). `mark` is what happened to the resource outside Sponson, said here once.
+ */
+function sideText(after: Obj | undefined, mark?: string): string {
+  const ref = after ? optStr(after.ref) : undefined;
+  const label = after?.state === "secret" ? "secret" : after?.state === "sensitive" ? "value hidden" : after?.state === "pending" && !ref ? "pending" : "";
+  const notes = [label, mark ?? ""].filter(Boolean);
+  return `${ref ? ` ← ${code(ref)}` : ""}${notes.length ? ` (${notes.join("; ")})` : ""}`;
 }
 
-/** A plan line's resources by label, each value shown only as a reference. */
-function planWhat(l: Line): string {
+/** A plan line's resources by label, each value shown only as a reference, a drifted one saying so. */
+function planWhat(l: Line, marks: Marks): string {
   return namesPhrase(
     l,
     l.diffs.map((d) => d.label),
-    (i) => sideText(l.diffs[i]!.after),
+    (i) => sideText(l.diffs[i]!.after, markOf(marks, l, l.diffs[i]!.key)),
   );
 }
 
 /** A line held back only because a line it depends on is refused or failed: it has no fix of its own. */
 const heldBack = (l: Line): boolean => l.errorCode === "DEPENDENCY_BLOCKED";
 
-function planPhrase(l: Line): string {
+/** Whether a refusal for drift is already said on the line, by the name of the resource it happened to. */
+const driftSaid = (l: Line, keys: string[], marks: Marks): boolean => l.errorCode === "DRIFT_CHANGED" && keys.some((k) => markOf(marks, l, k) !== undefined);
+
+function planPhrase(l: Line, marks: Marks): string {
   if (l.status === "pending") return waitPhrase(l.waitingFor, l.waitingOn);
-  if (l.status === "blocked") return `${heldBack(l) ? "held back" : "refused"}: ${problem(l.error, l.errorCode)}`;
+  const said = driftSaid(l, l.diffs.map((d) => d.key), marks);
+  if (l.status === "blocked") return `${heldBack(l) ? "held back" : "refused"}${said ? " " : ": "}${problem(l.error, l.errorCode, said)}`;
   if (l.status === "error") return `error: ${problem(l.error, l.errorCode)}`;
   return PLAN_PHRASE[l.status] ?? esc(l.status);
 }
 
-function planBullet(l: Line): string {
-  const what = l.manual ? esc(l.manual.title) : planWhat(l) || esc(nounOf(l)[0]);
-  return `- ${code(l.id)} ${what}${what ? " — " : ""}${planPhrase(l)}`;
+function planBullet(l: Line, marks: Marks): string {
+  const what = l.manual ? esc(l.manual.title) : planWhat(l, marks) || esc(nounOf(l)[0]);
+  return `- ${code(l.id)} ${what}${what ? " — " : ""}${planPhrase(l, marks)}`;
 }
 
 /** What lines of these plan statuses amount to: "its own database branch and 2 variables"; "" for none. */
@@ -513,11 +539,13 @@ function renderPlan(e: Obj, o: MarkdownOptions): Parts {
     e.requiresApproval === true ? "Applying it needs a person's approval: it writes to production (`--approved-by <who>`)." : "",
   ];
   const todos = lines.map((l) => l.manual).filter((t): t is Todo => !!t);
+  const marks = driftMarks(arr(e.drift));
+  const shown = (line: string, key: string) => lines.some((l) => l.id === line && !l.manual && l.diffs.some((d) => d.key === key));
   return {
     title: `Sponson plan: ${who(environment, str(e.scope))}`,
     lead,
-    items: lines.map(planBullet),
-    blocks: [manualSection(todos, "Manual steps"), driftSection(arr(e.drift)), warningsSection(arr(e.warnings))],
+    items: lines.map((l) => planBullet(l, marks)),
+    blocks: [manualSection(todos, "Manual steps"), driftSection(arr(e.drift), shown), warningsSection(arr(e.warnings))],
     footer: footer([`plan ${esc(str(e.planHash).slice(0, 8))}`], o.runUrl),
   };
 }
@@ -537,22 +565,23 @@ const APPLY_PHRASE: Record<string, string> = {
   skipped: "skipped",
 };
 
-function applyPhrase(l: Line): string {
+function applyPhrase(l: Line, marks: Marks): string {
   if (l.orphan) return "no longer in the plan: left alone until the pull request closes";
   if (l.status === "waiting") return waitPhrase(l.waitingFor);
   if (l.status === "failed") return `failed: ${problem(l.error, l.errorCode)}`;
-  if (l.status === "blocked") return `refused: ${problem(l.error, l.errorCode)}`;
+  const said = driftSaid(l, l.resources.map((r) => r.key), marks);
+  if (l.status === "blocked") return `refused${said ? " " : ": "}${problem(l.error, l.errorCode, said)}`;
   if (l.status === "rollback_failed") return `failed, and rolling it back failed too, so it may still exist: ${problem(l.error, l.errorCode)}`;
   if (l.status === "skipped" && (l.error || l.errorCode)) return `skipped: ${problem(l.error?.replace(/^skipped: /, ""), l.errorCode)}`;
   return APPLY_PHRASE[l.status] ?? esc(l.status);
 }
 
-function applyBullet(l: Line): string {
-  const what = resourcesText(l, l.resources) || esc(nounOf(l)[0]);
+function applyBullet(l: Line, marks: Marks): string {
+  const what = namesPhrase(l, l.resources.map((r) => r.label ?? r.key), (i) => sideText(undefined, markOf(marks, l, l.resources[i]!.key))) || esc(nounOf(l)[0]);
   const values = VARIABLE_OPS.has(`${l.adapter}.${l.op}`) && l.resources.length ? ", values not shown" : "";
   const links = outputLinks(l.outputs);
   const extra = links.length ? ` · ${links.join(" · ")}` : "";
-  return `- ${code(l.id)} ${what}${values} — ${applyPhrase(l)}${consoleLink(LIVE.has(l.status) ? l.consoleUrl : undefined)}${extra}`;
+  return `- ${code(l.id)} ${what}${values} — ${applyPhrase(l, marks)}${consoleLink(LIVE.has(l.status) ? l.consoleUrl : undefined)}${extra}`;
 }
 
 function previewUrl(lines: Line[]): string {
@@ -595,11 +624,13 @@ function renderApply(e: Obj, rc: Obj, o: MarkdownOptions): Parts {
   const todos = arr(e.manual).map(toTodo).filter((t): t is Todo => t !== null);
   const runVerb = rc.destroy === true ? "destroy" : "apply";
   const plan = isObj(rc.plan) ? str(rc.plan.hash).slice(0, 8) : "";
+  const marks = driftMarks(arr(e.drift));
+  const shown = (line: string, key: string) => lines.some((l) => l.id === line && l.resources.some((r) => r.key === key));
   return {
     title: applyTitle(rc, lines, todos.length > 0),
     lead: rc.stale === true ? ["Nothing was changed."] : applyLead(rc, lines),
-    items: lines.map(applyBullet),
-    blocks: [manualSection(todos, "Manual steps waiting for a person"), driftSection(arr(e.drift)), warningsSection(arr(e.warnings))],
+    items: lines.map((l) => applyBullet(l, marks)),
+    blocks: [manualSection(todos, "Manual steps waiting for a person"), driftSection(arr(e.drift), shown), warningsSection(arr(e.warnings))],
     footer: footer([`${runVerb} ${esc(rc.runId)}`, plan ? `plan ${esc(plan)}` : ""], o.runUrl),
   };
 }

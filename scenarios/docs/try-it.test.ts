@@ -194,12 +194,15 @@ describe("README: Try it in 60 seconds", () => {
     // Blocked reads as "not done" (x), never as a delete (-).
     expect(r.output).toMatch(/^x env +vercel\.env +blocked +DRIFT_CHANGED/m);
     expect(r.output).toMatch(/^x callback +clerk\.redirect_allow +blocked +DEPENDENCY_BLOCKED/m);
-    expect(r.output).toMatch(/drift\n {2}changed +vercel +DATABASE_URL \(preview, feat\/checkout\) was changed outside Sponson/);
+    // The variable once (its own row, saying it changed), the fix once (the refused line), no drift section repeating it.
+    expect(r.output.match(/DATABASE_URL/g)).toHaveLength(1);
+    expect(r.output).not.toContain("\ndrift\n");
     // One remedy, said once: the error code's.
     expect(r.output.match(/--reconcile/g)).toHaveLength(1);
     // Two hidden values: what changed, not "(secret) → (secret)".
-    expect(r.output).toContain("~ DATABASE_URL (preview, feat/checkout)  changed outside Sponson (value hidden)");
-    expect(r.output).not.toContain("(secret) → (secret)");
+    expect(r.output).toContain("~ DATABASE_URL (preview, feat/checkout)  changed outside Sponson (value hidden ← db.connection_string)");
+    expect(r.output).not.toContain("(value hidden) → (value hidden)");
+    expect(r.output).not.toContain("(secret");
     expect(r.output).not.toContain("typed-in-the-console");
   });
 
@@ -210,6 +213,8 @@ describe("README: Try it in 60 seconds", () => {
     // The console edit is deleted with the rest (Sponson created it), but not silently.
     expect(r.output).toMatch(/warnings\n {2}`env`: DATABASE_URL \(preview, feat\/checkout\) was changed outside Sponson since the last apply; deleted anyway/);
     expect(r.output).toContain("destroy complete");
+    // What was deleted has no outputs left to list.
+    expect(r.output).not.toContain("outputs");
     const state = (await (await fetch(`${simUrl}/_state`)).json()) as {
       neon: { projects: Record<string, { branches: Array<{ name: string }> }> };
       vercel: { projects: Record<string, { envs: unknown[] }> };

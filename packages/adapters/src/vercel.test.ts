@@ -34,7 +34,7 @@ describe("vercel env", () => {
     const p = params({ DATABASE_URL: "postgres://a", API_KEY: "k1" });
     expect(await env.read(actx, p)).toBeNull();
     const diffs = env.diff(null, p);
-    expect(diffs[0]).toEqual({ key: "env:preview:feat/x:DATABASE_URL", kind: "create", label: "DATABASE_URL (preview, feat/x)", before: { state: "absent" }, after: SENS });
+    expect(diffs[0]).toEqual({ key: "env:preview:feat/x:DATABASE_URL", kind: "create", label: "DATABASE_URL (preview, feat/x)", before: { state: "absent" }, after: SENS, input: "values.DATABASE_URL" });
 
     const r = await env.apply(actx, p, null);
     expect(r.created.sort()).toEqual(["env:preview:feat/x:API_KEY", "env:preview:feat/x:DATABASE_URL"]);
@@ -53,7 +53,7 @@ describe("vercel env", () => {
 
     const p2 = params({ DATABASE_URL: "postgres://b", API_KEY: "k1" });
     const d2 = env.diff(live, p2);
-    expect(d2.find((d) => d.key === "env:preview:feat/x:DATABASE_URL")).toEqual({ key: "env:preview:feat/x:DATABASE_URL", kind: "update", label: "DATABASE_URL (preview, feat/x)", before: SENS, after: SENS });
+    expect(d2.find((d) => d.key === "env:preview:feat/x:DATABASE_URL")).toEqual({ key: "env:preview:feat/x:DATABASE_URL", kind: "update", label: "DATABASE_URL (preview, feat/x)", before: SENS, after: SENS, input: "values.DATABASE_URL" });
     expect(d2.find((d) => d.key === "env:preview:feat/x:API_KEY")?.kind).toBe("unchanged");
     const r2 = await env.apply(actx, p2, live);
     expect(r2.created).toEqual([]);
@@ -98,8 +98,8 @@ describe("vercel env", () => {
   it("pending and secret markers diff with their reference; apply refuses them", async () => {
     const p = params({ DATABASE_URL: pendingMarker("db.connection_string"), STRIPE_KEY: pendingMarker("env://STRIPE_KEY") });
     expect(env.diff(null, p)).toEqual([
-      { key: "env:preview:feat/x:DATABASE_URL", kind: "create", label: "DATABASE_URL (preview, feat/x)", before: { state: "absent" }, after: { state: "pending", ref: "db.connection_string" } },
-      { key: "env:preview:feat/x:STRIPE_KEY", kind: "create", label: "STRIPE_KEY (preview, feat/x)", before: { state: "absent" }, after: { state: "secret", ref: "env://STRIPE_KEY" } },
+      { key: "env:preview:feat/x:DATABASE_URL", kind: "create", label: "DATABASE_URL (preview, feat/x)", before: { state: "absent" }, after: { state: "pending", ref: "db.connection_string" }, input: "values.DATABASE_URL" },
+      { key: "env:preview:feat/x:STRIPE_KEY", kind: "create", label: "STRIPE_KEY (preview, feat/x)", before: { state: "absent" }, after: { state: "secret", ref: "env://STRIPE_KEY" }, input: "values.STRIPE_KEY" },
     ]);
     const live = { resources: [{ key: "env:preview:feat/x:DATABASE_URL", id: "env_1", hash: sha256("x") }], outputs: {} };
     expect(env.diff(live, p)[0]).toMatchObject({ kind: "update", before: SENS, after: { state: "pending", ref: "db.connection_string" } });

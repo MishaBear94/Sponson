@@ -32,7 +32,7 @@ exactly when the exit code is 0.
 | `REF_OUTPUT_UNKNOWN` | 2 | A `from:` reference names an output the op does not declare. |  |
 | `CTX_NULL` | 2 | A `${ctx.*}` interpolation is unknown or null in this context. |  |
 | `ENV_UNKNOWN` | 2 | The environment is not declared by the plan. |  |
-| `ENV_NOT_APPROVED` | 2 | The run writes to production and no approver was given (approvedBy). | Pass --approved-by <who> or set SPONSON_APPROVED_BY from an approval workflow. |
+| `ENV_NOT_APPROVED` | 2 | The run writes to production and nobody approved it: no `--approved-by`, `SPONSON_APPROVED_BY` or MCP `approved_by`. | Pass --approved-by <who> or set SPONSON_APPROVED_BY from an approval workflow. |
 | `SECRET_LITERAL` | 2 | A parameter that looks like a secret is written as a literal. |  |
 | `SECRET_UNRESOLVED` | 1 | A secret source could not resolve a reference. |  |
 | `ADAPTER_UNKNOWN` | 2 | No adapter of that name is registered. |  |
@@ -40,7 +40,7 @@ exactly when the exit code is 0.
 | `PARAM_INVALID` | 2 | An adapter rejected a parameter. |  |
 | `USAGE` | 2 | The command line is wrong. |  |
 | `MANUAL_STEP_PENDING` | 2 | A manual step (`manual.step`) is not done yet, or its undo on destroy: a person must do it, by its instructions, and then confirm it; its line and the lines that depend on it wait. Nothing else is held back. | A person does the step as instructed, then runs apply again with --confirm <line> (with --approved-by <who>, or as the git user). Agents never confirm on their own. |
-| `DRIFT_CHANGED` | 1 | A resource was changed or replaced outside Sponson; the line is refused unless the run reconciles. | Keep that change by updating the plan to match, or re-run with --reconcile to overwrite it (a re-created one is adopted). |
+| `DRIFT_CHANGED` | 1 | A resource was changed or replaced outside Sponson; the line is refused unless the run reconciles. | Keep that change by updating the plan to match, or re-run with --reconcile to overwrite it. If it was deleted and re-created, reconciling adopts the new one instead: Sponson keeps it and will not delete it. |
 | `LOCK_HELD` | 3 | Another run holds the scope's lock. | Wait for it, or pass --wait. |
 | `LOCK_LOST` | 3 | The run lost the scope's lock to another run and stopped. |  |
 | `RECEIPT_CORRUPT` | 1 | The receipt cannot be parsed. |  |

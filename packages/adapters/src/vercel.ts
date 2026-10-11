@@ -386,7 +386,7 @@ const env: OpSpec = {
     const byKey = new Map((live?.resources ?? []).map((r) => [r.key, r]));
     return Object.entries(scope.values).map(([name, desired]) => {
       const key = envKey(scope.target, scope.branch, name);
-      return diffValue({ key, label: envLabel(scope, name), live: byKey.get(key), desired, sensitive: true });
+      return diffValue({ key, label: envLabel(scope, name), live: byKey.get(key), desired, sensitive: true, input: `values.${name}` });
     });
   },
 

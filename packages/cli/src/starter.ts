@@ -18,7 +18,13 @@ export interface Todo {
 
 export interface Starter {
   text: string;
+  /** Placeholders the plan cannot run with (`proj_xxx`, `<id>`): they block readiness and the workflow. */
   todos: Todo[];
+  /**
+   * Defaults to check against the app (a recipe's documented default, such as Stripe's webhook path): the plan runs
+   * with them, so they never block; `init` and `--setup` list them as "please check".
+   */
+  checks: Todo[];
   /** Nothing Sponson manages was detected: the plan is the Vercel + Neon template. */
   assumed: boolean;
 }
@@ -104,14 +110,15 @@ export function credentialsFor(d: StackDetection): string[] {
 export function composeStarter(d: StackDetection): Starter {
   const s = shapeOf(d);
   const todos: Todo[] = [];
+  const checks: Todo[] = [];
   const out = [...header(d, s), "version: 1", "environments: [preview, production]", ...providers(d, s, todos), "", "changes:"];
   // Never empty: without Vercel, Netlify, Cloudflare Pages, Neon, PlanetScale or Supabase the template assumes Vercel and Neon.
   out.push(...dbLine(s), ...supabaseBranchLine(s), ...envLine(d, s), ...netlifyEnvLine(d, s), ...pagesLine(d, s), ...deployLine(s), ...clerkLine(s), ...supabaseAuthLine(s), ...flagLine(s));
-  out.push(...adapterNotes(d), ...recipeLines(d, s, todos, lineIds(out)), ...orphanNotes(s));
+  out.push(...adapterNotes(d), ...recipeLines(d, s, { todos, checks }, lineIds(out)), ...orphanNotes(s));
   // Every line commented out (recipe lines waiting on TODOs): the list is empty until one is uncommented.
   if (lineIds(out).size === 0) out[out.indexOf("changes:")] = "changes: []   # every line below waits on its TODOs: uncomment them, then delete this `[]`";
   const text = out.join("\n").replace(/\n+$/, "") + "\n";
-  return { text, todos, assumed: s.assumed };
+  return { text, todos, checks, assumed: s.assumed };
 }
 
 function header(d: StackDetection, s: Shape): string[] {
@@ -445,13 +452,13 @@ function starters(r: Recipe): RecipeStarter[] {
  * Every detected recipe provider's lines (ready, or commented out until their TODOs are filled in), each ready one
  * followed by the deploy target's line for the outputs its app reads from a variable (`starter.env`).
  */
-function recipeLines(d: StackDetection, s: Shape, todos: Todo[], taken: Set<string>): string[] {
+function recipeLines(d: StackDetection, s: Shape, notes: { todos: Todo[]; checks: Todo[] }, taken: Set<string>): string[] {
   const preview = s.vercel || s.netlify ? previewUrlFrom(s) : undefined;
   // Cloudflare Pages preview variables are shared by every preview: a per-PR output never goes there.
   const target = s.vercel ? "vercel" : s.netlify ? "netlify" : undefined;
   return d.recipes.flatMap((r) =>
     starters(r).flatMap((st) => {
-      const line = recipeLine(r, st, { preview, todos, taken, credentials: d.credentials[r.provider] ?? [] });
+      const line = recipeLine(r, st, { preview, ...notes, taken, credentials: d.credentials[r.provider] ?? [] });
       return line.ready && target ? [...line.text, ...outputEnvLine(r, st, line.id, target, d.envNames ?? {}, taken)] : line.text;
     }),
   );
@@ -490,13 +497,15 @@ interface RecipeLineCtx {
   /** Where the preview URL comes from, and the note beside it; undefined without a deploy target's line. */
   preview: [string, string] | undefined;
   todos: Todo[];
+  checks: Todo[];
   taken: Set<string>;
   credentials: string[];
 }
 
 /**
- * A param written into a recipe line: its value as YAML, and the comment beside it. `placeholder` marks a TODO: a
- * value missing (`<name>`), or a default to check against the app (`starter.check`).
+ * A param written into a recipe line: its value as YAML, and the comment beside it. `placeholder` marks a value the
+ * person sees to: a TODO when it is missing (`<name>`), a CHECK when it is a default to check against the app
+ * (`starter.check`, `check: true`), which the plan runs with.
  */
 interface ParamText {
   name: string;
@@ -504,6 +513,7 @@ interface ParamText {
   note?: string;
   missing: boolean;
   placeholder?: string;
+  check?: boolean;
 }
 
 function recipeLine(r: Recipe, st: RecipeStarter, c: RecipeLineCtx): { id: string; ready: boolean; text: string[] } {
@@ -512,7 +522,7 @@ function recipeLine(r: Recipe, st: RecipeStarter, c: RecipeLineCtx): { id: strin
   const params = Object.entries(op.params)
     .filter(([name, p]) => p.required === true || name === st.preview_url || st.values?.[name] !== undefined || st.check?.includes(name) === true)
     .map(([name, p]) => recipeParam(r, st, name, p, c.preview));
-  for (const p of params) if (p.placeholder !== undefined) c.todos.push({ path: `changes.${id}.${p.name}`, placeholder: p.placeholder, hint: p.note! });
+  for (const p of params) if (p.placeholder !== undefined) (p.check ? c.checks : c.todos).push({ path: `changes.${id}.${p.name}`, placeholder: p.placeholder, hint: p.note! });
   const block = perAccountBlock(r, c.todos);
   const ready = params.every((p) => !p.missing) && block.length === 0;
   const body = [
@@ -520,7 +530,7 @@ function recipeLine(r: Recipe, st: RecipeStarter, c: RecipeLineCtx): { id: strin
     "  adapter: http",
     `  op: ${op.kind}`,
     `  recipe: ${r.provider}.${st.op}`,
-    ...params.map((p) => `  ${p.name}: ${p.value}${p.note ? `   # ${p.placeholder !== undefined ? "TODO: " : ""}${p.note}` : ""}`),
+    ...params.map((p) => `  ${p.name}: ${p.value}${p.note ? `   # ${p.placeholder === undefined ? "" : p.check ? "CHECK: " : "TODO: "}${p.note}` : ""}`),
     "  environments: [preview]",
   ];
   const credential = c.credentials.length ? `; ${c.credentials.join(", ")} ${c.credentials.length === 1 ? "is" : "are"} read from the environment` : "";
@@ -535,8 +545,8 @@ function recipeParam(r: Recipe, st: RecipeStarter, name: string, p: RecipeParam,
   if (given !== undefined) return { name, value: yamlValue(given), missing: false };
   if (st.check?.includes(name) && p.default !== undefined) {
     const value = yamlValue(p.default);
-    const note = `${p.description.replace(/\.$/, "")}; the recipe's default: check it against your app, then delete this TODO`;
-    return { name, value, note, missing: false, placeholder: typeof p.default === "string" ? p.default : value };
+    const note = `${p.description.replace(/\.$/, "")}; the recipe's default, which the plan runs with: check it against your app, then delete this note`;
+    return { name, value, note, missing: false, check: true, placeholder: typeof p.default === "string" ? p.default : value };
   }
   const where = r.detect?.where?.[name] ?? p.description;
   const hint = name === st.preview_url ? `the preview's URL (no deploy target Sponson manages was detected to take it from): ${where}` : where;
@@ -571,6 +581,8 @@ function q(s: string): string {
 
 /** A `# TODO:` comment in a plan: what `init` marks a placeholder with (`  neon: { project: "proj_xxx" }   # TODO: …`). */
 const TODO_MARK = /#\s*TODO:\s*/;
+/** A `# CHECK:` comment: a default the plan runs with, to check against the app (advisory, never blocking). */
+const CHECK_MARK = /#\s*CHECK:\s*/;
 
 /**
  * The TODOs a plan still has: every line carrying a `# TODO:` comment. A starter TODO keeps its path and placeholder
@@ -579,9 +591,18 @@ const TODO_MARK = /#\s*TODO:\s*/;
  * the starter's comments say: until then the value counts as a placeholder (setup does not check against it).
  */
 export function planTodos(text: string, known: Todo[]): Todo[] {
+  return marked(text, known, TODO_MARK);
+}
+
+/** The defaults a plan still asks to check: every line carrying a `# CHECK:` comment (see `planTodos`). */
+export function planChecks(text: string, known: Todo[]): Todo[] {
+  return marked(text, known, CHECK_MARK);
+}
+
+function marked(text: string, known: Todo[], mark: RegExp): Todo[] {
   const out: Todo[] = [];
   text.split(/\r?\n/).forEach((line, i) => {
-    const m = TODO_MARK.exec(line);
+    const m = mark.exec(line);
     if (!m) return;
     const before = line.slice(0, m.index);
     // Several starter lines may share a placeholder (`<url>`): each line takes the first one not taken yet.

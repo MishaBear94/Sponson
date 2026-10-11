@@ -99,20 +99,22 @@ export function desiredSide(v: unknown, sensitive: boolean): DiffSide {
 
 /**
  * Diff one desired value against the live record by hash. `liveValue` is what `before` shows for a non-sensitive
- * value (the live record carries only a hash). Unchanged diffs carry no sides: there is nothing to show.
+ * value (the live record carries only a hash). Unchanged diffs carry no sides: there is nothing to show. `input` is
+ * the param path the value came from (`values.NAME`): the engine describes `after` by what that param is in the plan.
  */
-export function diffValue(opts: { key: string; label: string; live: ResourceRecord | undefined; desired: unknown; sensitive: boolean; liveValue?: string }): ResourceDiff {
+export function diffValue(opts: { key: string; label: string; live: ResourceRecord | undefined; desired: unknown; sensitive: boolean; liveValue?: string; input?: string }): ResourceDiff {
   const { key, label, live, desired, sensitive } = opts;
+  const base = { key, label, ...(opts.input !== undefined ? { input: opts.input } : {}) };
   const marker = markerKind(desired);
   if (marker === "keep") {
-    if (live) return { key, kind: "unchanged", label };
+    if (live) return { ...base, kind: "unchanged" };
     throw new SponsonError("PARAM_INVALID", `${label} is declared \`{ keep: true }\` but does not exist, so there is no value to keep. Give it a value or remove it.`, { key });
   }
   const after = desiredSide(desired, sensitive);
-  if (!live) return { key, kind: "create", label, before: ABSENT, after };
+  if (!live) return { ...base, kind: "create", before: ABSENT, after };
   const before: DiffSide = sensitive || opts.liveValue === undefined ? SENSITIVE : { state: "literal", value: opts.liveValue };
-  if (marker === null && live.hash === sha256(String(desired))) return { key, kind: "unchanged", label };
-  return { key, kind: "update", label, before, after };
+  if (marker === null && live.hash === sha256(String(desired))) return { ...base, kind: "unchanged" };
+  return { ...base, kind: "update", before, after };
 }
 
 /**

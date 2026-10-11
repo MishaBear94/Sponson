@@ -39,18 +39,44 @@ changes:
     environments: [preview]
 ```
 
+<!-- generated:readme-plan:start (scripts/gen-docs.ts; run `pnpm docs:gen`) -->
 ```
 $ sponson plan
-sponson plan · preview · pr-42 · plan 7aba4410
+sponson plan · preview · pr-42 · plan 0583f85b
 
-+ db        neon.branch           create     Neon branch sponson/preview/pr-42
-+ env       vercel.env            create
-    + DATABASE_URL (preview)  (pending ← db.connection_string)
-    + STRIPE_KEY (preview)    (secret ← env://STRIPE_KEY)
-? callback  clerk.redirect_allow  pending    waiting on `env` (deploy)
++ db        neon.branch           create   Neon branch sponson/preview/pr-42
+? env       vercel.env            pending  waiting on `db`
+    + DATABASE_URL (preview, feat/checkout)  (pending ← db.connection_string)
+    + STRIPE_KEY (preview, feat/checkout)  (secret ← env://STRIPE_KEY)
+? callback  clerk.redirect_allow  pending  waiting on `env` (deploy)
+    + Clerk redirect  (pending ← env.preview_url)
 
-2 to create, 1 pending
+1 to create, 2 pending
 ```
+<!-- generated:readme-plan:end -->
+
+The first `apply` creates the branch and writes both variables, then stops at the deploy barrier: the callback needs
+the preview URL, which exists once the deploy finishes. The next `apply` (the one the deploy triggers in CI) finishes
+it.
+
+<!-- generated:readme-apply:start (scripts/gen-docs.ts; run `pnpm docs:gen`) -->
+```
+$ sponson apply
+sponson apply · preview · pr-42 · run run-1a2b3c4d
+
++ db        neon.branch           applied  Neon branch sponson/preview/pr-42
++ env       vercel.env            applied  DATABASE_URL (preview, feat/checkout), STRIPE_KEY (preview, feat/checkout)
+? callback  clerk.redirect_allow  waiting  waiting on deploy
+
+outputs
+  db.branch_id = br-11
+  db.host = br-11.sim.neon.tech
+
+apply partial: waiting on deploy for lines callback
+```
+<!-- generated:readme-apply:end -->
+
+Both are real output: `pnpm docs:gen` runs this plan against the fake cloud below and writes what the CLI prints here.
 
 ## Try it in 60 seconds
 
@@ -156,10 +182,14 @@ or asks for it (hidden input, never written to disk), and checks it with one rea
 each, it stores the checked tokens as GitHub Actions secrets of your `origin` with your own `gh` (the value goes to
 `gh secret set` on stdin, nowhere else), and writes `.github/workflows/sponson.yml` with the action pinned to the
 commit of the installed version's release tag (an existing file is never overwritten). TODOs the plan still has (a
-project id `init` could not find) are listed first, and the workflow is not offered until they are filled in: it would
-run a plan that cannot work. Run it again any time, also on an existing plan; `--yes` accepts every offer for scripted
-use, `--json` reports what `init` detects, each credential's status without a value, and `next`, the command to run
-next. Agents ask a human to run it rather than handle a token themselves ([SKILL.md](SKILL.md)).
+placeholder such as a project id `init` could not find) are listed first, and the workflow is not offered until they
+are filled in: it would run a plan that cannot work. A default the plan runs with but you should look at (a recipe's
+documented default, such as Stripe's webhook path, marked `# CHECK:`) is listed as "please check" and blocks nothing.
+Run it again any time, also on an existing plan; `--yes` accepts every offer for scripted use, `--json` reports what
+`init` detects (`todo` and `check`), each credential's status without a value, and `next`: `{ command, why }`, where
+`command` is the command to run next (`sponson plan` once ready, `sponson init --setup` when a token only needs to be
+typed) or `null` when the next step is not a command (filling in a TODO, making a new token), and `why` says what to do.
+Agents ask a human to run it rather than handle a token themselves ([SKILL.md](SKILL.md)).
 
 ```
 $ sponson init --setup
@@ -197,7 +227,7 @@ GitHub Actions secrets of acme/web (with your `gh`; the value goes to its stdin 
 
 Workflow: wrote .github/workflows/sponson.yml (action pinned to 3f1c0a9e7b2d, sponson@<version>).
 
-Not ready yet: fix the credentials above, then run `sponson init --setup` again and `sponson plan`.
+Not ready yet: Fix the credentials above (Clerk: unauthorized), then run `sponson init --setup` again and `sponson plan`.
 To try Sponson first without any account, against a local fake cloud: `npx --yes @sponson/sim --demo sponson-demo`
 ```
 

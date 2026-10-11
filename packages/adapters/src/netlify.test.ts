@@ -38,7 +38,7 @@ describe("netlify env", () => {
     const actx = h.actx("netlify", provider);
     const p = params({ DATABASE_URL: "postgres://a", API_KEY: "k1" });
     expect(await env.read(actx, p)).toBeNull();
-    expect(env.diff(null, p)[0]).toEqual({ key: "env:branch:feat/x:DATABASE_URL", kind: "create", label: "DATABASE_URL (branch feat/x)", before: { state: "absent" }, after: SENS });
+    expect(env.diff(null, p)[0]).toEqual({ key: "env:branch:feat/x:DATABASE_URL", kind: "create", label: "DATABASE_URL (branch feat/x)", before: { state: "absent" }, after: SENS, input: "values.DATABASE_URL" });
 
     const r = await env.apply(actx, p, null);
     expect(r.created).toEqual(["env:branch:feat/x:DATABASE_URL", "env:branch:feat/x:API_KEY"]);

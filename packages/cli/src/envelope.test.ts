@@ -16,7 +16,7 @@ import { buildMcpServer, readReceipt, validateArgs } from "./commands/mcp.js";
 import { run } from "./main.js";
 import { errorEnvelope, exitCodeFor, serialize } from "./output.js";
 import { ERROR_CODES, Redactor } from "@sponson/core";
-import { diffText, finalLine, renderApply, renderPlan } from "./render.js";
+import { applyJson, diffText, finalLine, renderApply, renderPlan } from "./render.js";
 import { createRequire } from "node:module";
 
 const PKG_VERSION = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
@@ -168,7 +168,7 @@ describe("error envelope on every failure path", () => {
   });
 
   it("the envelope carries the CLI remedy for codes whose fix is a flag", () => {
-    expect(errorEnvelope("apply", new SponsonError("ENV_NOT_APPROVED", "approval is required (approvedBy)")).error.hint).toMatch(/--approved-by/);
+    expect(errorEnvelope("apply", new SponsonError("ENV_NOT_APPROVED", "This run applies to production, and nobody approved it.")).error.hint).toMatch(/--approved-by/);
     expect(errorEnvelope("apply", new SponsonError("DRIFT_CHANGED", "x")).error.hint).toMatch(/--reconcile/);
     expect(errorEnvelope("plan", new SponsonError("PLAN_INVALID", "x")).error).not.toHaveProperty("hint");
   });
@@ -268,6 +268,7 @@ describe("init", () => {
           { path: "providers.vercel.project", placeholder: "prj_xxx", hint: expect.stringContaining("vercel link") },
           { path: "providers.neon.project", placeholder: "proj_xxx", hint: expect.stringContaining("neonctl projects list") },
         ],
+        check: [],
         assumed: true,
       },
       added: [],
@@ -357,7 +358,7 @@ describe("text renderer", () => {
     );
     expect(text).toContain("an apply is running on this scope; this plan may change");
     expect(text).toContain("~ FLAG  off → on");
-    expect(text).toContain("~ DATABASE_URL  (secret) → (pending ← db.connection_string)");
+    expect(text).toContain("~ DATABASE_URL  (value hidden) → (pending ← db.connection_string)");
     expect(text).toContain("+ STRIPE_KEY  (secret ← env://STRIPE_KEY)");
     expect(text).toMatch(/^\? callback .*waiting on `env` \(deploy\)$/m);
     // Blocked is `x` ("not done"), never `-` (a delete); the CLI remedy follows the engine message, once.
@@ -374,9 +375,18 @@ describe("text renderer", () => {
     expect(diffText(diff({ label: "FLAG", after: { state: "literal", value: "on" } }))).toBe("FLAG  on");
     expect(diffText(diff({ kind: "update", label: "Branch b", before: { state: "literal", value: "a" }, after: { state: "literal", value: "b" } }))).toBe("Branch b  a → b");
     const hidden = diff({ kind: "update", label: "DATABASE_URL", before: { state: "sensitive" }, after: { state: "sensitive" } });
-    expect(diffText(hidden, true)).toBe("DATABASE_URL  changed outside Sponson (value hidden)");
+    expect(diffText(hidden, "changed outside Sponson")).toBe("DATABASE_URL  changed outside Sponson (value hidden)");
     expect(diffText(hidden)).toBe("DATABASE_URL  changes (value hidden)");
-    expect(diffText(diff({ kind: "update", label: "K", before: { state: "secret", ref: "env://K" }, after: { state: "secret", ref: "env://K" } }))).toBe("K  changes (value hidden)");
+    expect(diffText(diff({ kind: "update", label: "K", before: { state: "secret", ref: "env://K" }, after: { state: "secret", ref: "env://K" } }))).toBe("K  changes (secret ← env://K)");
+  });
+
+  it("labels a value by what it is in the plan: secret only for a `{ secret }`, value hidden for a sensitive `{ from }`, a literal as itself", () => {
+    const diff = (after: ResourceDiff["after"]): ResourceDiff => ({ key: "k", kind: "create", label: "V", before: { state: "absent" }, after });
+    expect(diffText(diff({ state: "secret", ref: "env://STRIPE_KEY" }))).toBe("V  (secret ← env://STRIPE_KEY)");
+    expect(diffText(diff({ state: "sensitive", ref: "db.connection_string" }))).toBe("V  (value hidden ← db.connection_string)");
+    expect(diffText(diff({ state: "sensitive" }))).toBe("V  (value hidden)");
+    expect(diffText(diff({ state: "literal", value: "preview" }))).toBe("V  preview");
+    for (const state of ["sensitive", "literal", "pending"] as const) expect(diffText(diff({ state, value: "x", ref: "db.x" }))).not.toContain("secret");
   });
 
   it("a drifted line in a plan: the diff says changed outside Sponson, the blocked line and the one it holds back are `x`", () => {
@@ -391,10 +401,25 @@ describe("text renderer", () => {
       { color: false },
     );
     expect(text).toContain("    ~ DATABASE_URL  changed outside Sponson (value hidden)");
-    expect(text).toMatch(/^x env /m);
+    expect(text).toMatch(/^x env +vercel\.env +blocked +DRIFT_CHANGED: Keep that change/m);
     expect(text).toMatch(/^x callback /m);
     expect(text).not.toMatch(/^- /m);
+    // The resource once (its own row), the drift fact once (on that row), the fix once (on the refused line).
+    expect(text.match(/DATABASE_URL/g)).toHaveLength(1);
+    expect(text.match(/changed outside Sponson/g)).toHaveLength(1);
     expect(text.match(/--reconcile/g)).toHaveLength(1);
+    expect(text).not.toContain("\ndrift\n");
+  });
+
+  it("a drift no line shows (another line's resource, an unmanaged one) still has the drift section", () => {
+    const text = renderPlan(
+      planResult({
+        lines: [{ id: "env", adapter: "vercel", op: "env", status: "unchanged", inputs: {}, outputs: {}, diffs: [{ key: "k", kind: "unchanged", label: "A" }] }],
+        drift: [{ kind: "unmanaged", adapter: "vercel", op: "env", resource: { key: "u", label: "B" }, message: "B exists, but no line manages it." }],
+      }),
+      { color: false },
+    );
+    expect(text).toContain("drift\n  unmanaged  vercel  B exists, but no line manages it.");
   });
 
   function summary(r: Partial<Receipt>): ApplyResultSummary {
@@ -429,6 +454,29 @@ describe("text renderer", () => {
     expect(text).toContain("approved by alice");
     expect(text).toMatch(/^x a .*blocked\s+OWNED_BY_OTHER_SCOPE: owned by pr-7$/m);
     expect(finalLine(summary({ stale: true }))).toBe("apply skipped (stale): a newer commit (fffffff) was already applied to this scope");
+  });
+
+  it("lists outputs after an apply, never after a destroy (what they describe is gone; the receipt keeps them)", () => {
+    const line = { id: "db", adapter: "neon", op: "branch", status: "applied", createdBy: "sponson", resources: [], outputs: { branch_id: "br-1" } } as unknown as Receipt["lines"][string];
+    expect(renderApply(summary({ lines: { db: line } }), { color: false })).toContain("outputs\n  db.branch_id = br-1");
+    const destroyed = summary({ destroy: true, lines: { db: { ...line, status: "destroyed" } } });
+    expect(renderApply(destroyed, { color: false })).not.toContain("outputs");
+    expect(applyJson(destroyed, 0).receipt.lines.db!.outputs).toEqual({ branch_id: "br-1" });
+  });
+
+  it("a line refused for drift names the resource once: the drift section leaves out what its error says", () => {
+    const s = summary({
+      status: "failed",
+      lines: { env: { id: "env", adapter: "vercel", op: "env", status: "blocked", createdBy: "sponson", resources: [], outputs: {}, error: "DATABASE_URL (preview) was changed outside Sponson since the last apply.", errorCode: "DRIFT_CHANGED" } },
+    });
+    s.drift = [
+      { kind: "changed", adapter: "vercel", line: "env", resource: { key: "k", label: "DATABASE_URL (preview)" }, message: "DATABASE_URL (preview) was changed outside Sponson since the last apply." },
+      { kind: "unmanaged", adapter: "vercel", resource: { key: "u", label: "OTHER" }, message: "OTHER exists, but no line manages it." },
+    ];
+    const text = renderApply(s, { color: false });
+    expect(text.match(/DATABASE_URL/g)).toHaveLength(1);
+    expect(text.match(/--reconcile/g)).toHaveLength(1);
+    expect(text).toContain("drift\n  unmanaged  vercel  OTHER exists, but no line manages it.");
   });
 });
 

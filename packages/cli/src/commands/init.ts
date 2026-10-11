@@ -6,7 +6,7 @@ import { UsageError, planPathFor, toRunOptions, withInvocation, type GlobalOpts,
 import { withRedactorWarnings } from "../output.js";
 import { detectStack, fsReader, type Finding, type StackDetection, type UnsupportedFinding } from "../stack.js";
 import { runSetup, type SetupReport } from "../setup.js";
-import { composeStarter, credentialsFor, planTodos, todoLines, type Starter, type Todo } from "../starter.js";
+import { composeStarter, credentialsFor, planChecks, planTodos, todoLines, type Starter, type Todo } from "../starter.js";
 import { NO_TERMINAL } from "../terminal.js";
 
 export interface InitOpts extends GlobalOpts {
@@ -23,8 +23,10 @@ export interface InitDetected {
   found: Finding[];
   /** Detected but not managed by any built-in adapter or recipe yet, each with a pointer to an issue. */
   unsupported: UnsupportedFinding[];
-  /** Placeholders left in the plan, with where to find the real value. */
+  /** Placeholders left in the plan, with where to find the real value: the plan cannot run until they are filled in. */
   todo: Todo[];
+  /** Defaults the plan runs with that a person should check against the app (a recipe's documented default): advisory, never blocking. */
+  check: Todo[];
   /** True when no deploy target or database Sponson manages was detected and the plan starts from the Vercel + Neon template. */
   assumed: boolean;
 }
@@ -99,8 +101,9 @@ async function setupAfterInit(opts: InitOpts, io: IO, redactor: Redactor, result
   // Providers whose lines a starter written in this run may have left commented out; an existing plan says it all.
   const detected = result.created ? (result.detected?.found ?? []).filter((f) => f.kind === "provider") : [];
   const todos = result.detected?.todo ?? [];
+  const checks = result.detected?.check ?? [];
   const say = (...lines: string[]) => void out.write(`${lines.join("\n")}\n`);
-  result.setup = await runSetup({ io, redactor, terminal: io.terminal ?? NO_TERMINAL, opts, planPath: result.path, detected, todos }, say);
+  result.setup = await runSetup({ io, redactor, terminal: io.terminal ?? NO_TERMINAL, opts, planPath: result.path, detected, todos, checks }, say);
   result.warnings = withRedactorWarnings(result.warnings, redactor);
   if (opts.json) io.json(result);
   else if (result.warnings.length) say("", "warnings", ...result.warnings.map((w) => `  ${w}`));
@@ -164,7 +167,8 @@ async function detect(io: IO, plan?: string): Promise<{ detection: StackDetectio
   const detection = await detectStack(fsReader(io.cwd), { VERCEL_PROJECT_ID, VERCEL_ORG_ID, NEON_PROJECT_ID, NETLIFY_SITE_ID, CLOUDFLARE_ACCOUNT_ID });
   const starter = composeStarter(detection);
   const todo = plan === undefined ? starter.todos : planTodos(plan, starter.todos);
-  return { detection, starter, detected: { found: detection.found, unsupported: detection.unsupported, todo, assumed: starter.assumed } };
+  const check = plan === undefined ? starter.checks : planChecks(plan, starter.checks);
+  return { detection, starter, detected: { found: detection.found, unsupported: detection.unsupported, todo, check, assumed: starter.assumed } };
 }
 
 /**
@@ -190,6 +194,7 @@ export function initSummary(d: InitDetected, credentials: string[], o: { setup?:
   if (d.unsupported.length) out.push("Not supported yet (no line manages them):", ...d.unsupported.map((u) => `  ${u.name} (${u.evidence[0]!}): ${u.pointer}`));
   if (o.setup) return out;
   if (d.todo.length) out.push("To fill in:", ...todoLines(d.todo));
+  if (d.check.length) out.push("Please check (the plan runs with these defaults; nothing waits on them):", ...todoLines(d.check));
   out.push(`Next: ${d.todo.length ? "fill in the TODOs, " : ""}set ${credentials.join(", ")} in your environment, then run \`sponson plan\``);
   return out;
 }

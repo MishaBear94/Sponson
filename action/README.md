@@ -16,7 +16,7 @@ itself: GitHub splits a reference at its `@`).
 | `env` | `preview` | environment; `production` is never inferred from the branch |
 | `approved-by` | | required when a line writes to production; take it from the environment approval (below), never from an agent |
 | `plan` | `release.plan.yaml` | path to the plan |
-| `version` | `source` | `source` runs Sponson from this action's own checkout (exactly the ref you pinned; nothing is fetched from a registry); or an npm version of `sponson` (e.g. `0.4.0`), installed with `npm install` into the runner's temporary directory |
+| `version` | `source` | `source` runs Sponson from this action's own checkout (exactly the ref you pinned; nothing is fetched from a registry); or an npm version of `sponson` (the one you reviewed, as `sponson --version` prints it), installed with `npm install` into the runner's temporary directory |
 | `node-version` | `22` | Node.js version |
 | `github-token` | `${{ github.token }}` | pushes receipts and comments on the PR |
 
@@ -154,9 +154,12 @@ One comment per environment, marked with `<!-- sponson:<env> -->` and updated in
 the reviewer: a headline that says what this pull request's preview has (on a plan: what it already has, and what
 applying would add), then one line per plan line with a link to the provider's console where Sponson knows one, the
 preview URL as a link, and what a waiting line waits for. Values are never shown: resources by name, inputs as
-references (`DATABASE_URL ← db.connection_string`), secrets as `(secret)`. A refused or failed line says what happened
-and then the fix, once (`sponson apply --reconcile`, `--approved-by <who>`, `sponson apply --confirm <line>`); a line
-held back only because a line it depends on was refused is counted apart and has no fix of its own.
+references (`DATABASE_URL ← db.connection_string`), labelled by what they are in the plan: a `{ secret }` reference as
+`(secret)`, another value that is never shown (a connection string from `{ from }`) as `(value hidden)`, a literal
+with no label. A refused or failed line says what happened and then the fix, once (`sponson apply --reconcile`,
+`--approved-by <who>`, `sponson apply --confirm <line>`): a resource changed outside Sponson says so next to its name,
+and nowhere else. A line held back only because a line it depends on was refused is counted apart and has no fix of
+its own.
 
 The examples below are real comments: the PR comment suite (`scenarios/journeys/secrets/pr-comment.test.ts`) renders
 them from `--json` output against the fake cloud, and `pnpm docs:gen` copies its snapshots here, so they cannot go
@@ -212,12 +215,8 @@ This preview already has its own database branch.
 **1 line is refused**, and 1 line that depends on it is held back: see below for why and how to fix it.
 
 - `db` Neon branch sponson/preview/pr-42 — up to date
-- `env` 2 variables (preview, feat/x): `DATABASE_URL` (secret) and `STRIPE_KEY` — refused: DATABASE\_URL (preview, feat/x) was changed outside Sponson since the last apply. (`DRIFT_CHANGED`) **Fix:** Keep that change by updating the plan, or overwrite it with `sponson apply --reconcile`.
+- `env` 2 variables (preview, feat/x): `DATABASE_URL` ← `db.connection_string` (value hidden; changed outside Sponson) and `STRIPE_KEY` — refused (`DRIFT_CHANGED`) **Fix:** Keep that change by updating the plan, or overwrite it with `sponson apply --reconcile`.
 - `callback` auth callback — held back: depends on `env`, which cannot be applied (`DEPENDENCY_BLOCKED`)
-
-**Drift**
-
-- DATABASE\_URL (preview, feat/x) (line `env`) was changed outside Sponson since the last apply.
 
 <sub>plan 1e5d99ef · [run log](https://github.com/acme/app/actions/runs/1001)</sub>
 ```
@@ -260,7 +259,7 @@ A production run without an approver, refused before anything is touched:
 <!-- sponson:production -->
 ### Sponson apply refused: `ENV_NOT_APPROVED`
 
-This run applies to production: approval is required (approvedBy).
+This run applies to production, and nobody approved it.
 
 **Fix:** Production needs a person's approval: run it with `--approved-by <who>` from your approval workflow, never from an agent.
 
@@ -295,8 +294,27 @@ A manual step that nobody has done yet is listed under the lines with its instru
 runs once they did it (`sponson apply --confirm <line>`); the job stays red (exit 2) until then.
 
 A resource Sponson created that someone edited since the last apply is deleted on destroy too (the pull request is
-closing), and the comment's warnings name it: `DATABASE_URL (preview, feat/x) was changed outside Sponson since the
-last apply; deleted anyway`. The receipt records it under the line's `notes.changedOutside`.
+closing), and the comment's warnings name it. The receipt records it under the line's `notes.changedOutside`. When the
+pull request closes with the `DATABASE_URL` edit above still there:
+
+<!-- generated:comment-destroy-changed:start (scripts/gen-docs.ts; run `pnpm docs:gen`) -->
+```markdown
+<!-- sponson:preview -->
+### Sponson cleaned up the preview for pr-42
+
+**Cleaned up:** Clerk redirect https://prj\_demo-01234567.vercel.app; 2 variables (preview, feat/x): `DATABASE_URL` and `STRIPE_KEY`; Neon branch sponson/preview/pr-42.
+
+**Kept (adopted, never destroyed):** nothing.
+
+**Left for you:** nothing.
+
+**Warnings**
+
+- `env`: DATABASE\_URL (preview, feat/x) was changed outside Sponson since the last apply; deleted anyway (Sponson created it, and this scope is being destroyed).
+
+<sub>destroy destroy-5e6f7a8b · [run log](https://github.com/acme/app/actions/runs/1001)</sub>
+```
+<!-- generated:comment-destroy-changed:end -->
 
 Console links: Neon links the branch, Vercel the project's Environment Variables page, Clerk the dashboard, and a
 [recipe](../docs/recipes.md) line its op's `console_url` when the recipe declares one. They come from

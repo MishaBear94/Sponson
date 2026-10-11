@@ -197,18 +197,19 @@ function diffVar(scope: EnvScope, name: string, desired: { value: unknown; type:
   const key = varKey(scope.target, name);
   const label = varLabel(scope.target, name, desired.type);
   const secret = desired.type === "secret_text";
+  const input = `${secret ? "secrets" : "vars"}.${name}`;
   const marker = markerKind(desired.value);
   if (marker === "keep") {
-    if (live) return { key, kind: "unchanged", label };
+    if (live) return { key, kind: "unchanged", label, input };
     throw paramError(ADAPTER, `${label} is declared \`{ keep: true }\` but does not exist, so there is no value to keep. Give it a value or remove it.`, secret ? "secrets" : "vars");
   }
   const after: DiffSide = desiredSide(desired.value, secret);
-  if (!live) return { key, kind: "create", label, before: ABSENT, after };
+  if (!live) return { key, kind: "create", label, before: ABSENT, after, input };
   if (marker === null && !(secret && scope.rewriteSecrets)) {
     const want = secret ? secretHash() : plainHash(String(desired.value));
-    if (live.hash === want) return { key, kind: "unchanged", label };
+    if (live.hash === want) return { key, kind: "unchanged", label, input };
   }
-  return { key, kind: "update", label, before: SENSITIVE, after };
+  return { key, kind: "update", label, before: SENSITIVE, after, input };
 }
 
 /** After a write: every variable sent is there as sent, and every other variable that was there still is. */

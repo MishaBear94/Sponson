@@ -14,7 +14,9 @@
  *                           (scripts/render-providers.ts)
  *   README.md               the block providers-summary: the catalog's numbers and a link to it; the block
  *                           init-unsupported: the services `init` detects but nothing manages yet, from UNSUPPORTED
- *                           (packages/cli/src/stack.ts), so a service that gains a recipe leaves the README with it
+ *                           (packages/cli/src/stack.ts), so a service that gains a recipe leaves the README with it;
+ *                           the blocks readme-plan and readme-apply: what `sponson plan` and the first `sponson apply`
+ *                           print for the README's own plan, run against the fake cloud (scripts/render-samples.ts)
  *   action/README.md        the comment-* blocks: the example PR comments, from the snapshots the PR comment suite
  *                           writes from real runs (scenarios/journeys/secrets/__snapshots__/pr-comment/)
  *
@@ -40,6 +42,7 @@ import { cell, slug } from "./md.js";
 import { renderMatrix, renderNumbers, renderSecretSources } from "./render-coverage.js";
 import { renderProviders, renderProvidersSummary } from "./render-providers.js";
 import { aboutCredential, renderRecipes } from "./render-recipes.js";
+import { readmeSamples, sampleBlock } from "./render-samples.js";
 
 export { slug };
 
@@ -168,6 +171,7 @@ export const COMMENT_EXAMPLES: Record<string, string> = {
   "comment-apply-complete": "apply-complete",
   "comment-apply-partial": "apply-partial",
   "comment-destroy": "destroy",
+  "comment-destroy-changed": "destroy-changed",
   "comment-plan-drift": "plan-drift",
   "comment-apply-refused-production": "apply-refused-production",
   "comment-apply-manual-step": "apply-manual-step",
@@ -226,6 +230,11 @@ export async function generate(): Promise<GeneratedFile[]> {
   let readme = withBlock(await readFile(join(REPO, "README.md"), "utf8"), summary.start, summary.end, renderProvidersSummary(data));
   const unsupported = markers("init-unsupported");
   readme = withBlock(readme, unsupported.start, unsupported.end, renderInitUnsupported());
+  const samples = await readmeSamples(readme);
+  for (const [name, text] of [["readme-plan", samples.plan], ["readme-apply", samples.apply]] as const) {
+    const m = markers(name);
+    readme = withBlock(readme, m.start, m.end, sampleBlock(text));
+  }
   let action = await readFile(join(REPO, "action/README.md"), "utf8");
   for (const [name, snapshot] of Object.entries(COMMENT_EXAMPLES)) {
     const m = markers(name);

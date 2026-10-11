@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { parsePlan, type ProviderDetect } from "@sponson/core";
 import { createRegistry, detectableProviders, expandRecipe, loadRecipe, loadRecipes, type Recipe } from "@sponson/adapters";
 import { builtinProviders, detectStack, envMatches, UNSUPPORTED, type RepoReader, type StackDetection } from "./stack.js";
-import { composeStarter, credentialsFor, planTodos } from "./starter.js";
+import { composeStarter, credentialsFor, planChecks, planTodos } from "./starter.js";
 
 const schema = JSON.parse(await readFile(new URL("../../../schema/release.plan.schema.json", import.meta.url), "utf8")) as Record<string, unknown>;
 const validate = new Ajv2020({ allErrors: true, strict: true, strictTypes: false }).compile(schema);
@@ -139,7 +139,8 @@ describe("detection from data", () => {
     expect(text.match(/http: \{ auth0:/g)).toHaveLength(1);
     expect(expectRecipeLinesExpand(text)).toBe(2);
     for (const leak of [SECRET_STRIPE, SECRET_AUTH0, "acme.eu.auth0.com"]) expect(text).not.toContain(leak);
-    expect(composeStarter(d).todos.map((t) => t.path)).toEqual(["changes.auth0_callback_url.client_id", "changes.auth0_callback_url.url", "providers.http.auth0.base_url", "changes.auth0_logout_url.client_id", "changes.stripe_webhook_endpoint.path"]);
+    expect(composeStarter(d).todos.map((t) => t.path)).toEqual(["changes.auth0_callback_url.client_id", "changes.auth0_callback_url.url", "providers.http.auth0.base_url", "changes.auth0_logout_url.client_id"]);
+    expect(composeStarter(d).checks.map((t) => t.path)).toEqual(["changes.stripe_webhook_endpoint.path"]);
     expect(credentialsFor(d)).toEqual(["VERCEL_TOKEN", "NEON_API_KEY", "AUTH0_CLIENT_ID", "AUTH0_CLIENT_SECRET", "STRIPE_SECRET_KEY"]);
     expect(expectRecipeLinesExpand(finishRecipeLines(text))).toBe(4);
   });
@@ -159,10 +160,11 @@ describe("detection from data", () => {
   it("a recipe provider with a preview URL param and no deploy target Sponson manages: commented, the TODO says why", async () => {
     const d = await detectStack(repo({ "package.json": pkg({ stripe: "16" }), "fly.toml": "app = 'web'\n" }));
     expect(ids(d)).toEqual(["fly", "stripe"]);
-    const { text, todos } = composeStarter(d);
+    const { text, todos, checks } = composeStarter(d);
     expect(text).toMatch(/^changes: \[\]/m);
     expect(text).toContain("  #   url: \"<url>\"   # TODO: the preview's URL (no deploy target Sponson manages was detected to take it from)");
-    expect(todos.map((t) => t.path)).toEqual(["changes.fly_secret.app", "changes.fly_secret.name", "changes.fly_secret.value", "changes.stripe_webhook_endpoint.url", "changes.stripe_webhook_endpoint.path"]);
+    expect(todos.map((t) => t.path)).toEqual(["changes.fly_secret.app", "changes.fly_secret.name", "changes.fly_secret.value", "changes.stripe_webhook_endpoint.url"]);
+    expect(checks.map((t) => t.path)).toEqual(["changes.stripe_webhook_endpoint.path"]);
     expect(expectRecipeLinesExpand(finishRecipeLines(text))).toBe(2);
     // No deploy target to take the endpoint's secret: no variables line, whatever the .env files name.
     expect(text).not.toContain("STRIPE_WEBHOOK_SECRET");
@@ -184,7 +186,7 @@ describe("detection from data", () => {
     expect(planTodos("version: 1\n# Fill in the TODOs, then uncomment:\n", [])).toEqual([]);
   });
 
-  it("Stripe: the webhook path written with a TODO to check it, and the endpoint's secret wired to STRIPE_WEBHOOK_SECRET when .env* names it", async () => {
+  it("Stripe: the webhook path written with a CHECK note (a default, not a TODO), and the endpoint's secret wired to STRIPE_WEBHOOK_SECRET when .env* names it", async () => {
     const files = {
       "package.json": pkg({ next: "15", "@neondatabase/serverless": "1", stripe: "16" }),
       ".vercel/project.json": { projectId: "prj_web" },
@@ -193,9 +195,14 @@ describe("detection from data", () => {
     };
     const d = await detectStack(repo(files));
     const text = expectValidPlan(d, ["db", "env", "stripe_webhook_endpoint", "stripe_webhook_endpoint_env"]);
-    // The whole URL the endpoint gets is in the line: the recipe's documented default path, marked to check.
-    expect(text).toMatch(/^ {4}path: "\/api\/webhooks\/stripe" {3}# TODO: The path of the app's webhook handler/m);
-    expect(composeStarter(d).todos).toContainEqual(expect.objectContaining({ path: "changes.stripe_webhook_endpoint.path", placeholder: "/api/webhooks/stripe" }));
+    // The whole URL the endpoint gets is in the line: the recipe's documented default path, marked to check. A
+    // default the plan runs with is advisory (CHECK), never a blocking TODO: nothing in the plan is missing.
+    expect(text).toMatch(/^ {4}path: "\/api\/webhooks\/stripe" {3}# CHECK: The path of the app's webhook handler/m);
+    expect(text).not.toContain("# TODO");
+    expect(composeStarter(d).todos).toEqual([]);
+    expect(composeStarter(d).checks).toContainEqual(expect.objectContaining({ path: "changes.stripe_webhook_endpoint.path", placeholder: "/api/webhooks/stripe" }));
+    expect(planTodos(text, composeStarter(d).todos)).toEqual([]);
+    expect(planChecks(text, composeStarter(d).checks).map((t) => t.path)).toEqual(["changes.stripe_webhook_endpoint.path"]);
     // The once-only signing secret reaches the app in the same run, by reference, under the name its .env file uses.
     expect(text).toContain(
       "  - id: stripe_webhook_endpoint_env\n    adapter: vercel\n    op: env\n    target: preview\n    values:\n      STRIPE_WEBHOOK_SECRET: { from: stripe_webhook_endpoint.secret }\n    environments: [preview]",
