@@ -20,7 +20,10 @@ export function recipeLink(provider: string, op: string): string {
 function credential(api: Record<string, unknown>): string {
   const auth = api.auth as Record<string, unknown>;
   if (typeof auth.bearer_env === "string") return `\`${auth.bearer_env}\` (bearer)`;
-  if (typeof auth.value_env === "string") return `\`${String(auth.value_env)}\` (header \`${String(auth.header)}\`)`;
+  if (typeof auth.value_env === "string") return `\`${String(auth.value_env)}\` (header \`${String(auth.header)}\`${typeof auth.prefix === "string" ? `, after \`${auth.prefix.trimEnd()}\`` : ""})`;
+  const oauth = auth.oauth2_client_credentials as Record<string, string> | undefined;
+  if (oauth) return `\`${oauth.client_id_env}\` / \`${oauth.client_secret_env}\` (OAuth2 client credentials)`;
+  if (Array.isArray(auth.command)) return `the token \`${auth.command.join(" ")}\` prints (bearer)`;
   const basic = auth.basic as Record<string, string>;
   return `\`${basic.user_env}\` / \`${basic.password_env}\` (basic)`;
 }
@@ -104,6 +107,18 @@ function refused(r: { prefixes: string[]; unless_env: string }): string {
   return `credentials starting ${r.prefixes.map((p) => `\`${p}\``).join(" or ")} are refused (\`PROVIDER_AUTH\`) unless \`${r.unless_env}=1\`; a plan cannot override this`;
 }
 
+/** An OAuth2 recipe's token endpoint and audience (a path: on the origin of the plan's `base_url`), as table rows. */
+function tokenRows(api: Record<string, unknown>): string[] {
+  const oauth = (api.auth as Record<string, unknown>).oauth2_client_credentials as Record<string, string> | undefined;
+  if (!oauth) return [];
+  const where = (v: string) => (v.startsWith("/") ? `\`${v}\` on the origin of \`base_url\`` : `\`${v}\``);
+  return [
+    `| Token endpoint | ${where(oauth.token_url!)}; override: \`${oauth.token_url_env}\` |`,
+    ...(oauth.audience ? [`| Audience | ${where(oauth.audience)} |`] : []),
+    ...(oauth.scope ? [`| Scope | \`${oauth.scope}\` |`] : []),
+  ];
+}
+
 function providerSection(r: Recipe): string[] {
   const api = r.api;
   return [
@@ -118,6 +133,7 @@ function providerSection(r: Recipe): string[] {
     `| \`base_url\` | ${typeof api.base_url === "string" ? `\`${api.base_url}\`` : "none: set it in the provider block"} |`,
     `| \`base_url_env\` | \`${String(api.base_url_env)}\` |`,
     `| Credential | ${credential(api)} |`,
+    ...tokenRows(api),
     ...(api.headers ? [`| \`headers\` | ${cell(JSON.stringify(api.headers))} |`] : []),
     ...(api.encoding ? [`| \`encoding\` | \`${String(api.encoding)}\` |`] : []),
     ...(api.refuse_credential ? [`| \`refuse_credential\` | ${refused(api.refuse_credential as { prefixes: string[]; unless_env: string })} |`] : []),

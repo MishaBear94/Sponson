@@ -14,6 +14,8 @@
  * skipped. Use throwaway projects: it creates the example object under a unique scope and destroys it.
  */
 import { randomBytes } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { expandRecipe, loadRecipes, type Recipe, type RecipeOp } from "@sponson/adapters";
 import { startSim, type RestStyle, type SimHandle } from "@sponson/sim";
@@ -21,13 +23,58 @@ import { cliEnv, runCli, SHA, workspace, type CliRun, type Workspace } from "./s
 
 const LIVE = process.env.SPONSON_LIVE === "1";
 const TOKEN = "tok_recipe_scenario_secret_0042";
+/** What the fake CLI of a recipe authenticated by a command (`gcloud auth print-access-token`) prints. */
+const PRINTED = "ya29.recipe-scenario-printed-token-0042";
 
 const cases = loadRecipes().flatMap((r) => Object.entries(r.ops).map(([name, op]) => [`${r.provider}.${name}`, r, name, op] as const));
 
-/** Every credential variable of the recipe's API block. */
+/** A recipe's `auth`, every form a recipe may declare (schema/recipe.schema.json). */
+interface RecipeAuth {
+  bearer_env?: string;
+  header?: string;
+  value_env?: string;
+  prefix?: string;
+  basic?: { user_env: string; password_env: string };
+  oauth2_client_credentials?: { client_id_env: string; client_secret_env: string; token_url_env: string };
+  command?: string[];
+}
+
+const authOf = (r: Recipe) => r.api.auth as RecipeAuth;
+
+/** Every variable the recipe's credential is read from (an OAuth2 client's id and secret included). */
 function credentialVars(r: Recipe): string[] {
-  const auth = r.api.auth as { bearer_env?: string; value_env?: string; basic?: { user_env: string; password_env: string } };
-  return [auth.bearer_env, auth.value_env, auth.basic?.user_env, auth.basic?.password_env].filter((v): v is string => typeof v === "string");
+  const auth = authOf(r);
+  const oauth = auth.oauth2_client_credentials;
+  return [auth.bearer_env, auth.value_env, auth.basic?.user_env, auth.basic?.password_env, oauth?.client_id_env, oauth?.client_secret_env].filter((v): v is string => typeof v === "string");
+}
+
+/**
+ * The sim checks the credential for real (rest sim R7) when the recipe's form needs it: the OAuth2 client whose id
+ * and secret the harness sets (both TOKEN), the token the fake CLI prints, or a header value behind its prefix
+ * (`SSWS <token>`). Other forms are checked as R1 says.
+ */
+function authSeed(r: Recipe): Record<string, unknown> | undefined {
+  const auth = authOf(r);
+  if (auth.oauth2_client_credentials) return { clients: { [TOKEN]: TOKEN } };
+  if (auth.command) return { tokens: [PRINTED] };
+  if (auth.prefix && auth.header) return { headers: [{ [auth.header.toLowerCase()]: `${auth.prefix}${TOKEN}` }] };
+  return undefined;
+}
+
+/**
+ * The environment a recipe's credential needs against the sim, besides its variables: the token endpoint's
+ * override, or a fake CLI on PATH that prints PRINTED for exactly the recipe's command (and fails otherwise).
+ */
+async function authEnv(r: Recipe, sim: SimHandle, ws: Workspace): Promise<NodeJS.ProcessEnv> {
+  const auth = authOf(r);
+  if (auth.oauth2_client_credentials) return { [auth.oauth2_client_credentials.token_url_env]: `${sim.url}/rest/oauth/token` };
+  if (!auth.command) return {};
+  const [file, ...args] = auth.command as [string, ...string[]];
+  const dir = join(ws.dir, ".recipe-bin");
+  await mkdir(dir, { recursive: true });
+  const script = `#!/bin/sh\nif [ "$*" != ${JSON.stringify(args.join(" "))} ]; then echo "unexpected: $*" >&2; exit 2; fi\necho ${PRINTED}\n`;
+  await writeFile(join(dir, file), script, { mode: 0o755 });
+  return { PATH: [dir, process.env.PATH].filter(Boolean).join(delimiter) };
 }
 
 /** `${ctx.*}` as the CLI fills it for `scope`. */
@@ -50,10 +97,11 @@ function fill(path: string, vars: Record<string, unknown>): string {
   return filled.length > 1 ? filled.replace(/\/$/, "") : filled;
 }
 
-function planText(r: Recipe, name: string, op: RecipeOp, params: Record<string, unknown>): string {
+function planText(r: Recipe, name: string, op: RecipeOp, params: Record<string, unknown>, base = r.base_url_example): string {
   const line = { id: "it", adapter: "http", op: op.kind, recipe: `${r.provider}.${name}`, ...params };
-  // A per-account API (no default base_url) needs its block; the test points base_url_env at the fake cloud.
-  const block = r.api.base_url === undefined ? `providers:\n  http:\n    ${r.provider}: ${JSON.stringify({ recipe: r.provider, base_url: r.base_url_example })}\n` : "";
+  // A per-account API (no default base_url) needs its block; the test points base_url_env at the fake cloud. Live, the
+  // block names the real account, so that what the recipe resolves against it (an OAuth2 token URL) is the account's.
+  const block = r.api.base_url === undefined ? `providers:\n  http:\n    ${r.provider}: ${JSON.stringify({ recipe: r.provider, base_url: base })}\n` : "";
   return `version: 1\n${block}changes:\n  - ${JSON.stringify(line)}\n`;
 }
 
@@ -124,12 +172,23 @@ function simSeed(r: Recipe, op: RecipeOp, spec: Record<string, unknown>) {
   const findPath = (spec.find as { path?: string } | undefined)?.path;
   if (op.kind === "resource" && create?.path && findPath && fill(findPath, vars) !== collectionOf(op, spec)) aliases[fill(findPath, vars)] = collectionOf(op, spec);
   const objects = Object.fromEntries(Object.entries(op.sim?.objects ?? {}).map(([p, o]) => [fill(p, vars), structuredClone(o)]));
-  // A parent read in an envelope (`parent.item_path`) is answered in it.
-  const parent = spec.parent as { path: string; read_path?: string; item_path?: string } | undefined;
-  if (op.kind === "list_item" && parent?.item_path) styles[fill(parent.read_path ?? parent.path, vars)] = { item_path: parent.item_path };
+  if (op.kind === "list_item") parentStyles(spec, styles);
   // A credential header the sim would not recognise by its name (`X-Honeycomb-Team`).
   const header = (r.api.auth as { header?: string }).header;
-  return { rest: { collections, objects, styles, aliases, ...(header ? { auth_headers: [header] } : {}) } };
+  const auth = authSeed(r);
+  return { rest: { collections, objects, styles, aliases, ...(header ? { auth_headers: [header] } : {}), ...(auth ? { auth } : {}) } };
+}
+
+/** A list item's parent, styled: answered in its read envelope, and storing a collection written under another name. */
+function parentStyles(spec: Record<string, unknown>, styles: Record<string, RestStyle>): void {
+  const vars = spec.vars as Record<string, unknown>;
+  const parent = spec.parent as { path: string; read_path?: string; item_path?: string; write_list_path?: string };
+  // A parent read in an envelope (`parent.item_path`) is answered in it.
+  if (parent.item_path) styles[fill(parent.read_path ?? parent.path, vars)] = { item_path: parent.item_path };
+  // A collection written under another name than it is read (`parent.write_list_path`) is stored under its read name.
+  if (parent.write_list_path === undefined) return;
+  const at = fill(parent.path, vars);
+  styles[at] = { ...styles[at], write_fields: { [token(parent.write_list_path, "")]: token(spec.list_path, "") } };
 }
 
 class Run {
@@ -142,7 +201,9 @@ class Run {
   async cli(args: string, sim?: SimHandle): Promise<CliRun & { writes: number }> {
     const before = sim?.state.writes.length ?? 0;
     const r = await runCli([...args.split(" "), ...this.ctx, "--receipts", "local", "--receipts-dir", `${this.ws.dir}/.sponson/receipts`], { env: this.env, cwd: this.ws.dir });
-    for (const out of [r.stdout, r.stderr]) expect(out, `${args}: the credential leaked`).not.toContain(TOKEN);
+    // The credential, and every token obtained with it (an OAuth2 access token, a printed one), never reaches output.
+    const secrets = [TOKEN, PRINTED, ...(sim?.state.rest.auth?.issued ?? []).map((t) => t.token)];
+    for (const out of [r.stdout, r.stderr]) for (const s of secrets) expect(out, `${args}: a credential leaked`).not.toContain(s);
     return { ...r, writes: (sim?.state.writes.length ?? before) - before };
   }
 }
@@ -201,7 +262,7 @@ async function lifecycleInSim(r: Recipe, name: string, op: RecipeOp): Promise<vo
   const spec = expandRecipe({ recipe: `${r.provider}.${name}`, ...interpolate(params, "pr-42") }, op.kind);
   const sim = await startSim({ seed: simSeed(r, op, spec) });
   const ws = await workspace("recipe", { plan: planText(r, name, op, params) });
-  const env = cliEnv(sim, { [String(r.api.base_url_env)]: `${sim.url}/rest`, ...Object.fromEntries(credentialVars(r).map((v) => [v, TOKEN])) });
+  const env = cliEnv(sim, { [String(r.api.base_url_env)]: `${sim.url}/rest`, ...Object.fromEntries(credentialVars(r).map((v) => [v, TOKEN])), ...(await authEnv(r, sim, ws)) });
   const run = new Run(ws, env, ["--env", "preview", "--pr", "42", "--branch", "feat/x", "--sha", SHA]);
   const seededObjects = structuredClone(sim.state.rest.objects);
   try {
@@ -212,6 +273,7 @@ async function lifecycleInSim(r: Recipe, name: string, op: RecipeOp): Promise<vo
     res = await run.cli("apply --json", sim);
     expect(res.code, `apply${diag(res)}`).toBe(0);
     expect(lineOf(res).status).toBe("applied");
+    expectTokenFlow(r, sim);
     if (op.kind === "resource") {
       expect(simItems(sim, op, spec)).toHaveLength(1);
       for (const [f, v] of Object.entries((spec.fields as Record<string, unknown> | undefined) ?? {})) expect(valueAt(simItems(sim, op, spec)[0], f), `field ${f}`).toEqual(v);
@@ -234,6 +296,20 @@ async function lifecycleInSim(r: Recipe, name: string, op: RecipeOp): Promise<vo
     await sim.close();
     await ws.cleanup();
   }
+}
+
+/**
+ * An OAuth2 recipe got its token from the endpoint, asking for the audience it declares (a path: on the origin of
+ * the plan's `base_url`, never of the base_url_env override).
+ */
+function expectTokenFlow(r: Recipe, sim: SimHandle): void {
+  const oauth = (authOf(r).oauth2_client_credentials ?? null) as { audience?: string } | null;
+  if (!oauth) return;
+  const issued = sim.state.rest.auth?.issued ?? [];
+  expect(issued.length, "an access token was issued").toBeGreaterThan(0);
+  const base = String(r.api.base_url ?? r.base_url_example);
+  const audience = oauth.audience?.startsWith("/") ? new URL(oauth.audience, base).href : oauth.audience;
+  for (const t of issued) expect(t.audience).toBe(audience);
 }
 
 /** Gone, or for a recipe whose destroy archives (a POST with a body), still there with the archive fields set. */
@@ -275,7 +351,7 @@ async function listDrift(run: Run, sim: SimHandle, spec: Record<string, unknown>
 
 async function lifecycleLive(r: Recipe, name: string, op: RecipeOp): Promise<void> {
   const scope = `pr-${900000 + (parseInt(randomBytes(4).toString("hex"), 16) % 99999)}`;
-  const ws = await workspace("recipe-live", { plan: planText(r, name, op, exampleParams(op, process.env)) });
+  const ws = await workspace("recipe-live", { plan: planText(r, name, op, exampleParams(op, process.env), process.env[String(r.api.base_url_env)]) });
   const run = new Run(ws, { ...process.env }, ["--env", "preview", "--pr", scope.slice(3), "--branch", `sponson-recipe-${scope}`, "--sha", randomBytes(20).toString("hex")]);
   try {
     let res = await run.cli("apply --json");

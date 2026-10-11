@@ -665,7 +665,8 @@
             "item_path": { "$ref": "#/$defs/jsonPointer", "description": "Where the parent object is in the read answer (`/branch` for `{ branch: {…} }`). Default: the whole body." },
             "content_type": { "type": "string" },
             "if_missing": { "enum": ["error", "empty"], "description": "error (default); empty: a 404 on the parent reads as an empty collection (S3 CORS)." },
-            "when_empty": { "enum": ["write", "delete"], "description": "write (default); delete: an empty collection is removed with DELETE path instead (S3 CORS)." }
+            "when_empty": { "enum": ["write", "delete"], "description": "write (default); delete: an empty collection is removed with DELETE path instead (S3 CORS)." },
+            "write_list_path": { "$ref": "#/$defs/jsonPointer", "description": "Where a write puts the collection, when the API names it otherwise than its read (Kinde reads `{ redirect_urls }`, replaces with `{ urls }`). Default: list_path." }
           }
         },
         "list_path": { "$ref": "#/$defs/jsonPointer", "description": "Where the collection is in the parent." },

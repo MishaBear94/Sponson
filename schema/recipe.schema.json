@@ -36,12 +36,49 @@
           "description": "The credential, under the provider's conventional variable name (its CLI's or SDK's).",
           "oneOf": [
             { "type": "object", "required": ["bearer_env"], "additionalProperties": false, "properties": { "bearer_env": { "$ref": "#/$defs/credentialEnv" } } },
-            { "type": "object", "required": ["header", "value_env"], "additionalProperties": false, "properties": { "header": { "type": "string", "minLength": 1 }, "value_env": { "$ref": "#/$defs/credentialEnv" } } },
+            {
+              "type": "object",
+              "required": ["header", "value_env"],
+              "additionalProperties": false,
+              "properties": {
+                "header": { "type": "string", "minLength": 1 },
+                "value_env": { "$ref": "#/$defs/credentialEnv" },
+                "prefix": { "type": "string", "pattern": "^[\\x20-\\x7e]{1,64}$", "description": "Literal text sent before the value (`SSWS `, `Api-Key `)." }
+              }
+            },
             {
               "type": "object",
               "required": ["basic"],
               "additionalProperties": false,
               "properties": { "basic": { "type": "object", "required": ["user_env", "password_env"], "additionalProperties": false, "properties": { "user_env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" }, "password_env": { "$ref": "#/$defs/credentialEnv" } } } }
+            },
+            {
+              "type": "object",
+              "required": ["oauth2_client_credentials"],
+              "additionalProperties": false,
+              "properties": {
+                "oauth2_client_credentials": {
+                  "type": "object",
+                  "description": "A bearer token from the provider's token endpoint (client credentials). A per-account API writes `token_url` and `audience` as paths, resolved against the origin of the plan's `base_url`.",
+                  "required": ["token_url", "token_url_env", "client_id_env", "client_secret_env"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "token_url": { "type": "string", "pattern": "^(https://\\S+|/(?!/)\\S*)$" },
+                    "token_url_env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*_TOKEN_URL$", "description": "The override variable, `<PROVIDER>_TOKEN_URL`; the recipe tests point it at the fake cloud's token endpoint." },
+                    "client_id_env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+                    "client_secret_env": { "$ref": "#/$defs/credentialEnv" },
+                    "audience": { "type": "string", "minLength": 1 },
+                    "scope": { "type": "string", "minLength": 1 },
+                    "auth_method": { "enum": ["client_secret_post", "client_secret_basic"] }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["command"],
+              "additionalProperties": false,
+              "properties": { "command": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[^$\\s][^$]*$" }, "description": "The CLI that prints an access token, run without a shell (`[gcloud, auth, print-access-token]`)." } }
             }
           ]
         },

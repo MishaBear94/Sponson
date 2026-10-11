@@ -715,6 +715,26 @@ describe("http.list_item", () => {
     await expect(listItem.read(actx, { ...rule, parent: { path: "/features/f", item_path: "/nope" } })).rejects.toMatchObject({ code: "PROVIDER_RESPONSE", message: expect.stringMatching(/no object at `parent.item_path` \/nope/) });
   });
 
+  it("parent.write_list_path writes the collection under another name than it is read (Kinde: { redirect_urls } read, { urls } replaced)", async () => {
+    await h.close();
+    const at = "/applications/a1/auth_redirect_urls";
+    // The sim stores a written `urls` as `redirect_urls`, as the provider does; a write under the read name would be kept as such.
+    h = await harness({ rest: { objects: { [at]: { redirect_urls: ["https://app.example.com/cb"] } }, styles: { [at]: { write_fields: { urls: "redirect_urls" } } } } });
+    const actx = h.actx("http", API);
+    const url = { api: "demo", parent: { path: at, method: "PUT", write_list_path: "/urls" }, list_path: "/redirect_urls", item: "https://pr-42.example.app/cb" };
+    const r = await listItem.apply(actx, url, null);
+    expect(r.created).toHaveLength(1);
+    expect(h.sim.state.rest.objects[at]).toEqual({ redirect_urls: ["https://app.example.com/cb", "https://pr-42.example.app/cb"] });
+    expect(JSON.parse(r.resources[0]!.id)).toMatchObject({ list: "/redirect_urls", write_list: "/urls" });
+    expect((await readApply(h, listItem, url)).diffs[0]!.kind).toBe("unchanged");
+    await listItem.destroy(actx, r.resources);
+    expect(h.sim.state.rest.objects[at]).toEqual({ redirect_urls: ["https://app.example.com/cb"] });
+    // Lines without it keep their record ids.
+    const plain = await listItem.apply(actx, { ...url, parent: { path: at, method: "PUT" } }, null);
+    expect(JSON.parse(plain.resources[0]!.id)).not.toHaveProperty("write_list");
+    expect(() => listItem.diff(null, { ...url, parent: { path: at, write_list_path: "urls" } })).toThrow(/parent.write_list_path/);
+  });
+
   it("map items may be identified by a pointer into the item (a condition's value)", async () => {
     const group = { api: "demo", parent: { path: "/apps/demo" }, list_path: "/rules", key_field: "/properties/0/value/0", item: { properties: [{ key: "host", value: ["pr-42.example.app"] }], rollout_percentage: 100 } };
     const actx = h.actx("http", API);

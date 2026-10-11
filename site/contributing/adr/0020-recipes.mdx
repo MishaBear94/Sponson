@@ -258,3 +258,33 @@ Rows whose lifecycle needs waiting (Algolia's copy task, a Xata branch coming up
 first-class adapters instead of a polling extension: each waits on a different signal, and polling in a request
 template would be a small language. Inngest's sync stays uncovered (a one-off action with nothing to read back or
 delete).
+
+## Amendment 5 (2026-10-11): run-time credentials in recipes, and lists written under another name
+
+The identity-provider rows (Auth0 callbacks, Firebase authorized domains, Okta redirect URIs, Kinde callbacks) are
+lists on a shared object, which `http.list_item` and its lock ([ADR 0019](/contributing/adr/0019-parent-object-locks)) already handle,
+behind credentials ADR 0017's amendment already sends. Three gaps stood between them and a recipe; each is closed
+without naming a provider in the code:
+
+- **Recipes may declare the run-time credential forms.** `schema/recipe.schema.json` accepts
+  `oauth2_client_credentials` (with a required `token_url_env`, `<PROVIDER>_TOKEN_URL`, so the tests can point it at the
+  fake cloud, as `base_url_env` is), `command`, and the header form's `prefix` (`Authorization: SSWS <token>`). The
+  recipe harness checks each for real against the REST sim (R7): an OAuth2 client and the audience every issued token
+  was asked for, the token a fake CLI on `PATH` prints only for exactly the recipe's command, or the header value
+  behind its prefix; every token obtained is checked never to reach output, as the credential is.
+- **A token endpoint and an audience on the account's own host.** A per-account API (an Auth0 tenant, a Kinde
+  business) has its token URL and audience on the account's host, which a recipe cannot know. In any API block, an
+  OAuth2 `token_url` or `audience` written as an absolute path (`/oauth/token`, `/api/v2/`) is resolved against the
+  origin of the block's `base_url` (not its `base_url_env` override: every runner, and the ledger, see one value; the
+  live harness therefore writes the real account's URL as `base_url`). A plan names the account once; a block that
+  needs something else (an audience on another host) writes the full URL. Blocks with full URLs are unchanged, and the
+  block (the ledger identity) keeps the text as written.
+- **`parent.write_list_path`** (`http.list_item`): where a write puts the collection, when the API names it otherwise
+  than its read (Kinde reads `{ redirect_urls }` and replaces the list with `{ urls }`). It joins the record id only when
+  set, so existing record ids are unchanged. The sim stores such a write under the read name (an object style's
+  `write_fields`, which the harness derives from the recipe).
+
+Okta's application replace takes the whole object back (`send: parent`, the documented system-assigned fields being
+ignored); Okta's trusted origins are objects of their own. Okta's OAuth for its management API needs `private_key_jwt`,
+which stays out (ADR 0017's amendment): its recipe uses an `SSWS` API token. Firebase's `x-goog-user-project`, needed
+only with user credentials, names a project, so it is left to the plan's block rather than the recipe.
