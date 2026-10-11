@@ -172,6 +172,18 @@ export interface ResourceRecord {
   createdBy?: "sponson" | "adopted";
 }
 
+/** What `OpSpec.consoleUrl` is given: where the line's resources live and what the run recorded for it. */
+export interface ConsoleUrlInput {
+  /** The `providers.<adapter>` block the line writes through (as `providerFor` narrows it). */
+  provider: Record<string, unknown>;
+  /** The line's params as written (interpolated, references unresolved). */
+  params: Record<string, unknown>;
+  /** The resources the receipt line records, never empty. */
+  resources: ResourceRecord[];
+  /** The line's public outputs. */
+  outputs: Record<string, Literal>;
+}
+
 /** What `OpSpec.read` found in the provider for one line: its resources and the outputs derivable from them. */
 export interface LiveState {
   resources: ResourceRecord[];
@@ -334,6 +346,13 @@ export interface OpSpec {
    * `destroy` are never called. Pure: no provider calls.
    */
   manual?(params: ResolvedParams, ctx: Ctx): ManualStep | null;
+  /**
+   * Where a person sees what the line manages in the provider's own console (the Neon branch, the Vercel project's
+   * variables), recorded on the receipt line as `consoleUrl` after an apply and shown as a link in the PR comment.
+   * Only documented URL patterns: cite the source beside the implementation. Return null when there is none; any
+   * value that is not an `https://` URL is ignored. Never put a secret in it. Pure: no provider calls.
+   */
+  consoleUrl?(input: ConsoleUrlInput): string | null;
   /**
    * For an op that is a one-off action rather than a resource (the built-in `http.action`, ADR 0022: an Inngest
    * sync, a cache purge, a deploy notification): its trigger, from resolved params; null while a trigger value is
@@ -566,6 +585,13 @@ export interface ReceiptLine {
   notes?: Record<string, unknown>;
   /** Carried over from a previous receipt; the plan no longer has this line. */
   orphan?: boolean;
+  /** The provider console page for what the line manages (`OpSpec.consoleUrl`), when the op knows one. */
+  consoleUrl?: string;
+  /**
+   * Destroy only: what this run took off the ledger for the line. `createdBy: sponson` records were deleted at the
+   * provider; `adopted` ones were forgotten and left in place (adopted resources are never destroyed).
+   */
+  removed?: ResourceRecord[];
 }
 
 /**

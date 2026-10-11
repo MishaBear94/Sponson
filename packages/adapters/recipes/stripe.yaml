@@ -172,6 +172,9 @@ ops:
         description: { param: description }
       outputs:
         secret: { path: /secret, sensitive: true, once: true }
+    console_url:
+      template: https://dashboard.stripe.com/webhooks
+      source: https://docs.stripe.com/webhooks
     live:
       params: { url: SPONSON_LIVE_STRIPE_WEBHOOK_URL }
   product:

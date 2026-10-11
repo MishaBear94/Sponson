@@ -1,10 +1,11 @@
 import { Command, CommanderError, Option } from "commander";
 import { Redactor, type Registry } from "@sponson/core";
-import { applyCommand } from "./commands/apply.js";
+import { applyCommand, type ApplyOpts } from "./commands/apply.js";
 import { initCommand } from "./commands/init.js";
 import { mcpCommand } from "./commands/mcp.js";
 import { planCommand } from "./commands/plan.js";
-import type { GlobalOpts, IO } from "./context.js";
+import { withFormat, type GlobalOpts, type IO } from "./context.js";
+import { ciRunUrl, renderMarkdown } from "./markdown.js";
 import { cliHint, errorEnvelope, exitCodeFor, serialize, toSponsonError } from "./output.js";
 import { defaultRegistry, loadPlugins } from "./registry.js";
 import { VERSION } from "./version.js";
@@ -51,7 +52,7 @@ export async function run(argv: string[], init: RunIO = {}): Promise<number> {
     color: init.color ?? (Boolean(process.stdout.isTTY) && env.NO_COLOR === undefined && init.stdout === undefined),
   };
 
-  const json = argv.includes("--json");
+  const format = formatOf(argv);
   let code = 0;
   const program = buildProgram(io, redactor, (c) => (code = c));
   const command = commandOf(program, argv);
@@ -61,7 +62,7 @@ export async function run(argv: string[], init: RunIO = {}): Promise<number> {
   } catch (e) {
     // --help / --version: commander already printed them.
     if (e instanceof CommanderError && e.exitCode === 0) return 0;
-    return reportError(e, io, json, program, command, env);
+    return reportError(e, io, format, program, command, argv);
   }
 }
 
@@ -84,12 +85,32 @@ function commandOf(program: Command, argv: string[]): string | null {
   return null;
 }
 
+/** The value of a flag on the command line (`--flag v` or `--flag=v`), the last one given. */
+function flagValue(argv: string[], flag: string): string | undefined {
+  let value: string | undefined;
+  argv.forEach((a, i) => {
+    if (a === flag) value = argv[i + 1];
+    else if (a.startsWith(`${flag}=`)) value = a.slice(flag.length + 1);
+  });
+  return value;
+}
+
+/** How errors are reported, read from the raw command line (parsing may be what failed). */
+function formatOf(argv: string[]): string {
+  return argv.includes("--json") ? "json" : (flagValue(argv, "--format") ?? "text");
+}
+
 /** Only a real command name goes into the error envelope; an unknown word stays out. */
-function reportError(e: unknown, io: IO, json: boolean, program: Command, command: string | null, env: NodeJS.ProcessEnv): number {
+function reportError(e: unknown, io: IO, format: string, program: Command, command: string | null, argv: string[]): number {
+  const env = io.env;
   const err = toSponsonError(e);
   const known = command !== null && program.commands.some((c) => c.name() === command) ? command : null;
-  if (json) io.json(errorEnvelope(known, err));
-  else io.stderr.write(`error ${err.code}: ${err.message}${cliHint(err.code) ? ` ${cliHint(err.code)}` : ""}\n`);
+  if (format === "json") io.json(errorEnvelope(known, err));
+  else if (format === "markdown") {
+    const destroy = known === "apply" && argv.includes("--destroy");
+    io.stdout.write(renderMarkdown(errorEnvelope(known, err), { environment: flagValue(argv, "--env") ?? "preview", command: destroy ? "destroy" : (known ?? "run"), runUrl: ciRunUrl(env) }));
+    io.stderr.write(`error ${err.code}: ${err.message}\n`);
+  } else io.stderr.write(`error ${err.code}: ${err.message}${cliHint(err.code) ? ` ${cliHint(err.code)}` : ""}\n`);
   if (env.SPONSON_DEBUG === "1" && e instanceof Error && e.stack) io.stderr.write(e.stack + "\n");
   return exitCodeFor(err);
 }
@@ -104,6 +125,7 @@ function buildProgram(io: IO, redactor: Redactor, setCode: (c: number) => void):
     .option("--branch <name>", "git branch (default: checked-out branch)")
     .option("--sha <sha>", "git commit (default: HEAD)")
     .option("--json", "machine-readable output on stdout: one JSON document, also for errors")
+    .addOption(new Option("--format <format>", "output: text (default), json (same as --json), or markdown (plan and apply: the pull request comment, also for errors)").choices(["text", "json", "markdown"]))
     .addOption(new Option("--receipts <store>", "receipt store; overrides the plan's `receipts:`").choices(["git-branch", "local"]))
     .option("--receipts-dir <dir>", "local receipt store root (default: .sponson/receipts, or $SPONSON_RECEIPTS_DIR)")
     .option("--receipts-remote <url>", "git remote for the receipts branches (default: origin, or $SPONSON_RECEIPTS_REMOTE)")
@@ -118,7 +140,7 @@ function buildProgram(io: IO, redactor: Redactor, setCode: (c: number) => void):
     .command("plan")
     .alias("status")
     .description("read live state and print the diff and drift; changes nothing")
-    .action(async (_opts, cmd: Command) => setCode(await planCommand(globals(cmd), io, redactor)));
+    .action(async (_opts, cmd: Command) => setCode(await planCommand(withFormat(globals(cmd), "plan", true), io, redactor)));
 
   program
     .command("apply")
@@ -130,18 +152,18 @@ function buildProgram(io: IO, redactor: Redactor, setCode: (c: number) => void):
     .option("--confirm <line>", "a person did this manual step (with --destroy: its undo); recorded with --approved-by or the git user as who confirmed (repeatable, or comma-separated)", collect, [])
     .option("--wait", "poll for deploys and locks instead of stopping with status partial")
     .option("--wait-timeout <seconds>", "give up waiting after this long (default: 600)")
-    .action(async (_opts, cmd: Command) => setCode(await applyCommand(cmd.optsWithGlobals(), io, redactor)));
+    .action(async (_opts, cmd: Command) => setCode(await applyCommand(withFormat(cmd.optsWithGlobals<ApplyOpts>(), "apply", true), io, redactor)));
 
   program
     .command("init")
     .description("write a starter plan, or adopt unmanaged resources into the existing one")
     .option("--adopt <key>", "adopt only the unmanaged resource with this key, id or label")
-    .action(async (_opts, cmd: Command) => setCode(await initCommand(cmd.optsWithGlobals(), io, redactor)));
+    .action(async (_opts, cmd: Command) => setCode(await initCommand(withFormat(cmd.optsWithGlobals(), "init", false), io, redactor)));
 
   program
     .command("mcp")
     .description("serve plan / apply / receipt as MCP tools over stdio")
-    .action(async (_opts, cmd: Command) => setCode(await mcpCommand(globals(cmd), io)));
+    .action(async (_opts, cmd: Command) => setCode(await mcpCommand(withFormat(globals(cmd), "mcp", false), io)));
 
   return program;
 }

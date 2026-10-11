@@ -29,6 +29,10 @@ Options:
   --sha <sha>              git commit (default: HEAD)
   --json                   machine-readable output on stdout: one JSON document,
                            also for errors
+  --format <format>        output: text (default), json (same as --json), or
+                           markdown (plan and apply: the pull request comment,
+                           also for errors) (choices: "text", "json",
+                           "markdown")
   --receipts <store>       receipt store; overrides the plan's `receipts:`
                            (choices: "git-branch", "local")
   --receipts-dir <dir>     local receipt store root (default: .sponson/receipts,

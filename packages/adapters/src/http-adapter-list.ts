@@ -21,7 +21,7 @@ import { SponsonError, canonicalJson, type AdapterContext, type DiffSide, type L
 import { ABSENT, SENSITIVE, assertNoPending, desiredSide, paramError } from "./common.js";
 import { isObject, type ApiClient } from "./http.js";
 import { failedWith, httpClient, withLineCredential, write } from "./http-adapter-client.js";
-import { expandRecipe } from "./recipes.js";
+import { expandRecipe, recipeConsoleUrl } from "./recipes.js";
 import { ADAPTER, apiBlock, apiEnvironment, at, credentialInputs, fieldTokens, fillPath, firstMarker, isKeep, parseApi, parseListItem, pointerTokens, projection, setAt, stateHash, type ListItemSpec, type ListShape, type ParentSend } from "./http-adapter-spec.js";
 
 /** Read-modify-write rounds before giving up on a collection that keeps changing under us. */
@@ -384,6 +384,7 @@ function parentLock(params: ResolvedParams, provider: Record<string, unknown>): 
 
 /** `http.list_item`: one value kept in a collection on a parent object, by read-modify-write. */
 export const listItem: OpSpec = {
+  consoleUrl: recipeConsoleUrl,
   outputs: {},
   // A recipe line's params are checked before any request (PARAM_INVALID naming the param); it declares no outputs.
   outputsFor: (params) => (params.recipe === undefined ? {} : (expandRecipe(params, "list_item"), {})),

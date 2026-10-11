@@ -3130,7 +3130,7 @@ Assumptions:
 
 **Webhook endpoint** (`http.resource`). A test-mode webhook endpoint that sends the preview's events to its own URL, `url` + `path` (usually `{ from: web.preview_url }`). Identified by `name` in its metadata, so a new preview URL updates the endpoint in place. Its signing `secret` exists only in the answer that creates the endpoint: it is a once-only output, passed in the same run to the line that writes it (`STRIPE_WEBHOOK_SECRET` in a `vercel.env` or `netlify.env` line); later runs keep what that line holds, and `apply --recreate <line>` rotates it. Writing the secret rebuilds the preview, and a preview URL output follows the newest deploy, so the next run moves the endpoint to the rebuilt deploy's URL (in place: the secret is kept); a URL that does not change per deploy (`https://deploy-preview-${ctx.pr.number}--<site>.netlify.app`, a custom preview domain) avoids that update. A console edit of its URL, events or description is drift.
 
-Covers: `stripe-webhook` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`, `secret` (sensitive, [once](plan-format.md#once-only-outputs): only from the create). On destroy: deleted (`destroy: keep` on the line leaves it).
+Covers: `stripe-webhook` in [the coverage matrix](coverage.md#coverage-matrix). Outputs: `id`, `secret` (sensitive, [once](plan-format.md#once-only-outputs): only from the create). On destroy: deleted (`destroy: keep` on the line leaves it). Console link in the PR comment: `https://dashboard.stripe.com/webhooks` ([pattern documented](https://docs.stripe.com/webhooks)).
 
 | Param | Type | Required | Default | Meaning |
 |---|---|---|---|---|

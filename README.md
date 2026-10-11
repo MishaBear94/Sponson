@@ -221,6 +221,8 @@ The action comments the plan and the receipt on the pull request. See [action/RE
 
 Every command (`init` included) takes `--json`, and every outcome, failures included, is one JSON document: `{ ok, command, ... }` or `{ ok: false, command, error: { code, message } }`. That holds for a mistyped flag (`USAGE`), a plan error, a provider failure (`PROVIDER_*`) and an unexpected crash (`INTERNAL`) alike, and the MCP tools return the same envelope as the first line of every result. `ok` is true exactly when the exit code is 0. Pending, secret and sensitive values are `null` next to an explicit `state`, never placeholder text; display strings exist only in the human-readable output. Secrets are masked in every form a provider may echo them (raw, JSON-escaped, URL-encoded, base64, the password inside a connection string) before anything is printed, logged or written to a receipt, and JSON is masked field by field so redaction can never change its structure.
 
+`plan` and `apply` also take `--format markdown`: the pull request comment the [GitHub Action](action/README.md#the-pr-comment) posts (what the preview has, what waits, what to fix, and on destroy what was cleaned up and kept), for any CI or agent that wants to post it. The `sponson` package exports the same renderer, `renderMarkdown(envelope)`, for a `--json` result already in hand.
+
 ## Integrations
 
 Copy-paste setups beside the [GitHub Action](action/README.md), each with its prerequisites, the variables to set and

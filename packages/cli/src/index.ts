@@ -18,3 +18,4 @@ export {
   type CtxSource,
 } from "./detect.js";
 export type { SponsonPlugin } from "./registry.js";
+export { renderMarkdown, commentMarker, ciRunUrl, GITHUB_COMMENT_LIMIT, type MarkdownOptions } from "./markdown.js";

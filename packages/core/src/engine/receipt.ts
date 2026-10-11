@@ -42,3 +42,22 @@ export async function rereadLine(rc: RunContext, prepared: Prepared, change: Cha
   const params = resolveParams(prepared.params.get(change.id)!, outputs, rc.secrets.values).params;
   return prepared.ops.get(change.id)!.read(rc.adapterContext(change.adapter, provider), params);
 }
+
+/**
+ * Stamp each line that manages something with its provider console page (`OpSpec.consoleUrl`). Display data only: a
+ * hook that throws or answers anything but an `https://` URL leaves the line without one.
+ */
+export function stampConsoleUrls(rc: RunContext, prepared: Prepared, receipt: Receipt): void {
+  for (const c of prepared.ordered) {
+    const line = receipt.lines[c.id];
+    const op = prepared.ops.get(c.id)!;
+    if (!line || !op.consoleUrl || line.resources.length === 0) continue;
+    let url: string | null = null;
+    try {
+      url = op.consoleUrl({ provider: rc.provider(c), params: prepared.params.get(c.id) ?? {}, resources: line.resources, outputs: line.outputs });
+    } catch {
+      url = null;
+    }
+    if (typeof url === "string" && /^https:\/\/[^\s<>"`]+$/.test(url)) line.consoleUrl = url;
+  }
+}

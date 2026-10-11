@@ -101,13 +101,18 @@ function destroyOf(op: RecipeOp): string {
   return "deleted (`destroy: keep` on the line leaves it).";
 }
 
+/** The console page the PR comment links, when the recipe declares one. */
+function consoleOf(op: RecipeOp): string {
+  return op.console_url ? ` Console link in the PR comment: \`${op.console_url.template}\` ([pattern documented](${op.console_url.source})).` : "";
+}
+
 function opSection(r: Recipe, name: string, op: RecipeOp): string[] {
   return [
     recipeHeading(r.provider, name),
     "",
     `**${op.title}** (\`http.${op.kind}\`). ${op.summary}`,
     "",
-    `Covers: ${op.covers.map((c) => `\`${c}\``).join(", ") || "—"} in [the coverage matrix](coverage.md#coverage-matrix). Outputs: ${outputsOf(op)}. On destroy: ${destroyOf(op)}`,
+    `Covers: ${op.covers.map((c) => `\`${c}\``).join(", ") || "—"} in [the coverage matrix](coverage.md#coverage-matrix). Outputs: ${outputsOf(op)}. On destroy: ${destroyOf(op)}${consoleOf(op)}`,
     "",
     ...paramsTable(op),
     "",

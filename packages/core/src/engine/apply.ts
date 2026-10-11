@@ -16,7 +16,7 @@ import { checkConfirm, manualEntry, pendingLine, todoOf, unusedConfirmations } f
 import { consumedFingerprints, producedFingerprints } from "./once.js";
 import { hasExternalOutputs, publicOutputs } from "./outputs.js";
 import { prepare, requireApproval, type Prepared } from "./prepare.js";
-import { receiptSkeleton, rereadLine, toRecord } from "./receipt.js";
+import { receiptSkeleton, rereadLine, stampConsoleUrls, toRecord } from "./receipt.js";
 import { RunContext } from "./run-context.js";
 import type { ApplyResultSummary, ManualTodo, RunOptions } from "./types.js";
 
@@ -111,6 +111,7 @@ class ApplyRun {
 
     const unused = unusedConfirmations(this.rc.opts, this.confirmed);
     if (unused) this.rc.warnings.push(unused);
+    stampConsoleUrls(this.rc, this.prepared, this.receipt);
     this.receipt.status = this.status();
     this.receipt.finishedAt = this.now().toISOString();
     this.receipt.ledger = this.rc.ledger.toJSON();

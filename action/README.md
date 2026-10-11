@@ -14,7 +14,7 @@ nobody can move under you.
 | `env` | `preview` | environment; `production` is never inferred from the branch |
 | `approved-by` | | required when a line writes to production; take it from the environment approval (below), never from an agent |
 | `plan` | `release.plan.yaml` | path to the plan |
-| `version` | `source` | `source` runs Sponson from this action's own checkout (exactly the ref you pinned; nothing is fetched from a registry); or an npm version of `sponson` (e.g. `0.4.0`), fetched with `npx` |
+| `version` | `source` | `source` runs Sponson from this action's own checkout (exactly the ref you pinned; nothing is fetched from a registry); or an npm version of `sponson` (e.g. `0.4.0`), installed with `npm install` into the runner's temporary directory |
 | `node-version` | `22` | Node.js version |
 | `github-token` | `${{ github.token }}` | pushes receipts and comments on the PR |
 
@@ -148,24 +148,67 @@ On a push the action passes no scope flags; the CLI reads the GitHub context (`G
 
 ## The PR comment
 
-One comment per environment, marked with `<!-- sponson:<env> -->` and updated in place on every run:
+One comment per environment, marked with `<!-- sponson:<env> -->` and updated in place on every run. It is written for
+the reviewer: a headline that says what this pull request's preview has, then one line per plan line with a link to
+the provider's console where Sponson knows one, the preview URL as a link, and what a waiting line waits for. Values
+are never shown: resources by name, inputs as references (`DATABASE_URL ← db.connection_string`), secrets as
+`(secret)`. A refusal, a failure or drift is one sentence with the fix (`sponson apply --reconcile`,
+`--approved-by <who>`, `sponson apply --confirm <line>`).
 
+After `apply` on a pull request:
+
+```markdown
+<!-- sponson:preview -->
+### Sponson: the preview for pr-42 is ready
+
+This preview has its own database branch, 2 variables and 1 auth callback.
+
+**Preview:** [https://acme-web-git-feat-x.vercel.app](https://acme-web-git-feat-x.vercel.app)
+
+- `db` Neon branch sponson/preview/pr-42 — set up in this run · [console](https://console.neon.tech/app/projects/proj_demo/branches/br-11)
+- `env` 2 variables (preview, feat/x): `DATABASE_URL` and `STRIPE_KEY`, values not shown — set up in this run · [console](https://vercel.com/d?to=%2F%5Bteam%5D%2F%5Bproject%5D%2Fsettings%2Fenvironment-variables&title=Go+to+Environment+Variables)
+- `callback` Clerk redirect https://acme-web-git-feat-x.vercel.app — set up in this run · [console](https://dashboard.clerk.com)
+
+<sub>apply run-1a2b3c4d · plan 1e5d99ef · [run log](https://github.com/acme/app/actions/runs/1001)</sub>
 ```
-### Sponson apply · preview · pr-42 · partial (run run-1a2b3c4d)
 
-|   | line     | adapter          | status  | detail                                 |
-|---|----------|------------------|---------|----------------------------------------|
-| + | db       | neon.branch      | applied | Neon branch sponson/preview/pr-42      |
-| + | env      | vercel.env       | applied | DATABASE_URL (preview)                 |
-| ? | callback | clerk.redirect_allow | waiting | waiting on deploy                  |
+Before the preview deploy finished, the same comment said `is almost ready`, `Still to come: 1 auth callback, once
+the preview deploy finishes (nothing to retry)`, and listed the callback as `waits for the preview deploy`.
 
-Some lines are waiting on a deploy. The deployment_status run will finish them; nothing to retry.
+When the pull request closes (`destroy`):
+
+```markdown
+<!-- sponson:preview -->
+### Sponson cleaned up the preview for pr-42
+
+**Cleaned up:** Clerk redirect https://acme-web-git-feat-x.vercel.app; 2 variables (preview, feat/x): `DATABASE_URL` and `STRIPE_KEY`; Neon branch sponson/preview/pr-42.
+
+**Kept (adopted, never destroyed):** nothing.
+
+**Left for you:** nothing.
+
+<sub>destroy destroy-5e6f7a8b · [run log](https://github.com/acme/app/actions/runs/1001)</sub>
 ```
 
-Symbols: `+` create/applied, `~` update, `=` unchanged, `?` pending/waiting, `-` blocked/skipped/rolled back/destroyed, `!` error/failed.
+`Kept` lists what existed before Sponson and was adopted: destroy forgets it and never deletes it. `Left for you` lists
+what a person has to finish: a delete the provider refused (with the error and the fix), something re-created outside
+Sponson under the same name, or the undo of a [manual step](../docs/plan-format.md#manualstep).
 
-A [manual step](../docs/plan-format.md#manualstep) that nobody has done yet (`*` todo in a plan, `waiting on
-confirmation` in an apply) is listed under the table with its instructions, whole, and the command a person runs once
-they did it (`sponson apply --confirm <line>`); the job stays red (exit 2) until then.
+A manual step that nobody has done yet is listed under the lines with its instructions, whole, and the command a person
+runs once they did it (`sponson apply --confirm <line>`); the job stays red (exit 2) until then.
 
-Everything that comes from a provider (error messages, drift, labels) is HTML-escaped and flattened to one line in the comment, so an HTML error page, a CRLF or a `|` cannot break the table, open a tag or hide the rest of the comment.
+Console links: Neon links the branch, Vercel the project's Environment Variables page (through Vercel's dashboard
+link, which asks for the team and project), Clerk the dashboard, and a [recipe](../docs/recipes.md) line its op's
+`console_url` when the recipe declares one. They come from `receipt.lines[id].consoleUrl` in the JSON result.
+
+How the comment is made: the action runs the CLI with `--json` (that JSON is the `result` output), then renders the
+comment from it with Sponson's own renderer (`render-comment.mjs`, the function behind
+`sponson plan|apply --format markdown`), so the comment and the CLI never disagree. Everything that comes from a
+provider (error messages, labels) is HTML-escaped and kept on its line, so an HTML error page or a stray backtick
+cannot open a tag or hide the rest of the comment. A comment that would exceed GitHub's 65,536 characters keeps its
+title and headline and leaves out the lines and sections that do not fit, saying so; the run log and the `result`
+output have everything. With a `version` older than the renderer, the action posts a one-line summary instead.
+
+The same markdown outside this action: `sponson apply --format markdown > comment.md` (GitLab, CircleCI, Bitbucket:
+[integrations](../integrations/README.md#the-pull-request-comment)), or `renderMarkdown(envelope)` from the `sponson`
+package on a `--json` result you already have.

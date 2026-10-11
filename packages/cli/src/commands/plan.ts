@@ -1,6 +1,7 @@
 import { planRun, type PlanResult, type Redactor } from "@sponson/core";
 import { toRunOptions, withInvocation, type GlobalOpts, type IO } from "../context.js";
 import { withRedactorWarnings } from "../output.js";
+import { ciRunUrl, renderMarkdown } from "../markdown.js";
 import { planJson, renderPlan } from "../render.js";
 
 export interface PlanOutcome {
@@ -23,6 +24,7 @@ export async function executePlan(opts: GlobalOpts, io: IO, redactor: Redactor):
 export async function planCommand(opts: GlobalOpts, io: IO, redactor: Redactor): Promise<number> {
   const { result, code } = await executePlan(opts, io, redactor);
   if (opts.json) io.json(planJson(result, code === 0));
+  else if (opts.format === "markdown") io.stdout.write(renderMarkdown(planJson(result, code === 0), { environment: result.environment, command: "plan", runUrl: ciRunUrl(io.env) }));
   else io.stdout.write(renderPlan(result, { color: io.color }));
   return code;
 }

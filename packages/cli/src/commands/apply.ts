@@ -1,6 +1,7 @@
 import { applyRun, destroyRun, exitCodeFor, type ApplyResultSummary, type Redactor } from "@sponson/core";
 import { UsageError, gitUser, resolveApprover, toRunOptions, withInvocation, type GlobalOpts, type IO } from "../context.js";
 import { withRedactorWarnings } from "../output.js";
+import { ciRunUrl, renderMarkdown } from "../markdown.js";
 import { applyJson, renderApply } from "../render.js";
 
 export interface ApplyOpts extends GlobalOpts {
@@ -49,6 +50,7 @@ export async function executeApply(opts: ApplyOpts, io: IO, redactor: Redactor):
 export async function applyCommand(opts: ApplyOpts, io: IO, redactor: Redactor): Promise<number> {
   const { summary, code } = await executeApply(opts, io, redactor);
   if (opts.json) io.json(applyJson(summary, code));
+  else if (opts.format === "markdown") io.stdout.write(renderMarkdown(applyJson(summary, code), { environment: summary.receipt.environment, command: opts.destroy ? "destroy" : "apply", runUrl: ciRunUrl(io.env) }));
   else io.stdout.write(renderApply(summary, { color: io.color }));
   return code;
 }

@@ -334,3 +334,42 @@ describe("a recipe line through the http ops", () => {
     expect(recipeNames()).not.toContain("example");
   });
 });
+
+describe("console_url: the console page a recipe line links to in the PR comment", () => {
+  const res = [{ key: "k", id: "we_1", hash: "h" }];
+
+  it("every declared template is an https URL whose placeholders name a param, an output or `id`, and cites its source", () => {
+    for (const r of loadRecipes()) {
+      for (const [name, op] of Object.entries(r.ops)) {
+        if (!op.console_url) continue;
+        expect(op.console_url.template, `${r.provider}.${name}`).toMatch(/^https:\/\//);
+        expect(op.console_url.source, `${r.provider}.${name}`).toMatch(/^https:\/\//);
+        const outputs = Object.keys(((op.http as Record<string, unknown>).outputs as Record<string, unknown> | undefined) ?? {});
+        for (const [, p] of op.console_url.template.matchAll(/\{([a-z_][a-z0-9_]*)\}/g)) expect([...Object.keys(op.params), ...outputs, "id"], `${r.provider}.${name}: {${p}}`).toContain(p);
+      }
+    }
+  });
+
+  it("stripe.webhook_endpoint links the documented Webhooks page; the http ops answer null without a recipe or template", () => {
+    const params = { recipe: "stripe.webhook_endpoint", name: "preview-pr-42", url: "https://x.example" };
+    expect(httpAdapter.ops.resource!.consoleUrl!({ provider: {}, params, resources: res, outputs: {} })).toBe("https://dashboard.stripe.com/webhooks");
+    expect(httpAdapter.ops.resource!.consoleUrl!({ provider: {}, params: { path: "/x" }, resources: res, outputs: {} })).toBeNull();
+    expect(httpAdapter.ops.resource!.consoleUrl!({ provider: {}, params: { recipe: "stripe.product", id: "p" }, resources: res, outputs: {} })).toBeNull();
+  });
+
+  it("fills placeholders URI-encoded, and gives up on one without a plain value", () => {
+    const restore = useRecipe({
+      ...loadRecipe("stripe"),
+      provider: "consoletest",
+      ops: { thing: { ...loadRecipe("stripe").ops.webhook_endpoint!, console_url: { template: "https://c.example/{name}/{id}", source: "https://docs.example" } } },
+    } as Recipe);
+    try {
+      const base = { recipe: "consoletest.thing", url: "https://x.example" };
+      expect(httpAdapter.ops.resource!.consoleUrl!({ provider: {}, params: { ...base, name: "a b/c" }, resources: res, outputs: {} })).toBe("https://c.example/a%20b%2Fc/we_1");
+      expect(httpAdapter.ops.resource!.consoleUrl!({ provider: {}, params: { ...base, name: { from: "x.y" } }, resources: res, outputs: {} })).toBeNull();
+      expect(httpAdapter.ops.resource!.consoleUrl!({ provider: {}, params: { ...base, name: "pr-${ctx.scope}" }, resources: res, outputs: {} })).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+});

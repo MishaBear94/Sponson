@@ -10,7 +10,7 @@ import { Redactor } from "../redact.js";
 import { LocalReceiptStore } from "../receipts/local.js";
 import { Registry } from "../registry.js";
 import { FakeCloud, fakeSecretSource } from "../testing/fake.js";
-import type { Ctx } from "../types.js";
+import type { Ctx, OpSpec } from "../types.js";
 
 const ctx: Ctx = { env: "preview", git: { branch: "feat/x", sha: "abc1234def", short_sha: "abc1234" }, pr: { number: 42 }, scope: "pr-42" };
 
@@ -791,5 +791,34 @@ changes:
   it("fails the run before any provider call when a line names a block that does not exist", async () => {
     await expect(planRun(opts(NARROW.replace("api: two", "api: three")))).rejects.toMatchObject({ code: "PLAN_INVALID" });
     expect(cloud.reads).toBe(0);
+  });
+});
+
+describe("what the PR comment reads: console links and what destroy removed", () => {
+  function withConsole(consoleUrl: NonNullable<OpSpec["consoleUrl"]>): Registry {
+    const adapter = cloud.adapter();
+    adapter.ops.item = { ...adapter.ops.item!, consoleUrl };
+    return new Registry().addAdapter(adapter);
+  }
+
+  it("apply stamps each line that manages something with its console page; a hook that throws or answers no https URL is ignored", async () => {
+    registry = withConsole(({ resources, params }) => {
+      if (params.name === "beta") throw new Error("no");
+      if (params.name === "gamma") return "javascript:alert(1)";
+      return `https://console.example/items/${resources[0]!.id}`;
+    });
+    const { receipt } = await applyRun(opts());
+    expect(receipt.lines["a"]!.consoleUrl).toMatch(/^https:\/\/console\.example\/items\//);
+    expect(receipt.lines["b"]!.consoleUrl).toBeUndefined();
+    expect(receipt.lines["c"]!.consoleUrl).toBeUndefined();
+  });
+
+  it("destroy records what it deleted and what it only forgot (adopted), by line", async () => {
+    cloud.seed("alpha", "one");
+    await applyRun(opts());
+    const { receipt } = await destroyRun(opts());
+    expect(receipt.lines["b"]!.removed?.map((r) => [r.key, r.createdBy])).toEqual([["item:beta", "sponson"]]);
+    expect(receipt.lines["a"]!.removed?.map((r) => [r.key, r.createdBy])).toEqual([["item:alpha", "adopted"]]);
+    expect(receipt.lines["b"]!.resources).toEqual([]);
   });
 });

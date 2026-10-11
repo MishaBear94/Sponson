@@ -15,7 +15,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
-import { SponsonError, markerKind } from "@sponson/core";
+import { SponsonError, markerKind, type ConsoleUrlInput } from "@sponson/core";
 import { paramError } from "./common.js";
 import { isObject } from "./http.js";
 
@@ -90,6 +90,12 @@ export interface RecipeOp {
    */
   destroy?: "keep" | "never";
   sim?: RecipeSimHints;
+  /**
+   * The provider console page for what the op made, shown as a link in the PR comment: `template` an `https://` URL
+   * with `{<name>}` placeholders (a param, an output, or `id`, the first resource's provider id), each URI-encoded;
+   * `source` the provider's page documenting that URL pattern. Absent when no pattern is documented.
+   */
+  console_url?: { template: string; source: string };
   /** For `pnpm test:live`: the environment variable supplying each param that has no usable example live. */
   live?: { params?: Record<string, string> };
 }
@@ -361,4 +367,27 @@ export function resolveRecipeApi(block: Record<string, unknown>, where: string):
   const api = loadRecipe(provider).api;
   if (!api) throw new SponsonError("PLAN_INVALID", `${ADAPTER}: ${where}.recipe: recipe \`${provider}\` has no API block (its ops call the app's own URL)`, { adapter: ADAPTER, key: `${where}.recipe` });
   return { ...api, ...overrides };
+}
+
+/**
+ * A recipe line's console page (`OpSpec.consoleUrl` of the http ops): its op's `console_url` template filled from the
+ * line's params (or their defaults), its outputs and `id`, the first resource's provider id. Null for a line without a
+ * recipe, a recipe op without a template, or a placeholder with no plain value (a reference, an uninterpolated `${…}`).
+ */
+export function recipeConsoleUrl({ params, resources, outputs }: ConsoleUrlInput): string | null {
+  if (typeof params.recipe !== "string") return null;
+  let op: RecipeOp;
+  try {
+    op = recipeOp(params.recipe).op;
+  } catch {
+    return null;
+  }
+  const template = op.console_url?.template;
+  if (!template) return null;
+  const defaults = Object.fromEntries(Object.entries(op.params).map(([k, p]) => [k, p.default]));
+  const values: Record<string, unknown> = { ...defaults, ...params, ...outputs, id: resources[0]?.id };
+  const plain = (v: unknown): v is string | number => (typeof v === "string" || typeof v === "number") && String(v) !== "" && !String(v).includes("${");
+  const names = [...template.matchAll(/\{([a-z_][a-z0-9_]*)\}/g)].map((m) => m[1]!);
+  if (!names.every((n) => plain(values[n]))) return null;
+  return template.replace(/\{([a-z_][a-z0-9_]*)\}/g, (_m, name: string) => encodeURIComponent(String(values[name] as string | number)));
 }

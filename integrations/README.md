@@ -27,6 +27,44 @@ What every CI needs, whichever it is:
   enough. Each template sets `SPONSON_RECEIPTS_REMOTE` to an HTTPS URL carrying a write token; its README says which
   token to create. Sponson strips credentials from every git error it prints.
 
+## The pull request comment
+
+The GitHub Action comments on the pull request ([what the comment looks like](../action/README.md#the-pr-comment)).
+The other templates print to the job log and post nothing, because posting needs a token with more rights than
+pushing receipts. To get the same comment on a merge request or pull request, run the command with
+`--format markdown` (instead of the default text) and post the file it prints; the exit code is the same, and a
+refusal or failure prints a comment too. The first line is the marker `<!-- sponson:<env> -->`: update the note that
+starts with it instead of adding one per run.
+
+GitLab, in `sponson:apply`, `sponson:finish` and `sponson:destroy` (a project access token with the `api` scope,
+saved as the masked variable `SPONSON_GITLAB_NOTES_TOKEN`; the [merge request notes API](https://docs.gitlab.com/api/notes/#merge-requests)):
+
+```yaml
+  script:
+    - npx -y sponson@0.5.0 apply --format markdown --env preview --pr "$CI_MERGE_REQUEST_IID" --branch "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" --sha "${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}" > sponson-comment.md || code=$?
+    - cat sponson-comment.md
+    - |
+      node -e '
+        const body = require("fs").readFileSync("sponson-comment.md", "utf8"), marker = body.split("\n")[0];
+        const api = `${process.env.CI_API_V4_URL}/projects/${process.env.CI_PROJECT_ID}/merge_requests/${process.env.CI_MERGE_REQUEST_IID}/notes`;
+        const headers = { "PRIVATE-TOKEN": process.env.SPONSON_GITLAB_NOTES_TOKEN, "content-type": "application/json" };
+        (async () => {
+          const notes = await (await fetch(`${api}?per_page=100&sort=asc`, { headers })).json();
+          const mine = notes.find((n) => n.body.startsWith(marker));
+          const r = await fetch(mine ? `${api}/${mine.id}` : api, { method: mine ? "PUT" : "POST", headers, body: JSON.stringify({ body }) });
+          if (!r.ok) throw new Error(`posting the note failed: ${r.status}`);
+        })();'
+    - exit "${code:-0}"
+```
+
+Bitbucket Pipelines and CircleCI work the same way: Bitbucket's
+[pull request comments API](https://developer.atlassian.com/cloud/bitbucket/rest/api-group-pullrequests/#api-repositories-workspace-repo-slug-pullrequests-pull-request-id-comments-post)
+takes the file as `{ "content": { "raw": … } }` (Bitbucket does not render the `<pre>` and `<sub>` HTML the comment
+uses for manual steps and its footer; the text stays readable); from CircleCI, post it to the GitHub pull request with
+the [issue comments API](https://docs.github.com/rest/issues/comments). A tool that already holds the `--json` result
+can render the same markdown with `renderMarkdown(envelope)` from the `sponson` package instead of running Sponson
+twice.
+
 ## How the templates are checked
 
 **On every `pnpm test`**, `scenarios/docs/integrations.test.ts` parses every template, checks the GitLab template's

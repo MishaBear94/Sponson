@@ -341,7 +341,15 @@ async function upsertEnvs(c: Client, scope: EnvScope, toWrite: Array<[string, un
   return { r, path };
 }
 
+/**
+ * The project's Environment Variables settings, through the dashboard link Vercel's own docs use: it opens the page for
+ * the team and project the person picks (https://vercel.com/docs/environment-variables/managing-environment-variables).
+ * The API identifies a project by id, the dashboard by team and project slug, so no deeper link is derivable.
+ */
+const VERCEL_ENV_CONSOLE_URL = "https://vercel.com/d?to=%2F%5Bteam%5D%2F%5Bproject%5D%2Fsettings%2Fenvironment-variables&title=Go+to+Environment+Variables";
+
 const env: OpSpec = {
+  consoleUrl: () => VERCEL_ENV_CONSOLE_URL,
   outputs: {
     preview_url: { available: "external", event: "deploy" },
     deployment_id: { available: "external", event: "deploy" },

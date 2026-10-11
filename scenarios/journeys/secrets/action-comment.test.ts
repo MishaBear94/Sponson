@@ -2,8 +2,8 @@
  * The GitHub Action's two github-script steps, extracted verbatim from action/action.yml and executed in node with
  * a mocked `github` / `context` / `core`, fed with real `--json` output from the CLI against the sim.
  *
- * Promises: action/README.md "The PR comment" (one comment per environment, marked `<!-- sponson:<env> -->`, a
- * table with one row per line), README "The action comments the plan and the receipt on the pull request",
+ * Promises: action/README.md "The PR comment" (one comment per environment, marked `<!-- sponson:<env> -->`, Sponson's
+ * own markdown with one line per plan line), README "The action comments the plan and the receipt on the pull request",
  * secrets never appear (README "redacted from every byte of output"), and the example workflow in action/README.md.
  */
 import { createRequire } from "node:module";
@@ -11,7 +11,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { afterEach, describe, expect, it } from "vitest";
-import { SHA, World } from "./helpers.js";
+import { SHA, World, renderLikeAction } from "./helpers.js";
 
 const root = new URL("../../../", import.meta.url).pathname;
 const requireFn = createRequire(import.meta.url);
@@ -73,33 +73,34 @@ async function runScript(code: string, opts: { payload: any; env?: Record<string
   return outputs;
 }
 
-/** Render the PR comment for a CLI JSON result exactly as the action would. */
+/** Render the PR comment for a CLI JSON result exactly as the action would: the run step's renderer, then the comment step. */
 async function renderComment(w: World, stdout: string, command: string, exit: number, existing: Comment[] = []) {
-  const path = join(w.cwd, `result-${Math.random().toString(36).slice(2)}.json`);
-  await writeFile(path, stdout);
+  const md = await renderLikeAction(w.cwd, stdout, { command, exit });
+  const path = join(w.cwd, `comment-${Math.random().toString(36).slice(2)}.md`);
+  await writeFile(path, md);
   const { github, calls } = mockGithub(existing);
   await runScript(await script("comment"), {
     payload: { pull_request: { number: 42 } },
     github,
-    env: { RESULT_PATH: path, SPONSON_ENV: "preview", SPONSON_COMMAND: command, SPONSON_EXIT: String(exit), SPONSON_PR: "42" },
+    env: { COMMENT_PATH: path, SPONSON_ENV: "preview", SPONSON_COMMAND: command, SPONSON_EXIT: String(exit), SPONSON_PR: "42" },
   });
   const write = calls.find((c) => c.op === "create" || c.op === "update")!;
   return { body: write.args.body as string, calls };
 }
 
-/** A GFM table survives only if each row is one physical line with exactly 6 unescaped pipes. */
-function tableProblems(body: string): string[] {
+/**
+ * Provider text must stay inert: outside the marker no HTML comment, no tag (besides the comment's own `<pre>` and
+ * `<sub>`, and `<who>` inside code spans), no unbalanced code span, no bare CR.
+ */
+function markupProblems(body: string): string[] {
   const problems: string[] = [];
   if (/\r/.test(body)) problems.push("body contains a bare CR (a line break in markdown)");
-  const lines = body.split(/\r\n|\r|\n/);
-  const start = lines.findIndex((l) => l.startsWith("| | line |"));
-  if (start < 0) return problems;
-  for (let i = start; i < lines.length && lines[i] !== ""; i++) {
-    const l = lines[i]!;
-    const pipes = (l.match(/(?<!\\)\|/g) ?? []).length;
-    if (!l.startsWith("|") || pipes !== 6) problems.push(`row ${i - start}: ${JSON.stringify(l.slice(0, 120))}`);
-  }
-  // A table row is followed by a blank line or the end; a stray continuation means a row was split.
+  const rest = body.replace(/^<!-- sponson:[^>]* -->\n/, "");
+  if (rest.includes("<!--")) problems.push("an HTML comment outside the marker");
+  const prose = rest.replace(/`[^`\n]*`/g, "");
+  const tag = /<(?!\/?(pre|sub)>)[a-z!/][^>]{0,30}/i.exec(prose);
+  if (tag) problems.push(`a tag: ${tag[0]}`);
+  for (const l of rest.split("\n")) if ((l.match(/`/g) ?? []).length % 2 !== 0) problems.push(`odd backticks: ${l.slice(0, 120)}`);
   return problems;
 }
 
@@ -133,7 +134,7 @@ afterEach(async () => {
 });
 
 describe("PR comment rendering from real --json output", () => {
-  it("control: plan / partial / failed+rollback / resumed / destroy / refused comments carry no secret, keep one marker, and form a valid table", async () => {
+  it("control: plan / partial / failed+rollback / resumed / destroy / refused comments carry no secret, keep one marker, and keep provider text inert", async () => {
     const stripe = "fake_lv_prCommentCheck_4242";
     const w = await World.create(PLAN, { env: { STRIPE_KEY: stripe } });
     worlds.push(w);
@@ -151,7 +152,7 @@ describe("PR comment rendering from real --json output", () => {
     expect(failed.r.json.receipt.status).toBe("failed");
     const partial = await step("apply --json", "apply");
     expect(partial.r.json.receipt.status).toBe("partial");
-    expect(partial.body).toContain("waiting on deploy");
+    expect(partial.body).toContain("waits for the preview deploy");
     await w.sim.state.applyChaos({ deploy: "ok" } as never);
     await step("plan --json", "plan");
     await step("apply --json", "apply");
@@ -162,12 +163,12 @@ describe("PR comment rendering from real --json output", () => {
 
     const conns = w.sim.state.vercel.projects.prj_demo!.envs.map((e) => e.value);
     for (const [what, body] of bodies) {
-      expect(body.startsWith("<!-- sponson:preview -->\n### Sponson "), what).toBe(true);
+      expect(body.startsWith("<!-- sponson:preview -->\n### Sponson"), what).toBe(true);
       expect(body.split("<!-- sponson:").length - 1, `${what}: one marker`).toBe(1);
       expect(body, what).not.toContain(stripe);
       expect(body, what).not.toMatch(/postgres(ql)?:\/\/[^\s|]*:[^\s|@]+@/);
       for (const c of conns) expect(body, what).not.toContain(c);
-      expect(tableProblems(body), `${what}:\n${body}`).toEqual([]);
+      expect(markupProblems(body), `${what}:\n${body}`).toEqual([]);
     }
   });
 
@@ -218,7 +219,7 @@ changes:
     expect(r.json.receipt.lines.env.status).toBe("blocked");
     expect(r.json.receipt.lines.env.errorCode).toBe("SECRET_UNRESOLVED");
     const { body } = await renderComment(w, r.stdout, "apply", r.code);
-    expect(tableProblems(body), body).toEqual([]);
+    expect(markupProblems(body), body).toEqual([]);
   });
 
   it("D16: an HTML error page from a provider (truncated mid `<!--`) is neutralised and cannot swallow the rest of the PR comment", async () => {
@@ -275,11 +276,11 @@ changes:
       expect(body).toContain("/cb &lt;script&gt;alert(1)&lt;/script&gt; --&gt; and save.</pre>");
       expect(body).not.toMatch(/<script/);
       expect(body.split("<!-- sponson:").length - 1).toBe(1);
-      expect(tableProblems(body), body).toEqual([]);
+      expect(markupProblems(body), body).toEqual([]);
     }
-    expect(planBody).toContain("| `*` | `google-redirect` | manual.step | todo | by hand: Allow the callback on the Google OAuth client |");
+    expect(planBody).toContain("- `google-redirect` Allow the callback on the Google OAuth client — a person does this by hand (below)");
     expect(applyBody).toContain("**Manual steps waiting for a person**");
-    expect(applyBody).toContain("waiting on confirmation");
+    expect(applyBody).toContain("waits for a person to do the manual step below");
   });
 });
 

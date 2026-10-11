@@ -19,6 +19,7 @@ import { isObject, isProviderError, listAll, type ApiClient } from "./http.js";
 import { failedWith, httpClient, idOf, itemOf, literalOf, withLineCredential, write } from "./http-adapter-client.js";
 import { ADAPTER, apiBlock, apiEnvironment, at, credentialInputs, bodyOf, deepMerge, fieldTokens, fillPath, firstMarker, isKeep, parseResource, pointerTokens, projection, requestHeaders, resourceOutputs, stateHash, type FindSpec, type ResourceSpec } from "./http-adapter-spec.js";
 import { fillVariables, graphqlRequest, requestName, usesId, variablesPending, type GraphqlSpec } from "./http-adapter-graphql.js";
+import { recipeConsoleUrl } from "./recipes.js";
 
 /** An object as found: its provider id and its body. */
 interface Located {
@@ -399,6 +400,7 @@ function acceptedWithoutJson(e: unknown): boolean {
 
 /** `http.resource`: one object per item, located by a path or by `find`, its declared `fields` kept as planned. */
 export const resource: OpSpec = {
+  consoleUrl: recipeConsoleUrl,
   outputs: { id: { available: "immediate" } },
   outputsFor: resourceOutputs,
   providerFor: apiBlock,

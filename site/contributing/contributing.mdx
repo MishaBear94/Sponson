@@ -115,7 +115,10 @@ existing file in `packages/adapters/recipes/` and:
    value the provider shows only in the create answer (an API key's token) is an output
    `{ path, sensitive: true, once: true }`; a value it shows on every read is not `once`. When destroying a scope must
    not delete what the op made, say so on the op: `destroy: keep` (shared history; a line may still opt into
-   `destroy: delete`) or `destroy: never` (the provider cannot delete it). A one-off side effect with nothing to read
+   `destroy: delete`) or `destroy: never` (the provider cannot delete it). When the provider documents a console URL
+   for what the op makes, add `console_url: { template, source }`: an `https://` template with `{<param>}`,
+   `{<output>}` or `{id}` placeholders, and the provider page documenting that pattern; the PR comment links it. A
+   one-off side effect with nothing to read
    back (a sync, a purge, a notification) is `kind: action` ([ADR 0022](/contributing/adr/0022-one-off-actions)): declare
    its `trigger` from params (put every param whose change should run it again there, and at least one string param
    besides a URL, which the harness changes), its `request`, an `undo` only if the provider has one, and say in an

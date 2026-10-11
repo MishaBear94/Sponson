@@ -76,6 +76,7 @@ async function destroyGroup(rc: RunContext, prepared: Prepared, receipt: Receipt
     line.errorCode = "INTENT_UNRESOLVED";
     line.error = `Sponson may have created ${unknown.map((e) => e.key).join(", ")} in an interrupted run but cannot locate it (the line is gone from the plan or its read failed). Check the provider and remove it by hand if it exists.`;
   }
+  if (adopted.length) line.removed = [...(line.removed ?? []), ...adopted.map(toRecord)];
   if (ours.length === 0) {
     if (line.status === "destroyed") {
       line.status = "skipped";
@@ -85,6 +86,9 @@ async function destroyGroup(rc: RunContext, prepared: Prepared, receipt: Receipt
   }
   await deleteOurs(rc, prepared, line, head, ours, holder);
   line.resources = rc.ledger.all().filter((x) => x.line === head.line).map(toRecord);
+  const left = new Set(line.resources.map((r) => r.key));
+  const deleted = ours.filter((e) => !left.has(e.key)).map(toRecord);
+  if (deleted.length) line.removed = [...deleted, ...(line.removed ?? [])];
   return [];
 }
 

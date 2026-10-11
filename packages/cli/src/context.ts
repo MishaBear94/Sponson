@@ -36,6 +36,8 @@ export interface GlobalOpts {
   branch?: string;
   sha?: string;
   json?: boolean;
+  /** `--format`: `json` is `--json`; `markdown` (plan and apply) prints the pull request comment. */
+  format?: OutputFormat;
   receipts?: "git-branch" | "local";
   receiptsDir?: string;
   receiptsRemote?: string;
@@ -58,6 +60,19 @@ export class UsageError extends SponsonError {
     super("USAGE", message, details);
     this.name = "UsageError";
   }
+}
+
+export type OutputFormat = "text" | "json" | "markdown";
+
+/**
+ * Settle `--json` and `--format` into one: `--format json` sets `json`; `--json` with another explicit format is a
+ * usage error, as is `markdown` for a command that has no comment to print (only plan and apply have).
+ */
+export function withFormat<T extends GlobalOpts>(opts: T, command: string, markdown: boolean): T {
+  const format = opts.format ?? (opts.json ? "json" : "text");
+  if (opts.json && format !== "json") throw new UsageError(`--json and --format ${format} contradict each other: pass one`);
+  if (format === "markdown" && !markdown) throw new UsageError(`--format markdown is for plan and apply (the pull request comment); \`${command}\` prints text or json`);
+  return { ...opts, format, json: format === "json" };
 }
 
 export function planPathFor(opts: GlobalOpts, io: IO): string {

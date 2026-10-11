@@ -276,6 +276,16 @@
             }
           }
         },
+        "console_url": {
+          "type": "object",
+          "required": ["template", "source"],
+          "additionalProperties": false,
+          "description": "The provider console page for what the op made, linked from the PR comment. Only a documented URL pattern: `source` is the provider's page that documents it.",
+          "properties": {
+            "template": { "type": "string", "pattern": "^https://[^\\s{}]+(\\{[a-z_][a-z0-9_]*\\}[^\\s{}]*)*$", "description": "An `https://` URL with `{<name>}` placeholders: a param, an output, or `id` (the provider id of what the op made); each value is URI-encoded." },
+            "source": { "type": "string", "pattern": "^https://\\S+$" }
+          }
+        },
         "live": {
           "type": "object",
           "additionalProperties": false,

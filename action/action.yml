@@ -1,7 +1,8 @@
 # Sponson GitHub Action
 #
 # Runs `sponson plan`, `sponson apply` or `sponson apply --destroy` with `--json`, exposes the JSON
-# as the `result` output, and on pull_request events upserts one PR comment per environment.
+# as the `result` output, and on pull_request events upserts one PR comment per environment, rendered from that JSON
+# by Sponson's own markdown renderer (render-comment.mjs: the same text as `--format markdown`).
 #
 # Required workflow permissions:
 #   contents: write        apply pushes receipts to the orphan branches `sponson-receipts/<env>/<scope>`
@@ -33,7 +34,7 @@ inputs:
     description: >-
       `source` (default): install and run Sponson from this action's own checkout, so the code that runs is exactly
       the action ref you pinned and nothing is fetched from a package registry. Or an npm version of the `sponson`
-      package (e.g. `0.4.0`), fetched with npx.
+      package (e.g. `0.4.0`), installed from npm into the runner's temporary directory.
     default: source
   node-version:
     description: Node.js version to run the CLI with.
@@ -62,7 +63,7 @@ runs:
     - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: ${{ inputs.node-version }}
-        # This step runs in the caller's repository; Sponson runs through npx and must not start caching (or
+        # This step runs in the caller's repository; Sponson runs from its own install and must not start caching (or
         # failing on a missing lock file for) the caller's own dependencies.
         package-manager-cache: false
 
@@ -154,13 +155,28 @@ runs:
           fi
           # Run the sources through tsx, the same way the repository's own tests run the CLI. (Inside the
           # workspace the packages resolve to their TypeScript sources; only published packages point at dist/.)
-          sponson=(node --import "$root/node_modules/tsx/dist/loader.mjs" "$root/packages/cli/src/bin.ts")
+          node_ts=(node --import "$root/node_modules/tsx/dist/loader.mjs")
+          sponson=("${node_ts[@]}" "$root/packages/cli/src/bin.ts")
+          render=("${node_ts[@]}")
+          markdown_module="$root/packages/cli/src/markdown.ts"
         else
-          sponson=(npx -y "sponson@$INPUT_VERSION")
+          # Installed into a directory of its own (not npx's cache), so the comment step can load its renderer too.
+          prefix="$RUNNER_TEMP/sponson-cli"
+          if ! npm install --prefix "$prefix" --no-save --no-audit --no-fund --loglevel=error "sponson@$INPUT_VERSION" >&2; then
+            echo "::error::installing sponson@$INPUT_VERSION from npm failed"; exit 1
+          fi
+          sponson=("$prefix/node_modules/.bin/sponson")
+          render=(node)
+          markdown_module="$prefix/node_modules/sponson/dist/index.js"
         fi
         "${sponson[@]}" "${cmd[@]}" "${args[@]}" > "$RUNNER_TEMP/sponson-result.json"
         code=$?
         cat "$RUNNER_TEMP/sponson-result.json"
+        # The PR comment: the markdown `--format markdown` prints, rendered by Sponson from the JSON saved above.
+        rm -f "$RUNNER_TEMP/sponson-comment.md"
+        RESULT_PATH="$RUNNER_TEMP/sponson-result.json" COMMENT_PATH="$RUNNER_TEMP/sponson-comment.md" \
+          SPONSON_MARKDOWN_MODULE="$markdown_module" SPONSON_ENV="$INPUT_ENV" SPONSON_COMMAND="$INPUT_COMMAND" SPONSON_EXIT="$code" \
+          "${render[@]}" "$GITHUB_ACTION_PATH/render-comment.mjs" >&2 || echo "::warning::sponson could not render the PR comment; posting a summary"
         # A random delimiter: output that happened to contain a fixed one could forge further step outputs.
         eof="SPONSON_$(openssl rand -hex 16)"
         {
@@ -176,7 +192,7 @@ runs:
       if: steps.scope.outputs.skip != 'true' && (github.event_name == 'pull_request' || steps.scope.outputs.pr != '')
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
-        RESULT_PATH: ${{ runner.temp }}/sponson-result.json
+        COMMENT_PATH: ${{ runner.temp }}/sponson-comment.md
         SPONSON_ENV: ${{ inputs.env }}
         SPONSON_COMMAND: ${{ inputs.command }}
         SPONSON_EXIT: ${{ steps.run.outputs.exit }}
@@ -184,77 +200,21 @@ runs:
       with:
         github-token: ${{ inputs.github-token }}
         script: |
+          // The body is Sponson's own markdown (render-comment.mjs, the `--format markdown` renderer), written by the
+          // run step. One comment per environment, found by the marker it starts with and updated in place.
           const fs = require("fs");
-          const env = process.env.SPONSON_ENV, command = process.env.SPONSON_COMMAND, exit = Number(process.env.SPONSON_EXIT);
-          const marker = `<!-- sponson:${env} -->`;
-          let r; try { r = JSON.parse(fs.readFileSync(process.env.RESULT_PATH, "utf8")); } catch { r = null; }
-
-          const PLAN = { create: "+", update: "~", unchanged: "=", pending: "?", todo: "*", blocked: "-", error: "!" };
-          const LINE = { applied: "+", unchanged: "=", waiting: "?", failed: "!", rolled_back: "-", rollback_failed: "!", skipped: "-", blocked: "-", destroyed: "-", destroy_failed: "!" };
-          // Provider text can carry anything (HTML error pages, CRLF, pipes, backticks): neutralise every
-          // character that could end a table row, open a code span, a tag or an HTML comment.
-          const esc = (s) => String(s ?? "")
-            .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-            .replace(/\|/g, "&#124;").replace(/`/g, "&#96;")
-            .replace(/\r\n|\r|\n/g, " ");
-          // An identifier shown inside a code span: no backticks or line breaks, never HTML-interpreted there.
-          const code = (s) => "`" + String(s ?? "").replace(/[`\r\n|]/g, "") + "`";
-          const side = (s) => {
-            if (s === undefined || s === null) return null;
-            if (typeof s !== "object") return esc(s);
-            if (s.state === "absent") return null;
-            if (s.state === "literal") return esc(s.value);
-            if (s.state === "sensitive") return "(secret)";
-            return `(${esc(s.state)}${s.ref ? " ← " + esc(s.ref) : ""})`;
-          };
-          const failure = (l) => [l.errorCode ? code(l.errorCode) : "", esc(l.error)].filter(Boolean).join(" ");
-          // Manual steps (ADR 0021): a person does them from these instructions, so they are shown whole, as text.
-          const pre = (t) => "<pre>" + String(t ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\r\n|\r/g, "\n").trimEnd() + "</pre>";
-          const steps = (todos) => todos.map((t) => {
-            const flag = t.action === "undo" ? `sponson apply --destroy --confirm ${t.line}` : `sponson apply --confirm ${t.line}`;
-            return `- ${code(t.line)} ${t.action === "undo" ? "undo: " : ""}${esc(t.title)}\n\n${pre(t.instructions)}\n\n  Then a person confirms it: ${code(flag)}`;
-          }).join("\n\n");
-          const rows = [];
-          let title, tail = "";
-          if (!r) {
-            title = `${esc(command)} crashed (exit ${exit})`;
-          } else if (r.ok === false && r.error && !r.receipt) {
-            title = `${esc(command)} failed: ${code(r.error.code)}`;
-            tail = `\n\n${esc(r.error.message)}`;
-          } else if (r.command === "plan") {
-            title = `plan · ${esc(r.environment)} · ${esc(r.scope)} · plan ${esc(String(r.planHash).slice(0, 8))}`;
-            if (r.lock) tail += `\n\nAn apply is running on this scope (${esc(r.lock.holder)}); this plan may change.`;
-            if (r.requiresApproval) tail += "\n\nApplying this plan needs approval: it writes to production.";
-            for (const l of r.lines) {
-              let detail;
-              if (l.status === "pending") detail = l.waitingOn ? `waiting on ${code(l.waitingOn)}${l.waitingFor ? ` (${esc(l.waitingFor)})` : ""}` : `waiting${l.waitingFor ? ` on ${esc(l.waitingFor)}` : ""}`;
-              else if (l.status === "todo") detail = `by hand: ${esc(l.manual?.title)}`;
-              else if (l.status === "error" || l.status === "blocked") detail = failure(l);
-              else detail = (l.diffs ?? []).map((d) => {
-                const after = side(d.after), before = side(d.before);
-                return `${esc(d.label)}${after !== null ? ` ${before !== null ? before + " → " : ""}${after}` : ""}`;
-              }).join("<br>");
-              rows.push(`| ${code(PLAN[l.status] ?? " ")} | ${code(l.id)} | ${esc(l.adapter)}.${esc(l.op)} | ${esc(l.status)} | ${detail} |`);
-            }
-            const todos = r.lines.filter((l) => l.status === "todo" && l.manual).map((l) => l.manual);
-            if (todos.length) tail += "\n\n**Manual steps** (no API can do these; a person does them)\n\n" + steps(todos);
-          } else {
-            const rc = r.receipt;
-            const status = rc.stale ? "stale (a newer commit was already applied)" : rc.status;
-            title = `${rc.destroy ? "destroy" : "apply"} · ${esc(rc.environment)} · ${esc(rc.scope)} · **${esc(status)}** (run ${esc(rc.runId)})${rc.approvedBy ? ` · approved by ${esc(rc.approvedBy)}` : ""}`;
-            for (const l of Object.values(rc.lines)) {
-              const detail = l.status === "waiting" ? `waiting on ${esc(l.waitingFor)}`
-                : (l.error || l.errorCode) ? failure(l)
-                : [...l.resources.map((x) => esc(x.label ?? x.key)), ...Object.entries(l.outputs ?? {}).map(([k, v]) => `${esc(k)} = ${esc(v)}`)].join("<br>");
-              rows.push(`| ${code(LINE[l.status] ?? " ")} | ${code(l.id)} | ${esc(l.adapter)}.${esc(l.op)} | ${esc(l.status)} | ${detail} |`);
-            }
-            if (r.manual?.length) tail += "\n\n**Manual steps waiting for a person** (no API can do these)\n\n" + steps(r.manual);
-            else if (rc.status === "partial") tail += "\n\nSome lines are waiting on a deploy. The `deployment_status` run will finish them; nothing to retry.";
+          const env = process.env.SPONSON_ENV, command = process.env.SPONSON_COMMAND, exit = process.env.SPONSON_EXIT;
+          const marker = `<!-- sponson:${String(env).replace(/[^A-Za-z0-9_.-]/g, "_")} -->`;
+          const LIMIT = 65536;
+          let body = "";
+          try { body = fs.readFileSync(process.env.COMMENT_PATH, "utf8"); } catch { body = ""; }
+          if (!body.trim()) {
+            const run = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const word = String(command).replace(/[^a-z]/g, "") || "run";
+            body = `${marker}\n### Sponson ${word} exited with ${String(exit).replace(/[^0-9]/g, "") || "an unknown code"}\n\nNo comment could be rendered for this run. The [run log](${run}) has the result.\n`;
           }
-          if (r?.drift?.length) tail += "\n\n**Drift**\n" + r.drift.map((d) => `- ${code(d.kind)} ${esc(d.adapter)}: ${esc(d.message)}`).join("\n");
-          if (r?.warnings?.length) tail += "\n\n**Warnings**\n" + r.warnings.map((w) => `- ${esc(w)}`).join("\n");
-          const table = rows.length ? `\n\n| | line | adapter | status | detail |\n|---|---|---|---|---|\n${rows.join("\n")}` : "";
-          const body = `${marker}\n### Sponson ${title}${table}${tail}\n\n<sub>${esc(`${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`)}</sub>`;
+          if (!body.startsWith(marker)) body = `${marker}\n${body}`;
+          if (body.length > LIMIT) body = body.slice(0, LIMIT - 2) + "\n…";
 
           const issue_number = context.payload.pull_request?.number ?? Number(process.env.SPONSON_PR);
           const comments = await github.paginate(github.rest.issues.listComments, { ...context.repo, issue_number, per_page: 100 });

@@ -53,7 +53,14 @@ async function list(api: ApiClient): Promise<RedirectUrl[]> {
   });
 }
 
+/**
+ * The Clerk Dashboard (https://clerk.com/docs/guides/development/deployment/production links it as the place to manage
+ * an instance). The secret key names the instance, not its application, so no deeper link is derivable.
+ */
+const CLERK_CONSOLE_URL = "https://dashboard.clerk.com";
+
 const redirect_allow: OpSpec = {
+  consoleUrl: () => CLERK_CONSOLE_URL,
   outputs: { id: { available: "immediate" } },
 
   async read(actx, params) {

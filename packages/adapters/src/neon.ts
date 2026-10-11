@@ -132,7 +132,17 @@ function parentOf(branches: NeonBranch[], params: ResolvedParams, project: strin
   throw paramError("neon", `parent branch \`${name}\` not found in project ${project}${hint}`, "parent");
 }
 
+/**
+ * The branch's page in the Neon Console: the URL Neon's own schema-diff action links each branch with
+ * (https://github.com/neondatabase/schema-diff-action/blob/main/src/utils.ts).
+ */
+function neonConsoleUrl(project: unknown, branchId: string | undefined): string | null {
+  if (typeof project !== "string" || !project || !branchId) return null;
+  return `https://console.neon.tech/app/projects/${encodeURIComponent(project)}/branches/${encodeURIComponent(branchId)}`;
+}
+
 const branch: OpSpec = {
+  consoleUrl: ({ provider, resources }) => neonConsoleUrl(provider.project, resources[0]?.id),
   outputs: {
     branch_id: { available: "immediate" },
     connection_string: { available: "immediate", sensitive: true },

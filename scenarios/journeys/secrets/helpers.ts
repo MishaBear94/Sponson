@@ -5,7 +5,7 @@ import { chmod, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { startSim, type SimHandle } from "@sponson/sim";
+import { startSim, type SimHandle, type SimSeed } from "@sponson/sim";
 import { cliEnv, runCli, SHA, workspace, type CliRun } from "../../support.js";
 
 export { SHA };
@@ -69,8 +69,8 @@ export class World {
     private readonly closers: Array<() => Promise<void>>,
   ) {}
 
-  static async create(plan: string, opts: { env?: Record<string, string>; rules?: Rule[] } = {}): Promise<World> {
-    const sim = await startSim();
+  static async create(plan: string, opts: { env?: Record<string, string>; rules?: Rule[]; seed?: Partial<SimSeed> } = {}): Promise<World> {
+    const sim = await startSim(opts.seed ? { seed: opts.seed } : undefined);
     const ws = await workspace("sec", { plan });
     const closers: Array<() => Promise<void>> = [() => sim.close(), ws.cleanup];
     let base = sim.url;
@@ -184,3 +184,36 @@ changes:
       DATABASE_URL: { from: db.connection_string }
 ${extraValues}    environments: [preview]
 `;
+
+const ROOT = new URL("../../../", import.meta.url).pathname;
+
+/**
+ * What action/action.yml's run step does after the CLI ran: render the PR comment from the saved `--json` output with
+ * action/render-comment.mjs, the way the action runs it from source (node with the tsx loader, the renderer module
+ * from packages/cli/src). Returns the markdown file's text ("" when rendering failed).
+ */
+export async function renderLikeAction(dir: string, stdout: string, opts: { command: string; exit: number; env?: string }): Promise<string> {
+  const tag = Math.random().toString(36).slice(2);
+  const result = join(dir, `result-${tag}.json`);
+  const comment = join(dir, `comment-${tag}.md`);
+  await writeFile(result, stdout);
+  try {
+    await exec(process.execPath, ["--import", join(ROOT, "node_modules/tsx/dist/loader.mjs"), join(ROOT, "action/render-comment.mjs")], {
+      env: {
+        PATH: process.env.PATH,
+        RESULT_PATH: result,
+        COMMENT_PATH: comment,
+        SPONSON_MARKDOWN_MODULE: join(ROOT, "packages/cli/src/markdown.ts"),
+        SPONSON_ENV: opts.env ?? "preview",
+        SPONSON_COMMAND: opts.command,
+        SPONSON_EXIT: String(opts.exit),
+        GITHUB_SERVER_URL: "https://github.com",
+        GITHUB_REPOSITORY: "acme/app",
+        GITHUB_RUN_ID: "1001",
+      },
+    });
+    return await readFile(comment, "utf8");
+  } catch {
+    return "";
+  }
+}

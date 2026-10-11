@@ -19,7 +19,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "DiffKind", "DiffSide", "Drift", "DriftKind", "ERROR_CODES", "ErrorCode", "ErrorCodeSpec", "ExitCode", "FromRef",
     "GitBranchReceiptStore", "GitBranchStoreOptions", "KeepRef", "LEGACY_RECEIPTS_BRANCH", "Ledger", "LedgerEntry", "LineOutputs", "LineStatus",
     "Literal", "LiveState", "LocalReceiptStore", "LockHeldError", "LockInfo", "LockLostError", "MASK",
-    "MIN_REDACT_LENGTH", "ManualStep", "ManualTodo", "MarkerKind", "OpSpec", "OutputSpec", "PARENT_LOCKS_ENVIRONMENT", "PLAN_FILENAME", "ParseWarning", "ParsedPlan", "Plan",
+    "ConsoleUrlInput", "MIN_REDACT_LENGTH", "ManualStep", "ManualTodo", "MarkerKind", "OpSpec", "OutputSpec", "PARENT_LOCKS_ENVIRONMENT", "PLAN_FILENAME", "ParseWarning", "ParsedPlan", "Plan",
     "PlanLine", "PlanLineStatus", "PlanResult", "RECEIPTS_REF_PREFIX", "RECEIPT_VERSION", "Receipt", "ReceiptLine", "ReceiptStore",
     "RedactDeepOptions", "Redactor", "Registry", "ResolveResult", "ResolvedParams", "ResolvedValue",
     "ResourceAdapter", "ResourceDiff", "ResourceRecord", "RunOptions", "RunStatus", "SecretRef", "SecretSource",
@@ -79,6 +79,7 @@ const PUBLIC_API: Record<string, string[]> = {
   "sponson": [
     "CtxFacts", "CtxOverrides", "CtxSource", "DEFAULT_CTX_SOURCES", "RunIO", "SponsonPlugin", "bitbucketPipelinesSource",
     "circleCiSource", "detectCtx", "githubActionsSource", "gitlabCiSource", "localGitSource", "run", "sponsonEnvSource",
+    "GITHUB_COMMENT_LIMIT", "MarkdownOptions", "ciRunUrl", "commentMarker", "renderMarkdown",
   ],
 };
 
