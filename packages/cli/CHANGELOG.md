@@ -1,5 +1,41 @@
 # sponson
 
+## 0.8.0
+
+### Minor Changes
+
+- d72de54: `sponson init --setup`: from a plan to the first real apply in one guided run on your own machine. For every
+  provider the plan uses (and every value it references with `env://`), it shows the page where the token is created
+  and the least it needs, reads the token from the environment or asks for it with hidden input (terminal only, never
+  written to disk), and checks it with one read-only request: `ok`, `wrong_scope` (403, or a project the token does
+  not reach) or `unauthorized` (401). Then, after a yes per secret (`--yes` for scripted use), it stores each checked
+  token as a GitHub Actions secret of the origin repository with your own `gh` (the value on stdin only, never in argv
+  or the child's environment), and writes `.github/workflows/sponson.yml` from the action README's preview job with the
+  action pinned to the commit of the installed version's release tag, never overwriting an existing file. Works on a
+  fresh repository (after writing the starter plan) and on an existing plan. `--json` reports each credential's status,
+  the secrets stored and the workflow written, never a value.
+  
+  Adapters: `about.credentialUrl` and `about.credentialScope` say where a credential is created and what to pick (every
+  built-in adapter declares them, checked against the providers' docs), and `ResourceAdapter.verifyCredential(actx)`
+  checks one with a single read-only request (Vercel `GET /v9/projects/{id}` or `/v2/user`, Neon `GET /projects/{id}`,
+  Clerk `GET /redirect_urls`, …). Recipes gain a `credential` block (`url`, `scope`, `source`, optional `verify`), and
+  `verifyRecipeCredential` sends a recipe's check through the same client and authentication as its ops.
+  docs/providers.md lists each provider's token page and scope.
+- 051c526: The pull request comment is redesigned for the reviewer, and any CI or agent can post it.
+  
+  - **What the comment says.** A headline ("This preview has its own database branch, 2 variables and 1 auth callback"), the preview URL as a link, then one line per plan line: what it manages (by name; values never shown, inputs only as references), whether it was set up or is unchanged, a link to the provider's console, and what a waiting line waits for. A refusal, a failure or drift is one sentence with the fix (`--reconcile`, `--approved-by`, `--confirm`). On destroy: "Cleaned up", "Kept (adopted, never destroyed)" and "Left for you". Still one comment per environment, updated in place by its `<!-- sponson:<env> -->` marker; a comment that would exceed GitHub's 65,536 characters keeps its headline and says what it left out.
+  - **`--format markdown`** on `plan` and `apply` prints that comment (also for errors, with the same exit code); `--format json` is `--json`. The `sponson` package exports the renderer, `renderMarkdown(envelope)`, a pure function of a `--json` envelope.
+  - **The GitHub Action** renders its comment with that renderer from the JSON it saves (`action/render-comment.mjs`), so the comment and the CLI never disagree. With `version: <npm version>` the action now installs Sponson with `npm install` into the runner's temporary directory instead of `npx`; a version older than the renderer gets a one-line summary comment.
+  - **Receipts** carry `lines[id].consoleUrl` (the provider console page for what a line manages) after apply, and `lines[id].removed` (what destroy deleted, or forgot because it was adopted) after `--destroy`. Ops declare console pages with the new optional `OpSpec.consoleUrl`; Neon links the branch, Vercel the project's Environment Variables page, Clerk the dashboard, and recipes the new optional `console_url: { template, source }` (filled for `stripe.webhook_endpoint`).
+  - The GitLab, CircleCI and Bitbucket READMEs (integrations/README.md) show how to post the same comment as a merge request note or pull request comment.
+
+### Patch Changes
+
+- Updated dependencies [d72de54]
+- Updated dependencies [051c526]
+  - @sponson/adapters@0.8.0
+  - @sponson/core@0.8.0
+
 ## 0.7.0
 
 ### Minor Changes
