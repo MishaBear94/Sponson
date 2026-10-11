@@ -1,5 +1,37 @@
 # @sponson/adapters
 
+## 0.9.1
+
+### Patch Changes
+
+- 8f7be6e: `sponson init` and `init --setup`:
+  
+  - A recipe default the plan runs with (Stripe's webhook `path`) is written with a `# CHECK:` note instead of a
+    `# TODO:`. It is listed as "please check" and reported as `detected.check`, and never blocks `ready` or the workflow
+    offer; only placeholders the plan cannot run with (`proj_xxx`, `<id>`) are TODOs.
+  - `setup.next` in `--json` is `{ command, why }`: `command` is the command to run next (`sponson plan` once ready,
+    `sponson init --setup` when a token only needs typing) or `null` when the next step is a person's (a TODO, a new
+    token); `why` says what to do.
+  - Without a terminal (`--json` in CI or from an agent), a missing token is reported with advice that fits: set it in
+    the environment the command runs with, or run `sponson init --setup` in an interactive terminal to type it.
+- 8f7be6e: Plan output and the PR comment, from a newcomer walkthrough of 0.9.0:
+  
+  - A value is labelled by what it is in the plan, the same way in the CLI and the PR comment: `(secret ← env://KEY)`
+    only for a `{ secret }` reference, `(value hidden ← db.connection_string)` for a sensitive `{ from }` output, and a
+    literal as itself. Before, a connection string read as a secret and a literal Vercel variable as `(secret)`.
+    Adapters name the param a diff comes from (`ResourceDiff.input`; Vercel, Netlify and Cloudflare Pages variables), and
+    the engine describes the new side from it.
+  - Drift is said once: a drifted resource says "changed outside Sponson" on its own row (CLI) or next to its name (PR
+    comment), the refused line keeps only the code and the fix, and the drift section lists only what no line shows.
+    Under `apply`'s table the last line names the failed line and its code instead of repeating the error.
+  - `apply --destroy` no longer prints an `outputs` block for what it just deleted (the receipt keeps the outputs).
+  - No internal field names in human text: a refused production run says "This run applies to production, and nobody
+    approved it." (was "approval is required (approvedBy)").
+  - The `DRIFT_CHANGED` hint says in plain words what `--reconcile` does to a resource deleted and re-created outside
+    Sponson: it adopts the new one, keeps it and will not delete it.
+- Updated dependencies [8f7be6e]
+  - @sponson/core@0.9.1
+
 ## 0.9.0
 
 ### Minor Changes
