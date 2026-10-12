@@ -507,6 +507,19 @@ categories:
         priority: P2
         covered_by: manual.step
         why: "no public API for sandboxes in your own account (re-checked 2026-10-12): docs.stripe.com/sandboxes/dashboard/manage creates and deletes them in the Dashboard only, up to five per account, the Claimable Sandboxes API (docs.stripe.com/sandboxes/claimable-sandboxes) makes anonymous sandboxes that no existing account owns, for coding platforms that set up Stripe for their users, needs a Stripe App that Stripe reviews, uses a preview API version and has no delete (unclaimed ones are deleted after 60 days), and `stripe sandbox create` (docs.stripe.com/cli/sandbox) provisions an account-less sandbox only when the CLI is logged out ('If you're already logged in, sandbox create opens the sandbox management page in your Stripe Dashboard') that expires after 7 days"
+  - id: cms
+    title: Headless CMS content per preview
+    rows:
+      - id: contentful-environment
+        provider: Contentful
+        side_effect: Sandbox environment per PR copied from master (entries, assets, content types, locales), readable by the app's delivery and preview API keys; deleted when the PR closes
+        api_shape: "CMA `PUT /spaces/{s}/environments/{id}` with `X-Contentful-Source-Environment`, `DELETE` the same; bearer token; object; the copy is asynchronous (`sys.status` `queued` → `ready`); the API key's `environments` is a **list** written whole with `X-Contentful-Version`"
+        generic: P (asynchronous copy; a versioned list on the API key)
+        priority: P1
+        covered_by:
+          - contentful.environment
+          - contentful.api_key_access
+        note: "waits until the copy is ready; the key's other environments are left alone; a space holds at most 151 environments and plans include fewer sandboxes (2 to 4 below Enterprise)"
 secret_sources:
   - id: doppler
     provider: Doppler

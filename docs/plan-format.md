@@ -261,6 +261,7 @@ The base URL override replaces the provider's API base URL (the test suites poin
 | `xata` | [`xata.branch`](#xatabranch) | `XATA_API_KEY` | `XATA_API_URL` |
 | `digitalocean` | [`digitalocean.app`](#digitaloceanapp) | `DIGITALOCEAN_ACCESS_TOKEN` | `DIGITALOCEAN_API_URL` |
 | `cloud_run` | [`cloud_run.revision`](#cloud_runrevision) | the token `gcloud auth print-access-token` prints (bearer) | `CLOUD_RUN_API_URL` |
+| `contentful` | [`contentful.environment`](#contentfulenvironment), [`contentful.api_key_access`](#contentfulapi_key_access) | `CONTENTFUL_MANAGEMENT_TOKEN` | `CONTENTFUL_API_URL` |
 <!-- generated:adapters:end -->
 
 A missing credential fails the line with `PROVIDER_AUTH`. Every resource has a key that identifies it within the
@@ -1113,6 +1114,45 @@ traffic shares and other tags alone; the revision is left for Cloud Run, which d
 past 1000 per service, oldest first. Every line on a service locks it (`cloud_run:<project>/<region>:service:<service>`).
 Not listed for drift or adoption.
 
+### `contentful.environment`
+
+A sandbox environment of a Contentful space per scope, copied from another environment (entries, assets, content
+types, locales and the rest of what Contentful copies). Requires `providers.contentful.space` (the space id) and a
+personal access token in `CONTENTFUL_MANAGEMENT_TOKEN` whose role may create and delete environments;
+`CONTENTFUL_API_URL` points it at another host (`https://api.eu.contentful.com` for EU data residency).
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | string | (required) | The environment id, 1 to 40 letters, digits, `-`, `_` or `.` (`${ctx.scope}`); its identity (key `environment:<id>`). `master` is refused. |
+| `source` | string | `master` | The environment it is copied from, when it is created. |
+
+Contentful copies an environment asynchronously, so `apply` waits until its status is `ready` (polling every 3
+seconds, up to `SPONSON_CONTENTFUL_READY_TIMEOUT_MS`, ten minutes by default; then `WAIT_TIMEOUT`, and the next
+`plan` shows the line as an update to `ready` that `apply` waits for without writing). A copy that ends `failed` is
+refused with what to do. Outputs: `environment_id` (for the app's `CONTENTFUL_ENVIRONMENT` and an
+`api_key_access` line) and `status`. **Drift**: only the environment's existence; its content is the sandbox's to
+change, and `source` is used only when it is created. A deleted environment is `missing`, and the next apply copies it
+again. **Destroy** deletes the environment (never `master`). Contentful limits a space to 151 environments and 12
+creations per 5 minutes, and plans include fewer sandbox environments than that. Not listed for drift or adoption.
+
+### `contentful.api_key_access`
+
+Lets a delivery API key, and with it its preview API key, read an environment: Contentful answers 404 to a key for
+any environment not in its `environments` list, so a new sandbox is unreadable to the app's keys until it is added.
+Requires `providers.contentful.space`.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `api_key_id` | string | (required) | The delivery API key's id (Settings, API keys; the id in the key's URL). |
+| `environment` | string | (required) | The environment id, usually `{ from: <environment line>.environment_id }`. |
+
+Key `api_key:<key id>:environment:<environment id>`. The key's environments are one list on a shared object: the line
+reads the key, adds its environment and writes the list back with the version it read (`X-Contentful-Version`), again
+when another writer changed the key in between (up to three rounds), and every line on the key locks it
+(`contentful:<space>:api_key:<key id>`, [ADR 0019](adr/0019-parent-object-locks.md)). **Drift**: the environment
+missing from the key's list is `missing`, added again by the next apply. **Destroy** removes only this environment
+from the key; the key's other environments stay. Not listed for drift or adoption.
+
 ### Outputs
 
 The outputs each built-in op declares. `immediate` outputs exist once the line is applied; `external` ones only after
@@ -1160,6 +1200,9 @@ the named event. Sensitive outputs are never displayed, logged or written to rec
 | `digitalocean.app` | `live_url` | immediate | no |
 | `cloud_run.revision` | `url` | immediate | no |
 | `cloud_run.revision` | `revision` | immediate | no |
+| `contentful.environment` | `environment_id` | immediate | no |
+| `contentful.environment` | `status` | immediate | no |
+| `contentful.api_key_access` | (none) | | |
 <!-- generated:outputs:end -->
 
 ### Once-only outputs

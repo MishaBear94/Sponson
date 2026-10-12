@@ -28,6 +28,7 @@ All fetched on 2026-10-10 (LaunchDarkly, PlanetScale, Supabase, Netlify: 2026-10
 | Cloudflare | OpenAPI document, https://github.com/cloudflare/api-schemas (`openapi.json`); API reference https://developers.cloudflare.com/api/resources/pages/subresources/projects/methods/get/ and [`…/methods/edit/`](https://developers.cloudflare.com/api/resources/pages/subresources/projects/methods/edit/); the Pages and fundamentals pages cited below | fetched 2026-10-11 |
 | Algolia | Search API reference https://www.algolia.com/doc/rest-api/search/, generated from https://github.com/algolia/api-clients-automation (`specs/search`: `spec.yml`, `operationIndex.yml`, `getTask.yml`, `settings.yml`, `listIndices.yml`); copy guide https://www.algolia.com/doc/guides/sending-and-managing-data/manage-indices-and-apps/manage-indices/how-to/copy-indices; CLI authentication https://www.algolia.com/doc/tools/cli/authentication | fetched 2026-10-11 |
 | Xata | OpenAPI document https://api.xata.tech/openapi.json; docs https://xata.io/docs/cli, https://xata.io/docs/cli/branch, https://xata.io/docs/platform/branch | fetched 2026-10-11 |
+| Contentful | CMA reference https://www.contentful.com/developers/docs/references/content-management-api/ (environments, environment states, API keys, versioning) and https://www.contentful.com/developers/docs/technical-limits/, read through the Wayback Machine (contentful.com answers automated fetches with 429); official SDK source https://github.com/contentful/contentful-management.js (`lib/adapters/REST/endpoints/environment.ts`, `api-key.ts`, `rest-adapter.ts`), recorded API traffic in https://github.com/contentful/contentful-management.py (`fixtures/environment/*.yaml`, `fixtures/api_key/*.yaml`), CLI https://github.com/contentful/contentful-cli (`environment create --await-processing`) | fetched 2026-10-12 |
 | DigitalOcean | OpenAPI document https://github.com/digitalocean/openapi (`specification/resources/apps`: `apps_create.yml`, `apps_get.yml`, `apps_update.yml`, `apps_delete.yml`, `apps_list.yml`, `apps_get_deployment.yml`, `models/app.yml`, `models/app_spec.yml`, `models/app_variable_definition.yml`, `models/apps_deployment_phase.yml`), rendered at https://docs.digitalocean.com/reference/api/digitalocean/#tag/Apps; app spec reference https://docs.digitalocean.com/products/app-platform/reference/app-spec/ | fetched 2026-10-11 |
 | Google Cloud Run | Discovery document https://run.googleapis.com/$discovery/rest?version=v2 (Service, RevisionTemplate, TrafficTarget, TrafficTargetStatus, Revision, Condition, Operation, Status; `services.patch`, `services.revisions.get`, `operations.get`); REST reference https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.services and [`…/patch`](https://docs.cloud.google.com/run/docs/reference/rest/v2/projects.locations.services/patch); docs https://docs.cloud.google.com/run/docs/rollouts-rollbacks-traffic-migration, https://docs.cloud.google.com/run/docs/configuring/services/containers, https://docs.cloud.google.com/run/docs/managing/revisions, https://docs.cloud.google.com/run/docs/triggering/https-request, https://docs.cloud.google.com/run/quotas; gcloud references https://docs.cloud.google.com/sdk/gcloud/reference/run/deploy and https://docs.cloud.google.com/sdk/gcloud/reference/auth/print-access-token | fetched 2026-10-11 |
 | HashiCorp Vault | KV v2 API https://developer.hashicorp.com/vault/api-docs/secret/kv/kv-v2 ("Read secret version"); HTTP API overview (token header, namespaces, status codes, error format) https://developer.hashicorp.com/vault/api-docs | fetched 2026-10-11 |
@@ -423,6 +424,34 @@ Deploy Previews cannot be rebuilt through any documented call (the docs describe
 | XA5 | ready when healthy, broken on a fault | field ✅; enum spelling ❓ (pinned) |
 | XA6 | credentials readable at any time | endpoint ✅; "any time" inferred |
 | XA7 | ready within minutes | ❓ (bounded by `SPONSON_XATA_READY_TIMEOUT_MS`) |
+
+## Contentful
+
+### Calls the adapter makes
+
+| Call | What the adapter sends and reads | Spec | Notes |
+|---|---|---|---|
+| base URL and auth | `https://api.contentful.com`, `Authorization: Bearer <CONTENTFUL_MANAGEMENT_TOKEN>`, `Content-Type: application/vnd.contentful.management.v1+json` | ✅ | The variable is the one Contentful's Terraform provider and migration tool read (CF1, CF3). |
+| `GET /spaces/{space}/environments/{id}` | `sys.id`, `sys.status.sys.id`; `404` is absent | ✅ | Polled until `ready` (`failed` fails), as the CLI's `--await-processing` does (CF4, CF5). |
+| `PUT` of the same path | `{ name }`, `X-Contentful-Source-Environment: <source>`; `201` with status `queued` | ✅ | A `409` (it exists: a create whose answer was lost) is read and waited for, claimed by the engine (CF2, CF6 ❓). |
+| `DELETE` of the same path | `204`; `404` is gone | ✅ | Never `master` (CF5). |
+| `GET /spaces/{space}/api_keys/{id}` | `name`, `description`, `environments[].sys.id`, `sys.version` | ✅ | (CF7) |
+| `PUT` of the same path | `{ name, description, environments }` with `X-Contentful-Version`; reads the answer's `environments` | ✅ | The fields the official SDK sends; a `409` is read and written again, three rounds at most (CF6, CF7). |
+
+### Sim assumptions (`packages/sim/src/routes/contentful.ts`)
+
+| Id | Assumption | Status |
+|---|---|---|
+| CF1 | base URL, bearer token, `CONTENTFUL_MANAGEMENT_TOKEN` | ✅ verified (EU host ❓) |
+| CF2 | `PUT` with an id creates, copied from the source header (default `master`); `201`, `queued` | ✅ verified |
+| CF3 | the CMA media type on every body | ✅ verified (whether plain JSON is refused ❓; the sim refuses it) |
+| CF4 | `queued` → `inProgress` → `ready` / `failed`, read on the environment | ✅ verified (pinned) |
+| CF5 | `404 NotFound`; `DELETE` `204`; `master` cannot be deleted | ✅ verified |
+| CF6 | an update needs the current version, else `409 VersionMismatch` | rule ✅; the status for a create on an existing id ❓ |
+| CF7 | an API key reads only the environments it links; `PUT` with the version replaces them | ✅ verified (pinned) |
+| CF8 | the environment list envelope | ✅ verified (not used by the adapter) |
+| CF9 | 151 environments per space, 12 creations per 5 minutes | ✅ verified (per-plan counts ❓) |
+| CF10 | a copy is ready within minutes | ❓ (bounded by `SPONSON_CONTENTFUL_READY_TIMEOUT_MS`) |
 
 ## DigitalOcean
 

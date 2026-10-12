@@ -197,6 +197,8 @@ const NOUNS: Record<string, [string, string]> = {
   "supabase.auth_redirect": ["auth callback", "auth callbacks"],
   "launchdarkly.flag_target": ["feature flag target", "feature flag targets"],
   "algolia.index": ["search index", "search indexes"],
+  "contentful.environment": ["content environment", "content environments"],
+  "contentful.api_key_access": ["content API key grant", "content API key grants"],
   "cloud_run.revision": ["Cloud Run revision", "Cloud Run revisions"],
   "digitalocean.app": ["app", "apps"],
   "vercel.deploy": ["deployment", "deployments"],

@@ -53,6 +53,7 @@ const BLOCKS: Record<string, { block: Record<string, unknown>; reaches: string; 
   algolia: { block: { application_id: "app" }, reaches: "application app" },
   digitalocean: { block: {}, reaches: "account" },
   xata: { block: { organization: "acme", project: "app" }, reaches: "project app", other: { organization: "acme", project: "other" } },
+  contentful: { block: { space: "space1" }, reaches: "space space1", other: { space: "other" } },
 };
 
 function actxFor(s: SimHandle, provider: Record<string, unknown>, env: NodeJS.ProcessEnv = {}): AdapterContext {

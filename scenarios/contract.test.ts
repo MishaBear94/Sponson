@@ -59,7 +59,7 @@ import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CLERK_DEFAULT_API_URL, CLOUDFLARE_DEFAULT_API_URL, CLOUD_RUN_DEFAULT_API_URL, algoliaAdapter, cloudRunAdapter, createCloudRunAdapter, digitaloceanAdapter, xataAdapter, LAUNCHDARKLY_DEFAULT_API_URL, NEON_DEFAULT_API_URL, NETLIFY_DEFAULT_API_URL, PLANETSCALE_DEFAULT_API_URL, SUPABASE_DEFAULT_API_URL, VERCEL_DEFAULT_API_URL, clerkAdapter, cloudflareAdapter, launchdarklyAdapter, neonAdapter, netlifyAdapter, planetscaleAdapter, supabaseAdapter, vercelAdapter } from "@sponson/adapters";
+import { CLERK_DEFAULT_API_URL, CLOUDFLARE_DEFAULT_API_URL, CLOUD_RUN_DEFAULT_API_URL, algoliaAdapter, cloudRunAdapter, createCloudRunAdapter, digitaloceanAdapter, xataAdapter, contentfulAdapter, LAUNCHDARKLY_DEFAULT_API_URL, NEON_DEFAULT_API_URL, NETLIFY_DEFAULT_API_URL, PLANETSCALE_DEFAULT_API_URL, SUPABASE_DEFAULT_API_URL, VERCEL_DEFAULT_API_URL, clerkAdapter, cloudflareAdapter, launchdarklyAdapter, neonAdapter, netlifyAdapter, planetscaleAdapter, supabaseAdapter, vercelAdapter } from "@sponson/adapters";
 import type { AdapterContext, Ctx } from "@sponson/core";
 import { SUPABASE_DEMO_PROJECT, simEnv, startSim, type SimHandle } from "@sponson/sim";
 import { cliEnv, runCli, workspace, type CliRun, type Workspace } from "./support.js";
@@ -854,6 +854,56 @@ describe.skipIf(LIVE && !XA_LIVE)(`contract: xata (${LIVE ? "@live" : "sim"})`, 
     await op.destroy(xactx(), [made!]);
     expect(await op.read(xactx(), params)).toBeNull();
     made = undefined;
+  }, 120_000);
+});
+
+/**
+ * Contentful (`assumption CF…`, packages/sim/src/routes/contentful.ts). Live only with CONTENTFUL_MANAGEMENT_TOKEN,
+ * SPONSON_LIVE_CONTENTFUL_SPACE and SPONSON_LIVE_CONTENTFUL_API_KEY (a delivery API key's id in that space); it copies
+ * master into the sandbox environment `sponson-ct-<tag>` (it counts against the space's environments while it
+ * exists), lets the key read it, and removes both in `afterAll`.
+ */
+const CTF_LIVE = ["CONTENTFUL_MANAGEMENT_TOKEN", "SPONSON_LIVE_CONTENTFUL_SPACE", "SPONSON_LIVE_CONTENTFUL_API_KEY"].every((k) => process.env[k]);
+describe.skipIf(LIVE && !CTF_LIVE)(`contract: contentful (${LIVE ? "@live" : "sim"})`, () => {
+  const envOp = contentfulAdapter.ops.environment!;
+  const accessOp = contentfulAdapter.ops.api_key_access!;
+  const envParams = { name: `sponson-ct-${tag}`.slice(0, 40) };
+  const accessParams = { api_key_id: LIVE ? process.env.SPONSON_LIVE_CONTENTFUL_API_KEY! : "key1", environment: envParams.name };
+  const cctx = (): AdapterContext => {
+    const ctx: Ctx = { env: "preview", git: { branch, sha, short_sha: sha.slice(0, 7) }, pr: { number: pr }, scope: `pr-${pr}` };
+    return { ctx, provider: { space: LIVE ? process.env.SPONSON_LIVE_CONTENTFUL_SPACE! : "space1" }, env: { ...env, SPONSON_CONTENTFUL_POLL_MS: LIVE ? "3000" : "1" }, log: () => {}, intend: async () => {}, redact: (t) => t };
+  };
+  let environment: { key: string; id: string; hash: string } | undefined;
+  let grant: { key: string; id: string; hash: string } | undefined;
+
+  afterAll(async () => {
+    if (grant) await accessOp.destroy(cctx(), [grant]).catch(() => {});
+    if (environment) await envOp.destroy(cctx(), [environment]).catch(() => {});
+  }, 120_000);
+
+  it("assumption CF2, CF4: a copy of master comes up ready and reads back unchanged", async () => {
+    const r = await envOp.apply(cctx(), envParams, null);
+    environment = r.resources[0];
+    expect(r.outputs.status).toBe("ready");
+    const live = await envOp.read(cctx(), envParams);
+    expect(envOp.diff(live, envParams)[0]!.kind).toBe("unchanged");
+  }, 15 * 60_000);
+
+  it("assumption CF6, CF7: an API key takes the environment with the version read, and gives it up again", async () => {
+    const r = await accessOp.apply(cctx(), accessParams, null);
+    grant = r.resources[0];
+    expect(await accessOp.read(cctx(), accessParams)).not.toBeNull();
+    await accessOp.destroy(cctx(), r.resources);
+    expect(await accessOp.read(cctx(), accessParams)).toBeNull();
+    grant = undefined;
+  }, 120_000);
+
+  it("assumption CF5: a deleted environment is gone, and deleting it again succeeds", async () => {
+    const live = await envOp.read(cctx(), envParams);
+    await envOp.destroy(cctx(), live!.resources);
+    expect(await envOp.read(cctx(), envParams)).toBeNull();
+    await envOp.destroy(cctx(), live!.resources);
+    environment = undefined;
   }, 120_000);
 });
 

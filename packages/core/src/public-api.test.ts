@@ -52,6 +52,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "DIGITALOCEAN_DEFAULT_API_URL", "digitaloceanAdapter",
     "CLOUD_RUN_DEFAULT_API_URL", "cloudRunAdapter", "createCloudRunAdapter",
     "manualAdapter",
+    "CONTENTFUL_DEFAULT_API_URL", "contentfulAdapter",
   ],
   "@sponson/sim": [
     "CHAOS_KEYS", "ChaosAction", "ChaosConfig", "ChaosRequest", "ClerkRedirect", "ClerkSeed", "ClerkState",
@@ -75,6 +76,7 @@ const PUBLIC_API: Record<string, string[]> = {
     "XataBranch", "XataState", "XataSeed", "xataSim", "xataConnectionString",
     "DigitaloceanApp", "DigitaloceanState", "DigitaloceanSeed", "digitaloceanSim",
     "CloudRunTrafficTarget", "CloudRunRevision", "CloudRunService", "CloudRunOperation", "CloudRunState", "CloudRunSeedService", "CloudRunSeed", "cloudRunSim",
+    "ContentfulEnvironment", "ContentfulApiKey", "ContentfulSpace", "ContentfulState", "ContentfulSeed", "contentfulSim", "CONTENTFUL_MEDIA_TYPE", "contentfulEnvironmentIds",
   ],
   "sponson": [
     "CtxFacts", "CtxOverrides", "CtxSource", "DEFAULT_CTX_SOURCES", "RunIO", "SponsonPlugin", "bitbucketPipelinesSource",

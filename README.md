@@ -145,7 +145,7 @@ One release, one plan. Three commands.
 ## Supported providers
 
 <!-- generated:providers-summary:start (scripts/gen-docs.ts; run `pnpm docs:gen`) -->
-Sponson manages per-environment state at **53 providers** in 11 categories, from deploy targets and databases to auth callbacks, feature flags, webhooks and DNS: 15 first-class ops and 56 recipe ops. `sponson init` detects 49 of them from a repository's files and writes their lines.
+Sponson manages per-environment state at **54 providers** in 12 categories, from deploy targets and databases to auth callbacks, feature flags, webhooks and DNS: 17 first-class ops and 56 recipe ops. `sponson init` detects 50 of them from a repository's files and writes their lines.
 
 [docs/providers.md](docs/providers.md) lists every one: what Sponson manages there, the op or recipe, the credential, what `init` detects it by and a line to start from.
 <!-- generated:providers-summary:end -->

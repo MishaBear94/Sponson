@@ -1,0 +1,80 @@
+# The Contentful adapter end to end through the CLI against the sim: a sandbox environment per scope copied from
+# master and waited for until ready (CF4), the delivery API key let read it (CF7), its id passed to a Vercel preview
+# variable by reference; re-apply without writes; a deleted environment and a removed key link put back; destroy
+# removing only what Sponson made (master and the key's other environments stay).
+# Format: see the top of scenarios/runner.test.ts.
+name: "contentful: environment copied and waited for, API key access, recreated when deleted, destroy only what was made"
+plan: |
+  version: 1
+  providers:
+    contentful: { space: space1 }
+    vercel: { project: prj_demo }
+  changes:
+    - id: content
+      adapter: contentful
+      op: environment
+      name: "${ctx.scope}"
+      environments: [preview]
+    - id: delivery
+      adapter: contentful
+      op: api_key_access
+      api_key_id: key1
+      environment: { from: content.environment_id }
+      environments: [preview]
+    - id: env
+      adapter: vercel
+      op: env
+      target: preview
+      values:
+        CONTENTFUL_ENVIRONMENT: { from: content.environment_id }
+      environments: [preview]
+env:
+  SPONSON_CONTENTFUL_POLL_MS: "5"
+seed:
+  contentful:
+    spaces:
+      space1: { environments: [master], api_keys: { key1: [master] } }
+    readyPolls: 2
+steps:
+  - run: plan --json
+    expect:
+      exit: 0
+      plan_lines: { content: create, delivery: pending, env: pending }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { content: applied, delivery: applied, env: applied }
+      outputs: { content: { environment_id: pr-42, status: ready } }
+  - sim:
+      vercel_env: { preview: { CONTENTFUL_ENVIRONMENT: exists } }
+      write_order: ["PUT /contentful/spaces/space1/environments/pr-42", "PUT /contentful/spaces/space1/api_keys/key1"]
+      state:
+        "contentful.spaces.space1.environments.pr-42.status": ready
+        "contentful.spaces.space1.apiKeys.key1.environments": [master, pr-42]
+  - run: apply --json
+    expect:
+      exit: 0
+      writes: 0
+      lines: { content: unchanged, delivery: unchanged, env: unchanged }
+  # Someone deletes the environment and removes it from the key in the web app: missing drift, put back by the next apply.
+  - chaos:
+      drift: { "contentful.environment.pr-42": "delete", "contentful.api_key.key1.pr-42": "remove" }
+  - run: plan --json
+    expect:
+      exit: 0
+      plan_lines: { content: create, delivery: pending }
+  - run: apply --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { content: applied, delivery: applied }
+  - run: apply --destroy --json
+    expect:
+      exit: 0
+      status: complete
+      lines: { content: destroyed, delivery: destroyed, env: destroyed }
+  - sim:
+      state:
+        "contentful.spaces.space1.environments.master.status": ready
+        "contentful.spaces.space1.apiKeys.key1.environments": [master]

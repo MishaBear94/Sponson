@@ -20,12 +20,13 @@ import { algoliaSim } from "./routes/algolia.js";
 import { xataSim } from "./routes/xata.js";
 import { digitaloceanSim } from "./routes/digitalocean.js";
 import { cloudRunSim } from "./routes/cloud_run.js";
+import { contentfulSim } from "./routes/contentful.js";
 
 /**
  * Every simulated provider, by URL prefix (`/<name>/…`), drift prefix (`<name>.…`), seed key and state key.
  * Order matters only for determinism: resets seed providers (and so allocate ids) in this order.
  */
-export const PROVIDERS = { vercel: vercelSim, neon: neonSim, clerk: clerkSim, planetscale: planetscaleSim, launchdarkly: launchdarklySim, rest: restSim, supabase: supabaseSim, netlify: netlifySim, cloudflare: cloudflareSim, aws: awsSim, railway: railwaySim, fly: flySim, algolia: algoliaSim, xata: xataSim, digitalocean: digitaloceanSim, cloud_run: cloudRunSim };
+export const PROVIDERS = { vercel: vercelSim, neon: neonSim, clerk: clerkSim, planetscale: planetscaleSim, launchdarkly: launchdarklySim, rest: restSim, supabase: supabaseSim, netlify: netlifySim, cloudflare: cloudflareSim, aws: awsSim, railway: railwaySim, fly: flySim, algolia: algoliaSim, xata: xataSim, digitalocean: digitaloceanSim, cloud_run: cloudRunSim, contentful: contentfulSim };
 
 type Providers = typeof PROVIDERS;
 /** A simulated provider's name: its URL prefix, seed key and state key. */

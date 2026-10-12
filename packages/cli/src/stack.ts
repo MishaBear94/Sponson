@@ -241,7 +241,7 @@ export const UNSUPPORTED: Rule[] = [
 ];
 
 /** The order providers are summarised in, by category; categories not listed come after, in detection order. */
-const CATEGORY_ORDER = ["deploy", "databases", "auth", "flags", "webhooks", "email", "observability", "dns", "cors", "queues", "search-payments"];
+const CATEGORY_ORDER = ["deploy", "databases", "auth", "flags", "webhooks", "email", "observability", "dns", "cors", "queues", "search-payments", "cms", "backend"];
 
 /** Prefixes frameworks put in front of a variable the browser may see; a provider's names match behind them. */
 const PUBLIC_PREFIXES = ["NEXT_PUBLIC_", "NUXT_PUBLIC_", "EXPO_PUBLIC_", "PUBLIC_", "VITE_", "REACT_APP_", "GATSBY_"];

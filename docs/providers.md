@@ -9,7 +9,7 @@ through the same), what `sponson init` detects it by, and a line to start from.
 for every provider it detects: ready to apply when it knows every value, else commented out with a `# TODO:` that
 says where to find each missing one.
 
-53 providers in 11 categories: 15 ops of first-class adapters and 56 recipe ops, plus 3 steps no API reaches, tracked as [`manual.step`](plan-format.md#manualstep) lines. `sponson init` detects 49 providers.
+54 providers in 12 categories: 17 ops of first-class adapters and 56 recipe ops, plus 3 steps no API reaches, tracked as [`manual.step`](plan-format.md#manualstep) lines. `sponson init` detects 50 providers.
 
 - First-class ops: [the plan format](plan-format.md#built-in-ops). Recipes: [Recipes](recipes.md).
 - What is covered and what is not, and why: [Provider coverage](coverage.md).
@@ -29,6 +29,7 @@ says where to find each missing one.
 | [CORS and allowed origins](#cors-and-allowed-origins) | [Firebase Storage (GCS bucket)](#firebase-storage-gcs-bucket), [S3 / R2](#s3--r2) |
 | [Queues, caches, background jobs](#queues-caches-background-jobs) | [Upstash Redis](#upstash-redis), [Upstash QStash](#upstash-qstash), [Inngest](#inngest) |
 | [Search, payments test mode](#search-payments-test-mode) | [Algolia](#algolia), [Stripe test-mode objects](#stripe-test-mode-objects), [Stripe sandboxes](#stripe-sandboxes) |
+| [Headless CMS content per preview](#headless-cms-content-per-preview) | [Contentful](#contentful) |
 
 ## Deploy targets and their environment variables
 
@@ -1357,5 +1358,32 @@ changes:
       4. Save. Google may take a few minutes to accept the new URI.
     undo: |
       In the same client, remove `{url}/api/auth/callback/google` from **Authorized redirect URIs**, and save.
+    environments: [preview]
+```
+
+## Headless CMS content per preview
+
+| Provider | What Sponson manages | Ops | Credential |
+|---|---|---|---|
+| [Contentful](#contentful) | Sandbox environment per PR copied from master (entries, assets, content types, locales), readable by the app's delivery and preview API keys; deleted when the PR closes | [`contentful.environment`](plan-format.md#contentfulenvironment), [`contentful.api_key_access`](plan-format.md#contentfulapi_key_access) | `CONTENTFUL_MANAGEMENT_TOKEN` |
+
+### Contentful
+
+Sandbox environment per PR copied from master (entries, assets, content types, locales), readable by the app's delivery and preview API keys; deleted when the PR closes (waits until the copy is ready; the key's other environments are left alone; a space holds at most 151 environments and plans include fewer sandboxes (2 to 4 below Enterprise)).
+
+- **Ops**: [`contentful.environment`](plan-format.md#contentfulenvironment), [`contentful.api_key_access`](plan-format.md#contentfulapi_key_access)
+- **Credential**: `CONTENTFUL_MANAGEMENT_TOKEN`
+- **Token**: [create it](https://www.contentful.com/developers/docs/references/authentication/): A personal access token (or an OAuth token) with the content_management_manage scope, of a user whose role may create and delete sandbox environments and edit API keys in the space. `sponson init --setup` checks it with one read-only request.
+- **Detected by `sponson init` from**: `contentful`, `contentful-management`, `@contentful/*`, `CONTENTFUL_*`
+
+```yaml
+# from scenarios/adapters/contentful.yaml
+providers:
+  contentful: { space: space1 }
+changes:
+  - id: content
+    adapter: contentful
+    op: environment
+    name: ${ctx.scope}
     environments: [preview]
 ```

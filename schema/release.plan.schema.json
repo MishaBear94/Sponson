@@ -20,6 +20,12 @@
       "type": "object",
       "additionalProperties": { "type": "object" },
       "properties": {
+        "contentful": {
+          "type": "object",
+          "description": "The Contentful space id. Credential: CONTENTFUL_MANAGEMENT_TOKEN in the environment (a personal access token with content_management_manage); CONTENTFUL_API_URL for the EU host.",
+          "required": ["space"],
+          "properties": { "space": { "type": "string", "minLength": 1 } }
+        },
         "digitalocean": {
           "type": "object",
           "description": "Nothing to configure: the account is the token's. Credential: DIGITALOCEAN_ACCESS_TOKEN in the environment.",
@@ -238,7 +244,7 @@
       "required": ["id", "adapter", "op"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk, planetscale, launchdarkly, supabase, netlify, cloudflare, algolia, xata, digitalocean, cloud_run, http (any JSON REST API described in the plan), and manual (a step a person does by hand). Plugins (SPONSON_PLUGINS) add more." },
+        "adapter": { "type": "string", "minLength": 1, "description": "Built in: neon, vercel, clerk, planetscale, launchdarkly, supabase, netlify, cloudflare, algolia, xata, digitalocean, cloud_run, http (any JSON REST API described in the plan), and manual (a step a person does by hand), contentful. Plugins (SPONSON_PLUGINS) add more." },
         "op": { "type": "string", "minLength": 1 },
         "environments": { "$ref": "#/$defs/nameList", "description": "Environments this line applies to. Absent: all." },
         "depends_on": { "type": "array", "items": { "$ref": "#/$defs/id" }, "description": "Ordering without a data dependency. Prefer `from:` references." }
@@ -324,6 +330,14 @@
         {
           "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "cloud_run" }, "op": { "const": "revision" } } },
           "then": { "$ref": "#/$defs/op_cloud_run_revision" }
+        },
+        {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "contentful" }, "op": { "const": "environment" } } },
+          "then": { "$ref": "#/$defs/op_contentful_environment" }
+        },
+        {
+          "if": { "required": ["adapter", "op"], "properties": { "adapter": { "const": "contentful" }, "op": { "const": "api_key_access" } } },
+          "then": { "$ref": "#/$defs/op_contentful_api_key_access" }
         }
       ]
     },
@@ -981,6 +995,34 @@
         "tag": { "type": "string", "description": "The traffic tag (lowercase letters, digits and -). Default: the scope, e.g. pr-42." },
         "container": { "type": "string", "minLength": 1, "description": "The container of a multi-container service to set. Default: the only one, or the one with ports." },
         "pin_latest": { "type": "boolean", "description": "Allow pinning a share of traffic on LATEST (or empty traffic) to the revision serving it, so the new revision gets none; afterwards production deploys no longer receive traffic by themselves (update-traffic --to-latest). Without it such a service is refused (PARAM_INVALID). Not needed when traffic is on named revisions. Default false." }
+      },
+      "additionalProperties": false
+    },
+    "op_contentful_environment": {
+      "description": "contentful.environment: a sandbox environment per scope, copied from a source environment; apply waits until it is ready. Outputs: environment_id, status.",
+      "required": ["name"],
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "name": { "$ref": "#/$defs/stringOrRef", "description": "The environment id (1 to 40 letters, digits, -, _ or .; not master), e.g. ${ctx.scope}; its identity." },
+        "source": { "$ref": "#/$defs/stringOrRef", "description": "The environment to copy. Default master." }
+      },
+      "additionalProperties": false
+    },
+    "op_contentful_api_key_access": {
+      "description": "contentful.api_key_access: a delivery API key (and its preview key) allowed to read an environment; destroy removes only that environment from the key.",
+      "required": ["api_key_id", "environment"],
+      "properties": {
+        "id": true,
+        "adapter": true,
+        "op": true,
+        "environments": true,
+        "depends_on": true,
+        "api_key_id": { "$ref": "#/$defs/stringOrRef", "description": "The delivery API key's id (Settings, API keys: the id in the key's URL)." },
+        "environment": { "$ref": "#/$defs/stringOrRef", "description": "The environment id, usually { from: <environment line>.environment_id }." }
       },
       "additionalProperties": false
     }
