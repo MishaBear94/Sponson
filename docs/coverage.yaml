@@ -112,6 +112,14 @@ categories:
         priority: P2
         covered_by: digitalocean.app
         note: "an app per scope from a whole spec, waited for until deployed (in place of the app DigitalOcean's GitHub action makes); secret values are not compared"
+      - id: firebase-hosting-channel
+        provider: Firebase Hosting
+        side_effect: Preview channel per PR (`pr-42`) that the preview is deployed into, with its own `web.app` URL; deleted when the PR closes instead of left to expire
+        api_shape: "Hosting REST `POST /v1beta1/sites/{site}/channels?channelId=`, `GET`/`PATCH`/`DELETE …/channels/{id}`; Google OAuth; object; the deploy itself is `firebase hosting:channel:deploy`"
+        generic: Y (`command` token from `gcloud`; the id chosen in the query)
+        priority: P2
+        covered_by: recipe:firebase_hosting.channel
+        note: "the channel only: deploying into it stays `firebase hosting:channel:deploy` (which also authorizes its domain in Firebase Auth); its `url` is an output"
   - id: databases
     title: Databases with branching or per-PR instances
     rows:
@@ -453,6 +461,14 @@ categories:
         generic: "Y (S3 API with `aws_sigv4` and `encoding: xml`; R2 through its S3-compatible endpoint)"
         priority: P2
         covered_by: recipe:s3.bucket_cors
+      - id: sanity-cors
+        provider: Sanity CORS
+        side_effect: Preview origin in the project's CORS origins, so browser code, an embedded Studio or the Presentation tool on the preview can query the Content Lake
+        api_shape: "Projects API `POST /projects/{p}/cors` `{ origin, allowCredentials }`, `GET` (bare list), `DELETE …/cors/{id}`; bearer robot token; object"
+        generic: Y
+        priority: P2
+        covered_by: recipe:sanity.cors_origin
+        note: "previews that fetch only on the server need none; `allowCredentials` is set on create (no update is documented)"
   - id: queues
     title: Queues, caches, background jobs
     rows:
@@ -520,6 +536,27 @@ categories:
           - contentful.environment
           - contentful.api_key_access
         note: "waits until the copy is ready; the key's other environments are left alone; a space holds at most 151 environments and plans include fewer sandboxes (2 to 4 below Enterprise)"
+      - id: sanity-dataset
+        provider: Sanity
+        side_effect: Dataset per PR for the preview's content (empty, imported or seeded by the app; or a Cloud Clone copy of production on Enterprise)
+        api_shape: "Projects API `PUT /projects/{p}/datasets/{name}` `{ aclMode }`, `GET` (bare list), `DELETE …/datasets/{name}`; bearer robot token; object; copies are `PUT …/datasets/{source}/copy`, an asynchronous job (Enterprise)"
+        generic: "Y for an empty dataset; P for a Cloud Clone copy (a job to wait for)"
+        priority: P2
+        covered_by: recipe:sanity.dataset
+        note: "an empty dataset per scope; Cloud Clone copies are not covered. Free and Growth include 2 datasets in all, so one preview dataset at a time below Enterprise"
+  - id: backend
+    title: Backend platforms with preview deployments
+    rows:
+      - id: convex-preview-deployment
+        provider: Convex
+        side_effect: Preview deployment per PR (its own functions, data and URL), its deploy key for the preview's build; deleted when the PR closes instead of left to expire
+        api_shape: "Management API `POST /v1/projects/{id}/create_deployment` `{ type: preview, reference }`, `GET …/list_deployments`, `POST /v1/deployments/{name}/delete`; `POST …/create_deploy_key` (`deployKey` returned once); bearer team token; object"
+        generic: Y (a once-only deploy key; a delete named in a `POST` path)
+        priority: P1
+        covered_by:
+          - recipe:convex.preview_deployment
+          - recipe:convex.deploy_key
+        note: "the deployment and a deploy key for it (a once-only output, for `CONVEX_DEPLOY_KEY`); pushing code stays `npx convex deploy`"
 secret_sources:
   - id: doppler
     provider: Doppler

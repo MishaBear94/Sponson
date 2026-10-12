@@ -1,0 +1,107 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Firebase Hosting REST API recipes (preview channels). Format and checklist: docs/adr/0020-recipes.md (Amendment 9),
+# CONTRIBUTING.md "Adding a recipe". A separate file from firebase.yaml because it is another API (another host).
+provider: firebase_hosting
+title: Firebase Hosting
+category: deploy
+verified_on: "2026-10-12"
+docs:
+  - title: Firebase Hosting REST API discovery document (v1beta1, sites.channels)
+    url: https://firebasehosting.googleapis.com/$discovery/rest?version=v1beta1
+  - title: Test, preview, then deploy (preview channels)
+    url: https://firebase.google.com/docs/hosting/test-preview-deploy
+  - title: Manage preview channels, releases and versions
+    url: https://firebase.google.com/docs/hosting/manage-hosting-resources
+  - title: GitHub pull request integration (a channel per PR)
+    url: https://firebase.google.com/docs/hosting/github-integration
+  - title: Firebase predefined roles (Hosting Admin)
+    url: https://firebase.google.com/docs/projects/iam/roles-predefined-product
+  - title: firebase-tools hosting API client (channel create, get, delete)
+    url: https://github.com/firebase/firebase-tools/blob/master/src/hosting/api.ts
+api:
+  base_url: https://firebasehosting.googleapis.com/v1beta1
+  base_url_env: FIREBASE_HOSTING_API_URL
+  auth: { command: [gcloud, auth, print-access-token] }
+credential:
+  url: "https://firebase.google.com/docs/projects/iam/roles-predefined-product"
+  scope: "Sign in with `gcloud auth login` (or activate a service account) as an identity holding Firebase Hosting Admin (roles/firebasehosting.admin) on the project."
+  source: "https://firebase.google.com/docs/projects/iam/roles-predefined-product"
+detect:
+  files: [.github/workflows/firebase-hosting-pull-request.yml]
+  starter:
+    - op: channel
+      values: { channel_id: "${ctx.scope}" }
+  where:
+    site: "the Hosting site id: `hosting.site` in firebase.json, or the project id for the default site"
+assumptions:
+  - id: FH1
+    verified: true
+    text: "The API is served at `https://firebasehosting.googleapis.com/v1beta1` with a Google OAuth access token (scope `firebase` or `cloud-platform`) as `Authorization: Bearer`; Firebase Hosting Admin is the role for writes. With user credentials some Google APIs also need the quota project in `x-goog-user-project`: add `headers: { x-goog-user-project: <project> }` to the `providers.http.firebase_hosting` block (unverified for this API)."
+    source: https://firebasehosting.googleapis.com/$discovery/rest?version=v1beta1
+  - id: FH2
+    verified: true
+    text: "`POST /sites/{site}/channels?channelId=<id>` creates a channel (the id is required and immutable, unique in the site) from a `Channel` body with optional `ttl` (input only, a duration such as `604800s`), `labels` and `retainedReleaseCount`; `GET` and `DELETE /sites/{site}/channels/{id}` read and delete it; the `live` channel cannot be deleted."
+    source: https://firebasehosting.googleapis.com/$discovery/rest?version=v1beta1
+  - id: FH3
+    verified: true
+    text: "A `Channel` answers `name` (`sites/SITE_ID/channels/CHANNEL_ID`), `url` (the channel's `web.app` URL, also served on `firebaseapp.com`), `expireTime`, `retainedReleaseCount` (1 to 100, 10 by default) and `labels`; `PATCH …/channels/{id}?updateMask=` updates the masked fields."
+    source: https://firebasehosting.googleapis.com/$discovery/rest?version=v1beta1
+  - id: FH4
+    verified: true
+    text: "Without `ttl` or `expireTime` a channel is never deleted automatically; the CLI's default is 7 days and the most is 30. An expired channel is deleted within 24 hours, which Sponson sees as `missing` drift and creates again (empty) on the next apply."
+    source: https://firebase.google.com/docs/hosting/manage-hosting-resources
+  - id: FH5
+    verified: true
+    text: "`firebase hosting:channel:deploy <id>` deploys into an existing channel (creating it only when missing) and syncs the channel's domain into Firebase Auth's authorized domains; the GitHub integration's action creates a channel per pull request but never deletes it when the pull request closes (only expiry does)."
+    source: https://firebase.google.com/docs/hosting/github-integration
+  - id: FH6
+    verified: false
+    text: "Creating a channel whose id exists answers 409 (ALREADY_EXISTS), as Google APIs do; firebase-tools always reads first, which the recipe does too, so it only matters after a lost answer."
+  - id: FH7
+    verified: false
+    text: "A channel id is letters, digits, `_`, `-` and `.` (what the GitHub action keeps); the API documents no length limit, and `live` is the site's own channel, refused here."
+ops:
+  channel:
+    kind: resource
+    title: Preview channel
+    summary: "A Firebase Hosting preview channel per scope on a site, such as `pr-42`, that `firebase hosting:channel:deploy` then deploys the preview into (FH5): made before the deploy so its `url` is known to other lines, and deleted when the scope is destroyed instead of left to expire. A console edit of its retained release count is drift; destroy deletes the channel and its releases."
+    covers: [firebase-hosting-channel]
+    params:
+      site:
+        type: string
+        required: true
+        pattern: "^[a-z0-9-]+$"
+        description: The Hosting site id (the project id for the default site).
+        example: demo-project
+      channel_id:
+        type: string
+        required: true
+        pattern: "^(?!live$)[A-Za-z0-9_.-]+$"
+        description: "The channel id, unique in the site (FH7): usually `${ctx.scope}`."
+        example: "${ctx.scope}"
+      ttl:
+        type: string
+        pattern: "^[0-9]+s$"
+        description: "How long until Firebase deletes it by itself, in seconds (`2592000s`, the most: 30 days). Sent on create only; left out, the channel never expires (FH4)."
+      retained_release_count:
+        type: integer
+        default: 10
+        description: How many past releases the channel keeps (1 to 100).
+    http:
+      read: { path: "/sites/{site}/channels/{channel_id}" }
+      create:
+        path: "/sites/{site}/channels?channelId={channel_id}"
+        body: { ttl: { param: ttl } }
+      update:
+        method: PATCH
+        path: "/sites/{site}/channels/{channel_id}?updateMask=retainedReleaseCount"
+      id_path: /name
+      fields:
+        retainedReleaseCount: { param: retained_release_count }
+      outputs:
+        url: /url
+        expire_time: /expireTime
+    sim:
+      id_query: channelId
+    live:
+      params: { site: SPONSON_LIVE_FIREBASE_HOSTING_SITE }

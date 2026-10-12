@@ -54,8 +54,11 @@ names are set.
 | [`cockroachdb.database`](/reference/recipes#cockroachdb-database) | `resource` | Database in a cluster | `COCKROACH_API_KEY` (bearer) |
 | [`cockroachdb.sql_user`](/reference/recipes#cockroachdb-sql_user) | `resource` | SQL user in a cluster | `COCKROACH_API_KEY` (bearer) |
 | [`configcat.targeting_rule`](/reference/recipes#configcat-targeting_rule) | `list_item` | Feature flag targeting rule | `CONFIGCAT_BASIC_AUTH_USERNAME` / `CONFIGCAT_BASIC_AUTH_PASSWORD` (basic) |
+| [`convex.preview_deployment`](/reference/recipes#convex-preview_deployment) | `resource` | Preview deployment | `CONVEX_TEAM_ACCESS_TOKEN` (bearer) |
+| [`convex.deploy_key`](/reference/recipes#convex-deploy_key) | `resource` | Deploy key of a deployment | `CONVEX_TEAM_ACCESS_TOKEN` (bearer) |
 | [`datadog.synthetic_api_test`](/reference/recipes#datadog-synthetic_api_test) | `resource` | Synthetic API test against a preview | `DD_API_KEY` (header `DD-API-KEY`) and `DD_APP_KEY` (header `DD-APPLICATION-KEY`) |
 | [`firebase.authorized_domain`](/reference/recipes#firebase-authorized_domain) | `list_item` | Authorized domain | the token `gcloud auth print-access-token` prints (bearer) |
+| [`firebase_hosting.channel`](/reference/recipes#firebase_hosting-channel) | `resource` | Preview channel | the token `gcloud auth print-access-token` prints (bearer) |
 | [`flagsmith.environment`](/reference/recipes#flagsmith-environment) | `resource` | Environment per preview | `FLAGSMITH_MASTER_API_KEY` (header `Authorization`, after `Api-Key`) |
 | [`fly.secret`](/reference/recipes#fly-secret) | `resource` | App secret | `FLY_API_TOKEN` (bearer) |
 | [`fly_machines.app`](/reference/recipes#fly_machines-app) | `resource` | App | `FLY_API_TOKEN` (bearer) |
@@ -82,6 +85,8 @@ names are set.
 | [`resend.api_key`](/reference/recipes#resend-api_key) | `resource` | API key | `RESEND_API_KEY` (bearer) |
 | [`resend.webhook`](/reference/recipes#resend-webhook) | `resource` | Webhook | `RESEND_API_KEY` (bearer) |
 | [`s3.bucket_cors`](/reference/recipes#s3-bucket_cors) | `list_item` | CORS rule of a bucket | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (AWS SigV4, `s3` in `us-east-1`) |
+| [`sanity.dataset`](/reference/recipes#sanity-dataset) | `resource` | Dataset per preview | `SANITY_AUTH_TOKEN` (bearer) |
+| [`sanity.cors_origin`](/reference/recipes#sanity-cors_origin) | `resource` | CORS origin | `SANITY_AUTH_TOKEN` (bearer) |
 | [`sendgrid.event_webhook`](/reference/recipes#sendgrid-event_webhook) | `resource` | Event Webhook | `SENDGRID_API_KEY` (bearer) |
 | [`sendgrid.parse_setting`](/reference/recipes#sendgrid-parse_setting) | `resource` | Inbound Parse setting | `SENDGRID_API_KEY` (bearer) |
 | [`sentry.release`](/reference/recipes#sentry-release) | `resource` | Release | `SENTRY_AUTH_TOKEN` (bearer) |
@@ -730,6 +735,122 @@ item:
     predefinedVariationId: null
 ```
 
+## Convex
+
+Recipe file: [`packages/adapters/recipes/convex.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/convex.yaml). Verified on 2026-10-12 against:
+
+- [Management API overview (authorization, OpenAPI)](https://docs.convex.dev/management-api/overview)
+- [Management API OpenAPI document](https://api.convex.dev/v1/openapi.json)
+- [Platform APIs, team access tokens](https://docs.convex.dev/platform-apis/overview)
+- [Multiple deployments, preview deployments](https://docs.convex.dev/production/multiple-deployments)
+- [Hosting on Vercel, preview deployments](https://docs.convex.dev/production/hosting/vercel)
+- [Deploy key types](https://docs.convex.dev/cli/deploy-key-types)
+- [Pricing (preview deployments on every plan)](https://www.convex.dev/pricing)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.convex.dev/v1` |
+| `base_url_env` | `CONVEX_API_URL` |
+| Credential | `CONVEX_TEAM_ACCESS_TOKEN` (bearer) |
+
+Assumptions:
+
+- **CX1** (verified, [source](https://docs.convex.dev/management-api/overview)): The Management API at `https://api.convex.dev/v1` authenticates with `Authorization: Bearer` and a team access token (Team Settings), an OAuth application token or, on preview deployments only, a preview deploy key. Convex names no environment variable for the team token; the recipe reads it from `CONVEX_TEAM_ACCESS_TOKEN`.
+- **CX2** (verified, [source](https://api.convex.dev/v1/openapi.json)): `POST /projects/{project_id}/create_deployment` with `{ type: "preview", reference }` creates a deployment and answers it with `name` (such as `playful-otter-123`), `deploymentUrl`, `reference` and `deploymentType`. A reference is 3 to 100 lowercase letters, digits, `-` and `/`, unique in the project, not shaped like a deployment name and not a reserved word (`preview`, `prod`, `dev`, …).
+- **CX3** (verified, [source](https://api.convex.dev/v1/openapi.json)): `GET /projects/{project_id}/list_deployments?deploymentType=preview` answers a bare list of deployments with their `name` and `reference`; `GET /deployments/{name}` answers one.
+- **CX4** (verified, [source](https://docs.convex.dev/production/multiple-deployments)): Preview deployments are on every plan (Free included); each counts toward the team's deployments (40 on Free, 300 on Professional), and Convex deletes one automatically after the plan's retention (5 days, 14 on Professional and above) unless its `expiresAt` says otherwise. A preview deleted so is `missing` drift, created again by the next apply (empty: its data went with it).
+- **CX5** (verified, [source](https://api.convex.dev/v1/openapi.json)): `POST /deployments/{name}/delete` deletes the deployment with all its data and files; it takes no body (the recipe sends `{}`).
+- **CX6** (verified, [source](https://api.convex.dev/v1/openapi.json)): `POST /deployments/{name}/create_deploy_key` with `{ name }` answers only `{ deployKey }`, the key's value, shown once; `GET /deployments/{name}/list_deploy_keys` lists the keys with their `name` but never their value; `POST /deployments/{name}/delete_deploy_key` with `{ id }` deletes one, `id` being the key's value or its unique name. A preview deploy key cannot call these: the team token can.
+- **CX7** (verified, [source](https://docs.convex.dev/production/hosting/vercel)): `npx convex deploy` reads its deploy key from `CONVEX_DEPLOY_KEY` and deploys to the deployment the key names; a preview deployment's URL is what the frontend's `NEXT_PUBLIC_CONVEX_URL` (or `VITE_CONVEX_URL`, `CONVEX_URL`) must hold.
+- **CX8** **(unverified)**: A deploy key made for a preview deployment with `create_deploy_key` lets `npx convex deploy` push code and set environment variables there, as the dashboard's deployment keys do, and deleting the deployment deletes its keys (a key line is destroyed before the deployment line it references, so it never needs that).
+- **CX9** **(unverified)**: Deployment names are unique, and a reference names at most one deployment of the project, so `find` by `reference` sees one (two would be refused with PARAM_INVALID, never guessed).
+
+### `convex.preview_deployment`
+
+**Preview deployment** (`http.resource`). A Convex preview deployment per scope, a backend with its own data, functions and URL, created through the Management API instead of by `npx convex deploy` with a preview deploy key, so that it exists, with its URL, before the preview builds and is deleted when the scope is destroyed (CX4: not left to expire). Located by `reference`; only its existence is compared for drift; destroy deletes it with its data.
+
+Covers: `convex-preview-deployment` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`, `name`, `url`. On destroy: deleted (`destroy: keep` on the line leaves it). Console link in the PR comment: `https://dashboard.convex.dev/d/{id}` ([pattern documented](https://github.com/get-convex/convex-backend/blob/main/npm-packages/convex/src/cli/lib/dashboard.ts)).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `project_id` | string | yes | — | The project's numeric id. Matches `^[0-9]+$`. |
+| `reference` | string | yes | — | The deployment's reference in the project, its identity here (CX2): usually `${ctx.scope}`. Matches `^[a-z0-9/-]{3,100}$`. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: preview_deployment
+  adapter: http
+  op: resource
+  recipe: convex.preview_deployment
+  project_id: "12345"
+  reference: ${ctx.scope}
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /projects/{project_id}/list_deployments?deploymentType=preview
+  match:
+    reference: { param: reference }
+read:
+  path: /deployments/{id}
+create:
+  path: /projects/{project_id}/create_deployment
+  body:
+    type: preview
+delete:
+  method: POST
+  path: /deployments/{id}/delete
+id_path: /name
+outputs:
+  name: /name
+  url: /deploymentUrl
+```
+
+### `convex.deploy_key`
+
+**Deploy key of a deployment** (`http.resource`). A deploy key for one deployment (such as a `preview_deployment` line's `name`), so the preview's build deploys its functions there with `npx convex deploy` (`CONVEX_DEPLOY_KEY`, CX7). Its value exists only in the create's answer: a once-only output, for the deploy target's variable in the same run. Located by its name; destroy deletes it (it goes with its deployment anyway).
+
+Covers: `convex-preview-deployment` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`, `deploy_key` (sensitive, [once](/reference/plan-format#once-only-outputs): only from the create). On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `deployment` | string | yes | — | The deployment's name: usually `{ from: <preview_deployment line>.name }`. |
+| `name` | string | yes | — | The key's name, unique in the deployment. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: deploy_key
+  adapter: http
+  op: resource
+  recipe: convex.deploy_key
+  deployment: playful-otter-123
+  name: sponson-${ctx.scope}
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /deployments/{deployment}/list_deploy_keys
+  match:
+    name: { param: name }
+create:
+  path: /deployments/{deployment}/create_deploy_key
+delete:
+  method: POST
+  path: /deployments/{deployment}/delete_deploy_key
+  body:
+    id: "{id}"
+id_path: /name
+outputs:
+  deploy_key:
+    path: /deployKey
+    sensitive: true
+    once: true
+```
+
 ## Datadog
 
 Recipe file: [`packages/adapters/recipes/datadog.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/datadog.yaml). Verified on 2026-10-11 against:
@@ -878,6 +999,76 @@ parent:
   read_path: /projects/{project}/config
 list_path: /authorizedDomains
 item: { param: domain }
+```
+
+## Firebase Hosting
+
+Recipe file: [`packages/adapters/recipes/firebase_hosting.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/firebase_hosting.yaml). Verified on 2026-10-12 against:
+
+- [Firebase Hosting REST API discovery document (v1beta1, sites.channels)](https://firebasehosting.googleapis.com/$discovery/rest?version=v1beta1)
+- [Test, preview, then deploy (preview channels)](https://firebase.google.com/docs/hosting/test-preview-deploy)
+- [Manage preview channels, releases and versions](https://firebase.google.com/docs/hosting/manage-hosting-resources)
+- [GitHub pull request integration (a channel per PR)](https://firebase.google.com/docs/hosting/github-integration)
+- [Firebase predefined roles (Hosting Admin)](https://firebase.google.com/docs/projects/iam/roles-predefined-product)
+- [firebase-tools hosting API client (channel create, get, delete)](https://github.com/firebase/firebase-tools/blob/master/src/hosting/api.ts)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://firebasehosting.googleapis.com/v1beta1` |
+| `base_url_env` | `FIREBASE_HOSTING_API_URL` |
+| Credential | the token `gcloud auth print-access-token` prints (bearer) |
+
+Assumptions:
+
+- **FH1** (verified, [source](https://firebasehosting.googleapis.com/$discovery/rest?version=v1beta1)): The API is served at `https://firebasehosting.googleapis.com/v1beta1` with a Google OAuth access token (scope `firebase` or `cloud-platform`) as `Authorization: Bearer`; Firebase Hosting Admin is the role for writes. With user credentials some Google APIs also need the quota project in `x-goog-user-project`: add `headers: { x-goog-user-project: <project> }` to the `providers.http.firebase_hosting` block (unverified for this API).
+- **FH2** (verified, [source](https://firebasehosting.googleapis.com/$discovery/rest?version=v1beta1)): `POST /sites/{site}/channels?channelId=<id>` creates a channel (the id is required and immutable, unique in the site) from a `Channel` body with optional `ttl` (input only, a duration such as `604800s`), `labels` and `retainedReleaseCount`; `GET` and `DELETE /sites/{site}/channels/{id}` read and delete it; the `live` channel cannot be deleted.
+- **FH3** (verified, [source](https://firebasehosting.googleapis.com/$discovery/rest?version=v1beta1)): A `Channel` answers `name` (`sites/SITE_ID/channels/CHANNEL_ID`), `url` (the channel's `web.app` URL, also served on `firebaseapp.com`), `expireTime`, `retainedReleaseCount` (1 to 100, 10 by default) and `labels`; `PATCH …/channels/{id}?updateMask=` updates the masked fields.
+- **FH4** (verified, [source](https://firebase.google.com/docs/hosting/manage-hosting-resources)): Without `ttl` or `expireTime` a channel is never deleted automatically; the CLI's default is 7 days and the most is 30. An expired channel is deleted within 24 hours, which Sponson sees as `missing` drift and creates again (empty) on the next apply.
+- **FH5** (verified, [source](https://firebase.google.com/docs/hosting/github-integration)): `firebase hosting:channel:deploy <id>` deploys into an existing channel (creating it only when missing) and syncs the channel's domain into Firebase Auth's authorized domains; the GitHub integration's action creates a channel per pull request but never deletes it when the pull request closes (only expiry does).
+- **FH6** **(unverified)**: Creating a channel whose id exists answers 409 (ALREADY_EXISTS), as Google APIs do; firebase-tools always reads first, which the recipe does too, so it only matters after a lost answer.
+- **FH7** **(unverified)**: A channel id is letters, digits, `_`, `-` and `.` (what the GitHub action keeps); the API documents no length limit, and `live` is the site's own channel, refused here.
+
+### `firebase_hosting.channel`
+
+**Preview channel** (`http.resource`). A Firebase Hosting preview channel per scope on a site, such as `pr-42`, that `firebase hosting:channel:deploy` then deploys the preview into (FH5): made before the deploy so its `url` is known to other lines, and deleted when the scope is destroyed instead of left to expire. A console edit of its retained release count is drift; destroy deletes the channel and its releases.
+
+Covers: `firebase-hosting-channel` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`, `url`, `expire_time`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `site` | string | yes | — | The Hosting site id (the project id for the default site). Matches `^[a-z0-9-]+$`. |
+| `channel_id` | string | yes | — | The channel id, unique in the site (FH7): usually `${ctx.scope}`. Matches `^(?!live$)[A-Za-z0-9_.-]+$`. |
+| `ttl` | string | no | — | How long until Firebase deletes it by itself, in seconds (`2592000s`, the most: 30 days). Sent on create only; left out, the channel never expires (FH4). Matches `^[0-9]+s$`. |
+| `retained_release_count` | integer | no | `10` | How many past releases the channel keeps (1 to 100). |
+
+```yaml
+# under changes: (no provider block needed)
+- id: channel
+  adapter: http
+  op: resource
+  recipe: firebase_hosting.channel
+  site: demo-project
+  channel_id: ${ctx.scope}
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+read:
+  path: /sites/{site}/channels/{channel_id}
+create:
+  path: /sites/{site}/channels?channelId={channel_id}
+  body:
+    ttl: { param: ttl }
+update:
+  method: PATCH
+  path: /sites/{site}/channels/{channel_id}?updateMask=retainedReleaseCount
+id_path: /name
+fields:
+  retainedReleaseCount: { param: retained_release_count }
+outputs:
+  url: /url
+  expire_time: /expireTime
 ```
 
 ## Flagsmith
@@ -2656,6 +2847,118 @@ item:
   ExposeHeader: { param: expose_headers }
   ID: { param: rule_id }
   MaxAgeSeconds: { param: max_age_seconds }
+```
+
+## Sanity
+
+Recipe file: [`packages/adapters/recipes/sanity.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/sanity.yaml). Verified on 2026-10-12 against:
+
+- [Projects API reference (datasets, CORS origins)](https://www.sanity.io/docs/http-reference/projects-api)
+- [Datasets (naming rules, plan limits, environments)](https://www.sanity.io/docs/content-lake/datasets)
+- [CORS origins (preview deployments)](https://www.sanity.io/docs/content-lake/cors)
+- [HTTP API authentication (robot tokens)](https://www.sanity.io/docs/content-lake/http-auth)
+- [Cloud Clone (dataset copy)](https://www.sanity.io/docs/content-lake/how-to-use-cloud-clone-for-datasets)
+- [CLI configuration (SANITY_AUTH_TOKEN)](https://www.sanity.io/docs/cli-reference/cli-config)
+- [Pricing (datasets per plan)](https://www.sanity.io/pricing)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.sanity.io/v2021-06-07` |
+| `base_url_env` | `SANITY_API_URL` |
+| Credential | `SANITY_AUTH_TOKEN` (bearer) |
+
+Assumptions:
+
+- **SN1** (verified, [source](https://www.sanity.io/docs/http-reference/projects-api)): The Projects API is served at `https://api.sanity.io/<version>` (default `v2021-06-07`) and authenticates with a robot token as `Authorization: Bearer`; the Sanity CLI reads a token for unattended use from `SANITY_AUTH_TOKEN`.
+- **SN2** (verified, [source](https://www.sanity.io/docs/user-guides/roles)): Managing a project's datasets and settings needs the Administrator or Developer role (Developer only on Growth and Enterprise); editors can modify existing datasets but cannot create new ones.
+- **SN3** (verified, [source](https://www.sanity.io/docs/http-reference/projects-api)): `PUT /projects/{projectId}/datasets/{name}` with an optional `{ aclMode }` (`public`, the default, or `private`, a paid feature) creates an empty dataset and answers 200 with `{ datasetName, aclMode }`, not the dataset itself, so the recipe finds it by name afterwards (`create.locate`).
+- **SN4** (verified, [source](https://www.sanity.io/docs/http-reference/projects-api)): `GET /projects/{projectId}/datasets` answers a bare list of `{ name, aclMode, … }`; dataset names are unique in a project.
+- **SN5** (verified, [source](https://www.sanity.io/docs/http-reference/projects-api)): `DELETE /projects/{projectId}/datasets/{name}` deletes the dataset and its documents and answers `{ deleted: true }`.
+- **SN6** (verified, [source](https://www.sanity.io/docs/content-lake/datasets)): A dataset name is 1 to 64 characters of lowercase letters, digits, `-` and `_`, beginning and ending with a letter or digit.
+- **SN7** (verified, [source](https://www.sanity.io/pricing)): Free and Growth plans include 2 datasets (more on Growth cost $999 per dataset per month), and copying a dataset (Cloud Clone, an asynchronous job) is an Enterprise feature; so a dataset per preview is practical on Enterprise, or with one preview dataset at a time below it. This recipe makes an empty dataset; its content is the app's import or seed (application data, not Sponson's), and Cloud Clone copies are not covered.
+- **SN8** (verified, [source](https://www.sanity.io/docs/content-lake/cors)): A browser querying the Content Lake (or a Studio, or the Presentation tool) from an origin must find that origin in the project's CORS origins; preview deployments get a new URL per branch, so the origin cannot be added ahead of time, and unused preview origins should be removed. `https://*.vercel.app` with credentials is unsafe.
+- **SN9** (verified, [source](https://www.sanity.io/docs/http-reference/projects-api)): `GET /projects/{projectId}/cors` answers a bare list of `{ id, origin, allowCredentials, createdAt }` with integer ids; `POST /projects/{projectId}/cors` with `{ origin, allowCredentials? }` creates one (201); `DELETE /projects/{projectId}/cors/{id}` deletes it.
+- **SN10** **(unverified)**: No update of a CORS origin or of a dataset's `aclMode` is documented, so neither is compared for drift: `allowCredentials` and `aclMode` are sent when the line creates the object, and only its existence is checked after.
+- **SN11** **(unverified)**: A dataset being deleted (or a `PUT` of a name that exists) answers within the request; nothing waits, and a dataset is usable as soon as the `PUT` returns.
+
+### `sanity.dataset`
+
+**Dataset per preview** (`http.resource`). An empty Sanity dataset per scope in a project, such as `preview-pr-42`, for the preview to import or seed its content into (SN7: copying production into it is Enterprise's Cloud Clone and is not covered). Located by name; only its existence is compared for drift; destroy deletes the dataset and its documents.
+
+Covers: `sanity-dataset` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`, `name`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `project_id` | string | yes | — | The project id (`projectId` in sanity.config.ts). Matches `^[a-z0-9]+$`. |
+| `name` | string | yes | — | The dataset's name; its identity in the project (SN6). Matches `^(?!.*[-_]$)[a-z0-9][-_a-z0-9]{0,63}$`. |
+| `acl_mode` | string | no | `public` | Who may read it without a token: `public` (Sanity's default) or `private` (Growth and up). Sent on create only (SN10). One of `public`, `private`. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: dataset
+  adapter: http
+  op: resource
+  recipe: sanity.dataset
+  project_id: abc123de
+  name: preview-${ctx.scope}
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /projects/{project_id}/datasets
+  match:
+    name: { param: name }
+create:
+  method: PUT
+  path: /projects/{project_id}/datasets/{name}
+  body:
+    aclMode: { param: acl_mode }
+  send_fields: false
+  locate: true
+delete:
+  path: /projects/{project_id}/datasets/{id}
+id_path: /name
+outputs:
+  name: /name
+```
+
+### `sanity.cors_origin`
+
+**CORS origin** (`http.resource`). The preview deployment's origin in the project's CORS origins (API → CORS origins), so the preview's browser code, an embedded Studio or the Presentation tool can query the Content Lake (SN8). Located by origin; removed on destroy; every other origin is left alone.
+
+Covers: `sanity-cors` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it). Console link in the PR comment: `https://www.sanity.io/manage/project/{project_id}/api` ([pattern documented](https://github.com/sanity-io/client/blob/main/src/http/errors.ts)).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `project_id` | string | yes | — | The project id (`projectId` in sanity.config.ts). Matches `^[a-z0-9]+$`. |
+| `origin` | string | yes | — | The origin, scheme and host without a path or trailing slash: usually `{ from: <deploy line>.preview_url }`. Matches `^https?://[^/\\s]+$`. |
+| `allow_credentials` | boolean | no | `false` | Allow requests with credentials (a token or a login), which a Studio needs; never for a wildcard origin (SN8). Sent on create only (SN10). |
+
+```yaml
+# under changes: (no provider block needed)
+- id: cors_origin
+  adapter: http
+  op: resource
+  recipe: sanity.cors_origin
+  project_id: abc123de
+  origin: https://${ctx.scope}.preview.example.app
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /projects/{project_id}/cors
+  match:
+    origin: { param: origin }
+create:
+  path: /projects/{project_id}/cors
+  body:
+    allowCredentials: { param: allow_credentials }
+delete:
+  path: /projects/{project_id}/cors/{id}
 ```
 
 ## SendGrid

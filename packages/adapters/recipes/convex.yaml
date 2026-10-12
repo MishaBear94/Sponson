@@ -1,0 +1,144 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Convex Management API recipes, authenticated by a team access token. Format and checklist:
+# docs/adr/0020-recipes.md (Amendment 9), CONTRIBUTING.md "Adding a recipe".
+provider: convex
+title: Convex
+category: backend
+verified_on: "2026-10-12"
+docs:
+  - title: Management API overview (authorization, OpenAPI)
+    url: https://docs.convex.dev/management-api/overview
+  - title: Management API OpenAPI document
+    url: https://api.convex.dev/v1/openapi.json
+  - title: Platform APIs, team access tokens
+    url: https://docs.convex.dev/platform-apis/overview
+  - title: Multiple deployments, preview deployments
+    url: https://docs.convex.dev/production/multiple-deployments
+  - title: Hosting on Vercel, preview deployments
+    url: https://docs.convex.dev/production/hosting/vercel
+  - title: Deploy key types
+    url: https://docs.convex.dev/cli/deploy-key-types
+  - title: Pricing (preview deployments on every plan)
+    url: https://www.convex.dev/pricing
+api:
+  base_url: https://api.convex.dev/v1
+  base_url_env: CONVEX_API_URL
+  auth: { bearer_env: CONVEX_TEAM_ACCESS_TOKEN }
+credential:
+  url: "https://dashboard.convex.dev/team/settings/access-tokens"
+  scope: "A team access token (Team Settings → Access Tokens), preferably of a service-account member: it can do what that member's role allows on the team."
+  source: "https://docs.convex.dev/platform-apis/overview"
+detect:
+  deps: [convex]
+  files: [convex.json]
+  env: ["CONVEX_*"]
+  starter:
+    - op: preview_deployment
+      values: { reference: "${ctx.scope}" }
+      env: { url: NEXT_PUBLIC_CONVEX_URL }
+  where:
+    project_id: "Convex dashboard → the project → Settings (the project id), or the Management API's List Projects"
+assumptions:
+  - id: CX1
+    verified: true
+    text: "The Management API at `https://api.convex.dev/v1` authenticates with `Authorization: Bearer` and a team access token (Team Settings), an OAuth application token or, on preview deployments only, a preview deploy key. Convex names no environment variable for the team token; the recipe reads it from `CONVEX_TEAM_ACCESS_TOKEN`."
+    source: https://docs.convex.dev/management-api/overview
+  - id: CX2
+    verified: true
+    text: "`POST /projects/{project_id}/create_deployment` with `{ type: \"preview\", reference }` creates a deployment and answers it with `name` (such as `playful-otter-123`), `deploymentUrl`, `reference` and `deploymentType`. A reference is 3 to 100 lowercase letters, digits, `-` and `/`, unique in the project, not shaped like a deployment name and not a reserved word (`preview`, `prod`, `dev`, …)."
+    source: https://api.convex.dev/v1/openapi.json
+  - id: CX3
+    verified: true
+    text: "`GET /projects/{project_id}/list_deployments?deploymentType=preview` answers a bare list of deployments with their `name` and `reference`; `GET /deployments/{name}` answers one."
+    source: https://api.convex.dev/v1/openapi.json
+  - id: CX4
+    verified: true
+    text: "Preview deployments are on every plan (Free included); each counts toward the team's deployments (40 on Free, 300 on Professional), and Convex deletes one automatically after the plan's retention (5 days, 14 on Professional and above) unless its `expiresAt` says otherwise. A preview deleted so is `missing` drift, created again by the next apply (empty: its data went with it)."
+    source: https://docs.convex.dev/production/multiple-deployments
+  - id: CX5
+    verified: true
+    text: "`POST /deployments/{name}/delete` deletes the deployment with all its data and files; it takes no body (the recipe sends `{}`)."
+    source: https://api.convex.dev/v1/openapi.json
+  - id: CX6
+    verified: true
+    text: "`POST /deployments/{name}/create_deploy_key` with `{ name }` answers only `{ deployKey }`, the key's value, shown once; `GET /deployments/{name}/list_deploy_keys` lists the keys with their `name` but never their value; `POST /deployments/{name}/delete_deploy_key` with `{ id }` deletes one, `id` being the key's value or its unique name. A preview deploy key cannot call these: the team token can."
+    source: https://api.convex.dev/v1/openapi.json
+  - id: CX7
+    verified: true
+    text: "`npx convex deploy` reads its deploy key from `CONVEX_DEPLOY_KEY` and deploys to the deployment the key names; a preview deployment's URL is what the frontend's `NEXT_PUBLIC_CONVEX_URL` (or `VITE_CONVEX_URL`, `CONVEX_URL`) must hold."
+    source: https://docs.convex.dev/production/hosting/vercel
+  - id: CX8
+    verified: false
+    text: "A deploy key made for a preview deployment with `create_deploy_key` lets `npx convex deploy` push code and set environment variables there, as the dashboard's deployment keys do, and deleting the deployment deletes its keys (a key line is destroyed before the deployment line it references, so it never needs that)."
+  - id: CX9
+    verified: false
+    text: "Deployment names are unique, and a reference names at most one deployment of the project, so `find` by `reference` sees one (two would be refused with PARAM_INVALID, never guessed)."
+ops:
+  preview_deployment:
+    kind: resource
+    title: Preview deployment
+    summary: "A Convex preview deployment per scope, a backend with its own data, functions and URL, created through the Management API instead of by `npx convex deploy` with a preview deploy key, so that it exists, with its URL, before the preview builds and is deleted when the scope is destroyed (CX4: not left to expire). Located by `reference`; only its existence is compared for drift; destroy deletes it with its data."
+    covers: [convex-preview-deployment]
+    params:
+      project_id:
+        type: string
+        required: true
+        pattern: "^[0-9]+$"
+        description: The project's numeric id.
+        example: "12345"
+      reference:
+        type: string
+        required: true
+        pattern: "^[a-z0-9/-]{3,100}$"
+        description: "The deployment's reference in the project, its identity here (CX2): usually `${ctx.scope}`."
+        example: "${ctx.scope}"
+    http:
+      find:
+        path: "/projects/{project_id}/list_deployments?deploymentType=preview"
+        match: { reference: { param: reference } }
+      read: { path: "/deployments/{id}" }
+      create:
+        path: "/projects/{project_id}/create_deployment"
+        body: { type: preview }
+      delete: { method: POST, path: "/deployments/{id}/delete" }
+      id_path: /name
+      outputs:
+        name: /name
+        url: /deploymentUrl
+    sim:
+      collection: "/projects/{project_id}/deployments"
+    console_url:
+      template: "https://dashboard.convex.dev/d/{id}"
+      source: https://github.com/get-convex/convex-backend/blob/main/npm-packages/convex/src/cli/lib/dashboard.ts
+    live:
+      params: { project_id: SPONSON_LIVE_CONVEX_PROJECT_ID }
+  deploy_key:
+    kind: resource
+    title: Deploy key of a deployment
+    summary: "A deploy key for one deployment (such as a `preview_deployment` line's `name`), so the preview's build deploys its functions there with `npx convex deploy` (`CONVEX_DEPLOY_KEY`, CX7). Its value exists only in the create's answer: a once-only output, for the deploy target's variable in the same run. Located by its name; destroy deletes it (it goes with its deployment anyway)."
+    covers: [convex-preview-deployment]
+    params:
+      deployment:
+        type: string
+        required: true
+        description: "The deployment's name: usually `{ from: <preview_deployment line>.name }`."
+        example: playful-otter-123
+      name:
+        type: string
+        required: true
+        description: The key's name, unique in the deployment.
+        example: "sponson-${ctx.scope}"
+    http:
+      find:
+        path: "/deployments/{deployment}/list_deploy_keys"
+        match: { name: { param: name } }
+      create: { path: "/deployments/{deployment}/create_deploy_key" }
+      delete: { method: POST, path: "/deployments/{deployment}/delete_deploy_key", body: { id: "{id}" } }
+      id_path: /name
+      outputs:
+        deploy_key: { path: /deployKey, sensitive: true, once: true }
+    sim:
+      collection: "/deployments/{deployment}/list_deploy_keys"
+    live:
+      # A throwaway deployment's name: the live run makes a key on it and deletes it.
+      params: { deployment: SPONSON_LIVE_CONVEX_DEPLOYMENT }

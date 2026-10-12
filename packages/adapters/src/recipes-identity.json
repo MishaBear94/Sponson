@@ -171,6 +171,28 @@
     "key": "/v2/environments/08d8becf-d4d9-4c66-8b48-6ac74cd95fba/settings/12345/value#/targetingRules=pr-42",
     "id": "{\"item\":\"pr-42\",\"key_field\":\"/conditions/0/userCondition/comparisonValue/listValue/0/value\",\"list\":\"/targetingRules\",\"read\":\"/v2/environments/08d8becf-d4d9-4c66-8b48-6ac74cd95fba/settings/12345/value\",\"send\":[\"defaultValue\",\"percentageEvaluationAttribute\"],\"shape\":\"array\",\"write\":\"PUT /v2/environments/08d8becf-d4d9-4c66-8b48-6ac74cd95fba/settings/12345/value\"}"
   },
+  "convex.preview_deployment": {
+    "provider": {
+      "base_url": "https://api.convex.dev/v1",
+      "base_url_env": "CONVEX_API_URL",
+      "auth": {
+        "bearer_env": "CONVEX_TEAM_ACCESS_TOKEN"
+      }
+    },
+    "key": "/projects/12345/list_deployments?deploymentType=preview[reference=pr-42]",
+    "id": "POST /deployments/ID/delete"
+  },
+  "convex.deploy_key": {
+    "provider": {
+      "base_url": "https://api.convex.dev/v1",
+      "base_url_env": "CONVEX_API_URL",
+      "auth": {
+        "bearer_env": "CONVEX_TEAM_ACCESS_TOKEN"
+      }
+    },
+    "key": "/deployments/playful-otter-123/list_deploy_keys[name=sponson-pr-42]",
+    "id": "POST /deployments/playful-otter-123/delete_deploy_key body={\"id\":\"ID\"}"
+  },
   "datadog.synthetic_api_test": {
     "provider": {
       "base_url": "https://api.datadoghq.com/api/v1",
@@ -205,6 +227,21 @@
     },
     "key": "/projects/demo-project/config?updateMask=authorizedDomains#/authorizedDomains=pr-42.preview.example.app",
     "id": "{\"item\":\"pr-42.preview.example.app\",\"list\":\"/authorizedDomains\",\"read\":\"/projects/demo-project/config\",\"send\":\"field\",\"shape\":\"array\",\"write\":\"PATCH /projects/demo-project/config?updateMask=authorizedDomains\"}"
+  },
+  "firebase_hosting.channel": {
+    "provider": {
+      "base_url": "https://firebasehosting.googleapis.com/v1beta1",
+      "base_url_env": "FIREBASE_HOSTING_API_URL",
+      "auth": {
+        "command": [
+          "gcloud",
+          "auth",
+          "print-access-token"
+        ]
+      }
+    },
+    "key": "/sites/demo-project/channels/pr-42",
+    "id": "DELETE /sites/demo-project/channels/pr-42"
   },
   "flagsmith.environment": {
     "provider": {
@@ -527,6 +564,28 @@
     },
     "key": "/?cors#/CORSConfiguration/CORSRule=sponson-pr-42",
     "id": "{\"delete_empty\":true,\"item\":\"sponson-pr-42\",\"key_field\":\"ID\",\"list\":\"/CORSConfiguration/CORSRule\",\"missing_empty\":true,\"read\":\"/?cors\",\"send\":\"field\",\"shape\":\"array\",\"write\":\"PUT /?cors\"}"
+  },
+  "sanity.dataset": {
+    "provider": {
+      "base_url": "https://api.sanity.io/v2021-06-07",
+      "base_url_env": "SANITY_API_URL",
+      "auth": {
+        "bearer_env": "SANITY_AUTH_TOKEN"
+      }
+    },
+    "key": "/projects/abc123de/datasets[name=preview-pr-42]",
+    "id": "DELETE /projects/abc123de/datasets/ID"
+  },
+  "sanity.cors_origin": {
+    "provider": {
+      "base_url": "https://api.sanity.io/v2021-06-07",
+      "base_url_env": "SANITY_API_URL",
+      "auth": {
+        "bearer_env": "SANITY_AUTH_TOKEN"
+      }
+    },
+    "key": "/projects/abc123de/cors[origin=https://pr-42.preview.example.app]",
+    "id": "DELETE /projects/abc123de/cors/ID"
   },
   "sendgrid.event_webhook": {
     "provider": {

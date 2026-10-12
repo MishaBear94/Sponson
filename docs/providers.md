@@ -9,7 +9,7 @@ through the same), what `sponson init` detects it by, and a line to start from.
 for every provider it detects: ready to apply when it knows every value, else commented out with a `# TODO:` that
 says where to find each missing one.
 
-54 providers in 12 categories: 17 ops of first-class adapters and 56 recipe ops, plus 3 steps no API reaches, tracked as [`manual.step`](plan-format.md#manualstep) lines. `sponson init` detects 50 providers.
+58 providers in 13 categories: 17 ops of first-class adapters and 61 recipe ops, plus 3 steps no API reaches, tracked as [`manual.step`](plan-format.md#manualstep) lines. `sponson init` detects 53 providers.
 
 - First-class ops: [the plan format](plan-format.md#built-in-ops). Recipes: [Recipes](recipes.md).
 - What is covered and what is not, and why: [Provider coverage](coverage.md).
@@ -18,7 +18,7 @@ says where to find each missing one.
 
 | Category | Providers |
 |---|---|
-| [Deploy targets and their environment variables](#deploy-targets-and-their-environment-variables) | [Vercel](#vercel), [Netlify](#netlify), [Cloudflare Pages / Workers](#cloudflare-pages--workers), [Render](#render), [Railway](#railway), [Fly.io](#flyio), [Heroku](#heroku), [AWS Amplify](#aws-amplify), [Google Cloud Run](#google-cloud-run), [Azure Static Web Apps](#azure-static-web-apps), [DigitalOcean App Platform](#digitalocean-app-platform) |
+| [Deploy targets and their environment variables](#deploy-targets-and-their-environment-variables) | [Vercel](#vercel), [Netlify](#netlify), [Cloudflare Pages / Workers](#cloudflare-pages--workers), [Render](#render), [Railway](#railway), [Fly.io](#flyio), [Heroku](#heroku), [AWS Amplify](#aws-amplify), [Google Cloud Run](#google-cloud-run), [Azure Static Web Apps](#azure-static-web-apps), [DigitalOcean App Platform](#digitalocean-app-platform), [Firebase Hosting](#firebase-hosting) |
 | [Databases with branching or per-PR instances](#databases-with-branching-or-per-pr-instances) | [Neon](#neon), [Supabase](#supabase), [PlanetScale](#planetscale), [Turso](#turso), [Xata](#xata), [MongoDB Atlas](#mongodb-atlas), [CockroachDB Cloud](#cockroachdb-cloud), [Prisma Postgres](#prisma-postgres) |
 | [Auth callback and redirect allow-lists](#auth-callback-and-redirect-allow-lists) | [Clerk](#clerk), [Auth0](#auth0), [Supabase Auth](#supabase-auth), [Firebase Auth](#firebase-auth), [WorkOS](#workos), [Stytch](#stytch), [Okta](#okta), [Kinde](#kinde), [Google OAuth clients](#google-oauth-clients) |
 | [Feature flags and targeting](#feature-flags-and-targeting) | [LaunchDarkly](#launchdarkly), [PostHog](#posthog), [Statsig](#statsig), [GrowthBook](#growthbook), [Unleash](#unleash), [Flagsmith](#flagsmith), [ConfigCat](#configcat), [Split (Harness FME)](#split-harness-fme) |
@@ -26,10 +26,11 @@ says where to find each missing one.
 | [Email: sending domains, webhooks, test inboxes](#email-sending-domains-webhooks-test-inboxes) | [Resend](#resend), [Postmark](#postmark), [SendGrid](#sendgrid) |
 | [Observability per release](#observability-per-release) | [Sentry](#sentry), [Datadog](#datadog), [Honeycomb](#honeycomb) |
 | [DNS and preview domains](#dns-and-preview-domains) | [Cloudflare DNS](#cloudflare-dns), [Vercel domains](#vercel-domains) |
-| [CORS and allowed origins](#cors-and-allowed-origins) | [Firebase Storage (GCS bucket)](#firebase-storage-gcs-bucket), [S3 / R2](#s3--r2) |
+| [CORS and allowed origins](#cors-and-allowed-origins) | [Firebase Storage (GCS bucket)](#firebase-storage-gcs-bucket), [S3 / R2](#s3--r2), [Sanity CORS](#sanity-cors) |
 | [Queues, caches, background jobs](#queues-caches-background-jobs) | [Upstash Redis](#upstash-redis), [Upstash QStash](#upstash-qstash), [Inngest](#inngest) |
 | [Search, payments test mode](#search-payments-test-mode) | [Algolia](#algolia), [Stripe test-mode objects](#stripe-test-mode-objects), [Stripe sandboxes](#stripe-sandboxes) |
-| [Headless CMS content per preview](#headless-cms-content-per-preview) | [Contentful](#contentful) |
+| [Headless CMS content per preview](#headless-cms-content-per-preview) | [Contentful](#contentful), [Sanity](#sanity) |
+| [Backend platforms with preview deployments](#backend-platforms-with-preview-deployments) | [Convex](#convex) |
 
 ## Deploy targets and their environment variables
 
@@ -46,6 +47,7 @@ says where to find each missing one.
 | [Google Cloud Run](#google-cloud-run) | Tagged revision per PR (`--tag pr-42`), env vars on it | [`cloud_run.revision`](plan-format.md#cloud_runrevision) | the token `gcloud auth print-access-token` prints (bearer) |
 | [Azure Static Web Apps](#azure-static-web-apps) | Preview environment per PR (built in); app settings | recipe [`azure_swa.build_app_setting`](recipes.md#azure_swabuild_app_setting) | the token `az account get-access-token --query accessToken -o tsv` prints (bearer) |
 | [DigitalOcean App Platform](#digitalocean-app-platform) | No native PR previews; app per PR via its GitHub action; envs in the app spec | [`digitalocean.app`](plan-format.md#digitaloceanapp) | `DIGITALOCEAN_ACCESS_TOKEN` |
+| [Firebase Hosting](#firebase-hosting) | Preview channel per PR (`pr-42`) that the preview is deployed into, with its own `web.app` URL; deleted when the PR closes instead of left to expire | recipe [`firebase_hosting.channel`](recipes.md#firebase_hostingchannel) | the token `gcloud auth print-access-token` prints (bearer) |
 
 ### Vercel
 
@@ -296,6 +298,25 @@ changes:
           value: { secret: env://DO_SCENARIO_DB_URL }
           type: SECRET
     environments: [preview]
+```
+
+### Firebase Hosting
+
+Preview channel per PR (`pr-42`) that the preview is deployed into, with its own `web.app` URL; deleted when the PR closes instead of left to expire (the channel only: deploying into it stays `firebase hosting:channel:deploy` (which also authorizes its domain in Firebase Auth); its `url` is an output).
+
+- **Ops**: recipe [`firebase_hosting.channel`](recipes.md#firebase_hostingchannel)
+- **Credential**: the token `gcloud auth print-access-token` prints (bearer)
+- **Token**: [set up access](https://firebase.google.com/docs/projects/iam/roles-predefined-product): Sign in with `gcloud auth login` (or activate a service account) as an identity holding Firebase Hosting Admin (roles/firebasehosting.admin) on the project. `sponson init --setup` shows this; there is no token to store.
+- **Detected by `sponson init` from**: `.github/workflows/firebase-hosting-pull-request.yml`
+
+```yaml
+# under changes: (no provider block needed)
+- id: channel
+  adapter: http
+  op: resource
+  recipe: firebase_hosting.channel
+  site: demo-project
+  channel_id: ${ctx.scope}
 ```
 
 ## Databases with branching or per-PR instances
@@ -1174,6 +1195,7 @@ Branch-bound project domain (`gitBranch`) for a stable preview hostname.
 |---|---|---|---|
 | [Firebase Storage (GCS bucket)](#firebase-storage-gcs-bucket) | Preview origin in the bucket's `cors` | recipe [`gcs.bucket_cors`](recipes.md#gcsbucket_cors) | the token `gcloud auth print-access-token` prints (bearer) |
 | [S3 / R2](#s3--r2) | Preview origin in the bucket CORS rules | recipe [`s3.bucket_cors`](recipes.md#s3bucket_cors) | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (AWS SigV4, `s3` in `us-east-1`) |
+| [Sanity CORS](#sanity-cors) | Preview origin in the project's CORS origins, so browser code, an embedded Studio or the Presentation tool on the preview can query the Content Lake | recipe [`sanity.cors_origin`](recipes.md#sanitycors_origin) | `SANITY_AUTH_TOKEN` (bearer) |
 
 ### Firebase Storage (GCS bucket)
 
@@ -1216,6 +1238,25 @@ changes:
     recipe: s3.bucket_cors
     rule_id: sponson-${ctx.scope}
     origin: https://${ctx.scope}.preview.example.app
+```
+
+### Sanity CORS
+
+Preview origin in the project's CORS origins, so browser code, an embedded Studio or the Presentation tool on the preview can query the Content Lake (previews that fetch only on the server need none; `allowCredentials` is set on create (no update is documented)).
+
+- **Ops**: recipe [`sanity.cors_origin`](recipes.md#sanitycors_origin)
+- **Credential**: `SANITY_AUTH_TOKEN` (bearer)
+- **Token**: [create it](https://www.sanity.io/manage): A robot token of the project (API → Tokens) with the Administrator role, or Developer on Growth and Enterprise: editors cannot create datasets, and CORS origins are project settings. `sponson init --setup` cannot check it (no read-only request every such credential may send).
+- **Detected by `sponson init` from**: `sanity`, `@sanity/client`, `next-sanity`, `sanity.config.ts`, `sanity.config.js`, `sanity.cli.ts`, `sanity.cli.js`, `SANITY_*`
+
+```yaml
+# under changes: (no provider block needed)
+- id: cors_origin
+  adapter: http
+  op: resource
+  recipe: sanity.cors_origin
+  project_id: abc123de
+  origin: https://${ctx.scope}.preview.example.app
 ```
 
 ## Queues, caches, background jobs
@@ -1366,6 +1407,7 @@ changes:
 | Provider | What Sponson manages | Ops | Credential |
 |---|---|---|---|
 | [Contentful](#contentful) | Sandbox environment per PR copied from master (entries, assets, content types, locales), readable by the app's delivery and preview API keys; deleted when the PR closes | [`contentful.environment`](plan-format.md#contentfulenvironment), [`contentful.api_key_access`](plan-format.md#contentfulapi_key_access) | `CONTENTFUL_MANAGEMENT_TOKEN` |
+| [Sanity](#sanity) | Dataset per PR for the preview's content (empty, imported or seeded by the app; or a Cloud Clone copy of production on Enterprise) | recipe [`sanity.dataset`](recipes.md#sanitydataset) | `SANITY_AUTH_TOKEN` (bearer) |
 
 ### Contentful
 
@@ -1386,4 +1428,48 @@ changes:
     op: environment
     name: ${ctx.scope}
     environments: [preview]
+```
+
+### Sanity
+
+Dataset per PR for the preview's content (empty, imported or seeded by the app; or a Cloud Clone copy of production on Enterprise) (an empty dataset per scope; Cloud Clone copies are not covered. Free and Growth include 2 datasets in all, so one preview dataset at a time below Enterprise).
+
+- **Ops**: recipe [`sanity.dataset`](recipes.md#sanitydataset)
+- **Credential**: `SANITY_AUTH_TOKEN` (bearer)
+- **Token**: [create it](https://www.sanity.io/manage): A robot token of the project (API → Tokens) with the Administrator role, or Developer on Growth and Enterprise: editors cannot create datasets, and CORS origins are project settings. `sponson init --setup` cannot check it (no read-only request every such credential may send).
+- **Detected by `sponson init` from**: `sanity`, `@sanity/client`, `next-sanity`, `sanity.config.ts`, `sanity.config.js`, `sanity.cli.ts`, `sanity.cli.js`, `SANITY_*`
+
+```yaml
+# under changes: (no provider block needed)
+- id: dataset
+  adapter: http
+  op: resource
+  recipe: sanity.dataset
+  project_id: abc123de
+  name: preview-${ctx.scope}
+```
+
+## Backend platforms with preview deployments
+
+| Provider | What Sponson manages | Ops | Credential |
+|---|---|---|---|
+| [Convex](#convex) | Preview deployment per PR (its own functions, data and URL), its deploy key for the preview's build; deleted when the PR closes instead of left to expire | recipe [`convex.preview_deployment`](recipes.md#convexpreview_deployment), recipe [`convex.deploy_key`](recipes.md#convexdeploy_key) | `CONVEX_TEAM_ACCESS_TOKEN` (bearer) |
+
+### Convex
+
+Preview deployment per PR (its own functions, data and URL), its deploy key for the preview's build; deleted when the PR closes instead of left to expire (the deployment and a deploy key for it (a once-only output, for `CONVEX_DEPLOY_KEY`); pushing code stays `npx convex deploy`).
+
+- **Ops**: recipe [`convex.preview_deployment`](recipes.md#convexpreview_deployment), recipe [`convex.deploy_key`](recipes.md#convexdeploy_key)
+- **Credential**: `CONVEX_TEAM_ACCESS_TOKEN` (bearer)
+- **Token**: [create it](https://dashboard.convex.dev/team/settings/access-tokens): A team access token (Team Settings → Access Tokens), preferably of a service-account member: it can do what that member's role allows on the team. `sponson init --setup` cannot check it (no read-only request every such credential may send).
+- **Detected by `sponson init` from**: `convex`, `convex.json`, `CONVEX_*`
+
+```yaml
+# under changes: (no provider block needed)
+- id: preview_deployment
+  adapter: http
+  op: resource
+  recipe: convex.preview_deployment
+  project_id: "12345"
+  reference: ${ctx.scope}
 ```

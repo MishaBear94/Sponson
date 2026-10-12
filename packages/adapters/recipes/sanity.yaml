@@ -1,0 +1,163 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Sanity (Content Lake) Projects API recipes, authenticated by a robot token. Format and checklist:
+# docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: sanity
+title: Sanity
+category: cms
+verified_on: "2026-10-12"
+docs:
+  - title: Projects API reference (datasets, CORS origins)
+    url: https://www.sanity.io/docs/http-reference/projects-api
+  - title: Datasets (naming rules, plan limits, environments)
+    url: https://www.sanity.io/docs/content-lake/datasets
+  - title: CORS origins (preview deployments)
+    url: https://www.sanity.io/docs/content-lake/cors
+  - title: HTTP API authentication (robot tokens)
+    url: https://www.sanity.io/docs/content-lake/http-auth
+  - title: Cloud Clone (dataset copy)
+    url: https://www.sanity.io/docs/content-lake/how-to-use-cloud-clone-for-datasets
+  - title: CLI configuration (SANITY_AUTH_TOKEN)
+    url: https://www.sanity.io/docs/cli-reference/cli-config
+  - title: Pricing (datasets per plan)
+    url: https://www.sanity.io/pricing
+api:
+  base_url: https://api.sanity.io/v2021-06-07
+  base_url_env: SANITY_API_URL
+  auth: { bearer_env: SANITY_AUTH_TOKEN }
+credential:
+  url: "https://www.sanity.io/manage"
+  scope: "A robot token of the project (API → Tokens) with the Administrator role, or Developer on Growth and Enterprise: editors cannot create datasets, and CORS origins are project settings."
+  source: "https://www.sanity.io/docs/http-reference/projects-api"
+detect:
+  deps: [sanity, "@sanity/client", next-sanity]
+  files: [sanity.config.ts, sanity.config.js, sanity.cli.ts, sanity.cli.js]
+  env: ["SANITY_*"]
+  starter:
+    - op: cors_origin
+      preview_url: origin
+    - op: dataset
+      values: { name: "preview-${ctx.scope}" }
+  where:
+    project_id: "`projectId` in sanity.config.ts or sanity.cli.ts (`SANITY_STUDIO_PROJECT_ID`), or sanity.io/manage"
+assumptions:
+  - id: SN1
+    verified: true
+    text: "The Projects API is served at `https://api.sanity.io/<version>` (default `v2021-06-07`) and authenticates with a robot token as `Authorization: Bearer`; the Sanity CLI reads a token for unattended use from `SANITY_AUTH_TOKEN`."
+    source: https://www.sanity.io/docs/http-reference/projects-api
+  - id: SN2
+    verified: true
+    text: "Managing a project's datasets and settings needs the Administrator or Developer role (Developer only on Growth and Enterprise); editors can modify existing datasets but cannot create new ones."
+    source: https://www.sanity.io/docs/user-guides/roles
+  - id: SN3
+    verified: true
+    text: "`PUT /projects/{projectId}/datasets/{name}` with an optional `{ aclMode }` (`public`, the default, or `private`, a paid feature) creates an empty dataset and answers 200 with `{ datasetName, aclMode }`, not the dataset itself, so the recipe finds it by name afterwards (`create.locate`)."
+    source: https://www.sanity.io/docs/http-reference/projects-api
+  - id: SN4
+    verified: true
+    text: "`GET /projects/{projectId}/datasets` answers a bare list of `{ name, aclMode, … }`; dataset names are unique in a project."
+    source: https://www.sanity.io/docs/http-reference/projects-api
+  - id: SN5
+    verified: true
+    text: "`DELETE /projects/{projectId}/datasets/{name}` deletes the dataset and its documents and answers `{ deleted: true }`."
+    source: https://www.sanity.io/docs/http-reference/projects-api
+  - id: SN6
+    verified: true
+    text: "A dataset name is 1 to 64 characters of lowercase letters, digits, `-` and `_`, beginning and ending with a letter or digit."
+    source: https://www.sanity.io/docs/content-lake/datasets
+  - id: SN7
+    verified: true
+    text: "Free and Growth plans include 2 datasets (more on Growth cost $999 per dataset per month), and copying a dataset (Cloud Clone, an asynchronous job) is an Enterprise feature; so a dataset per preview is practical on Enterprise, or with one preview dataset at a time below it. This recipe makes an empty dataset; its content is the app's import or seed (application data, not Sponson's), and Cloud Clone copies are not covered."
+    source: https://www.sanity.io/pricing
+  - id: SN8
+    verified: true
+    text: "A browser querying the Content Lake (or a Studio, or the Presentation tool) from an origin must find that origin in the project's CORS origins; preview deployments get a new URL per branch, so the origin cannot be added ahead of time, and unused preview origins should be removed. `https://*.vercel.app` with credentials is unsafe."
+    source: https://www.sanity.io/docs/content-lake/cors
+  - id: SN9
+    verified: true
+    text: "`GET /projects/{projectId}/cors` answers a bare list of `{ id, origin, allowCredentials, createdAt }` with integer ids; `POST /projects/{projectId}/cors` with `{ origin, allowCredentials? }` creates one (201); `DELETE /projects/{projectId}/cors/{id}` deletes it."
+    source: https://www.sanity.io/docs/http-reference/projects-api
+  - id: SN10
+    verified: false
+    text: "No update of a CORS origin or of a dataset's `aclMode` is documented, so neither is compared for drift: `allowCredentials` and `aclMode` are sent when the line creates the object, and only its existence is checked after."
+  - id: SN11
+    verified: false
+    text: "A dataset being deleted (or a `PUT` of a name that exists) answers within the request; nothing waits, and a dataset is usable as soon as the `PUT` returns."
+ops:
+  dataset:
+    kind: resource
+    title: Dataset per preview
+    summary: "An empty Sanity dataset per scope in a project, such as `preview-pr-42`, for the preview to import or seed its content into (SN7: copying production into it is Enterprise's Cloud Clone and is not covered). Located by name; only its existence is compared for drift; destroy deletes the dataset and its documents."
+    covers: [sanity-dataset]
+    params:
+      project_id:
+        type: string
+        required: true
+        pattern: "^[a-z0-9]+$"
+        description: The project id (`projectId` in sanity.config.ts).
+        example: abc123de
+      name:
+        type: string
+        required: true
+        pattern: "^(?!.*[-_]$)[a-z0-9][-_a-z0-9]{0,63}$"
+        description: The dataset's name; its identity in the project (SN6).
+        example: "preview-${ctx.scope}"
+      acl_mode:
+        type: string
+        default: public
+        enum: [public, private]
+        description: "Who may read it without a token: `public` (Sanity's default) or `private` (Growth and up). Sent on create only (SN10)."
+    http:
+      find:
+        path: "/projects/{project_id}/datasets"
+        match: { name: { param: name } }
+      create:
+        method: PUT
+        path: "/projects/{project_id}/datasets/{name}"
+        body: { aclMode: { param: acl_mode } }
+        send_fields: false
+        locate: true
+      delete: { path: "/projects/{project_id}/datasets/{id}" }
+      id_path: /name
+      outputs:
+        name: /name
+    sim:
+      collection: "/projects/{project_id}/datasets"
+    live:
+      params: { project_id: SPONSON_LIVE_SANITY_PROJECT_ID }
+  cors_origin:
+    kind: resource
+    title: CORS origin
+    summary: "The preview deployment's origin in the project's CORS origins (API → CORS origins), so the preview's browser code, an embedded Studio or the Presentation tool can query the Content Lake (SN8). Located by origin; removed on destroy; every other origin is left alone."
+    covers: [sanity-cors]
+    params:
+      project_id:
+        type: string
+        required: true
+        pattern: "^[a-z0-9]+$"
+        description: The project id (`projectId` in sanity.config.ts).
+        example: abc123de
+      origin:
+        type: string
+        required: true
+        pattern: "^https?://[^/\\s]+$"
+        description: "The origin, scheme and host without a path or trailing slash: usually `{ from: <deploy line>.preview_url }`."
+        example: "https://${ctx.scope}.preview.example.app"
+      allow_credentials:
+        type: boolean
+        default: false
+        description: "Allow requests with credentials (a token or a login), which a Studio needs; never for a wildcard origin (SN8). Sent on create only (SN10)."
+    http:
+      find:
+        path: "/projects/{project_id}/cors"
+        match: { origin: { param: origin } }
+      create:
+        path: "/projects/{project_id}/cors"
+        body: { allowCredentials: { param: allow_credentials } }
+      delete: { path: "/projects/{project_id}/cors/{id}" }
+    sim:
+      numeric_ids: true
+    console_url:
+      template: "https://www.sanity.io/manage/project/{project_id}/api"
+      source: https://github.com/sanity-io/client/blob/main/src/http/errors.ts
+    live:
+      params: { project_id: SPONSON_LIVE_SANITY_PROJECT_ID }
