@@ -249,11 +249,11 @@ categories:
       - id: google-oauth-redirect
         provider: Google OAuth clients
         side_effect: Preview URL in a web client's authorized redirect URIs
-        api_shape: "**No public API** for standard OAuth web clients (Console only); only IAM workforce OAuth clients and IAP are programmable"
+        api_shape: "**No public API** for standard OAuth web clients: created and edited on the Console Clients page only. `gcloud iam oauth-clients` / IAM `projects.locations.oauthClients` (`allowedRedirectUris`) manage Workforce Identity Federation clients only; the IAP OAuth Admin API (IAP-locked clients, redirect URI not updatable) was shut down on 2026-03-19"
         generic: N
         priority: P1
         covered_by: manual.step
-        why: no public API for standard OAuth web clients
+        why: "no public API for standard OAuth web clients (re-checked 2026-10-12): Google's web-server guide configures redirect URIs on the Console Clients page only (developers.google.com/identity/protocols/oauth2/web-server), the IAM oauthClients API and `gcloud iam oauth-clients` are 'only for Workforce Identity Federation' (docs.cloud.google.com/iam/docs/workforce-manage-oauth-app, docs.cloud.google.com/iam/docs/reference/rest/v1/projects.locations.oauthClients), and the IAP OAuth Admin API 'was shut down on March 19, 2026' and never allowed updating redirect URIs (docs.cloud.google.com/iap/docs/programmatic-oauth-clients)"
   - id: flags
     title: Feature flags and targeting
     rows:
@@ -348,11 +348,11 @@ categories:
       - id: clerk-webhook
         provider: Clerk webhooks
         side_effect: Preview URL as a webhook endpoint
-        api_shape: Clerk's Backend API only creates/deletes the Svix app and a dashboard link; **no endpoint API** through Clerk
+        api_shape: "Clerk's Backend API has only `POST`/`DELETE /v1/webhooks/svix` (create/delete the instance's Svix app) and `POST /v1/webhooks/svix_url` (a Svix dashboard link); **no endpoint API** through Clerk, and no documented Svix API credential for the Clerk-owned app"
         generic: N
         priority: P1
         covered_by: manual.step
-        why: Clerk's API manages the Svix app, not its endpoints
+        why: "Clerk's API manages the Svix app, not its endpoints (re-checked 2026-10-12): the Backend API spec (github.com/clerk/openapi-specs, bapi/2025-11-10.yml and 2026-05-12.yml) has only CreateSvixApp, DeleteSvixApp and GenerateSvixAuthURL ('Generate a new URL for accessing the Svix's management dashboard'), the private-beta Platform API (platform/beta.yml) has no webhook routes, the `clerk api ls webhook` route the webhooks overview points agents to (clerk.com/docs/guides/development/webhooks/overview) lists those same three Backend API routes, `clerk webhooks` is a local relay and verifier that makes 'No Clerk API calls' (github.com/clerk/cli, commands/webhooks), and Clerk documents no Svix API token for its app (a portal-URL token is undocumented)"
   - id: email
     title: "Email: sending domains, webhooks, test inboxes"
     rows:
@@ -502,11 +502,11 @@ categories:
       - id: stripe-sandbox
         provider: Stripe sandboxes
         side_effect: A sandbox per PR
-        api_shape: No public API for account sandboxes; anonymous "claimable" sandboxes are private preview
+        api_shape: "No public API for sandboxes in your own account (Dashboard only, five per account). `POST /v2/core/claimable_sandboxes` (`Stripe-Version: …preview`, Stripe App with Stripe-approved access) and `stripe sandbox create` (logged out only) make anonymous sandboxes outside your account that expire (60 / 7 days) and have no delete call"
         generic: N
         priority: P2
         covered_by: manual.step
-        why: no public API for account sandboxes
+        why: "no public API for sandboxes in your own account (re-checked 2026-10-12): docs.stripe.com/sandboxes/dashboard/manage creates and deletes them in the Dashboard only, up to five per account, the Claimable Sandboxes API (docs.stripe.com/sandboxes/claimable-sandboxes) makes anonymous sandboxes that no existing account owns, for coding platforms that set up Stripe for their users, needs a Stripe App that Stripe reviews, uses a preview API version and has no delete (unclaimed ones are deleted after 60 days), and `stripe sandbox create` (docs.stripe.com/cli/sandbox) provisions an account-less sandbox only when the CLI is logged out ('If you're already logged in, sandbox create opens the sandbox management page in your Stripe Dashboard') that expires after 7 days"
 secret_sources:
   - id: doppler
     provider: Doppler
