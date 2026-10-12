@@ -1,5 +1,19 @@
 # @sponson/sim
 
+## 0.10.0
+
+### Minor Changes
+
+- 8d4d919: New `contentful` adapter: `contentful.environment` copies a sandbox environment per scope from `master` (or another
+  environment) and waits until it is ready; `contentful.api_key_access` lets a delivery API key (and its preview key)
+  read it, writing the key's environments with the version it read. `sponson init` detects Contentful from
+  `contentful`, `contentful-management` and `@contentful/*` packages and `CONTENTFUL_*` variables.
+- d21b9af: `http.resource`: a once-only output is now taken from the create's answer also when that answer holds nothing but
+  the value and the object is then found with `find` (Convex answers a new deploy key as `{ deployKey }`). The REST sim
+  lets a create choose its id with a query parameter (style `id_query`, recipe sim hint `id_query`) and deletes an
+  object a `POST` names in its path (a `deletes` path with a `{id}` segment).
+- 03af664: Recipes for six more providers with per-preview state: Mailgun (`mailgun.webhook`, an account webhook, and `mailgun.route`, an inbound route, posting to the preview's URL), Twilio (`twilio.twiml_app`, a TwiML Application per preview that its Voice SDK tokens name), Ably (`ably.webhook_rule`, an integration rule for the preview's channels), and release events as one-off actions with no undo: New Relic (`newrelic.deployment`, a change-tracking marker), Rollbar (`rollbar.deploy`) and BugSnag (`bugsnag.build`). The generic `http` adapter's Basic credential takes a literal user name (`basic: { user: api, password_env }`), and an API block may send lists as repeated form keys (`form_arrays: repeat`). The REST sim reads a repeated form key as a list and stores fields a write names otherwise than its answers under the read names. `sponson init` now finds Mailgun and Twilio, and reports Pusher Channels (no API for its webhooks) and Liveblocks (Enterprise-only Management API) as unmanaged.
+
 ## 0.9.3
 
 ### Patch Changes
