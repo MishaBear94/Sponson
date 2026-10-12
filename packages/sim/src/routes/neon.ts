@@ -28,6 +28,10 @@
  *       Verified live 2026-10-11. The default seed's root branch is `production`; a seed may name its root anything
  *       (older projects often have `main`), and its first root branch is the default. The adapter forks from the
  *       `default` branch when `parent` is omitted, so it depends on neither name.
+ *   N7. The create answer's connection string is `…?sslmode=require`, while GET /connection_uri answers
+ *       `…?channel_binding=require&sslmode=require` for the same branch, database and role (same password). Verified
+ *       2026-10-12 against a real project; found by the first live contract run, where a second apply rewrote the
+ *       Vercel variable that referenced it. The adapter reads outputs only through GET /connection_uri.
  */
 import { page, Reply, route, router, type CreatedBy, type ProviderSim, type SimCore } from "../provider.js";
 
@@ -137,7 +141,7 @@ const routes = router<NeonState>(
         operations: [{ id: core.nextId("op-"), branch_id: branch.id, action: "create_branch", status: core.chaos.neon_op_ms > 0 ? "running" : "finished" }],
         roles: [{ branch_id: branch.id, name: branch.database.owner_name }],
         databases: [publicDatabase(branch)],
-        connection_uris: [{ connection_uri: connectionUri(branch), connection_parameters: { database: branch.database.name, role: branch.database.owner_name, host: branch.endpoint.host } }],
+        connection_uris: [{ connection_uri: createdConnectionUri(branch), connection_parameters: { database: branch.database.name, role: branch.database.owner_name, host: branch.endpoint.host } }],
       });
     }),
 
@@ -207,9 +211,14 @@ export function createBranch(core: SimCore, project: NeonProject, name: string, 
 const DATABASE = "neondb";
 const ROLE = "neondb_owner";
 
-/** The connection string Neon would hand out for a branch. */
+/** The connection string GET /connection_uri hands out for a branch (N7: with `channel_binding=require`). */
 export function connectionUri(branch: NeonBranch): string {
-  return `postgres://${branch.database.owner_name}:pw_${branch.id}@${branch.endpoint.host}/${branch.database.name}`;
+  return `postgres://${branch.database.owner_name}:pw_${branch.id}@${branch.endpoint.host}/${branch.database.name}?channel_binding=require&sslmode=require`;
+}
+
+/** N7: the create answer's `connection_uris[0].connection_uri` lacks `channel_binding=require` (verified 2026-10-12). */
+function createdConnectionUri(branch: NeonBranch): string {
+  return connectionUri(branch).replace("channel_binding=require&", "");
 }
 
 function publicEndpoint(b: NeonBranch) {

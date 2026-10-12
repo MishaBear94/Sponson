@@ -198,8 +198,10 @@ const branch: OpSpec = {
       if (!found) throw e;
       return { resources: [record(found)], outputs: await outputsFor(c, found), created: [] };
     }
-    // Trust the write's answer: listing right after a create may not show it yet.
-    const outputs = r.host && r.uri ? { branch_id: r.branch.id, connection_string: r.uri, host: r.host } : await outputsFor(c, r.branch);
+    // N7: the create answer's connection string differs from GET /connection_uri's (it lacks
+    // `channel_binding=require`), so taking it here would make the next apply see a changed value and rewrite every
+    // line that references it. Outputs always come from the same read path as later runs.
+    const outputs = await outputsFor(c, r.branch);
     return { resources: [record(r.branch)], outputs, created: [key] };
   },
 

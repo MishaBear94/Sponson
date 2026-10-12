@@ -83,7 +83,7 @@ describe("neon branch", () => {
     h.sim.state.neon.projects.proj_demo!.branches[0]!.database = { name: "app", owner_name: "alex" };
     const actx = h.actx("neon");
     const r = await op.apply(actx, params(), null);
-    expect(String(r.outputs.connection_string)).toMatch(/^postgres:\/\/alex:pw_br-\d+@.*\/app$/);
+    expect(String(r.outputs.connection_string)).toMatch(/^postgres:\/\/alex:pw_br-\d+@.*\/app\?channel_binding=require&sslmode=require$/);
     const live = await op.read(actx, params());
     expect(live?.outputs).toEqual(r.outputs);
   });
