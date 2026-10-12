@@ -33,7 +33,8 @@ export type Auth =
   | { kind: "bearer"; env: string }
   | { kind: "header"; header: string; env: string; prefix?: string }
   | { kind: "headers"; headers: Array<{ header: string; env: string; prefix?: string }> }
-  | { kind: "basic"; userEnv: string; passwordEnv: string }
+  /** `user` is a literal user name (Mailgun's `api`), `userEnv` a variable holding one; exactly one is set. */
+  | { kind: "basic"; userEnv?: string; user?: string; passwordEnv: string }
   | { kind: "oauth2"; tokenUrl: string; tokenUrlEnv?: string; clientIdEnv: string; clientSecretEnv: string; audience?: string; scope?: string; extra: Record<string, string>; method: ClientAuthMethod }
   | { kind: "command"; argv: string[] }
   | { kind: "sigv4"; region: string; service: string; accessKeyIdEnv: string; secretAccessKeyEnv: string; sessionTokenEnv?: string }
@@ -67,7 +68,7 @@ export function envName(v: unknown, where: string, credential: boolean): string 
 }
 
 const AUTH_FORMS =
-  "`{ bearer_env: NAME }`, `{ header: X-Api-Key, value_env: NAME, prefix?: \"Api-Key \" }`, `{ headers: [{ header, value_env }, …] }`, `{ basic: { user_env, password_env } }`, `{ oauth2_client_credentials: { token_url, client_id_env, client_secret_env } }` (`token_url` and `audience` may be paths on the base URL's origin), `{ command: [argv…] }`, `{ aws_sigv4: { region, service, access_key_id_env, secret_access_key_env } }` or `{ digest: { user_env, password_env } }`";
+  "`{ bearer_env: NAME }`, `{ header: X-Api-Key, value_env: NAME, prefix?: \"Api-Key \" }`, `{ headers: [{ header, value_env }, …] }`, `{ basic: { user_env | user, password_env } }`, `{ oauth2_client_credentials: { token_url, client_id_env, client_secret_env } }` (`token_url` and `audience` may be paths on the base URL's origin), `{ command: [argv…] }`, `{ aws_sigv4: { region, service, access_key_id_env, secret_access_key_env } }` or `{ digest: { user_env, password_env } }`";
 
 function subBlock(v: unknown, where: string, known: string[]): Record<string, unknown> {
   if (!isObject(v)) throw planError(`must be a map (${known.join(", ")})`, where);
@@ -166,8 +167,21 @@ function parseUserPassword(v: unknown, where: string, kind: "basic" | "digest"):
   return { kind, userEnv: envName(o.user_env, `${where}.user_env`, false), passwordEnv: envName(o.password_env, `${where}.password_env`, true) };
 }
 
+/**
+ * Basic: the user name from a variable (`user_env`, an account id) or written as it is (`user`, for an API whose
+ * documented user name is fixed: Mailgun's `api`). Never both; the password is the credential either way.
+ */
+function parseBasic(v: unknown, where: string): Auth {
+  const o = subBlock(v, where, ["user_env", "user", "password_env"]);
+  const passwordEnv = envName(o.password_env, `${where}.password_env`, true);
+  if ((o.user === undefined) === (o.user_env === undefined)) throw planError("needs exactly one of `user_env` (a variable holding the user name) and `user` (a literal user name, such as Mailgun's `api`)", where);
+  if (o.user_env !== undefined) return { kind: "basic", userEnv: envName(o.user_env, `${where}.user_env`, false), passwordEnv };
+  if (typeof o.user !== "string" || !/^[^\s:]+$/.test(o.user)) throw planError("must be a user name without spaces or `:`", `${where}.user`);
+  return { kind: "basic", user: o.user, passwordEnv };
+}
+
 const PARSERS: Record<string, (v: unknown, where: string, base?: string) => Auth> = {
-  basic: (v, w) => parseUserPassword(v, w, "basic"),
+  basic: parseBasic,
   digest: (v, w) => parseUserPassword(v, w, "digest"),
   oauth2_client_credentials: parseOauth2,
   command: parseCommand,
@@ -438,6 +452,12 @@ function digestSigner(actx: AdapterContext, auth: Extract<Auth, { kind: "digest"
   };
 }
 
+/** HTTP Basic from the user name (a literal, or its variable) and the password's variable. */
+function basicCredential(env: NodeJS.ProcessEnv, auth: Extract<Auth, { kind: "basic" }>): Credential {
+  const encoded = basicOf(auth.user ?? requireEnv(env, auth.userEnv!, ADAPTER), requireEnv(env, auth.passwordEnv, ADAPTER));
+  return { token: `Basic ${encoded}`, authHeader: "header:authorization", masks: () => [encoded] };
+}
+
 /** A line's own credential in the place of a bearer or header form's variable (the header name and prefix stay). */
 function lineCredential(auth: Auth, line: string): Credential {
   if (auth.kind === "bearer") return { token: line, authHeader: "bearer", masks: () => [] };
@@ -465,10 +485,8 @@ export function credentialFor(actx: AdapterContext, auth: Auth, deps: AuthDeps, 
     }
     case "none":
       return { token: "", authHeader: "none", masks: () => [] };
-    case "basic": {
-      const encoded = basicOf(requireEnv(env, auth.userEnv, ADAPTER), requireEnv(env, auth.passwordEnv, ADAPTER));
-      return { token: `Basic ${encoded}`, authHeader: "header:authorization", masks: () => [encoded] };
-    }
+    case "basic":
+      return basicCredential(env, auth);
     case "oauth2": {
       const entry = entryFor(actx, auth, `${optionalEnv(env, auth.clientIdEnv) ?? ""}\u0000${optionalEnv(env, auth.clientSecretEnv) ?? ""}`);
       return { token: "", authHeader: "bearer", signer: bearerSigner(actx, entry, deps, () => fetchOauth2(actx, auth, deps, redact)), masks: () => entry.issued };

@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import { SponsonError } from "@sponson/core";
 import { afterEach, describe, expect, it } from "vitest";
-import { HTTP_ERROR_BODY_LIMIT, apiClient, backoffMs, classifyStatus, isProviderError, listAll, obj, records, retryAfterMs, type ApiClient } from "./http.js";
+import { HTTP_ERROR_BODY_LIMIT, apiClient, backoffMs, classifyStatus, formEncode, isProviderError, listAll, obj, records, retryAfterMs, type ApiClient } from "./http.js";
 
 type Handler = (req: IncomingMessage, res: ServerResponse, n: number) => void;
 
@@ -239,4 +239,9 @@ it("isProviderError filters by code", () => {
   expect(isProviderError(e, "PROVIDER_NOT_FOUND")).toBe(true);
   expect(isProviderError(e, ["PROVIDER_AUTH"])).toBe(false);
   expect(isProviderError(new SponsonError("PLAN_INVALID", "x"))).toBe(false);
+});
+
+it("formEncode brackets lists by default and repeats the key with `repeat`", () => {
+  expect(decodeURIComponent(formEncode({ a: ["x", "y"], b: { c: 1 } }))).toBe("a[0]=x&a[1]=y&b[c]=1");
+  expect(decodeURIComponent(formEncode({ a: ["x", "y"], b: "z" }, "repeat"))).toBe("a=x&a=y&b=z");
 });

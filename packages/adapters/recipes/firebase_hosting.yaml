@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=../../../schema/recipe.schema.json
-# Firebase Hosting REST API recipes (preview channels). Format and checklist: docs/adr/0020-recipes.md (Amendment 9),
+# Firebase Hosting REST API recipes (preview channels). Format and checklist: docs/adr/0020-recipes.md (Amendment 10),
 # CONTRIBUTING.md "Adding a recipe". A separate file from firebase.yaml because it is another API (another host).
 provider: firebase_hosting
 title: Firebase Hosting

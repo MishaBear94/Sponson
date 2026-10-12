@@ -8,6 +8,7 @@ import { isSponsonError, type AdapterContext, type Ctx, type OpSpec } from "@spo
 import type { SimSeed } from "@sponson/sim";
 import { createHttpAdapter, httpAdapter } from "./http-adapter.js";
 import { COMMAND_TOKEN_TTL_MS, parseAuth } from "./http-adapter-auth.js";
+import { parseApi } from "./http-adapter-spec.js";
 import type { Exec } from "./secrets.js";
 import { harness, type Harness } from "./testing.js";
 
@@ -391,5 +392,33 @@ describe("auth: header with a prefix, and several headers", () => {
     expect(() => parseAuth({ headers: [{ header: "DD-API-KEY", value_env: "DD_KEY" }, { header: "dd-api-key", value_env: "OTHER_KEY" }] }, w)).toThrow(/twice/);
     expect(() => parseAuth({ headers: [{ header: "DD-API-KEY", value_env: "DD_ID" }] }, w)).toThrow(/must end in TOKEN/);
     expect(() => parseAuth({ headers: [{ header: "DD-API-KEY", value_env: "DD_KEY" }], bearer_env: "X_TOKEN" }, w)).toThrow(/unknown key/);
+  });
+});
+
+describe("auth: basic with a literal user, and lists as repeated form keys", () => {
+  it("takes `user` (a literal, Mailgun's `api`) or `user_env`, never both, and sends user:password", async () => {
+    const w = "providers.http.x.auth";
+    expect(parseAuth({ basic: { user: "api", password_env: "MAILGUN_API_KEY" } }, w)).toEqual({ kind: "basic", user: "api", passwordEnv: "MAILGUN_API_KEY" });
+    expect(parseAuth({ basic: { user_env: "TWILIO_ACCOUNT_SID", password_env: "TWILIO_AUTH_TOKEN" } }, w)).toEqual({ kind: "basic", userEnv: "TWILIO_ACCOUNT_SID", passwordEnv: "TWILIO_AUTH_TOKEN" });
+    expect(() => parseAuth({ basic: { user: "api", user_env: "U", password_env: "P_KEY" } }, w)).toThrow(/exactly one of `user_env`/);
+    expect(() => parseAuth({ basic: { password_env: "P_KEY" } }, w)).toThrow(/exactly one of `user_env`/);
+    expect(() => parseAuth({ basic: { user: "a:b", password_env: "P_KEY" } }, w)).toThrow(/without spaces or `:`/);
+    const expected = `Basic ${Buffer.from("api:mg-key-0042").toString("base64")}`;
+    await start({ rest: { collections: { "/routes": [] }, auth: { headers: [{ authorization: expected }] } } });
+    const block = { base_url: `${h.sim.url}/rest`, auth: { basic: { user: "api", password_env: "MAILGUN_API_KEY" } }, encoding: "form", form_arrays: "repeat" };
+    const actions = ['forward("https://pr-42.example.com/in")', "stop()"];
+    const params = { api: "mg", find: { path: "/routes", list_path: "/data", match: { description: "pr-42" } }, create: { path: "/routes" }, delete: { path: "/routes/{id}" }, item_path: "/data", fields: { actions } };
+    const { actx } = run({ MAILGUN_API_KEY: "mg-key-0042" }, block);
+    await applyOnce(resource, actx, params);
+    // `actions=…&actions=…`: the sim reads a repeated key as a list.
+    expect(h.sim.state.rest.collections["/routes"]).toEqual([expect.objectContaining({ description: "pr-42", actions })]);
+  });
+
+  it("refuses `form_arrays` that is unknown or without `encoding: form`", () => {
+    const base = { base_url: "https://api.example.com", auth: { bearer_env: "X_TOKEN" } };
+    expect(() => parseApi({ ...base, form_arrays: "repeat" }, "providers.http.x")).toThrow(/applies to `encoding: form` only/);
+    expect(() => parseApi({ ...base, encoding: "form", form_arrays: "comma" }, "providers.http.x")).toThrow(/`brackets`.*`repeat`/);
+    expect(parseApi({ ...base, encoding: "form", form_arrays: "brackets" }, "providers.http.x").formArrays).toBeUndefined();
+    expect(parseApi({ ...base, encoding: "form", form_arrays: "repeat" }, "providers.http.x").formArrays).toBe("repeat");
   });
 });

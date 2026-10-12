@@ -3,7 +3,7 @@
  * environment, and the delivery API keys that may read it. The API assumptions it relies on are numbered CF1… at the
  * top of packages/sim/src/routes/contentful.ts.
  *
- * Why an adapter and not an `http` recipe (ADR 0020, Amendments 4 and 9): a new environment is copied
+ * Why an adapter and not an `http` recipe (ADR 0020, Amendments 4 and 10): a new environment is copied
  * asynchronously and is usable only once its status is `ready` (CF4), so `apply` waits for it; and granting an API
  * key access to it is a `PUT` of the key's whole `environments` list with the version read just before
  * (`X-Contentful-Version`, CF6/CF7), a precondition no request template carries.

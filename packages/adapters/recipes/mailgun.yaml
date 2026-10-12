@@ -1,0 +1,186 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Mailgun API recipes: an account webhook and an inbound route per preview. Format and checklist:
+# docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: mailgun
+title: Mailgun
+category: email
+verified_on: "2026-10-12"
+docs:
+  - title: Mailgun API OpenAPI document (every operation and schema below)
+    url: https://documentation.mailgun.com/_bundle/docs/mailgun/api-reference/send/mailgun.yaml
+  - title: Authentication (HTTP Basic, user `api`)
+    url: https://documentation.mailgun.com/docs/mailgun/api-reference/authentication/
+  - title: Account Webhooks
+    url: https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/account-webhooks
+  - title: Create an account-level webhook
+    url: https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/account-webhooks/post-v1-webhooks
+  - title: Get account-level webhook by ID
+    url: https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/account-webhooks/get-v1-webhooks--webhook-id-
+  - title: Update an account-level webhook
+    url: https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/account-webhooks/put-v1-webhooks--webhook-id-
+  - title: Domain Webhooks (the v3 and v4 per-domain alternatives)
+    url: https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/domain-webhooks
+  - title: Routes
+    url: https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/routes
+  - title: Route actions
+    url: https://documentation.mailgun.com/docs/mailgun/user-manual/receive-forward-store/route-actions
+api:
+  base_url: https://api.mailgun.net
+  base_url_env: MAILGUN_API_URL
+  auth: { basic: { user: api, password_env: MAILGUN_API_KEY } }
+  encoding: form
+  # Lists go as the key repeated (`action=…&action=…`, `event_types=…&event_types=…`): MG4.
+  form_arrays: repeat
+credential:
+  url: "https://documentation.mailgun.com/docs/mailgun/api-reference/authentication/"
+  scope: "An account API key (Account Settings > API Keys): Domain Sending Keys 'only allow sending messages' and cannot manage webhooks or routes."
+  source: "https://documentation.mailgun.com/docs/mailgun/api-reference/authentication/"
+  verify: "GET /v1/webhooks"
+detect:
+  deps: [mailgun.js, mailgun-js]
+  env: ["MAILGUN_*"]
+  starter:
+    - op: webhook
+      preview_url: url
+      values: { name: "sponson-${ctx.env}-${ctx.scope}" }
+      check: [path]
+assumptions:
+  - id: MG1
+    verified: true
+    text: "Requests authenticate with HTTP Basic, the user name `api` and an API key as the password; the US API is `https://api.mailgun.net`, the EU one `https://api.eu.mailgun.net` (an EU account sets `base_url` in the provider block)."
+    source: https://documentation.mailgun.com/_bundle/docs/mailgun/api-reference/send/mailgun.yaml
+  - id: MG2
+    verified: true
+    text: "`POST /v1/webhooks` creates an account-level webhook from `url` (required), `event_types` (required, one of accepted, clicked, opened, unsubscribed, delivered, permanent_fail, temporary_fail, complained; repeated for several) and `description`, and answers `{ webhook_id }` only; it receives the events of every domain of the account. At most three URLs per event type (a fourth answers 409 'unable to add more than 3 urls for event type …'), so at most three previews (fewer when the account has its own webhooks) can each have one at a time."
+    source: https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/account-webhooks/post-v1-webhooks
+  - id: MG3
+    verified: true
+    text: "`GET /v1/webhooks` answers `{ webhooks: [...] }` and `GET /v1/webhooks/{webhook_id}` one webhook, each with `webhook_id`, `description`, `url`, `event_types` (a list) and `created_at`; `PUT /v1/webhooks/{webhook_id}` replaces url, description and event types whole (204), `DELETE` on the same path removes it (204), and an unknown id answers 404."
+    source: https://documentation.mailgun.com/_bundle/docs/mailgun/api-reference/send/mailgun.yaml
+  - id: MG4
+    verified: true
+    text: "Lists in request bodies are the key repeated: the OpenAPI document declares `action` with `style: form, explode: true` and says to use `event_types` 'multiple times to specify multiple event types', hence `form_arrays: repeat`."
+    source: https://documentation.mailgun.com/_bundle/docs/mailgun/api-reference/send/mailgun.yaml
+  - id: MG5
+    verified: false
+    text: "The account-webhook operations, documented as `multipart/form-data`, accept the same fields `application/x-www-form-urlencoded`, as Mailgun's v3 operations (documented so) do."
+  - id: MG6
+    verified: true
+    text: "Webhook changes 'can take up to 10 minutes to become effective due to caching': a new preview may miss its first events."
+    source: https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/account-webhooks
+  - id: MG7
+    verified: true
+    text: "Routes are account-wide ('defined globally, per account, not per domain'). `POST /v3/routes` takes `priority` (default 0, lower first), `description`, `expression` (required) and `action` (repeated), and answers `{ message, route }`; `GET /v3/routes/{id}` answers `{ route }` (404 when unknown); `GET /v3/routes` answers `{ total_count, items }`, `limit` up to 1000; `PUT /v3/routes/{id}` updates only the fields sent and answers `{ message, route }`; `DELETE /v3/routes/{id}` removes it. A route object carries `id`, `priority`, `description`, `expression`, `actions` (a list) and `created_at`."
+    source: https://documentation.mailgun.com/_bundle/docs/mailgun/api-reference/send/mailgun.yaml
+  - id: MG8
+    verified: true
+    text: "`forward(\"https://…\")` posts a matching message to the URL; every route is evaluated unless a higher-priority one runs `stop()`; `match_recipient('regex')` filters on the recipient. The receiving domain needs its MX records pointing at Mailgun."
+    source: https://documentation.mailgun.com/docs/mailgun/user-manual/receive-forward-store/route-actions
+  - id: MG9
+    verified: false
+    text: "The API answers `description`, `url`, `event_types`, `expression` and `actions` as they were written, so an unchanged webhook or route hashes the same on every plan, and a route's description (not required to be unique by Mailgun) or a webhook's identifies what this recipe made: two equal ones make `find` refuse with PARAM_INVALID."
+  - id: MG10
+    verified: false
+    text: "A per-domain webhook (v3 `…/domains/{domain}/webhooks/{event}`, a list of up to three URLs per event; v4 `…/webhooks?url=`, answered as a map of event to URLs) is not an object of its own that a later run can read back by an id, so this recipe uses account webhooks; the preview's handler must ignore events of mail it did not send (every webhook gets every domain's events)."
+ops:
+  webhook:
+    kind: resource
+    title: Account webhook
+    summary: "An account-level webhook that posts the chosen email events to the preview's own URL, `url` + `path` (usually `{ from: web.preview_url }`). Identified by its description (`name`), so a new preview URL updates it in place. It receives every domain's events (MG10), and Mailgun takes at most three URLs per event type (MG2): at most three previews at a time. A console edit of its URL or events is drift."
+    covers: [mailgun-webhook-route]
+    params:
+      name:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9_.:/ -]{1,200}$"
+        description: "The webhook's identity, kept as its description: unique per preview, such as `sponson-${ctx.env}-${ctx.scope}`."
+        example: "sponson-${ctx.env}-${ctx.scope}"
+      url:
+        type: string
+        required: true
+        pattern: "^https://\\S*[^/]$"
+        description: "The preview's base URL, without a trailing slash: usually `{ from: <deploy line>.preview_url }`."
+        example: https://pr-42.preview.example.com
+      path:
+        type: string
+        default: /api/webhooks/mailgun
+        pattern: "^/\\S*$"
+        description: "Where the app handles Mailgun's events, appended to `url`."
+      event_types:
+        type: list
+        default: [delivered, permanent_fail, complained]
+        description: "The events posted: accepted, clicked, opened, unsubscribed, delivered, permanent_fail, temporary_fail, complained (MG2)."
+    http:
+      find:
+        path: /v1/webhooks
+        list_path: /webhooks
+        match: { description: { param: name } }
+      read: { path: "/v1/webhooks/{id}" }
+      create: { path: /v1/webhooks, locate: true }
+      update: { method: PUT, path: "/v1/webhooks/{id}" }
+      id_path: /webhook_id
+      fields:
+        url: { join: [{ param: url }, { param: path }] }
+        event_types: { param: event_types }
+  route:
+    kind: resource
+    title: Inbound route
+    summary: "An inbound route per preview that forwards mail matching `expression` (such as `match_recipient('pr-42@inbound.example.com')`) to the preview's own URL, `url` + `path`. Identified by its description (`name`); a console edit of its priority, expression or action is drift. The receiving domain is long-lived and shared (MX records at Mailgun, MG8); each preview gets its own address on it."
+    covers: [mailgun-webhook-route]
+    params:
+      name:
+        type: string
+        required: true
+        pattern: "^[A-Za-z0-9_.:/ -]{1,200}$"
+        description: "The route's identity, kept as its description: unique per preview, such as `sponson-${ctx.env}-${ctx.scope}`."
+        example: "sponson-${ctx.env}-${ctx.scope}"
+      expression:
+        type: string
+        required: true
+        description: "The filter (MG8), such as `match_recipient('${ctx.scope}@inbound.example.com')`."
+        example: "match_recipient('${ctx.scope}@inbound.example.com')"
+      url:
+        type: string
+        required: true
+        pattern: "^https://\\S*[^/\"]$"
+        description: "The preview's base URL, without a trailing slash: usually `{ from: <deploy line>.preview_url }`."
+        example: https://pr-42.preview.example.com
+      path:
+        type: string
+        default: /api/inbound/mailgun
+        pattern: "^/[^\\s\"]*$"
+        description: "Where the app receives forwarded mail, appended to `url`."
+      priority:
+        type: integer
+        default: 0
+        description: "Lower runs first (MG7)."
+    http:
+      find:
+        path: "/v3/routes?limit=1000"
+        list_path: /items
+        match: { description: { param: name } }
+      read: { path: "/v3/routes/{id}" }
+      create:
+        path: /v3/routes
+        send_fields: false
+        body:
+          priority: { param: priority }
+          description: { param: name }
+          expression: { param: expression }
+          action: [{ join: ["forward(\"", { param: url }, { param: path }, "\")"] }]
+      update:
+        method: PUT
+        path: "/v3/routes/{id}"
+        send_fields: false
+        body:
+          priority: { param: priority }
+          description: { param: name }
+          expression: { param: expression }
+          action: [{ join: ["forward(\"", { param: url }, { param: path }, "\")"] }]
+      item_path: /route
+      fields:
+        priority: { param: priority }
+        expression: { param: expression }
+        actions: [{ join: ["forward(\"", { param: url }, { param: path }, "\")"] }]
+    sim:
+      write_fields: { action: actions }

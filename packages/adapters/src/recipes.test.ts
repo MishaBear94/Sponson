@@ -84,7 +84,8 @@ describe.each(recipeNames())("recipes/%s.yaml", (name) => {
     expect(coverage.categories.map((c) => c.id), "category is a docs/coverage.yaml category").toContain(r.category);
     expect(new Set(r.assumptions.map((a) => a.id)).size, "assumption ids are unique").toBe(r.assumptions.length);
     if (!r.api) {
-      // Only actions sent to the app's own URL may do without an API block (and its credential).
+      // Only actions sent to an absolute URL (the app's own, or an endpoint taking its key in the body) may do without
+      // an API block (and its credential).
       for (const op of Object.values(r.ops)) expect({ kind: op.kind, url: (op.http.request as { url?: unknown } | undefined)?.url !== undefined }).toEqual({ kind: "action", url: true });
       return;
     }

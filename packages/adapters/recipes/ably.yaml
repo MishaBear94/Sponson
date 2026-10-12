@@ -1,0 +1,124 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Ably Control API recipes: a webhook integration rule per preview. Format and checklist: docs/adr/0020-recipes.md,
+# CONTRIBUTING.md "Adding a recipe".
+provider: ably
+title: Ably
+category: webhooks
+verified_on: "2026-10-12"
+docs:
+  - title: Control API (base URL, access tokens and their capabilities, rules)
+    url: https://ably.com/docs/platform/account/control-api
+  - title: Control API OpenAPI document (rule_post, rule_patch, rule_response, http_rule_*)
+    url: https://ably.com/docs/open-specs/control-v1.yaml
+  - title: Webhooks (integration rules, batching, signing)
+    url: https://ably.com/docs/platform/integrations/webhooks
+api:
+  base_url: https://control.ably.net/v1
+  base_url_env: ABLY_CONTROL_API_URL
+  auth: { bearer_env: ABLY_CONTROL_TOKEN }
+credential:
+  url: "https://ably.com/docs/platform/account/control-api"
+  scope: "An account access token (Account > My Access Tokens) with the `read:rule` and `write:rule` capabilities only."
+  source: "https://ably.com/docs/platform/account/control-api"
+  verify: "GET /me"
+detect:
+  deps: [ably]
+  env: ["ABLY_*"]
+  starter:
+    - op: webhook_rule
+      preview_url: url
+      values: { channel_filter: "^${ctx.scope}:" }
+      check: [path]
+  where:
+    app_id: "the app's ID: the part of its API key before the dot, or the Ably dashboard's app settings"
+assumptions:
+  - id: AB1
+    verified: true
+    text: "The Control API is at `https://control.ably.net/v1` and takes an account access token as `Authorization: Bearer`; managing rules needs the `read:rule` and `write:rule` capabilities, and `GET /me` shows a token's."
+    source: https://ably.com/docs/platform/account/control-api
+  - id: AB2
+    verified: true
+    text: "`POST /apps/{app_id}/rules` creates an integration rule; an `http` (webhook) rule takes `ruleType: http`, `requestMode` (`single` or `batch`), `source` (`channelFilter`, a regular expression over the whole channel name, and `type`: `channel.message`, `channel.presence`, `channel.lifecycle` or `channel.occupancy`), `target` (`url`, `format` `json` or `msgpack`, `enveloped`, `headers`, `signingKeyId`) and `status`, and answers 201 with the rule and its `id`."
+    source: https://ably.com/docs/open-specs/control-v1.yaml
+  - id: AB3
+    verified: true
+    text: "`GET /apps/{app_id}/rules` answers a bare array of rules, `GET /apps/{app_id}/rules/{rule_id}` one rule; `PATCH` on the same path updates the fields sent (`ruleType` required) and answers 200; `DELETE` answers 204, and an unknown rule 404."
+    source: https://ably.com/docs/open-specs/control-v1.yaml
+  - id: AB4
+    verified: false
+    text: "A rule's channel filter and source type identify the one this recipe made: Ably keeps rules with the same filter apart only by id, so a second rule with the same filter and type makes `find` refuse with PARAM_INVALID. The app must name a preview's channels with a per-preview prefix (`pr-42:…`) for the filter to select them."
+  - id: AB5
+    verified: false
+    text: "Ably answers `target.url`, `target.format`, `target.enveloped`, `requestMode` and `status` as written, and a `PATCH` that sends `target` without `headers` keeps none; this recipe sets no headers."
+ops:
+  webhook_rule:
+    kind: resource
+    title: Webhook rule
+    summary: "An integration rule that posts the messages (or presence, lifecycle, occupancy events) of a preview's channels, those matching `channel_filter` such as `^pr-42:`, to the preview's own URL, `url` + `path`. Identified by its channel filter and source type, so a new preview URL updates it in place; a console edit of its URL, format, envelope, request mode or status is drift. The app and its keys are shared and not managed."
+    covers: [ably-webhook-rule]
+    params:
+      app_id:
+        type: string
+        required: true
+        description: The Ably app the rule belongs to.
+        example: 28GY6a
+      channel_filter:
+        type: string
+        required: true
+        description: "A regular expression over the whole channel name selecting the preview's channels, such as `^${ctx.scope}:`; with `source_type`, the rule's identity."
+        example: "^${ctx.scope}:"
+      source_type:
+        type: string
+        default: channel.message
+        enum: [channel.message, channel.presence, channel.lifecycle, channel.occupancy]
+        description: The events the rule posts (AB2).
+      url:
+        type: string
+        required: true
+        pattern: "^https://\\S*[^/]$"
+        description: "The preview's base URL, without a trailing slash: usually `{ from: <deploy line>.preview_url }`."
+        example: https://pr-42.preview.example.com
+      path:
+        type: string
+        default: /api/webhooks/ably
+        pattern: "^/\\S*$"
+        description: "Where the app handles Ably's requests, appended to `url`."
+      request_mode:
+        type: string
+        default: single
+        enum: [single, batch]
+        description: One request per event, or events batched.
+      format:
+        type: string
+        default: json
+        enum: [json, msgpack]
+        description: The encoding of what is posted.
+      enveloped:
+        type: boolean
+        default: true
+        description: Whether events are wrapped in Ably's metadata envelope.
+      status:
+        type: string
+        default: enabled
+        enum: [enabled, disabled]
+        description: Whether the rule posts.
+    http:
+      find:
+        path: "/apps/{app_id}/rules"
+        match: { /source/channelFilter: { param: channel_filter }, /source/type: { param: source_type } }
+      read: { path: "/apps/{app_id}/rules/{id}" }
+      create:
+        path: "/apps/{app_id}/rules"
+        body: { ruleType: http }
+      update:
+        method: PATCH
+        path: "/apps/{app_id}/rules/{id}"
+        body: { ruleType: http }
+      fields:
+        /target/url: { join: [{ param: url }, { param: path }] }
+        /target/format: { param: format }
+        /target/enveloped: { param: enveloped }
+        /requestMode: { param: request_mode }
+        /status: { param: status }
+    live:
+      params: { app_id: SPONSON_LIVE_ABLY_APP_ID }

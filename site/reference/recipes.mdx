@@ -43,6 +43,7 @@ names are set.
 
 | Recipe | Op | What it manages | Credential |
 |---|---|---|---|
+| [`ably.webhook_rule`](/reference/recipes#ably-webhook_rule) | `resource` | Webhook rule | `ABLY_CONTROL_TOKEN` (bearer) |
 | [`amplify.branch`](/reference/recipes#amplify-branch) | `resource` | Branch | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (AWS SigV4, `amplify` in `us-east-1`) |
 | [`amplify.branch_variable`](/reference/recipes#amplify-branch_variable) | `list_item` | Branch environment variable | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (AWS SigV4, `amplify` in `us-east-1`) |
 | [`auth0.callback_url`](/reference/recipes#auth0-callback_url) | `list_item` | Application callback URL | `AUTH0_CLIENT_ID` / `AUTH0_CLIENT_SECRET` (OAuth2 client credentials) |
@@ -50,6 +51,7 @@ names are set.
 | [`auth0.web_origin`](/reference/recipes#auth0-web_origin) | `list_item` | Application allowed web origin | `AUTH0_CLIENT_ID` / `AUTH0_CLIENT_SECRET` (OAuth2 client credentials) |
 | [`auth0.allowed_origin`](/reference/recipes#auth0-allowed_origin) | `list_item` | Application allowed origin (CORS) | `AUTH0_CLIENT_ID` / `AUTH0_CLIENT_SECRET` (OAuth2 client credentials) |
 | [`azure_swa.build_app_setting`](/reference/recipes#azure_swa-build_app_setting) | `list_item` | App setting of a preview environment | the token `az account get-access-token --query accessToken -o tsv` prints (bearer) |
+| [`bugsnag.build`](/reference/recipes#bugsnag-build) | `action` | Build (release) | none of Sponson's (calls a URL the line gives; a key it needs is a `{ secret }` param) |
 | [`cloudflare.dns_cname`](/reference/recipes#cloudflare-dns_cname) | `resource` | DNS CNAME record | `CLOUDFLARE_API_TOKEN` (bearer) |
 | [`cockroachdb.database`](/reference/recipes#cockroachdb-database) | `resource` | Database in a cluster | `COCKROACH_API_KEY` (bearer) |
 | [`cockroachdb.sql_user`](/reference/recipes#cockroachdb-sql_user) | `resource` | SQL user in a cluster | `COCKROACH_API_KEY` (bearer) |
@@ -67,10 +69,13 @@ names are set.
 | [`growthbook.force_rule`](/reference/recipes#growthbook-force_rule) | `list_item` | Feature force rule | `GROWTHBOOK_API_KEY` (bearer) |
 | [`heroku.config_var`](/reference/recipes#heroku-config_var) | `list_item` | App config var | `HEROKU_API_KEY` (bearer) |
 | [`honeycomb.marker`](/reference/recipes#honeycomb-marker) | `resource` | Deploy marker | `HONEYCOMB_API_KEY` (header `X-Honeycomb-Team`) |
-| [`inngest.sync`](/reference/recipes#inngest-sync) | `action` | App sync into its branch environment | none (calls the app's own URL) |
+| [`inngest.sync`](/reference/recipes#inngest-sync) | `action` | App sync into its branch environment | none of Sponson's (calls a URL the line gives; a key it needs is a `{ secret }` param) |
 | [`kinde.callback_url`](/reference/recipes#kinde-callback_url) | `list_item` | Application callback URL | `KINDE_MANAGEMENT_CLIENT_ID` / `KINDE_MANAGEMENT_CLIENT_SECRET` (OAuth2 client credentials) |
 | [`kinde.logout_url`](/reference/recipes#kinde-logout_url) | `list_item` | Application allowed logout redirect URL | `KINDE_MANAGEMENT_CLIENT_ID` / `KINDE_MANAGEMENT_CLIENT_SECRET` (OAuth2 client credentials) |
+| [`mailgun.webhook`](/reference/recipes#mailgun-webhook) | `resource` | Account webhook | `MAILGUN_API_KEY` (basic, user `api`) |
+| [`mailgun.route`](/reference/recipes#mailgun-route) | `resource` | Inbound route | `MAILGUN_API_KEY` (basic, user `api`) |
 | [`mongodb_atlas.database_user`](/reference/recipes#mongodb_atlas-database_user) | `resource` | Database user | `MONGODB_ATLAS_PUBLIC_API_KEY` / `MONGODB_ATLAS_PRIVATE_API_KEY` (HTTP Digest) |
+| [`newrelic.deployment`](/reference/recipes#newrelic-deployment) | `action` | Deployment marker | `NEW_RELIC_API_KEY` (header `API-Key`) |
 | [`okta.redirect_uri`](/reference/recipes#okta-redirect_uri) | `list_item` | OIDC application sign-in redirect URI | `OKTA_API_TOKEN` (header `Authorization`, after `SSWS`) |
 | [`okta.post_logout_redirect_uri`](/reference/recipes#okta-post_logout_redirect_uri) | `list_item` | OIDC application sign-out redirect URI | `OKTA_API_TOKEN` (header `Authorization`, after `SSWS`) |
 | [`okta.trusted_origin`](/reference/recipes#okta-trusted_origin) | `resource` | Trusted origin (CORS and redirect) | `OKTA_API_TOKEN` (header `Authorization`, after `SSWS`) |
@@ -84,6 +89,7 @@ names are set.
 | [`render.env_var`](/reference/recipes#render-env_var) | `resource` | Service environment variable | `RENDER_API_KEY` (bearer) |
 | [`resend.api_key`](/reference/recipes#resend-api_key) | `resource` | API key | `RESEND_API_KEY` (bearer) |
 | [`resend.webhook`](/reference/recipes#resend-webhook) | `resource` | Webhook | `RESEND_API_KEY` (bearer) |
+| [`rollbar.deploy`](/reference/recipes#rollbar-deploy) | `action` | Deploy | `ROLLBAR_ACCESS_TOKEN` (header `X-Rollbar-Access-Token`) |
 | [`s3.bucket_cors`](/reference/recipes#s3-bucket_cors) | `list_item` | CORS rule of a bucket | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (AWS SigV4, `s3` in `us-east-1`) |
 | [`sanity.dataset`](/reference/recipes#sanity-dataset) | `resource` | Dataset per preview | `SANITY_AUTH_TOKEN` (bearer) |
 | [`sanity.cors_origin`](/reference/recipes#sanity-cors_origin) | `resource` | CORS origin | `SANITY_AUTH_TOKEN` (bearer) |
@@ -100,10 +106,92 @@ names are set.
 | [`stytch.redirect_url`](/reference/recipes#stytch-redirect_url) | `resource` | Redirect URL | `STYTCH_WORKSPACE_KEY_ID` / `STYTCH_WORKSPACE_KEY_SECRET` (basic) |
 | [`svix.endpoint`](/reference/recipes#svix-endpoint) | `resource` | Application endpoint | `SVIX_AUTH_TOKEN` (bearer) |
 | [`turso.database_branch`](/reference/recipes#turso-database_branch) | `resource` | Database branch | `TURSO_API_TOKEN` (bearer) |
+| [`twilio.twiml_app`](/reference/recipes#twilio-twiml_app) | `resource` | TwiML Application | `TWILIO_API_KEY` / `TWILIO_API_SECRET` (basic) |
 | [`unleash.flag_strategy`](/reference/recipes#unleash-flag_strategy) | `resource` | Flag strategy with constraints | `UNLEASH_AUTH_TOKEN` (header `Authorization`) |
 | [`upstash.redis_database`](/reference/recipes#upstash-redis_database) | `resource` | Redis database | `UPSTASH_EMAIL` / `UPSTASH_API_KEY` (basic) |
 | [`vercel.project_domain`](/reference/recipes#vercel-project_domain) | `resource` | Branch-bound project domain | `VERCEL_TOKEN` (bearer) |
 | [`workos.redirect_uri`](/reference/recipes#workos-redirect_uri) | `resource` | AuthKit redirect URI | `WORKOS_API_KEY` (bearer) |
+
+## Ably
+
+Recipe file: [`packages/adapters/recipes/ably.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/ably.yaml). Verified on 2026-10-12 against:
+
+- [Control API (base URL, access tokens and their capabilities, rules)](https://ably.com/docs/platform/account/control-api)
+- [Control API OpenAPI document (rule_post, rule_patch, rule_response, http_rule_*)](https://ably.com/docs/open-specs/control-v1.yaml)
+- [Webhooks (integration rules, batching, signing)](https://ably.com/docs/platform/integrations/webhooks)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://control.ably.net/v1` |
+| `base_url_env` | `ABLY_CONTROL_API_URL` |
+| Credential | `ABLY_CONTROL_TOKEN` (bearer) |
+
+Assumptions:
+
+- **AB1** (verified, [source](https://ably.com/docs/platform/account/control-api)): The Control API is at `https://control.ably.net/v1` and takes an account access token as `Authorization: Bearer`; managing rules needs the `read:rule` and `write:rule` capabilities, and `GET /me` shows a token's.
+- **AB2** (verified, [source](https://ably.com/docs/open-specs/control-v1.yaml)): `POST /apps/{app_id}/rules` creates an integration rule; an `http` (webhook) rule takes `ruleType: http`, `requestMode` (`single` or `batch`), `source` (`channelFilter`, a regular expression over the whole channel name, and `type`: `channel.message`, `channel.presence`, `channel.lifecycle` or `channel.occupancy`), `target` (`url`, `format` `json` or `msgpack`, `enveloped`, `headers`, `signingKeyId`) and `status`, and answers 201 with the rule and its `id`.
+- **AB3** (verified, [source](https://ably.com/docs/open-specs/control-v1.yaml)): `GET /apps/{app_id}/rules` answers a bare array of rules, `GET /apps/{app_id}/rules/{rule_id}` one rule; `PATCH` on the same path updates the fields sent (`ruleType` required) and answers 200; `DELETE` answers 204, and an unknown rule 404.
+- **AB4** **(unverified)**: A rule's channel filter and source type identify the one this recipe made: Ably keeps rules with the same filter apart only by id, so a second rule with the same filter and type makes `find` refuse with PARAM_INVALID. The app must name a preview's channels with a per-preview prefix (`pr-42:…`) for the filter to select them.
+- **AB5** **(unverified)**: Ably answers `target.url`, `target.format`, `target.enveloped`, `requestMode` and `status` as written, and a `PATCH` that sends `target` without `headers` keeps none; this recipe sets no headers.
+
+### `ably.webhook_rule`
+
+**Webhook rule** (`http.resource`). An integration rule that posts the messages (or presence, lifecycle, occupancy events) of a preview's channels, those matching `channel_filter` such as `^pr-42:`, to the preview's own URL, `url` + `path`. Identified by its channel filter and source type, so a new preview URL updates it in place; a console edit of its URL, format, envelope, request mode or status is drift. The app and its keys are shared and not managed.
+
+Covers: `ably-webhook-rule` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `app_id` | string | yes | — | The Ably app the rule belongs to. |
+| `channel_filter` | string | yes | — | A regular expression over the whole channel name selecting the preview's channels, such as `^${ctx.scope}:`; with `source_type`, the rule's identity. |
+| `source_type` | string | no | `channel.message` | The events the rule posts (AB2). One of `channel.message`, `channel.presence`, `channel.lifecycle`, `channel.occupancy`. |
+| `url` | string | yes | — | The preview's base URL, without a trailing slash: usually `{ from: <deploy line>.preview_url }`. Matches `^https://\\S*[^/]$`. |
+| `path` | string | no | `/api/webhooks/ably` | Where the app handles Ably's requests, appended to `url`. Matches `^/\\S*$`. |
+| `request_mode` | string | no | `single` | One request per event, or events batched. One of `single`, `batch`. |
+| `format` | string | no | `json` | The encoding of what is posted. One of `json`, `msgpack`. |
+| `enveloped` | boolean | no | `true` | Whether events are wrapped in Ably's metadata envelope. |
+| `status` | string | no | `enabled` | Whether the rule posts. One of `enabled`, `disabled`. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: webhook_rule
+  adapter: http
+  op: resource
+  recipe: ably.webhook_rule
+  app_id: 28GY6a
+  channel_filter: "^${ctx.scope}:"
+  url: https://pr-42.preview.example.com
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value, `{ join: [...] }` for its parts joined into one string, and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /apps/{app_id}/rules
+  match:
+    /source/channelFilter: { param: channel_filter }
+    /source/type: { param: source_type }
+read:
+  path: /apps/{app_id}/rules/{id}
+create:
+  path: /apps/{app_id}/rules
+  body:
+    ruleType: http
+update:
+  method: PATCH
+  path: /apps/{app_id}/rules/{id}
+  body:
+    ruleType: http
+fields:
+  /target/url:
+    join:
+      - { param: url }
+      - { param: path }
+  /target/format: { param: format }
+  /target/enveloped: { param: enveloped }
+  /requestMode: { param: request_mode }
+  /status: { param: status }
+```
 
 ## AWS Amplify Hosting
 
@@ -459,6 +547,80 @@ list_path: /properties
 shape: map
 item: { param: name }
 value: { param: value }
+```
+
+## BugSnag
+
+Recipe file: [`packages/adapters/recipes/bugsnag.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/bugsnag.yaml). Verified on 2026-10-12 against:
+
+- [BugSnag CLI create-build, the payload and endpoints BugSnag's own tooling sends (pkg/build, pkg/server, pkg/endpoints)](https://github.com/bugsnag/bugsnag-cli/tree/main/pkg)
+- [grunt-bugsnag, BugSnag's documented build-reporting options](https://github.com/bugsnag/grunt-bugsnag)
+- [Build and deploy integrations (the Build API's place among them)](https://docs.bugsnag.com/build-integrations/)
+
+No API block: its ops send their request to an absolute URL (a param: the app's own, or an endpoint that authenticates by a key in the body, passed as a `{ secret }` param), with no API credential.
+
+Assumptions:
+
+- **BS1** (verified, [source](https://github.com/bugsnag/bugsnag-cli/tree/main/pkg)): A build is reported with a JSON `POST` to `https://build.bugsnag.com` (`https://build.bugsnag.smartbear.com` for keys of BugSnag's SmartBear-hosted instance; an on-premise endpoint otherwise), as BugSnag's CLI sends it with `Content-Type: application/json`.
+- **BS2** (verified, [source](https://github.com/bugsnag/grunt-bugsnag)): The body carries `apiKey` (the project's notifier API key, required) and `appVersion` (required), and optionally `releaseStage`, `builderName`, `sourceControl` (`provider`, `repository`, `revision`), `autoAssignRelease` and `metadata`; the API key in the body is the only authentication.
+- **BS3** (verified, [source](https://github.com/bugsnag/grunt-bugsnag)): `autoAssignRelease: true` associates the build with new error events and sessions received for its release stage until the next build is reported; without a release stage it applies to `production`, so the recipe always sends the stage.
+- **BS4** **(unverified)**: BugSnag's public APIs delete no builds or releases, so destroy sends nothing and forgets the record: a release is history.
+- **BS5** **(unverified)**: Reporting the same app version and release stage twice (an action is sent at least once) updates or repeats the same release rather than failing.
+- **BS6** **(unverified)**: The notifier API key is also embedded in the app's client bundle for browser error reporting, but it is still passed here as a `{ secret }` so it never reaches the plan file, receipts or logs.
+
+### `bugsnag.build`
+
+**Build (release)** (`http.action`). Reports a build of `app_version` for the environment's `release_stage` (such as `preview`) to BugSnag's Build API, once per version and stage, so errors from the preview are grouped under its release. The project's notifier API key travels in the body (`api_key`, a `{ secret }`); Sponson sends no credential of its own. Nothing to undo (BS4).
+
+Covers: `bugsnag-build` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: none. On destroy: nothing is sent (there is nothing to undo); the record is forgotten.
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `url` | string | no | `https://build.bugsnag.com` | The Build API: `https://build.bugsnag.com`, or the SmartBear-hosted or on-premise endpoint (BS1). Matches `^https?://\\S*[^/]$`. |
+| `path` | string | no | `/` | The path of the build endpoint under `url`. Matches `^/\\S*$`. |
+| `api_key` | string | yes | — | The project's notifier API key, always as a reference: `{ secret: "env://BUGSNAG_API_KEY" }`. |
+| `app_version` | string | yes | — | The version the app's notifier reports (its `appVersion`), such as the commit. A new one reports a new build. |
+| `release_stage` | string | yes | — | The release stage the preview's notifier reports, such as `${ctx.env}`. |
+| `builder_name` | string | no | `sponson` | Who built it. |
+| `revision` | string | no | — | The commit, for BugSnag's source links: `"${ctx.git.sha}"`. |
+| `repository` | string | no | — | The repository's URL, for source links. |
+| `provider` | string | no | — | The source control provider, for source links. One of `github`, `github-enterprise`, `gitlab`, `gitlab-onpremise`, `bitbucket`, `bitbucket-server`. |
+| `auto_assign_release` | boolean | no | `true` | Attribute new events of the release stage to this build (BS3). |
+
+```yaml
+# under changes: (no provider block needed)
+- id: build
+  adapter: http
+  op: action
+  recipe: bugsnag.build
+  api_key:
+    secret: env://BUGSNAG_API_KEY
+  app_version: ${ctx.git.sha}
+  release_stage: ${ctx.env}
+```
+
+What the line expands into: the [`http.action`](/reference/plan-format#http-action) params, `{ param: <name> }` standing for a param's value, `{ join: [...] }` for its parts joined into one string, and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+trigger:
+  app_version: { param: app_version }
+  release_stage: { param: release_stage }
+request:
+  method: POST
+  url:
+    join:
+      - { param: url }
+      - { param: path }
+  body:
+    apiKey: { param: api_key }
+    appVersion: { param: app_version }
+    releaseStage: { param: release_stage }
+    builderName: { param: builder_name }
+    autoAssignRelease: { param: auto_assign_release }
+    sourceControl:
+      provider: { param: provider }
+      repository: { param: repository }
+      revision: { param: revision }
 ```
 
 ## Cloudflare
@@ -1643,7 +1805,7 @@ Recipe file: [`packages/adapters/recipes/inngest.yaml`](https://github.com/Misha
 - [The TypeScript SDK's serve handler (InngestCommHandler, PUT = register)](https://github.com/inngest/inngest-js/blob/main/packages/inngest/src/components/InngestCommHandler.ts)
 - [REST API v2 OpenAPI document (V2_SyncApp)](https://api-docs.inngest.com/api-specs/v2.json)
 
-No API block: its ops send their request to the app's own URL (a param), with no credential.
+No API block: its ops send their request to an absolute URL (a param: the app's own, or an endpoint that authenticates by a key in the body, passed as a `{ secret }` param), with no API credential.
 
 Assumptions:
 
@@ -1798,6 +1960,163 @@ list_path: /logout_urls
 item: { param: url }
 ```
 
+## Mailgun
+
+Recipe file: [`packages/adapters/recipes/mailgun.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/mailgun.yaml). Verified on 2026-10-12 against:
+
+- [Mailgun API OpenAPI document (every operation and schema below)](https://documentation.mailgun.com/_bundle/docs/mailgun/api-reference/send/mailgun.yaml)
+- [Authentication (HTTP Basic, user `api`)](https://documentation.mailgun.com/docs/mailgun/api-reference/authentication/)
+- [Account Webhooks](https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/account-webhooks)
+- [Create an account-level webhook](https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/account-webhooks/post-v1-webhooks)
+- [Get account-level webhook by ID](https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/account-webhooks/get-v1-webhooks--webhook-id-)
+- [Update an account-level webhook](https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/account-webhooks/put-v1-webhooks--webhook-id-)
+- [Domain Webhooks (the v3 and v4 per-domain alternatives)](https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/domain-webhooks)
+- [Routes](https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/routes)
+- [Route actions](https://documentation.mailgun.com/docs/mailgun/user-manual/receive-forward-store/route-actions)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.mailgun.net` |
+| `base_url_env` | `MAILGUN_API_URL` |
+| Credential | `MAILGUN_API_KEY` (basic, user `api`) |
+| `encoding` | `form` |
+| `form_arrays` | `repeat` |
+
+Assumptions:
+
+- **MG1** (verified, [source](https://documentation.mailgun.com/_bundle/docs/mailgun/api-reference/send/mailgun.yaml)): Requests authenticate with HTTP Basic, the user name `api` and an API key as the password; the US API is `https://api.mailgun.net`, the EU one `https://api.eu.mailgun.net` (an EU account sets `base_url` in the provider block).
+- **MG2** (verified, [source](https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/account-webhooks/post-v1-webhooks)): `POST /v1/webhooks` creates an account-level webhook from `url` (required), `event_types` (required, one of accepted, clicked, opened, unsubscribed, delivered, permanent_fail, temporary_fail, complained; repeated for several) and `description`, and answers `{ webhook_id }` only; it receives the events of every domain of the account. At most three URLs per event type (a fourth answers 409 'unable to add more than 3 urls for event type …'), so at most three previews (fewer when the account has its own webhooks) can each have one at a time.
+- **MG3** (verified, [source](https://documentation.mailgun.com/_bundle/docs/mailgun/api-reference/send/mailgun.yaml)): `GET /v1/webhooks` answers `{ webhooks: [...] }` and `GET /v1/webhooks/{webhook_id}` one webhook, each with `webhook_id`, `description`, `url`, `event_types` (a list) and `created_at`; `PUT /v1/webhooks/{webhook_id}` replaces url, description and event types whole (204), `DELETE` on the same path removes it (204), and an unknown id answers 404.
+- **MG4** (verified, [source](https://documentation.mailgun.com/_bundle/docs/mailgun/api-reference/send/mailgun.yaml)): Lists in request bodies are the key repeated: the OpenAPI document declares `action` with `style: form, explode: true` and says to use `event_types` 'multiple times to specify multiple event types', hence `form_arrays: repeat`.
+- **MG5** **(unverified)**: The account-webhook operations, documented as `multipart/form-data`, accept the same fields `application/x-www-form-urlencoded`, as Mailgun's v3 operations (documented so) do.
+- **MG6** (verified, [source](https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun/account-webhooks)): Webhook changes 'can take up to 10 minutes to become effective due to caching': a new preview may miss its first events.
+- **MG7** (verified, [source](https://documentation.mailgun.com/_bundle/docs/mailgun/api-reference/send/mailgun.yaml)): Routes are account-wide ('defined globally, per account, not per domain'). `POST /v3/routes` takes `priority` (default 0, lower first), `description`, `expression` (required) and `action` (repeated), and answers `{ message, route }`; `GET /v3/routes/{id}` answers `{ route }` (404 when unknown); `GET /v3/routes` answers `{ total_count, items }`, `limit` up to 1000; `PUT /v3/routes/{id}` updates only the fields sent and answers `{ message, route }`; `DELETE /v3/routes/{id}` removes it. A route object carries `id`, `priority`, `description`, `expression`, `actions` (a list) and `created_at`.
+- **MG8** (verified, [source](https://documentation.mailgun.com/docs/mailgun/user-manual/receive-forward-store/route-actions)): `forward("https://…")` posts a matching message to the URL; every route is evaluated unless a higher-priority one runs `stop()`; `match_recipient('regex')` filters on the recipient. The receiving domain needs its MX records pointing at Mailgun.
+- **MG9** **(unverified)**: The API answers `description`, `url`, `event_types`, `expression` and `actions` as they were written, so an unchanged webhook or route hashes the same on every plan, and a route's description (not required to be unique by Mailgun) or a webhook's identifies what this recipe made: two equal ones make `find` refuse with PARAM_INVALID.
+- **MG10** **(unverified)**: A per-domain webhook (v3 `…/domains/{domain}/webhooks/{event}`, a list of up to three URLs per event; v4 `…/webhooks?url=`, answered as a map of event to URLs) is not an object of its own that a later run can read back by an id, so this recipe uses account webhooks; the preview's handler must ignore events of mail it did not send (every webhook gets every domain's events).
+
+### `mailgun.webhook`
+
+**Account webhook** (`http.resource`). An account-level webhook that posts the chosen email events to the preview's own URL, `url` + `path` (usually `{ from: web.preview_url }`). Identified by its description (`name`), so a new preview URL updates it in place. It receives every domain's events (MG10), and Mailgun takes at most three URLs per event type (MG2): at most three previews at a time. A console edit of its URL or events is drift.
+
+Covers: `mailgun-webhook-route` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `name` | string | yes | — | The webhook's identity, kept as its description: unique per preview, such as `sponson-${ctx.env}-${ctx.scope}`. Matches `^[A-Za-z0-9_.:/ -]{1,200}$`. |
+| `url` | string | yes | — | The preview's base URL, without a trailing slash: usually `{ from: <deploy line>.preview_url }`. Matches `^https://\\S*[^/]$`. |
+| `path` | string | no | `/api/webhooks/mailgun` | Where the app handles Mailgun's events, appended to `url`. Matches `^/\\S*$`. |
+| `event_types` | list | no | `["delivered","permanent_fail","complained"]` | The events posted: accepted, clicked, opened, unsubscribed, delivered, permanent_fail, temporary_fail, complained (MG2). |
+
+```yaml
+# under changes: (no provider block needed)
+- id: webhook
+  adapter: http
+  op: resource
+  recipe: mailgun.webhook
+  name: sponson-${ctx.env}-${ctx.scope}
+  url: https://pr-42.preview.example.com
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value, `{ join: [...] }` for its parts joined into one string, and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /v1/webhooks
+  list_path: /webhooks
+  match:
+    description: { param: name }
+read:
+  path: /v1/webhooks/{id}
+create:
+  path: /v1/webhooks
+  locate: true
+update:
+  method: PUT
+  path: /v1/webhooks/{id}
+id_path: /webhook_id
+fields:
+  url:
+    join:
+      - { param: url }
+      - { param: path }
+  event_types: { param: event_types }
+```
+
+### `mailgun.route`
+
+**Inbound route** (`http.resource`). An inbound route per preview that forwards mail matching `expression` (such as `match_recipient('pr-42@inbound.example.com')`) to the preview's own URL, `url` + `path`. Identified by its description (`name`); a console edit of its priority, expression or action is drift. The receiving domain is long-lived and shared (MX records at Mailgun, MG8); each preview gets its own address on it.
+
+Covers: `mailgun-webhook-route` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `name` | string | yes | — | The route's identity, kept as its description: unique per preview, such as `sponson-${ctx.env}-${ctx.scope}`. Matches `^[A-Za-z0-9_.:/ -]{1,200}$`. |
+| `expression` | string | yes | — | The filter (MG8), such as `match_recipient('${ctx.scope}@inbound.example.com')`. |
+| `url` | string | yes | — | The preview's base URL, without a trailing slash: usually `{ from: <deploy line>.preview_url }`. Matches `^https://\\S*[^/"]$`. |
+| `path` | string | no | `/api/inbound/mailgun` | Where the app receives forwarded mail, appended to `url`. Matches `^/[^\\s"]*$`. |
+| `priority` | integer | no | `0` | Lower runs first (MG7). |
+
+```yaml
+# under changes: (no provider block needed)
+- id: route
+  adapter: http
+  op: resource
+  recipe: mailgun.route
+  name: sponson-${ctx.env}-${ctx.scope}
+  expression: match_recipient('${ctx.scope}@inbound.example.com')
+  url: https://pr-42.preview.example.com
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value, `{ join: [...] }` for its parts joined into one string, and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /v3/routes?limit=1000
+  list_path: /items
+  match:
+    description: { param: name }
+read:
+  path: /v3/routes/{id}
+create:
+  path: /v3/routes
+  send_fields: false
+  body:
+    priority: { param: priority }
+    description: { param: name }
+    expression: { param: expression }
+    action:
+      - join:
+          - forward("
+          - { param: url }
+          - { param: path }
+          - '")'
+update:
+  method: PUT
+  path: /v3/routes/{id}
+  send_fields: false
+  body:
+    priority: { param: priority }
+    description: { param: name }
+    expression: { param: expression }
+    action:
+      - join:
+          - forward("
+          - { param: url }
+          - { param: path }
+          - '")'
+item_path: /route
+fields:
+  priority: { param: priority }
+  expression: { param: expression }
+  actions:
+    - join:
+        - forward("
+        - { param: url }
+        - { param: path }
+        - '")'
+```
+
 ## MongoDB Atlas
 
 Recipe file: [`packages/adapters/recipes/mongodb_atlas.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/mongodb_atlas.yaml). Verified on 2026-10-11 against:
@@ -1878,6 +2197,79 @@ id_path: /username
 fields:
   roles: { param: roles }
   scopes: { param: scopes }
+```
+
+## New Relic
+
+Recipe file: [`packages/adapters/recipes/newrelic.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/newrelic.yaml). Verified on 2026-10-12 against:
+
+- [Track changes with NerdGraph (changeTrackingCreateDeployment, changeTrackingCreateEvent)](https://docs.newrelic.com/docs/change-tracking/change-tracking-graphql/)
+- [Introduction to NerdGraph (endpoints, the API-Key header)](https://docs.newrelic.com/docs/apis/nerdgraph/get-started/introduction-new-relic-nerdgraph/)
+- [New Relic's Go client, the mutation as its CLI and Terraform provider send it (ChangeTrackingDeploymentInput)](https://github.com/newrelic/newrelic-client-go/blob/main/pkg/changetracking/changetracking_api.go)
+- [User keys](https://docs.newrelic.com/docs/apis/intro-apis/new-relic-api-keys/)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.newrelic.com/graphql` |
+| `base_url_env` | `NEW_RELIC_API_URL` |
+| Credential | `NEW_RELIC_API_KEY` (header `API-Key`) |
+
+Assumptions:
+
+- **NR1** (verified, [source](https://docs.newrelic.com/docs/apis/nerdgraph/get-started/introduction-new-relic-nerdgraph/)): NerdGraph is one GraphQL endpoint, `https://api.newrelic.com/graphql` (EU accounts: `https://api.eu.newrelic.com/graphql`, set `base_url` in the provider block), taking a user key in the `API-Key` header and a JSON body `{ query, variables }`.
+- **NR2** (verified, [source](https://docs.newrelic.com/docs/change-tracking/change-tracking-graphql/)): `changeTrackingCreateDeployment(deployment: ChangeTrackingDeploymentInput!)` records a deployment marker on an entity from `version` and `entityGuid` (both required) and optionally `user`, `description`, `deploymentType` (`BASIC`, `BLUE_GREEN`, `CANARY`, `ROLLING`, `SHADOW`, `OTHER`), `deepLink`, `commit`, `changelog`, `groupId` and `timestamp` (within 24 hours of now), and answers `deploymentId` and `entityGuid`. New Relic recommends `changeTrackingCreateEvent` for new work but says this mutation 'isn't being retired and continues to work'.
+- **NR3** (verified, [source](https://github.com/newrelic/newrelic-client-go/blob/main/pkg/changetracking/changetracking_api.go)): The input type's name is `ChangeTrackingDeploymentInput`, as New Relic's own Go client declares the mutation's variable.
+- **NR4** **(unverified)**: NerdGraph has no mutation that deletes or edits a deployment marker (the REST v2 deployment endpoints, which could delete one, reach end of life on 2027-07-31), so destroy sends nothing and forgets the record: a marker is history.
+- **NR5** **(unverified)**: NerdGraph takes no idempotency key: a marker sent again after a crash before Sponson recorded it is a second marker for the same version (harmless, at least once).
+- **NR6** **(unverified)**: A preview that reports to its own entity (an app name per environment, such as `web (preview)`) gets its markers there; a preview sharing production's entity would mark production's charts, so give previews their own entity or leave this line to production.
+
+### `newrelic.deployment`
+
+**Deployment marker** (`http.action`). A change-tracking deployment marker on the environment's entity (`entity_guid`) for a release, sent once per entity and version (usually the commit). Nothing to undo: markers are history and NerdGraph deletes none (NR4).
+
+Covers: `newrelic-deployment` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `deployment_id`. On destroy: nothing is sent (there is nothing to undo); the record is forgotten.
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `entity_guid` | string | yes | — | The GUID of the entity the environment reports as (NR6). |
+| `version` | string | yes | — | The release's version, usually the commit: `"${ctx.git.sha}"`. A new one sends a new marker. |
+| `description` | string | no | — | Text shown with the marker, such as `preview pr-42`. |
+| `user` | string | no | `sponson` | Who deployed. |
+| `commit` | string | no | — | The commit deployed. |
+| `deep_link` | string | no | — | A link to the deployment (the preview URL, or the CI run). Matches `^https?://\\S+$`. |
+| `deployment_type` | string | no | `BASIC` | The kind of deployment (NR2). One of `BASIC`, `BLUE_GREEN`, `CANARY`, `ROLLING`, `SHADOW`, `OTHER`. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: deployment
+  adapter: http
+  op: action
+  recipe: newrelic.deployment
+  entity_guid: MXxBUE18QVBQTElDQVRJT058MTIzNDU2Nzg
+  version: ${ctx.git.sha}
+  description: ${ctx.env} ${ctx.scope}
+```
+
+What the line expands into: the [`http.action`](/reference/plan-format#http-action) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+trigger:
+  entity_guid: { param: entity_guid }
+  version: { param: version }
+request:
+  graphql:
+    query: "mutation ($deployment: ChangeTrackingDeploymentInput!) { changeTrackingCreateDeployment(deployment: $deployment) { deploymentId entityGuid } }"
+    variables:
+      deployment:
+        entityGuid: { param: entity_guid }
+        version: { param: version }
+        description: { param: description }
+        user: { param: user }
+        commit: { param: commit }
+        deepLink: { param: deep_link }
+        deploymentType: { param: deployment_type }
+outputs:
+  deployment_id: /changeTrackingCreateDeployment/deploymentId
 ```
 
 ## Okta
@@ -2772,6 +3164,75 @@ outputs:
   signing_secret:
     path: /signing_secret
     sensitive: true
+```
+
+## Rollbar
+
+Recipe file: [`packages/adapters/recipes/rollbar.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/rollbar.yaml). Verified on 2026-10-12 against:
+
+- [Report a deploy](https://docs.rollbar.com/reference/post-deploy)
+- [Deploy tracking](https://docs.rollbar.com/docs/deploy-tracking)
+- [Project access tokens and their scopes](https://docs.rollbar.com/docs/access-tokens)
+- [API reference index (deploy endpoints)](https://docs.rollbar.com/llms.txt)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.rollbar.com/api/1` |
+| `base_url_env` | `ROLLBAR_API_URL` |
+| Credential | `ROLLBAR_ACCESS_TOKEN` (header `X-Rollbar-Access-Token`) |
+
+Assumptions:
+
+- **RB1** (verified, [source](https://docs.rollbar.com/reference/post-deploy)): `POST https://api.rollbar.com/api/1/deploy` records a deploy from `environment` and `revision` (required), `rollbar_username`, `local_username`, `comment` and `status` (`started`, `succeeded` by default, `failed`, `timed_out`), authenticated by a project access token with the `post_server_item` scope in `X-Rollbar-Access-Token`, and answers 200 with `data.deploy_id`, an integer.
+- **RB2** **(unverified)**: The token in the header is enough: the reference also lists `access_token` as a body field, which this recipe does not send (a credential in a body would be part of what the request logs show).
+- **RB3** (verified, [source](https://docs.rollbar.com/llms.txt)): The API reference has report, get, update and list operations for deploys and none that deletes one, so destroy sends nothing and forgets the record: a deploy is history.
+- **RB4** **(unverified)**: Rollbar takes no idempotency key for deploys: one sent again after a crash before Sponson recorded it is a second deploy of the same revision (harmless, at least once).
+- **RB5** **(unverified)**: A deploy is attributed to errors of the environment of the same name that the SDK reports (`environment` in its configuration), so a preview's deploys stay apart from production's when the preview's SDK reports its own environment, such as `preview`.
+
+### `rollbar.deploy`
+
+**Deploy** (`http.action`). A deploy of the release's revision in the environment's Rollbar `environment` (such as `preview`), sent once per environment and revision, so errors are attributed to the deploy. Nothing to undo: Rollbar deletes no deploys (RB3).
+
+Covers: `rollbar-deploy` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `deploy_id`. On destroy: nothing is sent (there is nothing to undo); the record is forgotten.
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `environment` | string | yes | — | The Rollbar environment the deployment's SDK reports, such as `${ctx.env}` (RB5). |
+| `revision` | string | yes | — | The revision deployed, usually the commit: `"${ctx.git.sha}"`. A new one sends a new deploy. |
+| `comment` | string | no | — | Text shown with the deploy, such as the scope. |
+| `local_username` | string | no | `sponson` | Who deployed. |
+| `rollbar_username` | string | no | — | A Rollbar user to attribute the deploy to. |
+| `status` | string | no | `succeeded` | The deploy's status. One of `started`, `succeeded`, `failed`, `timed_out`. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: deploy
+  adapter: http
+  op: action
+  recipe: rollbar.deploy
+  environment: ${ctx.env}
+  revision: ${ctx.git.sha}
+  comment: ${ctx.scope}
+```
+
+What the line expands into: the [`http.action`](/reference/plan-format#http-action) params, `{ param: <name> }` standing for a param's value and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+trigger:
+  environment: { param: environment }
+  revision: { param: revision }
+request:
+  method: POST
+  path: /deploy
+  body:
+    environment: { param: environment }
+    revision: { param: revision }
+    comment: { param: comment }
+    local_username: { param: local_username }
+    rollbar_username: { param: rollbar_username }
+    status: { param: status }
+outputs:
+  deploy_id: /data/deploy_id
 ```
 
 ## Amazon S3 / Cloudflare R2 (S3 API)
@@ -3865,6 +4326,122 @@ id_path: /Name
 outputs:
   hostname: /Hostname
   db_id: /DbId
+```
+
+## Twilio
+
+Recipe file: [`packages/adapters/recipes/twilio.yaml`](https://github.com/MishaBear94/Sponson/blob/main/packages/adapters/recipes/twilio.yaml). Verified on 2026-10-12 against:
+
+- [Requests to Twilio's APIs (authentication, form-encoded parameters)](https://www.twilio.com/docs/usage/requests-to-twilio)
+- [Applications resource (TwiML Apps)](https://www.twilio.com/docs/usage/api/applications)
+- [Access tokens (Voice grant, outgoingApplicationSid)](https://www.twilio.com/docs/iam/access-tokens)
+- [API keys](https://www.twilio.com/docs/iam/api-keys)
+- [Twilio's OpenAPI document for the 2010-04-01 API (Applications paths and schema)](https://raw.githubusercontent.com/twilio/twilio-oai/main/spec/json/twilio_api_v2010.json)
+
+| API default | Value |
+|---|---|
+| `base_url` | `https://api.twilio.com` |
+| `base_url_env` | `TWILIO_API_URL` |
+| Credential | `TWILIO_API_KEY` / `TWILIO_API_SECRET` (basic) |
+| `encoding` | `form` |
+
+Assumptions:
+
+- **TW1** (verified, [source](https://www.twilio.com/docs/usage/requests-to-twilio)): Requests authenticate with HTTP Basic: an API key's SID as the user name and its secret as the password, or the Account SID and the Auth Token. Request parameters are form-encoded (`application/x-www-form-urlencoded`).
+- **TW2** (verified, [source](https://www.twilio.com/docs/usage/api/applications)): A TwiML Application is a set of URLs Twilio fetches TwiML from, 'most commonly used for the Voice SDKs to handle outbound calls': a Voice SDK access token's Voice grant names it as `outgoingApplicationSid` ('The SID of the TwiML App that Twilio will look to when making outgoing calls'), so each preview's tokens can name the preview's own app. A phone number can also be assigned an application instead of its own URLs.
+- **TW3** (verified, [source](https://www.twilio.com/docs/usage/api/applications)): `POST /2010-04-01/Accounts/{AccountSid}/Applications.json` creates an application from `FriendlyName` (up to 64 characters), `VoiceUrl`, `VoiceMethod`, `StatusCallback`, `SmsUrl`, `SmsMethod` and more, answering 201; `GET …/Applications.json` lists them (`applications`, filterable by `FriendlyName`); `GET` and `POST …/Applications/{Sid}.json` read and update one; `DELETE` answers 204 and unassigns it from any phone number using it. An account holds at most 1000 applications.
+- **TW4** (verified, [source](https://raw.githubusercontent.com/twilio/twilio-oai/main/spec/json/twilio_api_v2010.json)): Parameters are written in PascalCase (`FriendlyName`, `VoiceUrl`) and answers name the same fields in snake_case (`friendly_name`, `voice_url`, `voice_method`, `sms_url`, `sms_method`, `status_callback`), with the object's id in `sid` (`AP…`); paths end in `.json`.
+- **TW5** **(unverified)**: Twilio does not require a FriendlyName to be unique (the documentation does not say); the recipe gives each preview its own, and two applications of the same name make `find` refuse with PARAM_INVALID. The list filtered by `FriendlyName` fits in its first page.
+- **TW6** **(unverified)**: Twilio answers the URLs and methods as they were written, so an unchanged application hashes the same on every plan.
+- **TW7** (verified, [source](https://raw.githubusercontent.com/twilio/twilio-oai/main/spec/json/twilio_api_v2010.json)): A phone number has one `sms_url` and one `voice_url` (or one `sms_application_sid` / `voice_application_sid`, single strings): pointing a shared number at a preview takes it from every other environment, so a number is not per-preview state and the recipe does not manage numbers. Inbound SMS or calls per preview need a number per preview (bought and, for US SMS, A2P-registered) assigned to the preview's application.
+
+### `twilio.twiml_app`
+
+**TwiML Application** (`http.resource`). A TwiML Application per preview whose voice (and optionally messaging and status callback) URLs are the preview's own, `url` + a path: the Voice SDK tokens the preview issues name it (`outgoingApplicationSid`, TW2), so outgoing calls from that preview reach that preview's handlers. Identified by its FriendlyName (`name`), so a new preview URL updates it in place. A console edit of a URL or method is drift. Phone numbers are not managed (TW7).
+
+Covers: `twilio-twiml-app` in [the coverage matrix](/reference/coverage#coverage-matrix). Outputs: `id`. On destroy: deleted (`destroy: keep` on the line leaves it).
+
+| Param | Type | Required | Default | Meaning |
+|---|---|---|---|---|
+| `account_sid` | string | yes | — | The account (or subaccount) the application belongs to (`AC` and 32 hexadecimal characters on Twilio; the example is a placeholder). Matches `^AC[0-9A-Za-z]{32}$`. |
+| `name` | string | yes | — | The application's FriendlyName and identity: unique per preview, such as `sponson-${ctx.env}-${ctx.scope}`. Matches `^.{1,64}$`. |
+| `url` | string | yes | — | The preview's base URL, without a trailing slash: usually `{ from: <deploy line>.preview_url }`. Matches `^https://\\S*[^/]$`. |
+| `voice_path` | string | no | `/api/twilio/voice` | Where the app answers with TwiML for a call, appended to `url` (`VoiceUrl`). Matches `^/\\S*$`. |
+| `voice_method` | string | no | `POST` | How Twilio requests the voice URL. One of `GET`, `POST`. |
+| `sms_path` | string | no | — | Where the app answers an incoming message, appended to `url` (`SmsUrl`), for a number assigned to this application; unset leaves it empty. Matches `^/\\S*$`. |
+| `status_callback_path` | string | no | — | Where Twilio posts call status changes, appended to `url` (`StatusCallback`); unset leaves it empty. Matches `^/\\S*$`. |
+
+```yaml
+# under changes: (no provider block needed)
+- id: twiml_app
+  adapter: http
+  op: resource
+  recipe: twilio.twiml_app
+  account_sid: ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  name: sponson-${ctx.env}-${ctx.scope}
+  url: https://pr-42.preview.example.com
+```
+
+What the line expands into: the [`http.resource`](/reference/plan-format#http-resource) params, `{ param: <name> }` standing for a param's value, `{ join: [...] }` for its parts joined into one string, and `{<name>}` in a path for its URI-encoded value.
+
+```yaml
+find:
+  path: /2010-04-01/Accounts/{account_sid}/Applications.json?FriendlyName={name}
+  list_path: /applications
+  match:
+    friendly_name: { param: name }
+read:
+  path: /2010-04-01/Accounts/{account_sid}/Applications/{id}.json
+create:
+  path: /2010-04-01/Accounts/{account_sid}/Applications.json
+  send_fields: false
+  body:
+    FriendlyName: { param: name }
+    VoiceUrl:
+      join:
+        - { param: url }
+        - { param: voice_path }
+    VoiceMethod: { param: voice_method }
+    SmsUrl:
+      join:
+        - { param: url }
+        - { param: sms_path }
+    StatusCallback:
+      join:
+        - { param: url }
+        - { param: status_callback_path }
+update:
+  method: POST
+  send_fields: false
+  body:
+    VoiceUrl:
+      join:
+        - { param: url }
+        - { param: voice_path }
+    VoiceMethod: { param: voice_method }
+    SmsUrl:
+      join:
+        - { param: url }
+        - { param: sms_path }
+    StatusCallback:
+      join:
+        - { param: url }
+        - { param: status_callback_path }
+id_path: /sid
+fields:
+  voice_url:
+    join:
+      - { param: url }
+      - { param: voice_path }
+  voice_method: { param: voice_method }
+  sms_url:
+    join:
+      - { param: url }
+      - { param: sms_path }
+  status_callback:
+    join:
+      - { param: url }
+      - { param: status_callback_path }
 ```
 
 ## Unleash

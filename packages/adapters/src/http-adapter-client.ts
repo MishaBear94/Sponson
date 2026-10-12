@@ -140,10 +140,16 @@ export function httpClient(actx: AdapterContext, req: RequestOptions = {}, opts:
     authHeader: cred.authHeader,
     ...(cred.signer ? { signer: cred.signer } : {}),
     headers: { ...cfg.headers, ...(req.headers ?? {}) },
-    encoding: req.encoding ?? cfg.encoding,
+    ...encodingOf(req, cfg),
     ...(contentType ? { contentType } : {}),
     ...(cfg.mediaType ? { accept: cfg.mediaType } : {}),
   });
+}
+
+/** The request's encoding (a GraphQL request's JSON over the API's), with the API's form list style when it applies. */
+function encodingOf(req: RequestOptions, cfg: ApiConfig): { encoding: ApiConfig["encoding"]; formArrays?: "repeat" } {
+  if (req.encoding) return { encoding: req.encoding };
+  return { encoding: cfg.encoding, ...(cfg.formArrays ? { formArrays: cfg.formArrays } : {}) };
 }
 
 /**

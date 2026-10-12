@@ -25,7 +25,7 @@ export function aboutCredential(about: AdapterAbout): string {
 }
 
 export function credential(api: Record<string, unknown> | undefined): string {
-  if (!api) return "none (calls the app's own URL)";
+  if (!api) return "none of Sponson's (calls a URL the line gives; a key it needs is a `{ secret }` param)";
   const auth = api.auth as Record<string, unknown>;
   if (typeof auth.bearer_env === "string") return `\`${auth.bearer_env}\` (bearer)`;
   if (typeof auth.value_env === "string") return `\`${String(auth.value_env)}\` (header \`${String(auth.header)}\`${typeof auth.prefix === "string" ? `, after \`${auth.prefix.trimEnd()}\`` : ""})`;
@@ -45,6 +45,8 @@ function otherCredential(auth: Record<string, unknown>): string {
   const digest = auth.digest as Record<string, string> | undefined;
   if (digest) return `\`${digest.user_env}\` / \`${digest.password_env}\` (HTTP Digest)`;
   const basic = auth.basic as Record<string, string>;
+  // A literal user name (Mailgun's `api`) is not a variable: only the password is the credential.
+  if (basic.user !== undefined) return `\`${basic.password_env}\` (basic, user \`${basic.user}\`)`;
   return `\`${basic.user_env}\` / \`${basic.password_env}\` (basic)`;
 }
 
@@ -148,7 +150,7 @@ function tokenRows(api: Record<string, unknown>): string[] {
 
 /** The API defaults table, or what a recipe without an API block does instead. */
 function apiTable(api: Record<string, unknown> | undefined): string[] {
-  if (!api) return ["No API block: its ops send their request to the app's own URL (a param), with no credential."];
+  if (!api) return ["No API block: its ops send their request to an absolute URL (a param: the app's own, or an endpoint that authenticates by a key in the body, passed as a `{ secret }` param), with no API credential."];
   return [
     "| API default | Value |",
     "|---|---|",
@@ -158,6 +160,7 @@ function apiTable(api: Record<string, unknown> | undefined): string[] {
     ...tokenRows(api),
     ...(api.headers ? [`| \`headers\` | ${cell(JSON.stringify(api.headers))} |`] : []),
     ...(api.encoding ? [`| \`encoding\` | \`${String(api.encoding)}\` |`] : []),
+    ...(api.form_arrays ? [`| \`form_arrays\` | \`${String(api.form_arrays)}\` |`] : []),
     ...(api.refuse_credential ? [`| \`refuse_credential\` | ${refused(api.refuse_credential as { prefixes: string[]; unless_env: string })} |`] : []),
   ];
 }

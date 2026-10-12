@@ -20,8 +20,9 @@
  *       envelopes, the cursor's place, and the id's field and type, so that a recipe is tested in its provider's
  *       own response shapes. An object's style (by its path) may give it an `item_path` envelope for reads; writes
  *       go to the object itself, and its `write_fields` store a written field under another name (an API that
- *       reads `{ redirect_urls }` and replaces it with `{ urls }`). A create may be posted to another path than the
- *       collection's (seed `aliases`: `POST /gates/g/rule` adds to `/gates/g/rules`).
+ *       reads `{ redirect_urls }` and replaces it with `{ urls }`); a collection's style may rename written fields
+ *       of its objects the same way (`FriendlyName` → `friendly_name`, `action` → `actions`). A create may be posted
+ *       to another path than the collection's (seed `aliases`: `POST /gates/g/rule` adds to `/gates/g/rules`).
  *   R3. A path is known once seeded or created: a POST to an unknown path creates the collection; a GET of an
  *       unknown path is 404. A create may choose the id (the id field, or the style's `id_from` field, in the
  *       body, like a flag key or a database name); otherwise the sim assigns `it_<n>` (the next integer with
@@ -37,12 +38,14 @@
  *       `<collection>/<id>` that does not exist creates the object with that id (an upsert at a client-chosen key,
  *       such as an environment variable by name), answering 200.
  *       A style's `item_query` names an object by a query parameter (`<collection>?url=<id>` is the object whose
- *       id is `<id>`, for APIs that key objects by a value such as a URL).
+ *       id is `<id>`, for APIs that key objects by a value such as a URL). A style's `id_suffix` is an extension
+ *       an object's path carries after its id (`<collection>/<id>.json`), stripped before the lookup.
  *   R4. PATCH (and POST to an object, or to an object of a collection, as Stripe updates) is a JSON merge patch
  *       (RFC 7396: maps merge recursively, `null` deletes a field, lists are replaced whole); PUT replaces
  *       everything but a collection object's id. Bodies may be JSON or form-encoded (`a[b]=c`, every value a
  *       string; with the style's `form_types`, `true`/`false` and numbers are read as such, as an API with a typed
- *       schema does). No write has a precondition (no ETag): the last write wins.
+ *       schema does; a repeated key `a=x&a=y` is a list, and the style's `list_fields` are lists even when one value
+ *       came). No write has a precondition (no ETag): the last write wins.
  *   R6. A style's `once_fields` are generated on create (`<field>_sim_<n>`) and appear only in the create's answer,
  *       never stored or listed: a webhook endpoint's signing secret.
  *   R5. DELETE answers `{ id, deleted: true }`; anything unknown is 404 `{ error }`.
@@ -99,8 +102,22 @@ export interface RestStyle {
   once_fields?: string[];
   /** A query parameter that names an object of the collection by id (`url`), assumption R3. */
   item_query?: string;
-  /** For an object: top-level fields a write names otherwise than a read, written name → stored name (R2). */
+  /**
+   * Top-level fields a write names otherwise than a read, written name → stored name (R2): for an object, an API
+   * that reads `{ redirect_urls }` and replaces it with `{ urls }`; for a collection's objects, an API that takes
+   * `FriendlyName` and answers `friendly_name` (Twilio), or takes `action` and answers `actions` (Mailgun).
+   */
   write_fields?: Record<string, string>;
+  /**
+   * Fields (stored names) a write always stores as lists (R4): an API that takes a list as its key repeated
+   * (`event_types=a&event_types=b`), where one value arrives as a plain string.
+   */
+  list_fields?: string[];
+  /**
+   * The extension an object's path carries after its id (`/Applications/<id>.json`, Twilio), R3: stripped from the
+   * last segment before the id is looked up.
+   */
+  id_suffix?: string;
   /**
    * Request headers (lower-case names) whose values a create or update stores as fields, for an API that takes an
    * object's settings in headers (QStash: `upstash-cron` → `cron`, `upstash-schedule-id` → `scheduleId`).
@@ -325,7 +342,7 @@ function authorized(headers: IncomingHttpHeaders, declared: string[]): boolean {
   return Object.entries(headers).some(([name, v]) => carries(name) && typeof v === "string" && v.trim() !== "");
 }
 
-type FullStyle = Required<Omit<RestStyle, "next_path" | "item_query" | "id_query" | "header_fields" | "suffix_field" | "write_fields">> & Pick<RestStyle, "item_query" | "id_query"> & { next_path: string | null };
+type FullStyle = Required<Omit<RestStyle, "next_path" | "item_query" | "id_query" | "header_fields" | "suffix_field" | "write_fields" | "list_fields" | "id_suffix">> & Pick<RestStyle, "item_query" | "id_query"> & { next_path: string | null };
 
 /** The style of the collection at `path`, every default filled in. */
 function styleOf(state: RestState, path: string): FullStyle {
@@ -354,10 +371,15 @@ function typedForm(v: unknown): unknown {
   return typeof v === "string" && /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v;
 }
 
-/** The body as the collection at `path` reads it. */
+/** The body as the collection at `path` reads it: typed (R4), renamed (`write_fields`, R2), lists made lists (R4). */
 function bodyFor(state: RestState, path: string, body: unknown, headers: Record<string, string>): unknown {
   const form = (headers["content-type"] ?? "").startsWith("application/x-www-form-urlencoded");
-  return form && styleOf(state, path).form_types ? typedForm(body) : body;
+  const typed = form && styleOf(state, path).form_types ? typedForm(body) : body;
+  const style = state.styles[path];
+  if (!isRecord(typed) || (!style?.write_fields && !style?.list_fields)) return typed;
+  const out = renamed(state, path, typed);
+  for (const f of style.list_fields ?? []) if (out[f] !== undefined && !Array.isArray(out[f])) out[f] = [out[f]];
+  return out;
 }
 
 function isId(v: unknown): v is string | number {
@@ -464,7 +486,9 @@ function resolve(state: RestState, raw: string, query?: URLSearchParams): Target
   if (items) return queriedItem(state, path, query) ?? { kind: "collection", path, items };
   const cut = path.lastIndexOf("/");
   const collection = collectionAt(state, path.slice(0, cut)) ?? path.slice(0, cut);
-  return itemTarget(state, collection, decodeURIComponent(path.slice(cut + 1)));
+  const last = decodeURIComponent(path.slice(cut + 1));
+  const suffix = state.styles[collection]?.id_suffix;
+  return itemTarget(state, collection, suffix && last.endsWith(suffix) ? last.slice(0, -suffix.length) : last);
 }
 
 function itemTarget(state: RestState, collection: string, id: string): Target {

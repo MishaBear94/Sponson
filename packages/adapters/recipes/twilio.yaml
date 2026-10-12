@@ -1,0 +1,141 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Twilio REST API (2010-04-01) recipes: a TwiML Application per preview. Format and checklist:
+# docs/adr/0020-recipes.md, CONTRIBUTING.md "Adding a recipe".
+provider: twilio
+title: Twilio
+category: webhooks
+verified_on: "2026-10-12"
+docs:
+  - title: Requests to Twilio's APIs (authentication, form-encoded parameters)
+    url: https://www.twilio.com/docs/usage/requests-to-twilio
+  - title: Applications resource (TwiML Apps)
+    url: https://www.twilio.com/docs/usage/api/applications
+  - title: Access tokens (Voice grant, outgoingApplicationSid)
+    url: https://www.twilio.com/docs/iam/access-tokens
+  - title: API keys
+    url: https://www.twilio.com/docs/iam/api-keys
+  - title: Twilio's OpenAPI document for the 2010-04-01 API (Applications paths and schema)
+    url: https://raw.githubusercontent.com/twilio/twilio-oai/main/spec/json/twilio_api_v2010.json
+api:
+  base_url: https://api.twilio.com
+  base_url_env: TWILIO_API_URL
+  # An API key's SID as the user and its secret as the password (TW1); the Account SID and Auth Token work the same way.
+  auth: { basic: { user_env: TWILIO_API_KEY, password_env: TWILIO_API_SECRET } }
+  encoding: form
+credential:
+  url: "https://www.twilio.com/docs/iam/api-keys"
+  scope: "A Standard API key (Console > Account > API keys & tokens); its SID goes in TWILIO_API_KEY and its secret in TWILIO_API_SECRET."
+  source: "https://www.twilio.com/docs/usage/requests-to-twilio"
+detect:
+  deps: [twilio]
+  env: ["TWILIO_*"]
+  starter:
+    - op: twiml_app
+      preview_url: url
+      values: { name: "sponson-${ctx.env}-${ctx.scope}" }
+      check: [voice_path]
+  where:
+    account_sid: "the Account SID (`AC…`) on the Twilio Console's home page"
+assumptions:
+  - id: TW1
+    verified: true
+    text: "Requests authenticate with HTTP Basic: an API key's SID as the user name and its secret as the password, or the Account SID and the Auth Token. Request parameters are form-encoded (`application/x-www-form-urlencoded`)."
+    source: https://www.twilio.com/docs/usage/requests-to-twilio
+  - id: TW2
+    verified: true
+    text: "A TwiML Application is a set of URLs Twilio fetches TwiML from, 'most commonly used for the Voice SDKs to handle outbound calls': a Voice SDK access token's Voice grant names it as `outgoingApplicationSid` ('The SID of the TwiML App that Twilio will look to when making outgoing calls'), so each preview's tokens can name the preview's own app. A phone number can also be assigned an application instead of its own URLs."
+    source: https://www.twilio.com/docs/usage/api/applications
+  - id: TW3
+    verified: true
+    text: "`POST /2010-04-01/Accounts/{AccountSid}/Applications.json` creates an application from `FriendlyName` (up to 64 characters), `VoiceUrl`, `VoiceMethod`, `StatusCallback`, `SmsUrl`, `SmsMethod` and more, answering 201; `GET …/Applications.json` lists them (`applications`, filterable by `FriendlyName`); `GET` and `POST …/Applications/{Sid}.json` read and update one; `DELETE` answers 204 and unassigns it from any phone number using it. An account holds at most 1000 applications."
+    source: https://www.twilio.com/docs/usage/api/applications
+  - id: TW4
+    verified: true
+    text: "Parameters are written in PascalCase (`FriendlyName`, `VoiceUrl`) and answers name the same fields in snake_case (`friendly_name`, `voice_url`, `voice_method`, `sms_url`, `sms_method`, `status_callback`), with the object's id in `sid` (`AP…`); paths end in `.json`."
+    source: https://raw.githubusercontent.com/twilio/twilio-oai/main/spec/json/twilio_api_v2010.json
+  - id: TW5
+    verified: false
+    text: "Twilio does not require a FriendlyName to be unique (the documentation does not say); the recipe gives each preview its own, and two applications of the same name make `find` refuse with PARAM_INVALID. The list filtered by `FriendlyName` fits in its first page."
+  - id: TW6
+    verified: false
+    text: "Twilio answers the URLs and methods as they were written, so an unchanged application hashes the same on every plan."
+  - id: TW7
+    verified: true
+    text: "A phone number has one `sms_url` and one `voice_url` (or one `sms_application_sid` / `voice_application_sid`, single strings): pointing a shared number at a preview takes it from every other environment, so a number is not per-preview state and the recipe does not manage numbers. Inbound SMS or calls per preview need a number per preview (bought and, for US SMS, A2P-registered) assigned to the preview's application."
+    source: https://raw.githubusercontent.com/twilio/twilio-oai/main/spec/json/twilio_api_v2010.json
+ops:
+  twiml_app:
+    kind: resource
+    title: TwiML Application
+    summary: "A TwiML Application per preview whose voice (and optionally messaging and status callback) URLs are the preview's own, `url` + a path: the Voice SDK tokens the preview issues name it (`outgoingApplicationSid`, TW2), so outgoing calls from that preview reach that preview's handlers. Identified by its FriendlyName (`name`), so a new preview URL updates it in place. A console edit of a URL or method is drift. Phone numbers are not managed (TW7)."
+    covers: [twilio-twiml-app]
+    params:
+      account_sid:
+        type: string
+        required: true
+        pattern: "^AC[0-9A-Za-z]{32}$"
+        description: The account (or subaccount) the application belongs to (`AC` and 32 hexadecimal characters on Twilio; the example is a placeholder).
+        example: ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+      name:
+        type: string
+        required: true
+        pattern: "^.{1,64}$"
+        description: "The application's FriendlyName and identity: unique per preview, such as `sponson-${ctx.env}-${ctx.scope}`."
+        example: "sponson-${ctx.env}-${ctx.scope}"
+      url:
+        type: string
+        required: true
+        pattern: "^https://\\S*[^/]$"
+        description: "The preview's base URL, without a trailing slash: usually `{ from: <deploy line>.preview_url }`."
+        example: https://pr-42.preview.example.com
+      voice_path:
+        type: string
+        default: /api/twilio/voice
+        pattern: "^/\\S*$"
+        description: "Where the app answers with TwiML for a call, appended to `url` (`VoiceUrl`)."
+      voice_method:
+        type: string
+        default: POST
+        enum: [GET, POST]
+        description: How Twilio requests the voice URL.
+      sms_path:
+        type: string
+        pattern: "^/\\S*$"
+        description: "Where the app answers an incoming message, appended to `url` (`SmsUrl`), for a number assigned to this application; unset leaves it empty."
+      status_callback_path:
+        type: string
+        pattern: "^/\\S*$"
+        description: "Where Twilio posts call status changes, appended to `url` (`StatusCallback`); unset leaves it empty."
+    http:
+      find:
+        path: "/2010-04-01/Accounts/{account_sid}/Applications.json?FriendlyName={name}"
+        list_path: /applications
+        match: { friendly_name: { param: name } }
+      read: { path: "/2010-04-01/Accounts/{account_sid}/Applications/{id}.json" }
+      create:
+        path: "/2010-04-01/Accounts/{account_sid}/Applications.json"
+        send_fields: false
+        body:
+          FriendlyName: { param: name }
+          VoiceUrl: { join: [{ param: url }, { param: voice_path }] }
+          VoiceMethod: { param: voice_method }
+          SmsUrl: { join: [{ param: url }, { param: sms_path }] }
+          StatusCallback: { join: [{ param: url }, { param: status_callback_path }] }
+      update:
+        method: POST
+        send_fields: false
+        body:
+          VoiceUrl: { join: [{ param: url }, { param: voice_path }] }
+          VoiceMethod: { param: voice_method }
+          SmsUrl: { join: [{ param: url }, { param: sms_path }] }
+          StatusCallback: { join: [{ param: url }, { param: status_callback_path }] }
+      id_path: /sid
+      fields:
+        voice_url: { join: [{ param: url }, { param: voice_path }] }
+        voice_method: { param: voice_method }
+        sms_url: { join: [{ param: url }, { param: sms_path }] }
+        status_callback: { join: [{ param: url }, { param: status_callback_path }] }
+    sim:
+      write_fields: { FriendlyName: friendly_name, VoiceUrl: voice_url, VoiceMethod: voice_method, SmsUrl: sms_url, StatusCallback: status_callback }
+    live:
+      params: { account_sid: SPONSON_LIVE_TWILIO_ACCOUNT_SID }

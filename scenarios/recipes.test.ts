@@ -43,7 +43,8 @@ interface RecipeAuth {
   value_env?: string;
   prefix?: string;
   headers?: Array<{ header: string; value_env: string; prefix?: string }>;
-  basic?: { user_env: string; password_env: string };
+  /** `user` is a literal user name (Mailgun's `api`), not a variable. */
+  basic?: { user_env?: string; user?: string; password_env: string };
   digest?: { user_env: string; password_env: string };
   oauth2_client_credentials?: { client_id_env: string; client_secret_env: string; token_url_env: string };
   command?: string[];
@@ -57,7 +58,7 @@ function credentialVars(r: Recipe): string[] {
   const auth = authOf(r);
   const s = auth.aws_sigv4;
   const o = auth.oauth2_client_credentials;
-  const pair = (p?: { user_env: string; password_env: string }) => (p ? [p.user_env, p.password_env] : []);
+  const pair = (p?: { user_env?: string; password_env: string }) => (p ? [p.user_env, p.password_env] : []);
   const headers = (auth.headers ?? []).map((h) => h.value_env);
   return [auth.bearer_env, auth.value_env, ...headers, ...pair(auth.basic), ...pair(auth.digest), o?.client_id_env, o?.client_secret_env, s?.access_key_id_env, s?.secret_access_key_env, s?.session_token_env].filter((v): v is string => typeof v === "string");
 }
@@ -100,6 +101,8 @@ function restAuth(r: Recipe): Record<string, unknown> {
   // Several headers are accepted only together; Digest answers its challenge for the user the harness sets.
   if (auth.headers) return { auth: { headers: [Object.fromEntries(auth.headers.map((h, i) => [h.header.toLowerCase(), `${h.prefix ?? ""}${TOKEN}_${i}`]))] } };
   if (auth.digest) return { auth: { digest: { users: { [DIGEST_USER]: TOKEN }, realm: "Sponson recipes" } } };
+  // Basic with a literal user name (Mailgun's `api`): exactly that user, with the credential as the password.
+  if (auth.basic?.user) return { auth: { headers: [{ authorization: `Basic ${Buffer.from(`${auth.basic.user}:${TOKEN}`).toString("base64")}` }] } };
   return {};
 }
 
@@ -190,10 +193,15 @@ function simSeed(r: Recipe, op: RecipeOp, spec: Record<string, unknown>) {
     const coll = collectionOf(op, spec);
     // A PUT to the object's own path (an upsert at a client-chosen key) creates there; anything else is aliased.
     if (coll !== fill(create.path, vars) && create.method?.toUpperCase() !== "PUT") aliases[fill(create.path, vars)] = coll;
-    // Objects read, updated or deleted under another path than their collection (`/databases/{id}`).
+    // Objects read, updated or deleted under another path than their collection (`/databases/{id}`), perhaps with an
+    // extension after the id (`/Applications/{id}.json`, the style's `id_suffix`).
+    let idSuffix: string | undefined;
     for (const req of [spec.read, spec.update, spec.delete] as Array<{ path?: string } | undefined>) {
       const p = req?.path?.split("?")[0];
-      if (p && /\/\{[A-Za-z_]\w*\}$/.test(p) && fill(p.slice(0, p.lastIndexOf("/")), vars) !== coll) aliases[fill(p.slice(0, p.lastIndexOf("/")), vars)] = coll;
+      const m = p ? /\/\{[A-Za-z_]\w*\}(\.[A-Za-z]+)?$/.exec(p) : null;
+      if (!p || !m) continue;
+      if (m[1]) idSuffix = m[1];
+      if (fill(p.slice(0, p.lastIndexOf("/")), vars) !== coll) aliases[fill(p.slice(0, p.lastIndexOf("/")), vars)] = coll;
     }
     // Outputs the provider shows only in the create's answer (a signing secret): the sim generates them there only.
     const once = Object.values((spec.outputs as Record<string, unknown> | undefined) ?? {}).flatMap((d) => (typeof d === "object" && d !== null && (d as { once?: boolean }).once ? [token((d as { path: string }).path, "")] : []));
@@ -209,6 +217,9 @@ function simSeed(r: Recipe, op: RecipeOp, spec: Record<string, unknown>) {
       ...(op.sim?.header_fields ? { header_fields: op.sim.header_fields } : {}),
       ...(op.sim?.suffix_field ? { suffix_field: op.sim.suffix_field } : {}),
       ...(op.sim?.item_query ? { item_query: op.sim.item_query } : {}),
+      ...(op.sim?.write_fields ? { write_fields: op.sim.write_fields } : {}),
+      ...(idSuffix ? { id_suffix: idSuffix } : {}),
+      ...listFieldsOf(r, spec),
       ...(r.api?.encoding === "form" ? { form_types: true } : {}),
       ...(once.length ? { once_fields: once } : {}),
       ...generatedOf(spec),
@@ -255,6 +266,16 @@ function pointerTo(doc: unknown, needle: string, at = ""): string | undefined {
     if (found !== undefined) return found;
   }
   return undefined;
+}
+
+/**
+ * With `form_arrays: repeat`, a list goes as its key repeated, and one value arrives as a plain string: the declared
+ * list fields are lists in the sim whatever came (R4), as in the provider's typed schema.
+ */
+function listFieldsOf(r: Recipe, spec: Record<string, unknown>): { list_fields?: string[] } {
+  if ((r.api as { form_arrays?: string } | undefined)?.form_arrays !== "repeat") return {};
+  const lists = Object.entries((spec.fields as Record<string, unknown> | undefined) ?? {}).flatMap(([f, v]) => (Array.isArray(v) ? [token(f.startsWith("/") ? f : `/${f}`, f)] : []));
+  return lists.length ? { list_fields: lists } : {};
 }
 
 /** Fields the provider generates and shows on every read (a server's token: a sensitive output that is not once), R10. */
@@ -354,8 +375,9 @@ function paramsIn(tpl: unknown): string[] {
 /** Where the sim stands in for the app in an action recipe's example: its `url` param, rewritten per run. */
 const APP = "http://app.invalid";
 
-/** The sim path an action's request goes to: under the app's URL, or the API's path. */
-function endpointOf(req: { url?: unknown; path?: string }, vars: Record<string, unknown>): string {
+/** The sim path an action's request goes to: under the app's URL, the API's path, or a GraphQL API's base URL. */
+function endpointOf(req: { url?: unknown; path?: string; graphql?: unknown }, vars: Record<string, unknown>): string {
+  if (req.graphql !== undefined) return "/";
   return req.url !== undefined ? String(req.url).slice(APP.length) : fill(req.path!, vars);
 }
 
@@ -370,9 +392,19 @@ function replyFor(spec: Record<string, unknown>): Record<string, unknown> {
 /** The REST sim's endpoints for an action op (R9): its request's, answering what it expects, and its undo's. */
 function actionEndpoints(spec: Record<string, unknown>): Record<string, unknown> {
   const vars = spec.vars as Record<string, unknown>;
-  const req = spec.request as { url?: unknown; path?: string };
+  const req = spec.request as { url?: unknown; path?: string; graphql?: { data_path?: string } };
   const undo = spec.undo as { url?: unknown; path?: string } | undefined;
-  return { [endpointOf(req, vars)]: { public: req.url !== undefined, reply: replyFor(spec) }, ...(undo ? { [endpointOf(undo, vars)]: { public: undo.url !== undefined } } : {}) };
+  // A GraphQL answer carries what the op reads under `data` (and its `data_path`).
+  const reply = req.graphql ? { data: envelopeAt(req.graphql.data_path ?? "", replyFor(spec)) } : replyFor(spec);
+  return { [endpointOf(req, vars)]: { public: req.url !== undefined, reply }, ...(undo ? { [endpointOf(undo, vars)]: { public: undo.url !== undefined } } : {}) };
+}
+
+/** `v` placed at the JSON pointer `pointer` of an otherwise empty object (`""`: `v` itself). */
+function envelopeAt(pointer: string, v: Record<string, unknown>): Record<string, unknown> {
+  if (pointer === "") return v;
+  const doc: Record<string, unknown> = {};
+  setAt(doc, pointer, v);
+  return doc;
 }
 
 async function actionInSim(r: Recipe, name: string, op: RecipeOp): Promise<void> {
@@ -383,7 +415,8 @@ async function actionInSim(r: Recipe, name: string, op: RecipeOp): Promise<void>
   // The app's URL is the sim's (its REST provider), so every call lands in the sim's log.
   const at = (p: Record<string, unknown>) => (urlParam ? { ...p, [urlParam]: `${sim.url}/rest` } : p);
   const ws = await workspace("recipe", { plan: planText(r, name, op, at(params)) });
-  const env = cliEnv(sim, r.api ? { [String(r.api.base_url_env)]: `${sim.url}/rest`, ...credentialEnv(r), ...tokenUrlEnv(r, sim), ...(await fakeCli(r, ws.dir)) } : {});
+  // A key the request body carries as a `{ secret }` param (BugSnag's build API) gets a value the leak check covers.
+  const env = cliEnv(sim, { ...exampleSecrets(params), ...(r.api ? { [String(r.api.base_url_env)]: `${sim.url}/rest`, ...credentialEnv(r), ...tokenUrlEnv(r, sim), ...(await fakeCli(r, ws.dir)) } : {}) });
   const run = new Run(ws, env, SIM_CTX, secretOf(r));
   const calls = () => sim.state.rest.calls;
   const method = String((spec.request as { method?: string }).method ?? "POST").toUpperCase();

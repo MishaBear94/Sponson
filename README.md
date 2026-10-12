@@ -145,7 +145,7 @@ One release, one plan. Three commands.
 ## Supported providers
 
 <!-- generated:providers-summary:start (scripts/gen-docs.ts; run `pnpm docs:gen`) -->
-Sponson manages per-environment state at **58 providers** in 13 categories, from deploy targets and databases to auth callbacks, feature flags, webhooks and DNS: 17 first-class ops and 61 recipe ops. `sponson init` detects 53 of them from a repository's files and writes their lines.
+Sponson manages per-environment state at **64 providers** in 13 categories, from deploy targets and databases to auth callbacks, feature flags, webhooks and DNS: 17 first-class ops and 68 recipe ops. `sponson init` detects 59 of them from a repository's files and writes their lines.
 
 [docs/providers.md](docs/providers.md) lists every one: what Sponson manages there, the op or recipe, the credential, what `init` detects it by and a line to start from.
 <!-- generated:providers-summary:end -->
@@ -254,7 +254,7 @@ everything it needs and commented out with a `TODO` otherwise. With nothing dete
 template. Besides the plan, `init` writes one line, `.sponson/` (where local receipts go), into `.gitignore`.
 
 <!-- generated:init-unsupported:start (scripts/gen-docs.ts; run `pnpm docs:gen`) -->
-A service `init` detects that no adapter or recipe manages yet is listed as "not supported yet", with where to ask for it, and never silently dropped: today Mailgun and Twilio.
+A service `init` detects that no adapter or recipe manages yet is listed as "not supported yet", with where to ask for it (or why no API can manage it), and never silently dropped: today Pusher Channels and Liveblocks.
 <!-- generated:init-unsupported:end -->
 
 ```

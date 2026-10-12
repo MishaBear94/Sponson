@@ -1,0 +1,112 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# BugSnag Build API recipes: a build (release) per deploy and release stage. Format and checklist:
+# docs/adr/0020-recipes.md, docs/adr/0022-one-off-actions.md, CONTRIBUTING.md "Adding a recipe".
+# No API block: the Build API authenticates by the project's notifier API key in the JSON body, not by a header, so
+# the line passes that key as a `{ secret }` param and Sponson sends no credential of its own.
+provider: bugsnag
+title: BugSnag
+category: observability
+verified_on: "2026-10-12"
+docs:
+  - title: BugSnag CLI create-build, the payload and endpoints BugSnag's own tooling sends (pkg/build, pkg/server, pkg/endpoints)
+    url: https://github.com/bugsnag/bugsnag-cli/tree/main/pkg
+  - title: grunt-bugsnag, BugSnag's documented build-reporting options
+    url: https://github.com/bugsnag/grunt-bugsnag
+  - title: Build and deploy integrations (the Build API's place among them)
+    url: https://docs.bugsnag.com/build-integrations/
+detect:
+  deps: ["@bugsnag/"]
+  env: ["BUGSNAG_*"]
+  starter:
+    - op: build
+      values: { app_version: "${ctx.git.sha}", release_stage: "${ctx.env}", api_key: { secret: "env://BUGSNAG_API_KEY" } }
+assumptions:
+  - id: BS1
+    verified: true
+    text: "A build is reported with a JSON `POST` to `https://build.bugsnag.com` (`https://build.bugsnag.smartbear.com` for keys of BugSnag's SmartBear-hosted instance; an on-premise endpoint otherwise), as BugSnag's CLI sends it with `Content-Type: application/json`."
+    source: https://github.com/bugsnag/bugsnag-cli/tree/main/pkg
+  - id: BS2
+    verified: true
+    text: "The body carries `apiKey` (the project's notifier API key, required) and `appVersion` (required), and optionally `releaseStage`, `builderName`, `sourceControl` (`provider`, `repository`, `revision`), `autoAssignRelease` and `metadata`; the API key in the body is the only authentication."
+    source: https://github.com/bugsnag/grunt-bugsnag
+  - id: BS3
+    verified: true
+    text: "`autoAssignRelease: true` associates the build with new error events and sessions received for its release stage until the next build is reported; without a release stage it applies to `production`, so the recipe always sends the stage."
+    source: https://github.com/bugsnag/grunt-bugsnag
+  - id: BS4
+    verified: false
+    text: "BugSnag's public APIs delete no builds or releases, so destroy sends nothing and forgets the record: a release is history."
+  - id: BS5
+    verified: false
+    text: "Reporting the same app version and release stage twice (an action is sent at least once) updates or repeats the same release rather than failing."
+  - id: BS6
+    verified: false
+    text: "The notifier API key is also embedded in the app's client bundle for browser error reporting, but it is still passed here as a `{ secret }` so it never reaches the plan file, receipts or logs."
+ops:
+  build:
+    kind: action
+    title: Build (release)
+    summary: "Reports a build of `app_version` for the environment's `release_stage` (such as `preview`) to BugSnag's Build API, once per version and stage, so errors from the preview are grouped under its release. The project's notifier API key travels in the body (`api_key`, a `{ secret }`); Sponson sends no credential of its own. Nothing to undo (BS4)."
+    covers: [bugsnag-build]
+    params:
+      url:
+        type: string
+        default: https://build.bugsnag.com
+        pattern: "^https?://\\S*[^/]$"
+        description: "The Build API: `https://build.bugsnag.com`, or the SmartBear-hosted or on-premise endpoint (BS1)."
+      path:
+        type: string
+        default: /
+        pattern: "^/\\S*$"
+        description: The path of the build endpoint under `url`.
+      api_key:
+        type: string
+        required: true
+        description: "The project's notifier API key, always as a reference: `{ secret: \"env://BUGSNAG_API_KEY\" }`."
+        example: { secret: "env://BUGSNAG_API_KEY" }
+      app_version:
+        type: string
+        required: true
+        description: "The version the app's notifier reports (its `appVersion`), such as the commit. A new one reports a new build."
+        example: "${ctx.git.sha}"
+      release_stage:
+        type: string
+        required: true
+        description: "The release stage the preview's notifier reports, such as `${ctx.env}`."
+        example: "${ctx.env}"
+      builder_name:
+        type: string
+        default: sponson
+        description: Who built it.
+      revision:
+        type: string
+        description: "The commit, for BugSnag's source links: `\"${ctx.git.sha}\"`."
+      repository:
+        type: string
+        description: The repository's URL, for source links.
+      provider:
+        type: string
+        enum: [github, github-enterprise, gitlab, gitlab-onpremise, bitbucket, bitbucket-server]
+        description: The source control provider, for source links.
+      auto_assign_release:
+        type: boolean
+        default: true
+        description: Attribute new events of the release stage to this build (BS3).
+    http:
+      trigger: { app_version: { param: app_version }, release_stage: { param: release_stage } }
+      request:
+        method: POST
+        url: { join: [{ param: url }, { param: path }] }
+        body:
+          apiKey: { param: api_key }
+          appVersion: { param: app_version }
+          releaseStage: { param: release_stage }
+          builderName: { param: builder_name }
+          autoAssignRelease: { param: auto_assign_release }
+          sourceControl:
+            provider: { param: provider }
+            repository: { param: repository }
+            revision: { param: revision }
+    live:
+      # Needs BUGSNAG_API_KEY too (the example's `{ secret }`); reports a build to a throwaway project.
+      params: { url: SPONSON_LIVE_BUGSNAG_BUILD_URL }

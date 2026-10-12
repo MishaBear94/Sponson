@@ -163,7 +163,7 @@ function andList(xs: string[]): string {
 export function renderInitUnsupported(): string {
   const names = UNSUPPORTED.map((r) => r.name);
   const which = names.length ? `: today ${andList(names)}` : "; today there are none";
-  return `A service \`init\` detects that no adapter or recipe manages yet is listed as "not supported yet", with where to ask for it, and never silently dropped${which}.`;
+  return `A service \`init\` detects that no adapter or recipe manages yet is listed as "not supported yet", with where to ask for it (or why no API can manage it), and never silently dropped${which}.`;
 }
 
 /** The PR comment snapshots action/README.md shows, by block name; each one a real run's comment. */

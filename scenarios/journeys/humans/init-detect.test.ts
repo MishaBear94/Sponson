@@ -66,9 +66,9 @@ const NEXT_VERCEL_RECIPES: Files = {
   ".env.local": `STRIPE_SECRET_KEY=${SECRET_STRIPE}\nAUTH0_SECRET=${SECRET_AUTH0}\nSENTRY_AUTH_TOKEN=sntrys_do-not-leak\n`,
 };
 
-/** A Fly.io app with Turso, PostHog and Mailgun: no first-class provider at all, so no Vercel + Neon template. */
+/** A Fly.io app with Turso, PostHog and Liveblocks: no first-class provider at all, so no Vercel + Neon template. */
 const FLY_TURSO_POSTHOG: Files = {
-  "package.json": { dependencies: { "@libsql/client": "^0.14.0", "posthog-node": "^4.0.0", "mailgun.js": "^10.0.0" } },
+  "package.json": { dependencies: { "@libsql/client": "^0.14.0", "posthog-node": "^4.0.0", "@liveblocks/node": "^2.0.0" } },
   "fly.toml": "app = 'web'\n",
   ".env.example": "TURSO_DATABASE_URL=\nTURSO_AUTH_TOKEN=\nPOSTHOG_KEY=\n",
 };
@@ -225,19 +225,19 @@ describe("sponson init detects the stack", () => {
     expect(j.json.detected.unsupported).toEqual([]);
   });
 
-  it("Fly.io + Turso + PostHog, and Mailgun: recipe lines commented until their ids are filled in, no template; only Mailgun is not supported", async () => {
+  it("Fly.io + Turso + PostHog, and Liveblocks: recipe lines commented until their ids are filled in, no template; only Liveblocks is not supported", async () => {
     const cwd = await repoWith(FLY_TURSO_POSTHOG);
     const r = await init(cwd, "--json");
     expect(r.code, r.stderr).toBe(0);
     expect(r.json.detected.found.map((f: any) => f.id)).toEqual(["fly", "turso", "posthog"]);
     expect(r.json.detected.assumed).toBe(false);
-    expect(r.json.detected.unsupported).toEqual([expect.objectContaining({ id: "mailgun", name: "Mailgun", pointer: expect.stringMatching(/issues/) })]);
+    expect(r.json.detected.unsupported).toEqual([expect.objectContaining({ id: "liveblocks", name: "Liveblocks", pointer: expect.stringMatching(/issues/) })]);
     expect(r.json.detected.todo.map((t: any) => t.path)).toEqual(expect.arrayContaining(["changes.fly_secret.app", "changes.turso_database_branch.organization", "changes.posthog_release_condition.flag_id"]));
     const { text, ids } = await writtenPlan(cwd);
     expect(ids).toEqual([]);
     expect(text).toMatch(/^changes: \[\]/m);
     expect(text).toContain('  #   name: "app-${ctx.scope}"');
-    expect(text).toContain("# Not supported yet, so no line below manages it: Mailgun");
+    expect(text).toContain("# Not supported yet, so no line below manages it: Liveblocks");
     expect(text).not.toMatch(/vercel|neon/);
   });
 

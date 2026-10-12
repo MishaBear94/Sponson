@@ -79,6 +79,8 @@ export interface ApiClientOptions {
    * Responses are JSON, except with `xml`, where they are XML too.
    */
   encoding?: "json" | "form" | "xml";
+  /** With `form`: lists as the key repeated (`a=x&a=y`) instead of bracketed (`a[0]=x`); see `formEncode`. */
+  formArrays?: "repeat";
   /** The request `Content-Type`, when it is not the encoding's own (a vendor media type for a patch). */
   contentType?: string;
   /** The `Accept` header, when it is not the encoding's own (a versioned media type). */
@@ -286,7 +288,7 @@ export function apiClient(opts: ApiClientOptions): ApiClient {
   if (!opts.signer && auth === "bearer") headers.authorization = `Bearer ${opts.token}`;
   else if (!opts.signer && auth !== "bearer" && auth !== "none") headers[auth.slice("header:".length).toLowerCase()] = opts.token;
   const defaultContentType = opts.contentType ?? CONTENT_TYPES[opts.encoding ?? "json"];
-  const encodeBody = (body: unknown): string => (opts.encoding === "form" ? formEncode(body) : xml ? xmlEncode(body) : JSON.stringify(body));
+  const encodeBody = (body: unknown): string => (opts.encoding === "form" ? formEncode(body, opts.formArrays) : xml ? xmlEncode(body) : JSON.stringify(body));
 
   const fail = (code: ProviderErrorCode, method: string, path: string, detail: string, status?: number, extra: Record<string, unknown> = {}): SponsonError =>
     new SponsonError(code, `${opts.adapter}: ${method} ${path} → ${status ?? DESCRIBE[code]}${detail ? `: ${detail}` : ""}`, {
@@ -381,12 +383,13 @@ const CONTENT_TYPES = { json: "application/json", form: "application/x-www-form-
 
 /**
  * A body as `application/x-www-form-urlencoded`, bracket-nested: `{ a: { b: 1 }, c: [x, y] }` is
- * `a[b]=1&c[0]=x&c[1]=y`. Null sends an empty value (how such APIs clear a field).
+ * `a[b]=1&c[0]=x&c[1]=y`. Null sends an empty value (how such APIs clear a field). With `arrays: "repeat"`, a list
+ * is its key repeated instead, `c=x&c=y` (OpenAPI's `style: form, explode: true`, as Mailgun reads `action`).
  */
-export function formEncode(body: unknown): string {
+export function formEncode(body: unknown, arrays?: "repeat"): string {
   const pairs: Array<[string, string]> = [];
   const walk = (v: unknown, name: string): void => {
-    if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${name}[${i}]`));
+    if (Array.isArray(v)) v.forEach((x, i) => walk(x, arrays === "repeat" ? name : `${name}[${i}]`));
     else if (isObject(v)) for (const [k, x] of Object.entries(v)) walk(x, name ? `${name}[${k}]` : k);
     else if (name) pairs.push([name, v === null || v === undefined ? "" : String(v as string | number | boolean)]);
   };

@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=../../../schema/recipe.schema.json
 # Convex Management API recipes, authenticated by a team access token. Format and checklist:
-# docs/adr/0020-recipes.md (Amendment 9), CONTRIBUTING.md "Adding a recipe".
+# docs/adr/0020-recipes.md (Amendment 10), CONTRIBUTING.md "Adding a recipe".
 provider: convex
 title: Convex
 category: backend

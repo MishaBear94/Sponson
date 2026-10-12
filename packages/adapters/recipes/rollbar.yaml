@@ -1,0 +1,94 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# Rollbar API recipes: a deploy per release in the environment. Format and checklist: docs/adr/0020-recipes.md,
+# docs/adr/0022-one-off-actions.md, CONTRIBUTING.md "Adding a recipe".
+provider: rollbar
+title: Rollbar
+category: observability
+verified_on: "2026-10-12"
+docs:
+  - title: Report a deploy
+    url: https://docs.rollbar.com/reference/post-deploy
+  - title: Deploy tracking
+    url: https://docs.rollbar.com/docs/deploy-tracking
+  - title: Project access tokens and their scopes
+    url: https://docs.rollbar.com/docs/access-tokens
+  - title: API reference index (deploy endpoints)
+    url: https://docs.rollbar.com/llms.txt
+api:
+  base_url: https://api.rollbar.com/api/1
+  base_url_env: ROLLBAR_API_URL
+  auth: { header: X-Rollbar-Access-Token, value_env: ROLLBAR_ACCESS_TOKEN }
+credential:
+  url: "https://docs.rollbar.com/docs/access-tokens"
+  scope: "A project access token with the `post_server_item` scope ('Can perform all POST requests to /deploy/ and /item/')."
+  source: "https://docs.rollbar.com/reference/post-deploy"
+detect:
+  deps: [rollbar, "@rollbar/"]
+  env: ["ROLLBAR_*"]
+  starter:
+    - op: deploy
+      values: { environment: "${ctx.env}", revision: "${ctx.git.sha}", comment: "${ctx.scope}" }
+assumptions:
+  - id: RB1
+    verified: true
+    text: "`POST https://api.rollbar.com/api/1/deploy` records a deploy from `environment` and `revision` (required), `rollbar_username`, `local_username`, `comment` and `status` (`started`, `succeeded` by default, `failed`, `timed_out`), authenticated by a project access token with the `post_server_item` scope in `X-Rollbar-Access-Token`, and answers 200 with `data.deploy_id`, an integer."
+    source: https://docs.rollbar.com/reference/post-deploy
+  - id: RB2
+    verified: false
+    text: "The token in the header is enough: the reference also lists `access_token` as a body field, which this recipe does not send (a credential in a body would be part of what the request logs show)."
+  - id: RB3
+    verified: true
+    text: "The API reference has report, get, update and list operations for deploys and none that deletes one, so destroy sends nothing and forgets the record: a deploy is history."
+    source: https://docs.rollbar.com/llms.txt
+  - id: RB4
+    verified: false
+    text: "Rollbar takes no idempotency key for deploys: one sent again after a crash before Sponson recorded it is a second deploy of the same revision (harmless, at least once)."
+  - id: RB5
+    verified: false
+    text: "A deploy is attributed to errors of the environment of the same name that the SDK reports (`environment` in its configuration), so a preview's deploys stay apart from production's when the preview's SDK reports its own environment, such as `preview`."
+ops:
+  deploy:
+    kind: action
+    title: Deploy
+    summary: "A deploy of the release's revision in the environment's Rollbar `environment` (such as `preview`), sent once per environment and revision, so errors are attributed to the deploy. Nothing to undo: Rollbar deletes no deploys (RB3)."
+    covers: [rollbar-deploy]
+    params:
+      environment:
+        type: string
+        required: true
+        description: "The Rollbar environment the deployment's SDK reports, such as `${ctx.env}` (RB5)."
+        example: "${ctx.env}"
+      revision:
+        type: string
+        required: true
+        description: "The revision deployed, usually the commit: `\"${ctx.git.sha}\"`. A new one sends a new deploy."
+        example: "${ctx.git.sha}"
+      comment:
+        type: string
+        description: "Text shown with the deploy, such as the scope."
+        example: "${ctx.scope}"
+      local_username:
+        type: string
+        default: sponson
+        description: Who deployed.
+      rollbar_username:
+        type: string
+        description: A Rollbar user to attribute the deploy to.
+      status:
+        type: string
+        default: succeeded
+        enum: [started, succeeded, failed, timed_out]
+        description: The deploy's status.
+    http:
+      trigger: { environment: { param: environment }, revision: { param: revision } }
+      request:
+        method: POST
+        path: /deploy
+        body:
+          environment: { param: environment }
+          revision: { param: revision }
+          comment: { param: comment }
+          local_username: { param: local_username }
+          rollbar_username: { param: rollbar_username }
+          status: { param: status }
+      outputs: { deploy_id: /data/deploy_id }

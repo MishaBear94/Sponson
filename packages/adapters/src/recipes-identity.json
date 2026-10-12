@@ -1,4 +1,15 @@
 {
+  "ably.webhook_rule": {
+    "provider": {
+      "base_url": "https://control.ably.net/v1",
+      "base_url_env": "ABLY_CONTROL_API_URL",
+      "auth": {
+        "bearer_env": "ABLY_CONTROL_TOKEN"
+      }
+    },
+    "key": "/apps/28GY6a/rules[/source/channelFilter=^pr-42:,/source/type=channel.message]",
+    "id": "DELETE /apps/28GY6a/rules/ID"
+  },
   "amplify.branch": {
     "provider": {
       "base_url": "https://amplify.us-east-1.amazonaws.com",
@@ -117,6 +128,11 @@
     },
     "key": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-web/providers/Microsoft.Web/staticSites/web/builds/42/config/appsettings?api-version=2024-04-01#/properties=API_URL",
     "id": "{\"item\":\"API_URL\",\"list\":\"/properties\",\"missing_empty\":true,\"read\":\"/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-web/providers/Microsoft.Web/staticSites/web/builds/42/listAppSettings?api-version=2024-04-01\",\"read_method\":\"POST\",\"send\":\"collection\",\"shape\":\"map\",\"write\":\"PUT /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-web/providers/Microsoft.Web/staticSites/web/builds/42/config/appsettings?api-version=2024-04-01\"}"
+  },
+  "bugsnag.build": {
+    "provider": {},
+    "key": "action:<line id>",
+    "id": "FORGET"
   },
   "cloudflare.dns_cname": {
     "provider": {
@@ -382,6 +398,38 @@
     "key": "/applications/3b0b5c6c8fcc464fab397f4969b5f482/auth_logout_urls#/logout_urls=https://pr-42.preview.example.app",
     "id": "{\"item\":\"https://pr-42.preview.example.app\",\"list\":\"/logout_urls\",\"read\":\"/applications/3b0b5c6c8fcc464fab397f4969b5f482/auth_logout_urls\",\"send\":\"field\",\"shape\":\"array\",\"write\":\"PUT /applications/3b0b5c6c8fcc464fab397f4969b5f482/auth_logout_urls\",\"write_list\":\"/urls\"}"
   },
+  "mailgun.webhook": {
+    "provider": {
+      "base_url": "https://api.mailgun.net",
+      "base_url_env": "MAILGUN_API_URL",
+      "auth": {
+        "basic": {
+          "user": "api",
+          "password_env": "MAILGUN_API_KEY"
+        }
+      },
+      "encoding": "form",
+      "form_arrays": "repeat"
+    },
+    "key": "/v1/webhooks[description=sponson-preview-pr-42]",
+    "id": "DELETE /v1/webhooks/ID"
+  },
+  "mailgun.route": {
+    "provider": {
+      "base_url": "https://api.mailgun.net",
+      "base_url_env": "MAILGUN_API_URL",
+      "auth": {
+        "basic": {
+          "user": "api",
+          "password_env": "MAILGUN_API_KEY"
+        }
+      },
+      "encoding": "form",
+      "form_arrays": "repeat"
+    },
+    "key": "/v3/routes?limit=1000[description=sponson-preview-pr-42]",
+    "id": "DELETE /v3/routes/ID"
+  },
   "mongodb_atlas.database_user": {
     "provider": {
       "base_url": "https://cloud.mongodb.com/api/atlas/v2",
@@ -396,6 +444,18 @@
     },
     "key": "/groups/32b6e34b3d91647abb20e7b8/databaseUsers/admin/app-pr-42",
     "id": "DELETE /groups/32b6e34b3d91647abb20e7b8/databaseUsers/admin/app-pr-42"
+  },
+  "newrelic.deployment": {
+    "provider": {
+      "base_url": "https://api.newrelic.com/graphql",
+      "base_url_env": "NEW_RELIC_API_URL",
+      "auth": {
+        "header": "API-Key",
+        "value_env": "NEW_RELIC_API_KEY"
+      }
+    },
+    "key": "action:<line id>",
+    "id": "FORGET"
   },
   "okta.redirect_uri": {
     "provider": {
@@ -547,6 +607,18 @@
     },
     "key": "/webhooks[endpoint=https://pr-42.preview.example.com/api/resend]",
     "id": "DELETE /webhooks/ID"
+  },
+  "rollbar.deploy": {
+    "provider": {
+      "base_url": "https://api.rollbar.com/api/1",
+      "base_url_env": "ROLLBAR_API_URL",
+      "auth": {
+        "header": "X-Rollbar-Access-Token",
+        "value_env": "ROLLBAR_ACCESS_TOKEN"
+      }
+    },
+    "key": "action:<line id>",
+    "id": "FORGET"
   },
   "s3.bucket_cors": {
     "provider": {
@@ -768,6 +840,21 @@
     },
     "key": "/organizations/acme/databases/app-pr-42",
     "id": "DELETE /organizations/acme/databases/app-pr-42"
+  },
+  "twilio.twiml_app": {
+    "provider": {
+      "base_url": "https://api.twilio.com",
+      "base_url_env": "TWILIO_API_URL",
+      "auth": {
+        "basic": {
+          "user_env": "TWILIO_API_KEY",
+          "password_env": "TWILIO_API_SECRET"
+        }
+      },
+      "encoding": "form"
+    },
+    "key": "/2010-04-01/Accounts/ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/Applications.json?FriendlyName=sponson-preview-pr-42[friendly_name=sponson-preview-pr-42]",
+    "id": "DELETE /2010-04-01/Accounts/ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/Applications/ID.json"
   },
   "unleash.flag_strategy": {
     "provider": {

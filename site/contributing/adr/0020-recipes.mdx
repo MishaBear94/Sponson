@@ -366,7 +366,47 @@ sent when its trigger changes), and a recipe whose ops are all actions sent to t
 `action:<line id>` (the engine's) and its record id as `FORGET` or the undo request template; the recipe harness runs
 an action op as run → unchanged → new trigger → run → destroy, against REST sim endpoints that log every call (R9).
 
-## Amendment 9 (2026-10-12): ids chosen in the query, deletes named in the path, once-only values without an id
+## Amendment 9 (2026-10-12): messaging, realtime and release-marker rows
+
+Mailgun and Twilio were the services `sponson init` reported as unsupported; the realtime and release-marker providers
+of a typical US/EU stack were checked for per-preview state too (docs/coverage.md, "Considered and not added"). Three
+shapes were missing, each closed without naming a provider in the code:
+
+- **A literal Basic user** (`auth: { basic: { user, password_env } }`, ADR 0017's Basic form): Mailgun's user name is
+  always `api` and the key is the password, so a variable for the user would hold a constant. `user` and `user_env`
+  are exclusive; the password stays a variable. The harness checks the exact header (R7's `headers`).
+- **Lists as repeated form keys** (API block `form_arrays: repeat`, `form` only): Mailgun reads `action=…&action=…`
+  and `event_types=…&event_types=…` (OpenAPI's `style: form, explode: true`), not Stripe's `a[0]=…`. The key joins the
+  block (identity) only when set, so existing blocks are unchanged. The REST sim reads a repeated key as a list; one
+  value arrives as a string, so the harness declares the recipe's list fields (`list_fields`, R4).
+- **Fields written under another name than read** (recipe `sim.write_fields`): Twilio takes `FriendlyName` and
+  answers `friendly_name`; Mailgun takes `action` and answers `actions`. The adapter already sends a body other than
+  the compared fields (`send_fields: false`); the sim now stores a collection object's written fields under their read
+  names (R2), and addresses objects whose path carries an extension after the id (`/Applications/{id}.json`,
+  `id_suffix`, derived from the recipe's paths, R3). The action harness also runs GraphQL actions (an answer under
+  `data`) and gives a `{ secret }` param in an action's body a value the leak check covers.
+
+Decisions per row, recorded on the rows and in the recipes' assumptions:
+
+- **Mailgun** (`mailgun.webhook`, `mailgun.route`): account webhooks, objects with an id, rather than per-domain
+  webhooks (a list per event, or a map keyed by URL); every account webhook gets every domain's events and an event
+  type takes three URLs, so at most three previews at a time. Routes are account-wide objects forwarding a
+  per-preview address. Domains are parent objects.
+- **Twilio** (`twilio.twiml_app`): a phone number has one SMS and one voice URL, so pointing a shared number at a
+  preview is not per-environment state, and a lock (ADR 0019) would serialise writers that still overwrite each other.
+  Subaccounts are closed, never deleted, and need numbers bought per subaccount. The per-preview object is a TwiML
+  Application, which the preview's Voice SDK tokens name (`outgoingApplicationSid`).
+- **Ably** (`ably.webhook_rule`): an integration rule per preview, found by its channel filter and source type; the
+  app and keys stay shared. Pusher Channels (no API for apps or webhooks) and Liveblocks (Enterprise-only private beta
+  Management API) have no row; `init` reports them as unmanaged.
+- **New Relic, Rollbar, BugSnag** (`newrelic.deployment`, `rollbar.deploy`, `bugsnag.build`): one-off release events,
+  `http.action`s (ADR 0022) with no undo: none of the three APIs deletes a marker, deploy or build. BugSnag's Build API
+  authenticates by the notifier key in its JSON body, so its recipe has no API block and takes the key as a
+  `{ secret }` param sent to an absolute URL.
+- **Slack and Discord apps**: no row. A Slack app is a parent object installed by a person, behind a configuration
+  token that expires after 12 hours; a Discord application has one interactions URL.
+
+## Amendment 10 (2026-10-12): ids chosen in the query, deletes named in the path, once-only values without an id
 
 The headless-CMS and backend-preview rows (Firebase Hosting preview channels, Convex preview deployments and their
 deploy keys; [docs/coverage.yaml](https://github.com/MishaBear94/Sponson/blob/main/docs/coverage.yaml)) are plain CRUD, but three of their shapes were not expressible or

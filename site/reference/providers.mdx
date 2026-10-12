@@ -14,7 +14,7 @@ through the same), what `sponson init` detects it by, and a line to start from.
 for every provider it detects: ready to apply when it knows every value, else commented out with a `# TODO:` that
 says where to find each missing one.
 
-58 providers in 13 categories: 17 ops of first-class adapters and 61 recipe ops, plus 3 steps no API reaches, tracked as [`manual.step`](/reference/plan-format#manual-step) lines. `sponson init` detects 53 providers.
+64 providers in 13 categories: 17 ops of first-class adapters and 68 recipe ops, plus 3 steps no API reaches, tracked as [`manual.step`](/reference/plan-format#manual-step) lines. `sponson init` detects 59 providers.
 
 - First-class ops: [the plan format](/reference/plan-format#built-in-ops). Recipes: [Recipes](/reference/recipes).
 - What is covered and what is not, and why: [Provider coverage](/reference/coverage).
@@ -27,9 +27,9 @@ says where to find each missing one.
 | [Databases with branching or per-PR instances](/reference/providers#databases-with-branching-or-per-pr-instances) | [Neon](/reference/providers#neon), [Supabase](/reference/providers#supabase), [PlanetScale](/reference/providers#planetscale), [Turso](/reference/providers#turso), [Xata](/reference/providers#xata), [MongoDB Atlas](/reference/providers#mongodb-atlas), [CockroachDB Cloud](/reference/providers#cockroachdb-cloud), [Prisma Postgres](/reference/providers#prisma-postgres) |
 | [Auth callback and redirect allow-lists](/reference/providers#auth-callback-and-redirect-allow-lists) | [Clerk](/reference/providers#clerk), [Auth0](/reference/providers#auth0), [Supabase Auth](/reference/providers#supabase-auth), [Firebase Auth](/reference/providers#firebase-auth), [WorkOS](/reference/providers#workos), [Stytch](/reference/providers#stytch), [Okta](/reference/providers#okta), [Kinde](/reference/providers#kinde), [Google OAuth clients](/reference/providers#google-oauth-clients) |
 | [Feature flags and targeting](/reference/providers#feature-flags-and-targeting) | [LaunchDarkly](/reference/providers#launchdarkly), [PostHog](/reference/providers#posthog), [Statsig](/reference/providers#statsig), [GrowthBook](/reference/providers#growthbook), [Unleash](/reference/providers#unleash), [Flagsmith](/reference/providers#flagsmith), [ConfigCat](/reference/providers#configcat), [Split (Harness FME)](/reference/providers#split-harness-fme) |
-| [Webhooks registered per environment](/reference/providers#webhooks-registered-per-environment) | [Stripe](/reference/providers#stripe), [GitHub](/reference/providers#github), [Svix (as a sender)](/reference/providers#svix-as-a-sender), [Clerk webhooks](/reference/providers#clerk-webhooks) |
-| [Email: sending domains, webhooks, test inboxes](/reference/providers#email-sending-domains-webhooks-test-inboxes) | [Resend](/reference/providers#resend), [Postmark](/reference/providers#postmark), [SendGrid](/reference/providers#sendgrid) |
-| [Observability per release](/reference/providers#observability-per-release) | [Sentry](/reference/providers#sentry), [Datadog](/reference/providers#datadog), [Honeycomb](/reference/providers#honeycomb) |
+| [Webhooks registered per environment](/reference/providers#webhooks-registered-per-environment) | [Stripe](/reference/providers#stripe), [GitHub](/reference/providers#github), [Svix (as a sender)](/reference/providers#svix-as-a-sender), [Clerk webhooks](/reference/providers#clerk-webhooks), [Twilio](/reference/providers#twilio), [Ably](/reference/providers#ably) |
+| [Email: sending domains, webhooks, test inboxes](/reference/providers#email-sending-domains-webhooks-test-inboxes) | [Resend](/reference/providers#resend), [Postmark](/reference/providers#postmark), [SendGrid](/reference/providers#sendgrid), [Mailgun](/reference/providers#mailgun) |
+| [Observability per release](/reference/providers#observability-per-release) | [Sentry](/reference/providers#sentry), [Datadog](/reference/providers#datadog), [Honeycomb](/reference/providers#honeycomb), [New Relic](/reference/providers#new-relic), [Rollbar](/reference/providers#rollbar), [BugSnag](/reference/providers#bugsnag) |
 | [DNS and preview domains](/reference/providers#dns-and-preview-domains) | [Cloudflare DNS](/reference/providers#cloudflare-dns), [Vercel domains](/reference/providers#vercel-domains) |
 | [CORS and allowed origins](/reference/providers#cors-and-allowed-origins) | [Firebase Storage (GCS bucket)](/reference/providers#firebase-storage-gcs-bucket), [S3 / R2](/reference/providers#s3-/-r2), [Sanity CORS](/reference/providers#sanity-cors) |
 | [Queues, caches, background jobs](/reference/providers#queues-caches-background-jobs) | [Upstash Redis](/reference/providers#upstash-redis), [Upstash QStash](/reference/providers#upstash-qstash), [Inngest](/reference/providers#inngest) |
@@ -917,6 +917,8 @@ Targeting rule / individual target in an environment (targeting rule (not indivi
 | [GitHub](/reference/providers#github) | Repository webhook to the preview URL | recipe [`github.repo_webhook`](/reference/recipes#github-repo_webhook) | `GITHUB_TOKEN` (bearer) |
 | [Svix (as a sender)](/reference/providers#svix-as-a-sender) | Endpoint per environment on an application | recipe [`svix.endpoint`](/reference/recipes#svix-endpoint) | `SVIX_AUTH_TOKEN` (bearer) |
 | [Clerk webhooks](/reference/providers#clerk-webhooks) | Preview URL as a webhook endpoint | [`manual.step`](/reference/plan-format#manual-step) | none (a person does it) |
+| [Twilio](/reference/providers#twilio) | TwiML Application whose voice (and messaging, status) URLs are the preview's, named by the preview's Voice SDK tokens; a shared phone number has one URL and is not per-preview state | recipe [`twilio.twiml_app`](/reference/recipes#twilio-twiml_app) | `TWILIO_API_KEY` / `TWILIO_API_SECRET` (basic) |
+| [Ably](/reference/providers#ably) | Integration rule (webhook) posting the preview's channels' messages or presence to the preview URL | recipe [`ably.webhook_rule`](/reference/recipes#ably-webhook_rule) | `ABLY_CONTROL_TOKEN` (bearer) |
 
 ### Stripe
 
@@ -1010,6 +1012,46 @@ changes:
     environments: [preview]
 ```
 
+### Twilio
+
+TwiML Application whose voice (and messaging, status) URLs are the preview's, named by the preview's Voice SDK tokens; a shared phone number has one URL and is not per-preview state (per-preview inbound SMS or calls need a number per preview (bought, A2P-registered for US SMS); a shared number's single URL is not managed, and subaccounts (closed, never deleted, numbers bought per subaccount) are not the model).
+
+- **Ops**: recipe [`twilio.twiml_app`](/reference/recipes#twilio-twiml_app)
+- **Credential**: `TWILIO_API_KEY` / `TWILIO_API_SECRET` (basic)
+- **Token**: [create it](https://www.twilio.com/docs/iam/api-keys): A Standard API key (Console > Account > API keys & tokens); its SID goes in TWILIO_API_KEY and its secret in TWILIO_API_SECRET. `sponson init --setup` cannot check it (no read-only request every such credential may send).
+- **Detected by `sponson init` from**: `twilio`, `TWILIO_*`
+
+```yaml
+# under changes: (no provider block needed)
+- id: twiml_app
+  adapter: http
+  op: resource
+  recipe: twilio.twiml_app
+  account_sid: ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  name: sponson-${ctx.env}-${ctx.scope}
+  url: https://pr-42.preview.example.com
+```
+
+### Ably
+
+Integration rule (webhook) posting the preview's channels' messages or presence to the preview URL (the app (shared) and its keys are parent objects; the preview's channels must carry a per-preview prefix for a filter to tell them apart).
+
+- **Ops**: recipe [`ably.webhook_rule`](/reference/recipes#ably-webhook_rule)
+- **Credential**: `ABLY_CONTROL_TOKEN` (bearer)
+- **Token**: [create it](https://ably.com/docs/platform/account/control-api): An account access token (Account > My Access Tokens) with the `read:rule` and `write:rule` capabilities only. `sponson init --setup` checks it with `GET /me`.
+- **Detected by `sponson init` from**: `ably`, `ABLY_*`
+
+```yaml
+# under changes: (no provider block needed)
+- id: webhook_rule
+  adapter: http
+  op: resource
+  recipe: ably.webhook_rule
+  app_id: 28GY6a
+  channel_filter: "^${ctx.scope}:"
+  url: https://pr-42.preview.example.com
+```
+
 ## Email: sending domains, webhooks, test inboxes
 
 | Provider | What Sponson manages | Ops | Credential |
@@ -1017,6 +1059,7 @@ changes:
 | [Resend](/reference/providers#resend) | Restricted API key or webhook per environment (domains are long-lived; test addresses like `delivered@resend.dev` need no API) | recipe [`resend.api_key`](/reference/recipes#resend-api_key), recipe [`resend.webhook`](/reference/recipes#resend-webhook) | `RESEND_API_KEY` (bearer) |
 | [Postmark](/reference/providers#postmark) | Server per environment, webhook per server | recipe [`postmark.server`](/reference/recipes#postmark-server), recipe [`postmark_server.webhook`](/reference/recipes#postmark_server-webhook) | `POSTMARK_ACCOUNT_TOKEN` (header `X-Postmark-Account-Token`); `POSTMARK_SERVER_TOKEN` (header `X-Postmark-Server-Token`) |
 | [SendGrid](/reference/providers#sendgrid) | Event webhook or inbound-parse host per environment | recipe [`sendgrid.event_webhook`](/reference/recipes#sendgrid-event_webhook), recipe [`sendgrid.parse_setting`](/reference/recipes#sendgrid-parse_setting) | `SENDGRID_API_KEY` (bearer) |
+| [Mailgun](/reference/providers#mailgun) | Webhook delivering email events to the preview URL, or an inbound route forwarding a per-preview address to it (sending and receiving domains are long-lived) | recipe [`mailgun.webhook`](/reference/recipes#mailgun-webhook), recipe [`mailgun.route`](/reference/recipes#mailgun-route) | `MAILGUN_API_KEY` (basic, user `api`) |
 
 ### Resend
 
@@ -1075,6 +1118,25 @@ Event webhook or inbound-parse host per environment.
   friendly_name: sponson ${ctx.env} ${ctx.scope}
 ```
 
+### Mailgun
+
+Webhook delivering email events to the preview URL, or an inbound route forwarding a per-preview address to it (sending and receiving domains are long-lived) (every account webhook receives every domain's events, and an event type takes three URLs at most: three previews at a time; per-domain webhooks (a list per event, or a map keyed by URL) are not used).
+
+- **Ops**: recipe [`mailgun.webhook`](/reference/recipes#mailgun-webhook), recipe [`mailgun.route`](/reference/recipes#mailgun-route)
+- **Credential**: `MAILGUN_API_KEY` (basic, user `api`)
+- **Token**: [create it](https://documentation.mailgun.com/docs/mailgun/api-reference/authentication/): An account API key (Account Settings > API Keys): Domain Sending Keys 'only allow sending messages' and cannot manage webhooks or routes. `sponson init --setup` checks it with `GET /v1/webhooks`.
+- **Detected by `sponson init` from**: `mailgun.js`, `mailgun-js`, `MAILGUN_*`
+
+```yaml
+# under changes: (no provider block needed)
+- id: webhook
+  adapter: http
+  op: resource
+  recipe: mailgun.webhook
+  name: sponson-${ctx.env}-${ctx.scope}
+  url: https://pr-42.preview.example.com
+```
+
 ## Observability per release
 
 | Provider | What Sponson manages | Ops | Credential |
@@ -1082,6 +1144,9 @@ Event webhook or inbound-parse host per environment.
 | [Sentry](/reference/providers#sentry) | Release for the commit, deploy record for the environment; finalize | recipe [`sentry.release`](/reference/recipes#sentry-release), recipe [`sentry.deploy`](/reference/recipes#sentry-deploy) | `SENTRY_AUTH_TOKEN` (bearer) |
 | [Datadog](/reference/providers#datadog) | Deployment marker / synthetic test against the preview URL | recipe [`datadog.synthetic_api_test`](/reference/recipes#datadog-synthetic_api_test) | `DD_API_KEY` (header `DD-API-KEY`) and `DD_APP_KEY` (header `DD-APPLICATION-KEY`) |
 | [Honeycomb](/reference/providers#honeycomb) | Marker per deploy in the environment's dataset | recipe [`honeycomb.marker`](/reference/recipes#honeycomb-marker) | `HONEYCOMB_API_KEY` (header `X-Honeycomb-Team`) |
+| [New Relic](/reference/providers#new-relic) | Deployment marker (change tracking) on the environment's entity per release | recipe [`newrelic.deployment`](/reference/recipes#newrelic-deployment) | `NEW_RELIC_API_KEY` (header `API-Key`) |
+| [Rollbar](/reference/providers#rollbar) | Deploy of the revision in the environment (`preview`) per release | recipe [`rollbar.deploy`](/reference/recipes#rollbar-deploy) | `ROLLBAR_ACCESS_TOKEN` (header `X-Rollbar-Access-Token`) |
+| [BugSnag](/reference/providers#bugsnag) | Build (release) of the app version in the environment's release stage per deploy | recipe [`bugsnag.build`](/reference/recipes#bugsnag-build) | none of Sponson's (calls a URL the line gives; a key it needs is a `{ secret }` param) |
 
 ### Sentry
 
@@ -1143,6 +1208,66 @@ Marker per deploy in the environment's dataset.
   dataset: __all__
   message: deploy ${ctx.scope} ${ctx.git.sha}
   url: https://${ctx.scope}.preview.example.com
+```
+
+### New Relic
+
+Deployment marker (change tracking) on the environment's entity per release (an `http.action` (ADR 0022) sent once per entity and version; markers are history (no undo); a preview needs its own entity, or it marks production's charts).
+
+- **Ops**: recipe [`newrelic.deployment`](/reference/recipes#newrelic-deployment)
+- **Credential**: `NEW_RELIC_API_KEY` (header `API-Key`)
+- **Token**: [create it](https://docs.newrelic.com/docs/apis/intro-apis/new-relic-api-keys/): A user key (`NRAK-…`, API keys > Create a key > User) of a user who can create change tracking events for the entity's account. `sponson init --setup` cannot check it (no read-only request every such credential may send).
+- **Detected by `sponson init` from**: `newrelic`, `@newrelic/*`, `NEW_RELIC_*`
+
+```yaml
+# under changes: (no provider block needed)
+- id: deployment
+  adapter: http
+  op: action
+  recipe: newrelic.deployment
+  entity_guid: MXxBUE18QVBQTElDQVRJT058MTIzNDU2Nzg
+  version: ${ctx.git.sha}
+  description: ${ctx.env} ${ctx.scope}
+```
+
+### Rollbar
+
+Deploy of the revision in the environment (`preview`) per release (an `http.action` sent once per environment and revision; deploys are history (no delete in the API)).
+
+- **Ops**: recipe [`rollbar.deploy`](/reference/recipes#rollbar-deploy)
+- **Credential**: `ROLLBAR_ACCESS_TOKEN` (header `X-Rollbar-Access-Token`)
+- **Token**: [create it](https://docs.rollbar.com/docs/access-tokens): A project access token with the `post_server_item` scope ('Can perform all POST requests to /deploy/ and /item/'). `sponson init --setup` cannot check it (no read-only request every such credential may send).
+- **Detected by `sponson init` from**: `rollbar`, `@rollbar/*`, `ROLLBAR_*`
+
+```yaml
+# under changes: (no provider block needed)
+- id: deploy
+  adapter: http
+  op: action
+  recipe: rollbar.deploy
+  environment: ${ctx.env}
+  revision: ${ctx.git.sha}
+  comment: ${ctx.scope}
+```
+
+### BugSnag
+
+Build (release) of the app version in the environment's release stage per deploy (an `http.action` sent once per version and release stage; releases are history (no undo)).
+
+- **Ops**: recipe [`bugsnag.build`](/reference/recipes#bugsnag-build)
+- **Credential**: none of Sponson's (calls a URL the line gives; a key it needs is a `{ secret }` param)
+- **Detected by `sponson init` from**: `@bugsnag/*`, `BUGSNAG_*`
+
+```yaml
+# under changes: (no provider block needed)
+- id: build
+  adapter: http
+  op: action
+  recipe: bugsnag.build
+  api_key:
+    secret: env://BUGSNAG_API_KEY
+  app_version: ${ctx.git.sha}
+  release_stage: ${ctx.env}
 ```
 
 ## DNS and preview domains
@@ -1270,7 +1395,7 @@ Preview origin in the project's CORS origins, so browser code, an embedded Studi
 |---|---|---|---|
 | [Upstash Redis](/reference/providers#upstash-redis) | Database per PR, REST URL and token out | recipe [`upstash.redis_database`](/reference/recipes#upstash-redis_database) | `UPSTASH_EMAIL` / `UPSTASH_API_KEY` (basic) |
 | [Upstash QStash](/reference/providers#upstash-qstash) | Schedule that calls the preview URL | recipe [`qstash.schedule`](/reference/recipes#qstash-schedule) | `QSTASH_TOKEN` (bearer) |
-| [Inngest](/reference/providers#inngest) | Sync the preview deployment into its branch environment | recipe [`inngest.sync`](/reference/recipes#inngest-sync) | none (calls the app's own URL) |
+| [Inngest](/reference/providers#inngest) | Sync the preview deployment into its branch environment | recipe [`inngest.sync`](/reference/recipes#inngest-sync) | none of Sponson's (calls a URL the line gives; a key it needs is a `{ secret }` param) |
 
 ### Upstash Redis
 
@@ -1316,7 +1441,7 @@ Schedule that calls the preview URL.
 Sync the preview deployment into its branch environment (an `http.action` (ADR 0022): `PUT` to the deployment's serve endpoint once per deployment URL and revision, no Inngest credential; the app must set `INNGEST_ENV` (automatic on Vercel); nothing to undo (branch environments archive themselves); the beta REST v2 sync endpoint is not used (no way to target a branch environment)).
 
 - **Ops**: recipe [`inngest.sync`](/reference/recipes#inngest-sync)
-- **Credential**: none (calls the app's own URL)
+- **Credential**: none of Sponson's (calls a URL the line gives; a key it needs is a `{ secret }` param)
 - **Detected by `sponson init` from**: `inngest`, `INNGEST_*`
 
 ```yaml
