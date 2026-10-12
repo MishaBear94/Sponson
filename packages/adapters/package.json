@@ -1,6 +1,6 @@
 {
   "name": "@sponson/adapters",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "description": "The built-in resource adapters and secret sources for Sponson.",
   "keywords": [
     "sponson",

@@ -1,5 +1,11 @@
 # @sponson/sim
 
+## 0.9.3
+
+### Patch Changes
+
+- b410f94: Neon: a branch's `connection_string` output now always comes from GET /connection_uri. Neon's create answer gives the same string without `channel_binding=require`, so a plan that put it into a Vercel or Netlify variable rewrote that variable (and triggered a redeploy) on the second apply. Found by the first live run against real accounts.
+
 ## 0.9.2
 
 No changes in this release.
