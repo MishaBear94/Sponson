@@ -1,5 +1,13 @@
 # sponson
 
+## 0.9.3
+
+### Patch Changes
+
+- Updated dependencies [b410f94]
+  - @sponson/adapters@0.9.3
+  - @sponson/core@0.9.3
+
 ## 0.9.2
 
 ### Patch Changes
