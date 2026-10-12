@@ -4,9 +4,11 @@ name: live
 # provider changing its API shows up within a week instead of in a user's apply. It uses throwaway projects only
 # (see the header of scenarios/contract.test.ts) and runs only in this repository, never on forks.
 #
-# Secrets: VERCEL_TOKEN, SPONSON_LIVE_VERCEL_PROJECT, SPONSON_LIVE_VERCEL_TEAM, NEON_API_KEY,
-# SPONSON_LIVE_NEON_PROJECT, CLERK_SECRET_KEY (all required for the run), plus any optional provider's variables
-# (its tests run when they are present). docs/api-verification.md "Live runs" records results.
+# Secrets: the three core providers are independent, and the run needs at least one of them complete: Vercel
+# (VERCEL_TOKEN + SPONSON_LIVE_VERCEL_PROJECT, optional SPONSON_LIVE_VERCEL_TEAM), Neon (NEON_API_KEY +
+# SPONSON_LIVE_NEON_PROJECT) or Clerk (CLERK_SECRET_KEY). A core provider whose secrets are missing is skipped, and the
+# gate's notice names which run and which are skipped. Any optional provider's variables work the same way (its tests
+# run when they are present). docs/api-verification.md "Live runs" records results.
 
 on:
   schedule:
@@ -33,14 +35,27 @@ jobs:
       SPONSON_LIVE_NEON_PROJECT: ${{ secrets.SPONSON_LIVE_NEON_PROJECT }}
       CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
     steps:
-      - name: Skip unless the required secrets are set
+      - name: Skip unless at least one core provider's secrets are set
         id: gate
         run: |
-          missing=""
-          for v in VERCEL_TOKEN SPONSON_LIVE_VERCEL_PROJECT NEON_API_KEY SPONSON_LIVE_NEON_PROJECT CLERK_SECRET_KEY; do
-            [ -n "${!v}" ] || missing="$missing $v"
-          done
-          if [ -n "$missing" ]; then echo "::notice::live suite skipped; missing:$missing"; echo "run=false" >> "$GITHUB_OUTPUT"; else echo "run=true" >> "$GITHUB_OUTPUT"; fi
+          runs=""
+          skipped=""
+          check() {
+            name="$1"; shift
+            missing=""
+            for v in "$@"; do [ -n "${!v}" ] || missing="$missing $v"; done
+            if [ -z "$missing" ]; then runs="$runs $name"; else skipped="$skipped $name (missing:$missing);"; fi
+          }
+          check vercel VERCEL_TOKEN SPONSON_LIVE_VERCEL_PROJECT
+          check neon NEON_API_KEY SPONSON_LIVE_NEON_PROJECT
+          check clerk CLERK_SECRET_KEY
+          if [ -z "$runs" ]; then
+            echo "::notice::live suite skipped; no core provider is configured:$skipped"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::live suite runs core providers:$runs; skipped:${skipped:- none}"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
       - if: steps.gate.outputs.run == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - if: steps.gate.outputs.run == 'true'
