@@ -25,7 +25,8 @@
  *   R3. A path is known once seeded or created: a POST to an unknown path creates the collection; a GET of an
  *       unknown path is 404. A create may choose the id (the id field, or the style's `id_from` field, in the
  *       body, like a flag key or a database name); otherwise the sim assigns `it_<n>` (the next integer with
- *       `numeric_ids`). A create whose `name` (or chosen id) already exists in the collection answers 409. Query
+ *       `numeric_ids`), or with the style's `id_query`, by a query parameter (Google's `POST …/channels?channelId=`).
+ *       A create whose `name` (or chosen id) already exists in the collection answers 409. Query
  *       parameters other than `cursor` are ignored: a filtered list answers the whole collection. A trailing slash
  *       is ignored (`/releases/` is `/releases`). An alias (R2) names its collection for every method, so it also
  *       serves a provider that lists at another URL than it creates at (`GET /settings/all` lists `/settings`).
@@ -63,7 +64,8 @@
  *       when it carries a value the sim generated (a credential that is another object's output).
  *   R11. A seeded `deletes` path takes a POST whose body names objects of a collection (a JSON pointer to an id or a
  *       list of ids, `{ public_ids: [...] }`) and removes them, answering `{ deleted: [ids] }`; 404 when none of
- *       them exists.
+ *       them exists. A `deletes` path holding a `{id}` segment instead names the object in the path
+ *       (`POST /deployments/{id}/delete`), and its body is not read.
  */
 import type { IncomingHttpHeaders } from "node:http";
 import { digestChallenge, digestProblem, issueToken, sigV4Problem, tokenValid, type DigestConfig, type IssuedToken, type SigV4Config } from "../auth.js";
@@ -87,6 +89,8 @@ export interface RestStyle {
   id_field?: string;
   /** The body field a create may choose the id with. Default: the id field. */
   id_from?: string;
+  /** A query parameter a create may choose the id with (`channelId`), assumption R3. */
+  id_query?: string;
   /** Assign integer ids instead of `it_<n>`. */
   numeric_ids?: boolean;
   /** Read form-encoded `true`/`false` and numbers as booleans and numbers (assumption R4). */
@@ -111,7 +115,10 @@ export interface RestStyle {
   generated?: string[];
 }
 
-/** A path whose POST deletes objects its body names (assumption R11): the collection, and where the ids are. */
+/**
+ * A path whose POST deletes objects its body names (assumption R11): the collection, and where the ids are. A path
+ * with a `{id}` segment names the object there instead, and `ids` is not used.
+ */
 export interface RestBulkDelete {
   collection: string;
   /** JSON pointer to the id, or to a list of ids, in the body. */
@@ -318,7 +325,7 @@ function authorized(headers: IncomingHttpHeaders, declared: string[]): boolean {
   return Object.entries(headers).some(([name, v]) => carries(name) && typeof v === "string" && v.trim() !== "");
 }
 
-type FullStyle = Required<Omit<RestStyle, "next_path" | "item_query" | "header_fields" | "suffix_field" | "write_fields">> & Pick<RestStyle, "item_query"> & { next_path: string | null };
+type FullStyle = Required<Omit<RestStyle, "next_path" | "item_query" | "id_query" | "header_fields" | "suffix_field" | "write_fields">> & Pick<RestStyle, "item_query" | "id_query"> & { next_path: string | null };
 
 /** The style of the collection at `path`, every default filled in. */
 function styleOf(state: RestState, path: string): FullStyle {
@@ -335,6 +342,7 @@ function styleOf(state: RestState, path: string): FullStyle {
     once_fields: s.once_fields ?? [],
     generated: s.generated ?? [],
     ...(s.item_query ? { item_query: s.item_query } : {}),
+    ...(s.id_query ? { id_query: s.id_query } : {}),
   };
 }
 
@@ -506,12 +514,19 @@ function upsertAt(core: SimCore, state: RestState, at: { collection: string; suf
   return new Reply(200, envelope(style.item_path, item));
 }
 
-function create(core: SimCore, state: RestState, path: string, raw: unknown, headers: Record<string, string> = {}): Reply {
+/** The id a create chooses (R3): the body's `id_from` field, else the style's `id_query` query parameter. */
+function chosenId(style: FullStyle, body: Record<string, unknown>, query?: URLSearchParams): unknown {
+  if (isId(body[style.id_from])) return body[style.id_from];
+  const q = style.id_query === undefined ? null : (query?.get(style.id_query) ?? null);
+  return q === null || q === "" ? undefined : q;
+}
+
+function create(core: SimCore, state: RestState, path: string, raw: unknown, headers: Record<string, string> = {}, query?: URLSearchParams): Reply {
   if (!isRecord(raw)) return error(400, "body must be a JSON object");
   const body = { ...raw, ...headerFields(state, path, headers) };
   const list = (state.collections[path] ??= []);
   const style = styleOf(state, path);
-  const chosen = isId(body[style.id_from]) ? body[style.id_from] : undefined;
+  const chosen = chosenId(style, body, query);
   const clash = list.find((i) => (chosen !== undefined && i[style.id_field] === chosen) || (body.name !== undefined && i.name === body.name));
   if (clash) return error(409, `already exists: ${String(clash[style.id_field])}`);
   const item: RestItem = { ...structuredClone(body), [style.id_field]: chosen ?? newId(core, state, path) };
@@ -539,9 +554,21 @@ function setPointer(doc: Record<string, unknown>, pointer: string, value: unknow
   });
 }
 
+/** The `deletes` entry (R11) whose `{id}` segment `path` fills, and the id it names. */
+function pathDelete(state: RestState, path: string): { spec: RestBulkDelete; id: string } | undefined {
+  for (const [pattern, spec] of Object.entries(state.deletes)) {
+    if (!pattern.includes("{id}")) continue;
+    const [before, after] = pattern.split("{id}") as [string, string];
+    if (!path.startsWith(before) || !path.endsWith(after) || path.length <= before.length + after.length) continue;
+    const id = path.slice(before.length, path.length - after.length);
+    if (!id.includes("/")) return { spec, id: decodeURIComponent(id) };
+  }
+  return undefined;
+}
+
 /** POST to a `deletes` path (assumption R11): remove the objects the body names. */
-function bulkDelete(state: RestState, spec: RestBulkDelete, body: unknown): Reply {
-  const named = spec.ids.slice(1).split("/").reduce<unknown>((cur, t) => (isRecord(cur) ? cur[t] : Array.isArray(cur) ? cur[Number(t)] : undefined), body);
+function bulkDelete(state: RestState, spec: RestBulkDelete, body: unknown, inPath?: string): Reply {
+  const named = inPath ?? spec.ids.slice(1).split("/").reduce<unknown>((cur, t) => (isRecord(cur) ? cur[t] : Array.isArray(cur) ? cur[Number(t)] : undefined), body);
   const ids = (Array.isArray(named) ? named : [named]).filter(isId).map(String);
   const list = state.collections[spec.collection] ?? [];
   const idf = styleOf(state, spec.collection).id_field;
@@ -620,11 +647,13 @@ const routes = router<RestState>(
       return list(core, state, t, url.searchParams.get("cursor"));
     }),
 
-    route("POST", "/*path", ({ core, state, params, body, headers }) => {
+    route("POST", "/*path", ({ core, state, params, body, headers, url }) => {
       const read = state.reads[normPath(`/${params.path}`)];
       if (read !== undefined) return readObject(state, read);
       const bulk = state.deletes[normPath(`/${params.path}`)];
       if (bulk) return bulkDelete(state, bulk, body);
+      const named = pathDelete(state, normPath(`/${params.path}`));
+      if (named) return bulkDelete(state, named.spec, body, named.id);
       const suffix = suffixTarget(state, normPath(`/${params.path}`));
       if (suffix) return upsertAt(core, state, suffix, body, headers);
       const t = resolve(state, `/${params.path}`);
@@ -632,7 +661,7 @@ const routes = router<RestState>(
       if (t.kind === "item") return patch(state, t, bodyFor(state, t.collection, body, headers));
       const raw = normPath(`/${params.path}`);
       const path = t.kind === "collection" ? t.path : (state.aliases[raw] ?? raw);
-      return create(core, state, path, bodyFor(state, path, body, headers), headers);
+      return create(core, state, path, bodyFor(state, path, body, headers), headers, url.searchParams);
     }),
 
     route("PATCH", "/*path", ({ state, params, body, headers, url }) => {

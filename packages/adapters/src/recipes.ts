@@ -46,6 +46,8 @@ export interface RecipeSimHints {
   id_from?: string;
   /** The provider's ids are integers. */
   numeric_ids?: boolean;
+  /** The query parameter a create chooses the object's id with (`?channelId=`), when the provider takes it in the URL. */
+  id_query?: string;
   /** Objects to seed by path (placeholders filled from the example params): a list item's parent. */
   objects?: Record<string, Record<string, unknown>>;
   /** Request headers a create or update stores as fields (header → field), for an API that takes settings in headers. */

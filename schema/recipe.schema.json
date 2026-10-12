@@ -269,6 +269,7 @@
           "properties": {
             "id_from": { "type": "string", "description": "The body field a create chooses the id with." },
             "numeric_ids": { "type": "boolean" },
+            "id_query": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "The query parameter a create chooses the id with (`POST …/channels?channelId=`), when the provider takes it in the URL rather than the body." },
             "item_query": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "The query parameter that names one object, when the provider keys objects by a value (`url`)." },
             "objects": { "type": "object", "additionalProperties": { "type": "object" }, "description": "Objects to seed, by path (placeholders filled from the examples)." },
             "header_fields": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Request headers a create or update stores as fields (header → field), for an API that takes settings in headers." },

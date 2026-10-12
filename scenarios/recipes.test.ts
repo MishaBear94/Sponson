@@ -205,6 +205,7 @@ function simSeed(r: Recipe, op: RecipeOp, spec: Record<string, unknown>) {
       id_field: token(spec.id_path, "id"),
       ...(op.sim?.id_from ? { id_from: op.sim.id_from } : {}),
       ...(op.sim?.numeric_ids ? { numeric_ids: true } : {}),
+      ...(op.sim?.id_query ? { id_query: op.sim.id_query } : {}),
       ...(op.sim?.header_fields ? { header_fields: op.sim.header_fields } : {}),
       ...(op.sim?.suffix_field ? { suffix_field: op.sim.suffix_field } : {}),
       ...(op.sim?.item_query ? { item_query: op.sim.item_query } : {}),
@@ -227,9 +228,17 @@ function simSeed(r: Recipe, op: RecipeOp, spec: Record<string, unknown>) {
   return { rest: { collections, objects, styles, aliases, reads, ...(header ? { auth_headers: [header] } : {}), ...restAuth(r), ...bulkDeletes(op, spec) } };
 }
 
-/** A delete that names the object in its body (`{ public_ids: ["{id}"] }`): the sim's bulk delete at that path (R11). */
+/**
+ * A delete that names the object in its body (`{ public_ids: ["{id}"] }`), or a `POST` that names it in its path
+ * (`/deployments/{id}/delete`): the sim's bulk delete at that path (R11).
+ */
 function bulkDeletes(op: RecipeOp, spec: Record<string, unknown>): { deletes?: Record<string, { collection: string; ids: string }> } {
-  const del = spec.delete as { path?: string; body?: unknown } | undefined;
+  const del = spec.delete as { path?: string; method?: string; body?: unknown } | undefined;
+  if (op.kind === "resource" && del?.path?.includes("{id}") && del.body === undefined && del.method?.toUpperCase() === "POST") {
+    const marker = "\u0000";
+    const path = fill(del.path, { ...(spec.vars as Record<string, unknown>), id: marker }).replace(encodeURIComponent(marker), "{id}");
+    return { deletes: { [path]: { collection: collectionOf(op, spec), ids: "" } } };
+  }
   const at = del?.body === undefined ? undefined : pointerTo(del.body, "{id}");
   if (op.kind !== "resource" || !del?.path || at === undefined) return {};
   // The pointer to the list that holds the id when it is a list's element, else to the id itself.

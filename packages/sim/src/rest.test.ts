@@ -47,6 +47,19 @@ describe("rest sim styles", () => {
     expect((await call("PUT", "/services/srv-2/env-vars/API_URL", { value: "x" })).status).toBe(404);
   });
 
+  it("a create may choose its id with a query parameter (`id_query`), and a delete may name the object in its path", async () => {
+    const coll = "/sites/demo/channels";
+    sim = await startSim({ seed: { rest: { collections: { [coll]: [] }, styles: { [coll]: { item_path: "", list_path: "/channels", next_path: null, id_field: "name", id_query: "channelId" } }, deletes: { "/sites/demo/channels/{id}/delete": { collection: coll, ids: "" } } } } });
+    expect(await call("POST", `${coll}?channelId=pr-42`, { ttl: "86400s" })).toEqual({ status: 201, body: { ttl: "86400s", name: "pr-42" } });
+    expect((await call("POST", `${coll}?channelId=pr-42`, {})).status).toBe(409);
+    expect((await call("GET", `${coll}/pr-42`)).body).toEqual({ ttl: "86400s", name: "pr-42" });
+    // Without the query parameter the sim assigns the id, as before.
+    expect(((await call("POST", coll, {})).body.name as string)).toMatch(/^it_/);
+    expect(await call("POST", `${coll}/pr-42/delete`, {})).toEqual({ status: 200, body: { deleted: ["pr-42"] } });
+    expect((await call("POST", `${coll}/pr-42/delete`, {})).status).toBe(404);
+    expect((await call("GET", `${coll}/pr-42`)).status).toBe(404);
+  });
+
   it("an alias of a collection lists it and addresses its objects too", async () => {
     sim = await startSim({ seed: { rest: { collections: { "/projects/p/databases": [] }, aliases: { "/databases": "/projects/p/databases", "/all-databases": "/projects/p/databases" } } } });
     const created = await call("POST", "/projects/p/databases", { name: "app-pr-1" });

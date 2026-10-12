@@ -365,3 +365,27 @@ sent when its trigger changes), and a recipe whose ops are all actions sent to t
 (it needs no credential). `inngest.sync` is the first. The identity lock records an action op's key as
 `action:<line id>` (the engine's) and its record id as `FORGET` or the undo request template; the recipe harness runs
 an action op as run → unchanged → new trigger → run → destroy, against REST sim endpoints that log every call (R9).
+
+## Amendment 9 (2026-10-12): ids chosen in the query, deletes named in the path, once-only values without an id
+
+The headless-CMS and backend-preview rows (Firebase Hosting preview channels, Convex preview deployments and their
+deploy keys; [docs/coverage.yaml](https://github.com/MishaBear94/Sponson/blob/main/docs/coverage.yaml)) are plain CRUD, but three of their shapes were not expressible or
+not testable:
+
+- **An id chosen in the query.** Google's `sites.channels.create` takes the channel id as `?channelId=`, not in the
+  body. The request already worked (a create path may carry a query); only the REST sim assigned its own id. A recipe
+  sim hint `id_query` names the parameter, and the sim's create takes the id from it (R3).
+- **A delete named in the path of a `POST`.** Convex deletes a deployment with `POST /deployments/{name}/delete`. A
+  `delete: { method: POST, path }` without a body already worked against the real API; the REST sim now lets a
+  seeded `deletes` path hold a `{id}` segment that names the object (R11), and the harness derives it from such a
+  delete, as it derives the body form.
+- **A create that answers only the once-only value.** Convex answers a new deploy key as `{ deployKey }`, with no
+  id. The object was already found by `find` after such an answer, but "found so, it reveals no once-only value"
+  dropped the key, the one thing the op exists for. The once-only outputs are now taken from the create's own answer
+  even when the object is found afterwards: it is still the answer to the create that made it (ADR 0018). Not with
+  `create.locate`, whose answer is declared not to be the object.
+
+Nothing else changes: identities, record ids and the plan format are as before. Contentful's environments are a
+first-class adapter instead (`contentful.environment`): a new environment is copied asynchronously and is usable only
+once its status is `ready` (Amendment 4: waiting stays out of recipes), and granting an API key access to it is a
+`PUT` with the version read just before (`X-Contentful-Version`), a precondition no request template carries.

@@ -432,6 +432,26 @@ describe("http.resource", () => {
     expect(again.outputs).not.toHaveProperty("secret");
   });
 
+  it("a create answered with the once-only value alone: the object is found by `find`, the value still comes from that answer", async () => {
+    // Convex answers a new deploy key as `{ deployKey }`, with no id: the key is then found by name.
+    h.sim.state.rest.collections["/keys"] = [{ id: "k1", name: "key-pr-42" }];
+    h.sim.state.rest.endpoints["/keys/new"] = { reply: { deployKey: "dk_once_value_0042" } };
+    const actx = h.actx("http", API);
+    const key = {
+      api: "demo",
+      find: { path: "/keys", list_path: "/data", match: { name: "key-pr-42" } },
+      create: { path: "/keys/new" },
+      delete: { path: "/keys/{id}" },
+      outputs: { deploy_key: { path: "/deployKey", sensitive: true, once: true }, key_name: "/name" },
+    };
+    const r = await resource.apply(actx, key, null);
+    expect(r).toMatchObject({ created: ["/keys[name=key-pr-42]"], outputs: { id: "k1", key_name: "key-pr-42", deploy_key: "dk_once_value_0042" } });
+    // A read never has it; nor does `create.locate`, whose answer is not the object (nothing once-only is taken from it).
+    expect((await resource.read(actx, key))!.outputs).toEqual({ id: "k1", key_name: "key-pr-42" });
+    const located = await resource.apply(actx, { ...key, create: { path: "/keys/new", locate: true } }, null);
+    expect(located.outputs).toEqual({ id: "k1", key_name: "key-pr-42" });
+  });
+
   it("works with the sim's X-Api-Key credential end to end", async () => {
     const r = await resource.apply(h.actx("http", { ...API, auth: { header: "X-Api-Key", value_env: "REST_API_TOKEN" } }), GATE, null);
     expect(r.created).toEqual([GATE_KEY]);
