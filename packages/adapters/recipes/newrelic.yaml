@@ -1,0 +1,108 @@
+# yaml-language-server: $schema=../../../schema/recipe.schema.json
+# New Relic NerdGraph recipes: a change-tracking deployment marker per release. Format and checklist:
+# docs/adr/0020-recipes.md, docs/adr/0022-one-off-actions.md, CONTRIBUTING.md "Adding a recipe".
+provider: newrelic
+title: New Relic
+category: observability
+verified_on: "2026-10-12"
+docs:
+  - title: Track changes with NerdGraph (changeTrackingCreateDeployment, changeTrackingCreateEvent)
+    url: https://docs.newrelic.com/docs/change-tracking/change-tracking-graphql/
+  - title: Introduction to NerdGraph (endpoints, the API-Key header)
+    url: https://docs.newrelic.com/docs/apis/nerdgraph/get-started/introduction-new-relic-nerdgraph/
+  - title: New Relic's Go client, the mutation as its CLI and Terraform provider send it (ChangeTrackingDeploymentInput)
+    url: https://github.com/newrelic/newrelic-client-go/blob/main/pkg/changetracking/changetracking_api.go
+  - title: User keys
+    url: https://docs.newrelic.com/docs/apis/intro-apis/new-relic-api-keys/
+api:
+  base_url: https://api.newrelic.com/graphql
+  base_url_env: NEW_RELIC_API_URL
+  auth: { header: API-Key, value_env: NEW_RELIC_API_KEY }
+credential:
+  url: "https://docs.newrelic.com/docs/apis/intro-apis/new-relic-api-keys/"
+  scope: "A user key (`NRAK-…`, API keys > Create a key > User) of a user who can create change tracking events for the entity's account."
+  source: "https://docs.newrelic.com/docs/apis/nerdgraph/get-started/introduction-new-relic-nerdgraph/"
+detect:
+  deps: [newrelic, "@newrelic/"]
+  env: ["NEW_RELIC_*"]
+  starter:
+    - op: deployment
+      values: { version: "${ctx.git.sha}", description: "${ctx.env} ${ctx.scope}" }
+  where:
+    entity_guid: "the GUID of the APM (or browser) entity the environment reports as: the entity's metadata in New Relic, or `newrelic entity search`"
+assumptions:
+  - id: NR1
+    verified: true
+    text: "NerdGraph is one GraphQL endpoint, `https://api.newrelic.com/graphql` (EU accounts: `https://api.eu.newrelic.com/graphql`, set `base_url` in the provider block), taking a user key in the `API-Key` header and a JSON body `{ query, variables }`."
+    source: https://docs.newrelic.com/docs/apis/nerdgraph/get-started/introduction-new-relic-nerdgraph/
+  - id: NR2
+    verified: true
+    text: "`changeTrackingCreateDeployment(deployment: ChangeTrackingDeploymentInput!)` records a deployment marker on an entity from `version` and `entityGuid` (both required) and optionally `user`, `description`, `deploymentType` (`BASIC`, `BLUE_GREEN`, `CANARY`, `ROLLING`, `SHADOW`, `OTHER`), `deepLink`, `commit`, `changelog`, `groupId` and `timestamp` (within 24 hours of now), and answers `deploymentId` and `entityGuid`. New Relic recommends `changeTrackingCreateEvent` for new work but says this mutation 'isn't being retired and continues to work'."
+    source: https://docs.newrelic.com/docs/change-tracking/change-tracking-graphql/
+  - id: NR3
+    verified: true
+    text: "The input type's name is `ChangeTrackingDeploymentInput`, as New Relic's own Go client declares the mutation's variable."
+    source: https://github.com/newrelic/newrelic-client-go/blob/main/pkg/changetracking/changetracking_api.go
+  - id: NR4
+    verified: false
+    text: "NerdGraph has no mutation that deletes or edits a deployment marker (the REST v2 deployment endpoints, which could delete one, reach end of life on 2027-07-31), so destroy sends nothing and forgets the record: a marker is history."
+  - id: NR5
+    verified: false
+    text: "NerdGraph takes no idempotency key: a marker sent again after a crash before Sponson recorded it is a second marker for the same version (harmless, at least once)."
+  - id: NR6
+    verified: false
+    text: "A preview that reports to its own entity (an app name per environment, such as `web (preview)`) gets its markers there; a preview sharing production's entity would mark production's charts, so give previews their own entity or leave this line to production."
+ops:
+  deployment:
+    kind: action
+    title: Deployment marker
+    summary: "A change-tracking deployment marker on the environment's entity (`entity_guid`) for a release, sent once per entity and version (usually the commit). Nothing to undo: markers are history and NerdGraph deletes none (NR4)."
+    covers: [newrelic-deployment]
+    params:
+      entity_guid:
+        type: string
+        required: true
+        description: The GUID of the entity the environment reports as (NR6).
+        example: MXxBUE18QVBQTElDQVRJT058MTIzNDU2Nzg
+      version:
+        type: string
+        required: true
+        description: "The release's version, usually the commit: `\"${ctx.git.sha}\"`. A new one sends a new marker."
+        example: "${ctx.git.sha}"
+      description:
+        type: string
+        description: "Text shown with the marker, such as `preview pr-42`."
+        example: "${ctx.env} ${ctx.scope}"
+      user:
+        type: string
+        default: sponson
+        description: Who deployed.
+      commit:
+        type: string
+        description: The commit deployed.
+      deep_link:
+        type: string
+        pattern: "^https?://\\S+$"
+        description: A link to the deployment (the preview URL, or the CI run).
+      deployment_type:
+        type: string
+        default: BASIC
+        enum: [BASIC, BLUE_GREEN, CANARY, ROLLING, SHADOW, OTHER]
+        description: The kind of deployment (NR2).
+    http:
+      trigger: { entity_guid: { param: entity_guid }, version: { param: version } }
+      request:
+        graphql:
+          query: "mutation ($deployment: ChangeTrackingDeploymentInput!) { changeTrackingCreateDeployment(deployment: $deployment) { deploymentId entityGuid } }"
+          variables:
+            deployment:
+              entityGuid: { param: entity_guid }
+              version: { param: version }
+              description: { param: description }
+              user: { param: user }
+              commit: { param: commit }
+              deepLink: { param: deep_link }
+              deploymentType: { param: deployment_type }
+      outputs: { deployment_id: /changeTrackingCreateDeployment/deploymentId }
+    live:
+      params: { entity_guid: SPONSON_LIVE_NEW_RELIC_ENTITY_GUID }

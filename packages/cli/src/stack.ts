@@ -209,6 +209,7 @@ function dbHostProvider(raw: string, hosts: HostRule[]): string | undefined {
 // ---------------------------------------------------------------------------
 
 const NEW_ISSUE = "open or upvote an issue: https://github.com/MishaBear94/Sponson/issues";
+const NO_API = "no API reaches its per-environment state; why: https://github.com/MishaBear94/Sponson/blob/main/docs/coverage.md#considered-and-not-added";
 
 /** A framework, an ORM or an unsupported service: the rules that are not providers' own `detect`. */
 interface Rule extends ProviderDetect {
@@ -236,8 +237,10 @@ const STACK_RULES: Rule[] = [
  * fails while it is in both).
  */
 export const UNSUPPORTED: Rule[] = [
-  { id: "mailgun", name: "Mailgun", kind: "service", deps: ["mailgun.js", "mailgun-js"], env: ["MAILGUN_*"], pointer: NEW_ISSUE },
-  { id: "twilio", name: "Twilio", kind: "service", deps: ["twilio"], env: ["TWILIO_*"], pointer: NEW_ISSUE },
+  // Its apps' webhooks are set in the dashboard only: no API reaches them (docs/coverage.md, "Considered and not added").
+  { id: "pusher", name: "Pusher Channels", kind: "service", deps: ["pusher", "pusher-js"], env: ["PUSHER_*"], pointer: NO_API },
+  // Its Management API (projects, webhooks) is a private beta for Enterprise customers.
+  { id: "liveblocks", name: "Liveblocks", kind: "service", deps: ["@liveblocks/"], env: ["LIVEBLOCKS_*"], pointer: NEW_ISSUE },
 ];
 
 /** The order providers are summarised in, by category; categories not listed come after, in detection order. */

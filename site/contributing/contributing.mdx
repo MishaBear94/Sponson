@@ -105,7 +105,8 @@ existing file in `packages/adapters/recipes/` and:
    and `<PROVIDER>_API_URL`; per op its `kind`, typed `params` with an `example` for each required one, and `http`
    using `{ param: <name> }` and `{<name>}` path placeholders. Add `sim` hints when the sim needs them (a parent
    object to seed for a list item, the body field a client-chosen id comes from, the `collection` when the create
-   posts to another path than the list). An API the REST sim cannot stand in for (GraphQL, a map a POST replaces whole,
+   posts to another path than the list, `write_fields` when a write names fields otherwise than the answers do, as
+   Twilio's `FriendlyName` read back as `friendly_name`). An API the REST sim cannot stand in for (GraphQL, a map a POST replaces whole,
    S3's XML) names a first-class sim instead: `sim: { provider, seed, present, drift }` (`base_path` when its base URL
    is a sub-path of the sim). `auth` may also be a `command` (the provider CLI's token), `aws_sigv4`,
    `oauth2_client_credentials`, `digest`, several `headers` or a header with a `prefix`; the tests check each for real.

@@ -50,6 +50,11 @@ export interface RecipeSimHints {
   objects?: Record<string, Record<string, unknown>>;
   /** Request headers a create or update stores as fields (header → field), for an API that takes settings in headers. */
   header_fields?: Record<string, string>;
+  /**
+   * Body fields a create or update names otherwise than the answers do, sent name → read name (Twilio's
+   * `FriendlyName` is read back as `friendly_name`): the sim stores them under the read name.
+   */
+  write_fields?: Record<string, string>;
   /** For a create at `<collection>/{+param}`: the field the sim stores that path suffix in (an upsert by chosen id). */
   suffix_field?: string;
   /** The query parameter the provider names one object with, when objects are keyed by a value (`url`). */
@@ -389,7 +394,7 @@ export function resolveRecipeApi(block: Record<string, unknown>, where: string):
     throw new SponsonError("PLAN_INVALID", `${ADAPTER}: ${where}.recipe: no recipe \`${String(provider)}\` (known: ${known.join(", ")})`, { adapter: ADAPTER, key: `${where}.recipe` });
   }
   const api = loadRecipe(provider).api;
-  if (!api) throw new SponsonError("PLAN_INVALID", `${ADAPTER}: ${where}.recipe: recipe \`${provider}\` has no API block (its ops call the app's own URL)`, { adapter: ADAPTER, key: `${where}.recipe` });
+  if (!api) throw new SponsonError("PLAN_INVALID", `${ADAPTER}: ${where}.recipe: recipe \`${provider}\` has no API block (its ops call a URL the line gives, with no API credential)`, { adapter: ADAPTER, key: `${where}.recipe` });
   return { ...api, ...overrides };
 }
 

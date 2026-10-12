@@ -458,7 +458,7 @@
         "base_url": { "type": "string", "pattern": "^https?://\\S+$", "description": "The API's base URL; request paths are relative to it." },
         "base_url_env": { "$ref": "#/$defs/envName", "description": "Optional: a variable that overrides base_url when set (a staging API, the local fake cloud)." },
         "auth": {
-          "description": "`{ bearer_env: NAME }`, `{ header: X-Api-Key, value_env: NAME, prefix?: \"Api-Key \" }`, `{ headers: [{ header, value_env }, …] }`, `{ basic: { user_env, password_env } }`, `{ oauth2_client_credentials: { token_url, client_id_env, client_secret_env, … } }`, `{ command: [argv…] }`, `{ aws_sigv4: { region, service, access_key_id_env, secret_access_key_env } }` or `{ digest: { user_env, password_env } }`. Always variable NAMES, never values.",
+          "description": "`{ bearer_env: NAME }`, `{ header: X-Api-Key, value_env: NAME, prefix?: \"Api-Key \" }`, `{ headers: [{ header, value_env }, …] }`, `{ basic: { user_env | user, password_env } }`, `{ oauth2_client_credentials: { token_url, client_id_env, client_secret_env, … } }`, `{ command: [argv…] }`, `{ aws_sigv4: { region, service, access_key_id_env, secret_access_key_env } }` or `{ digest: { user_env, password_env } }`. Always variable NAMES, never values.",
           "oneOf": [
             { "type": "object", "required": ["bearer_env"], "additionalProperties": false, "properties": { "bearer_env": { "$ref": "#/$defs/credentialEnvName" } } },
             { "$ref": "#/$defs/httpHeaderCredential" },
@@ -473,7 +473,7 @@
               "required": ["basic"],
               "additionalProperties": false,
               "properties": {
-                "basic": { "type": "object", "required": ["user_env", "password_env"], "additionalProperties": false, "properties": { "user_env": { "$ref": "#/$defs/envName" }, "password_env": { "$ref": "#/$defs/credentialEnvName" } } }
+                "basic": { "type": "object", "required": ["password_env"], "oneOf": [{ "required": ["user_env"], "properties": { "user_env": true } }, { "required": ["user"], "properties": { "user": true } }], "additionalProperties": false, "properties": { "user_env": { "$ref": "#/$defs/envName" }, "user": { "type": "string", "pattern": "^[^\\s:]+$", "description": "A literal user name, for an API whose documented user is fixed (Mailgun: `api`)." }, "password_env": { "$ref": "#/$defs/credentialEnvName" } } }
               }
             },
             {
@@ -544,6 +544,7 @@
         },
         "headers": { "type": "object", "description": "Static headers sent with every request (an API version pin).", "additionalProperties": { "type": "string" } },
         "encoding": { "enum": ["json", "form", "xml"], "description": "Request bodies as JSON (default), application/x-www-form-urlencoded (`a[b]=c`) or XML (S3-style documents; answers are XML too)." },
+        "form_arrays": { "enum": ["brackets", "repeat"], "description": "With `encoding: form`: a list as `a[0]=x&a[1]=y` (`brackets`, the default) or as the key repeated, `a=x&a=y` (`repeat`, as Mailgun reads `action` and `event_types`)." },
         "production": { "type": "boolean", "description": "true when the API is a production system (a live Stripe account, a production tenant): every line through it needs approval (--approved-by), whatever the run's environment." },
         "media_type": { "type": "string", "pattern": "^[\\w.+-]+/[\\w.+-]+", "description": "A versioned JSON media type sent as Accept and Content-Type (application/vnd.atlas.2023-01-01+json)." },
         "refuse_credential": {

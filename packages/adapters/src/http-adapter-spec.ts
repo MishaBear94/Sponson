@@ -177,6 +177,11 @@ export interface ApiConfig {
   auth: Auth;
   headers: Record<string, string>;
   encoding: "json" | "form" | "xml";
+  /**
+   * How a form body writes a list: `brackets` (`a[0]=x&a[1]=y`, the default, as Stripe reads it) or `repeat`
+   * (`a=x&a=y`, OpenAPI's `style: form, explode: true`, as Mailgun reads it). Only with `encoding: form`.
+   */
+  formArrays?: "repeat";
   /** A versioned media type sent as `Accept` and as the `Content-Type` of JSON bodies (Atlas `application/vnd.atlas.2023-01-01+json`). */
   mediaType?: string;
   /** The API is a production system: lines through it need Sponson's approval (`writesEnvironment`). */
@@ -188,7 +193,14 @@ export interface ApiConfig {
   refuse?: { prefixes: string[]; unlessEnv: string };
 }
 
-const API_KEYS = ["base_url", "base_url_env", "auth", "headers", "encoding", "media_type", "production", "refuse_credential"];
+const API_KEYS = ["base_url", "base_url_env", "auth", "headers", "encoding", "form_arrays", "media_type", "production", "refuse_credential"];
+
+function parseFormArrays(v: unknown, where: string, encoding: string): "repeat" | undefined {
+  if (v === undefined || v === "brackets") return undefined;
+  if (v !== "repeat") throw planError("must be `brackets` (`a[0]=x&a[1]=y`, the default) or `repeat` (`a=x&a=y`)", where);
+  if (encoding !== "form") throw planError("applies to `encoding: form` only", where);
+  return v;
+}
 
 function parseEncoding(v: unknown, where: string): "json" | "form" | "xml" {
   if (v === undefined || v === "json" || v === "form" || v === "xml") return v ?? "json";
@@ -238,11 +250,13 @@ export function parseApi(block: Record<string, unknown>, where: string, opts: { 
   if (unknown.length) throw planError(`unknown key \`${unknown[0]}\` (known: ${API_KEYS.join(", ")})`, where);
   const encoding = parseEncoding(block.encoding, `${where}.encoding`);
   const mediaType = parseMediaType(block.media_type, `${where}.media_type`, encoding);
+  const formArrays = parseFormArrays(block.form_arrays, `${where}.form_arrays`, encoding);
   const cfg: ApiConfig = {
     baseUrl: base,
     auth: block.auth === undefined && opts.authOptional ? { kind: "none" } : parseAuth(block.auth, `${where}.auth`, base),
     headers: parseHeaders(block.headers, `${where}.headers`),
     encoding,
+    ...(formArrays ? { formArrays } : {}),
     ...(mediaType ? { mediaType } : {}),
     production: parseProduction(block.production, `${where}.production`),
   };

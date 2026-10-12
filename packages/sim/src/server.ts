@@ -154,7 +154,8 @@ function headersOf(req: IncomingMessage): Record<string, string> {
 /** A request body: empty is `undefined`; null when it is not JSON. */
 /**
  * A form body (`application/x-www-form-urlencoded`) as the object it encodes, bracket-nested the way Stripe reads
- * it: `a[b]=1&c[0]=x` is `{ a: { b: "1" }, c: ["x"] }`. Every value is a string.
+ * it: `a[b]=1&c[0]=x` is `{ a: { b: "1" }, c: ["x"] }`, and a repeated key `d=x&d=y` is `{ d: ["x", "y"] }`.
+ * Every value is a string.
  */
 function parseForm(raw: string): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -164,7 +165,8 @@ function parseForm(raw: string): Record<string, unknown> {
     path.forEach((seg, i) => {
       const last = i === path.length - 1;
       const slot = cur as Record<string, unknown>;
-      if (last) slot[seg] = value;
+      // A key repeated (`a=x&a=y`, OpenAPI's exploded form style, as Mailgun takes `action`) is a list.
+      if (last) slot[seg] = path.length === 1 && seg in slot ? [...(Array.isArray(slot[seg]) ? slot[seg] : [slot[seg]]), value] : value;
       else cur = (slot[seg] ??= /^\d+$/.test(path[i + 1]!) ? [] : {}) as Record<string, unknown> | unknown[];
     });
   }

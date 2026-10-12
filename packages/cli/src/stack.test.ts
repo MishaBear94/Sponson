@@ -224,15 +224,16 @@ describe("detectStack", () => {
   it("services managed by recipes are detected and get lines; only services nothing manages are reported as not supported", async () => {
     const d = await detectStack(
       repo({
-        "package.json": pkg({ "@auth0/nextjs-auth0": "3", "@launchdarkly/node-server-sdk": "9", "posthog-js": "1", stripe: "16", "@sentry/nextjs": "8", firebase: "10", "@libsql/client": "0.6", "mailgun.js": "10", twilio: "5" }),
+        "package.json": pkg({ "@auth0/nextjs-auth0": "3", "@launchdarkly/node-server-sdk": "9", "posthog-js": "1", stripe: "16", "@sentry/nextjs": "8", firebase: "10", "@libsql/client": "0.6", "pusher-js": "8", "@liveblocks/client": "2" }),
         "fly.toml": "app = 'x'\n",
         "railway.json": "{}",
       }),
     );
     expect(ids(d)).toEqual(["fly", "railway", "turso", "auth0", "firebase", "launchdarkly", "posthog", "stripe", "sentry"]);
     expect(d.found.filter((f) => f.via === "recipe").map((f) => f.id)).toEqual(["fly", "railway", "turso", "auth0", "firebase", "posthog", "stripe", "sentry"]);
-    expect(unsupportedIds(d)).toEqual(["mailgun", "twilio"]);
-    for (const u of d.unsupported) expect(u.pointer, u.id).toMatch(/issues/);
+    expect(unsupportedIds(d)).toEqual(["pusher", "liveblocks"]);
+    // Where to follow it: an issue to upvote, or why no API can manage it.
+    for (const u of d.unsupported) expect(u.pointer, u.id).toMatch(/issues|coverage\.md#considered-and-not-added/);
     // Railway and Turso are a deploy target and a database of their own: no Vercel + Neon template beside them.
     const { text, todos } = composeStarter(d);
     expect(parsePlan(text).plan.changes).toEqual([]);

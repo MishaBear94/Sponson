@@ -25,6 +25,8 @@ export interface CoverageRow {
   counted?: boolean;
   why?: string;
   note?: string;
+  /** Why the row has its priority: how often it appears in preview workflows, with the sources (not rendered). */
+  evidence?: string;
 }
 
 export interface CoverageCategory {

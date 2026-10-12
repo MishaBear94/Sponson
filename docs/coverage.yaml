@@ -11,6 +11,7 @@
 #                null (not yet). scenarios/docs/coverage.test.ts checks every reference resolves and is tested.
 #   counted      false for a row kept for completeness that has nothing to manage (`why` says so)
 #   note         shown after the coverage mark
+#   evidence     why the row has its priority (how often it appears in preview workflows), with sources; not rendered
 # Secret sources resolve references and create nothing; they are counted separately (covered_by: `secret:<scheme>`).
 weights:
   P0: 3
@@ -353,6 +354,24 @@ categories:
         priority: P1
         covered_by: manual.step
         why: "Clerk's API manages the Svix app, not its endpoints (re-checked 2026-10-12): the Backend API spec (github.com/clerk/openapi-specs, bapi/2025-11-10.yml and 2026-05-12.yml) has only CreateSvixApp, DeleteSvixApp and GenerateSvixAuthURL ('Generate a new URL for accessing the Svix's management dashboard'), the private-beta Platform API (platform/beta.yml) has no webhook routes, the `clerk api ls webhook` route the webhooks overview points agents to (clerk.com/docs/guides/development/webhooks/overview) lists those same three Backend API routes, `clerk webhooks` is a local relay and verifier that makes 'No Clerk API calls' (github.com/clerk/cli, commands/webhooks), and Clerk documents no Svix API token for its app (a portal-URL token is undocumented)"
+      - id: twilio-twiml-app
+        provider: Twilio
+        side_effect: TwiML Application whose voice (and messaging, status) URLs are the preview's, named by the preview's Voice SDK tokens; a shared phone number has one URL and is not per-preview state
+        api_shape: "`POST /2010-04-01/Accounts/{sid}/Applications.json` (`FriendlyName`, `VoiceUrl`, …), `GET`/`POST`/`DELETE …/Applications/{sid}.json`; HTTP Basic (API key SID and secret); form-encoded PascalCase in, snake_case JSON out; object"
+        generic: "Y (fields sent under their PascalCase names with `send_fields: false`, compared under the answer's names)"
+        priority: P2
+        covered_by: recipe:twilio.twiml_app
+        note: "per-preview inbound SMS or calls need a number per preview (bought, A2P-registered for US SMS); a shared number's single URL is not managed, and subaccounts (closed, never deleted, numbers bought per subaccount) are not the model"
+        evidence: "twilio had 28.2M npm downloads in the month to 2026-10-12 (api.npmjs.org), but its per-preview state is narrow: webhooks hang off phone numbers (one URL each, not per preview) except TwiML Apps, which Twilio calls 'most commonly used for the Voice SDKs to handle outbound calls' (twilio.com/docs/usage/api/applications): occasional in preview workflows, P2."
+      - id: ably-webhook-rule
+        provider: Ably
+        side_effect: Integration rule (webhook) posting the preview's channels' messages or presence to the preview URL
+        api_shape: "Control API `POST /v1/apps/{app}/rules` (`ruleType: http`, `source.channelFilter`, `target.url`), `GET` (a bare list), `PATCH`/`DELETE /v1/apps/{app}/rules/{id}`; bearer access token with `write:rule`; object"
+        generic: Y (found by its channel filter and source type)
+        priority: P2
+        covered_by: recipe:ably.webhook_rule
+        note: "the app (shared) and its keys are parent objects; the preview's channels must carry a per-preview prefix for a filter to tell them apart"
+        evidence: "ably had 5.72M npm downloads in the month to 2026-10-12 (api.npmjs.org), the same tier as the P2 rows; a webhook rule per preview is what a preview that reacts to its own channel events needs. Pusher Channels (pusher-js 13.5M) and Liveblocks (@liveblocks/client 1.83M) were checked too and have no row: see 'Considered and not added' in docs/coverage.md."
   - id: email
     title: "Email: sending domains, webhooks, test inboxes"
     rows:
@@ -384,6 +403,17 @@ categories:
         covered_by:
           - recipe:sendgrid.event_webhook
           - recipe:sendgrid.parse_setting
+      - id: mailgun-webhook-route
+        provider: Mailgun
+        side_effect: Webhook delivering email events to the preview URL, or an inbound route forwarding a per-preview address to it (sending and receiving domains are long-lived)
+        api_shape: "Account webhooks `POST /v1/webhooks` (answers `{ webhook_id }`), `GET`/`PUT`/`DELETE /v1/webhooks/{id}`; routes `POST /v3/routes`, `GET`/`PUT`/`DELETE /v3/routes/{id}` (account-wide); HTTP Basic with the user `api`; form-encoded, lists as repeated keys; object; at most 3 URLs per event type"
+        generic: "Y (Basic with a literal user, `form_arrays: repeat`)"
+        priority: P2
+        covered_by:
+          - recipe:mailgun.webhook
+          - recipe:mailgun.route
+        note: "every account webhook receives every domain's events, and an event type takes three URLs at most: three previews at a time; per-domain webhooks (a list per event, or a map keyed by URL) are not used"
+        evidence: "Same tier as the P2 email rows: mailgun.js had 4.98M npm downloads in the month to 2026-10-12, postmark 5.12M, @sendgrid/mail 21.1M, resend 53.8M (api.npmjs.org/downloads/point/last-month/<package>); a webhook or inbound route per preview is what a team testing email events or replies on a preview needs, as for SendGrid's rows."
   - id: observability
     title: Observability per release
     rows:
@@ -411,6 +441,33 @@ categories:
         generic: Y
         priority: P2
         covered_by: recipe:honeycomb.marker
+      - id: newrelic-deployment
+        provider: New Relic
+        side_effect: Deployment marker (change tracking) on the environment's entity per release
+        api_shape: "NerdGraph `changeTrackingCreateDeployment(deployment: { entityGuid, version, … })`, `API-Key` user key; one-off event, no delete"
+        generic: Y (a GraphQL `http.action`; nothing to read back or undo)
+        priority: P2
+        covered_by: recipe:newrelic.deployment
+        note: "an `http.action` (ADR 0022) sent once per entity and version; markers are history (no undo); a preview needs its own entity, or it marks production's charts"
+        evidence: "newrelic had 5.56M npm downloads in the month to 2026-10-12 (api.npmjs.org), the same tier as the P2 rows; deployment markers are routine in CD pipelines, but per preview only when previews report to their own entity: occasional, P2 like Honeycomb's markers."
+      - id: rollbar-deploy
+        provider: Rollbar
+        side_effect: Deploy of the revision in the environment (`preview`) per release
+        api_shape: "`POST /api/1/deploy` `{ environment, revision, … }` (answers `data.deploy_id`), `X-Rollbar-Access-Token` (`post_server_item`); one-off event, no delete"
+        generic: Y (an `http.action`; nothing to undo)
+        priority: P2
+        covered_by: recipe:rollbar.deploy
+        note: "an `http.action` sent once per environment and revision; deploys are history (no delete in the API)"
+        evidence: "rollbar had 2.24M npm downloads in the month to 2026-10-12 (api.npmjs.org); deploy tracking per environment is a documented CI step (docs.rollbar.com/docs/deploy-tracking): occasional in preview workflows, P2."
+      - id: bugsnag-build
+        provider: BugSnag
+        side_effect: Build (release) of the app version in the environment's release stage per deploy
+        api_shape: "Build API `POST https://build.bugsnag.com` JSON `{ apiKey, appVersion, releaseStage, sourceControl, … }`, the notifier key in the body (no header); one-off event, no delete"
+        generic: "Y (an `http.action` to an absolute URL, the key a `{ secret }` in the body)"
+        priority: P2
+        covered_by: recipe:bugsnag.build
+        note: "an `http.action` sent once per version and release stage; releases are history (no undo)"
+        evidence: "@bugsnag/js had 5.71M npm downloads in the month to 2026-10-12 (api.npmjs.org); a build per release stage is how BugSnag groups a preview's errors under its release (github.com/bugsnag/grunt-bugsnag, autoAssignRelease): occasional, P2."
   - id: dns
     title: DNS and preview domains
     rows:
